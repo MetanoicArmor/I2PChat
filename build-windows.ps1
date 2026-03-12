@@ -1,27 +1,33 @@
 Param(
-    [string]$VenvDir = ".venv",
+    [string]$VenvDir = ".venv39",
     [string]$AppName = "termchat-i2p"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-Write-Host "==> Создаю/обновляю виртуальное окружение $VenvDir (Python 3.9)"
-if (-not (Test-Path $VenvDir)) {
-    py -3.9 -m venv $VenvDir
+# строго Python 3.9, как требовалось автором (i2plib и остальное тестировалось на нём)
+Write-Host "==> Create fresh virtual environment $VenvDir (Python 3.9)"
+if (Test-Path $VenvDir) {
+    Remove-Item -Recurse -Force $VenvDir
 }
+py -3.9 -m venv $VenvDir
 
-Write-Host "==> Активирую виртуальное окружение"
+Write-Host "==> Activate virtual environment"
 & "$VenvDir\Scripts\Activate.ps1"
 
-Write-Host "==> Устанавливаю зависимости из requirements.txt"
+Write-Host "==> Install dependencies from requirements.txt"
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt pyinstaller
 
-Write-Host "==> Собираю одиночный бинарник PyInstaller'ом для Windows"
+Write-Host "==> Build CLI single-file Windows binary with PyInstaller"
 pyinstaller --clean --onefile --name $AppName chat-python.py
 
+Write-Host "==> Build GUI I2PChat.exe with icon"
+pyinstaller --clean --noconsole --name I2PChat --icon icon-1024.png main_qt.py
+
 Write-Host ""
-Write-Host "✔ Бинарник собран: dist\$AppName.exe"
-Write-Host "Можешь копировать dist\$AppName.exe на другие Windows-машины и запускать двойным кликом или из PowerShell/cmd."
+Write-Host "Done."
+Write-Host "CLI binary: dist\\$AppName.exe"
+Write-Host "GUI binary: dist\\I2PChat\\I2PChat.exe"
 
