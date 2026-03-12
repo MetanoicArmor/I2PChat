@@ -39,6 +39,14 @@ mkdir -p "${APPDIR}/usr/bin" \
 # Кладём внутрь AppDir бинарник и каталог _internal (с libpython и всеми зависимостями)
 cp "dist/${APP_NAME}/${APP_NAME}" "${APPDIR}/usr/bin/${APP_NAME}"
 cp -r "dist/${APP_NAME}/_internal" "${APPDIR}/usr/bin/_internal"
+
+# Добрасываем libcrypt, если он есть в системе, чтобы не требовать его снаружи
+for CAND in /usr/lib/libcrypt.so.2 /lib64/libcrypt.so.2 /lib/libcrypt.so.2; do
+  if [ -f "$CAND" ]; then
+    cp "$CAND" "${APPDIR}/usr/bin/_internal/"
+    break
+  fi
+done
 cp icon-1024.png "${APPDIR}/usr/share/icons/hicolor/512x512/apps/i2pchat.png"
 
 cat > "${APPDIR}/usr/share/applications/i2pchat.desktop" <<EOF
@@ -59,6 +67,9 @@ cp icon-1024.png "${APPDIR}/i2pchat.png"
 cat > "${APPDIR}/AppRun" <<'EOF'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
+# Добавляем наш _internal в путь поиска библиотек,
+# чтобы подхватывались libpython и, например, libcrypt.so.2
+export LD_LIBRARY_PATH="$HERE/usr/bin/_internal:${LD_LIBRARY_PATH:-}"
 exec "$HERE/usr/bin/I2PChat" "$@"
 EOF
 
