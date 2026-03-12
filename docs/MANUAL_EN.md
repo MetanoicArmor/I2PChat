@@ -141,11 +141,17 @@ On the receiving side:
 
 #### 4.6. `Lock to peer` button
 
-The **`Lock to peer`** button permanently associates the current profile with the currently verified peer.  
-In practice this means:
+The **`Lock to peer`** button is **optional** – you can safely use I2PChat without it.  
+By default, if you never lock, the profile works like an **email address**:
+
+- **anyone** who knows your destination can write to this profile;
+- you are free to connect to different peers over time.
+
+When you do press **`Lock to peer`**, the profile becomes **bound to a single peer**:
 
 - the peer address is stored in the profile `.dat` file;
-- on subsequent runs with this profile, the stored peer will be reused automatically.
+- on subsequent runs with this profile, the stored peer will be reused automatically;
+- connections from other addresses can be rejected by the core as “unauthorised”.
 
 Rules and behaviour:
 
@@ -274,7 +280,7 @@ On the receiving side:
 
 2. Connect to the desired peer using the address field and `Connect`.
 3. Make sure the connection is active and messages are exchanged.
-4. Click **`Lock to peer`**:
+4. If you want this profile to behave like a **one‑to‑one channel** (only this peer may reach it), click **`Lock to peer`**:
    - make sure the profile is not `default`;
    - on success, you will see:
 
@@ -284,7 +290,8 @@ On the receiving side:
 
 5. On subsequent runs with the `myprofile` profile:
    - the status label will show `Stored peer` with the address;
-   - if the peer field is empty, the stored address will be auto‑filled.
+   - if the peer field is empty, the stored address will be auto‑filled;
+   - connections from other peers will no longer be accepted for this profile.
 
 #### 6.4. Importing an existing `.dat` profile
 
