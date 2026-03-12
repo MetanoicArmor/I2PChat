@@ -4,6 +4,8 @@
 
 При запуске GUI без указания профиля появляется диалог **Select profile**:
 
+![Окно выбора профиля](../screenshots/3.png)
+
 - заголовок окна: **Select profile**;
 - основная надпись:
   - `Profile name (default = TRANSIENT).`

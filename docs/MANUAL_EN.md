@@ -4,6 +4,8 @@
 
 When you start the GUI **without** passing a profile name, the **Select profile** dialog appears:
 
+![Select profile dialog](../screenshots/3.png)
+
 - window title: **Select profile**;
 - main text:
   - `Profile name (default = TRANSIENT).`

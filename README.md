@@ -12,8 +12,8 @@ It provides both a terminal UI (TUI) and a graphical UI (PyQt6) on top of a shar
 
 ### Language / Язык
 
-[![English GUI manual](https://img.shields.io/badge/📖%20GUI%20manual-EN-blue.svg)](docs/GUI_MANUAL_EN.md)
-[![Русский мануал по GUI](https://img.shields.io/badge/📖%20GUI%20мануал-RU-red.svg)](docs/GUI_MANUAL_RU.md)
+[![English manual](https://img.shields.io/badge/📖%20Manual-EN-blue.svg)](docs/MANUAL_EN.md)
+[![Русский мануал](https://img.shields.io/badge/📖%20Мануал-RU-red.svg)](docs/MANUAL_RU.md)
 
 **Credits / upstream project:**  
 I2PChat is a **separate GUI client** that reuses ideas and parts of the logic from the original terminal client **`termchat-i2p-python`** by **Stanley** from the I2P community.  
@@ -45,8 +45,8 @@ The initial TUI concept, I2P protocol integration and a significant portion of t
 
 #### Manuals
 
-- **English manual**: [**docs/GUI_MANUAL_EN.md**](docs/GUI_MANUAL_EN.md)
-- **Русский мануал**: [**docs/GUI_MANUAL_RU.md**](docs/GUI_MANUAL_RU.md)
+- **English manual**: [**docs/MANUAL_EN.md**](docs/MANUAL_EN.md)
+- **Русский мануал**: [**docs/MANUAL_RU.md**](docs/MANUAL_RU.md)
 
 ### Screenshots
 
