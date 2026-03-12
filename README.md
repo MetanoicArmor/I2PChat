@@ -2,9 +2,18 @@
 
 [![Release](https://img.shields.io/github/v/release/MetanoicArmor/I2PChat?label=release)](https://github.com/MetanoicArmor/I2PChat/releases)
 [![License](https://img.shields.io/github/license/MetanoicArmor/I2PChat)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.9-blue.svg)](requirements.txt)
+[![I2P](https://img.shields.io/badge/I2P-SAM%20API-purple.svg)](https://geti2p.net)
 
 I2PChat is an experimental peer‑to‑peer chat client for the [I2P](https://geti2p.net) anonymity network.  
 It provides both a terminal UI (TUI) and a graphical UI (PyQt6) on top of a shared asynchronous core.
+
+---
+
+### Language / Язык
+
+[![English GUI manual](https://img.shields.io/badge/📖%20GUI%20manual-EN-blue.svg)](docs/GUI_MANUAL_EN.md)
+[![Русский мануал по GUI](https://img.shields.io/badge/📖%20GUI%20мануал-RU-red.svg)](docs/GUI_MANUAL_RU.md)
 
 **Credits / upstream project:**  
 I2PChat is a **separate GUI client** that reuses ideas and parts of the logic from the original terminal client **`termchat-i2p-python`** by **Stanley** from the I2P community.  
@@ -16,8 +25,8 @@ The initial TUI concept, I2P protocol integration and a significant portion of t
 ### Table of contents
 
 - [Features](#features)
-- [GUI manuals](#gui-manuals)
-- [GUI screenshots](#gui-screenshots)
+- [Manuals](#manuals)
+- [Screenshots](#screenshots)
 - [Prebuilt binaries](#prebuilt-binaries)
 - [Running from source](#running-from-source)
 - [Cross‑platform builds](#crossplatform-builds)
@@ -34,12 +43,12 @@ The initial TUI concept, I2P protocol integration and a significant portion of t
 - **ASCII / braille image rendering** for sending images over text channels
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
-#### GUI manuals
+#### Manuals
 
 - **English**: `docs/GUI_MANUAL_EN.md`
 - **Russian**: `docs/GUI_MANUAL_RU.md`
 
-### GUI screenshots
+### Screenshots
 
 ![I2PChat macOS GUI](screenshots/1.png)
 
