@@ -29,7 +29,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch='arm64',
+    target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon=['icon-1024.png'],
@@ -42,10 +42,4 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='I2PChat',
-)
-app = BUNDLE(
-    coll,
-    name='I2PChat.app',
-    icon='icon-1024.png',
-    bundle_identifier=None,
 )
