@@ -518,7 +518,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.input_edit = MessageInputEdit(self)
         self.input_edit.setPlaceholderText("Type message. Enter to send, Shift+Enter for new line.")
         self.input_edit.setMinimumHeight(56)
-        self.input_edit.setMaximumHeight(120)
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
         self.input_edit.setFont(font)
@@ -527,6 +526,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.send_button.setMinimumHeight(56)
 
         fixed_height = 56
+        self.input_edit.setFixedHeight(fixed_height)
         self.send_button.setFixedHeight(fixed_height)
         input_layout.addWidget(self.input_edit)
         input_layout.addWidget(self.send_button)
