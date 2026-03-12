@@ -1,5 +1,8 @@
 ## I2PChat
 
+[![Release](https://img.shields.io/github/v/release/MetanoicArmor/I2PChat?label=release)](https://github.com/MetanoicArmor/I2PChat/releases)
+[![License](https://img.shields.io/github/license/MetanoicArmor/I2PChat)](LICENSE)
+
 I2PChat is an experimental peer‑to‑peer chat client for the [I2P](https://geti2p.net) anonymity network.  
 It provides both a terminal UI (TUI) and a graphical UI (PyQt6) on top of a shared asynchronous core.
 
@@ -7,6 +10,18 @@ It provides both a terminal UI (TUI) and a graphical UI (PyQt6) on top of a shar
 I2PChat is a **separate GUI client** that reuses ideas and parts of the logic from the original terminal client **`termchat-i2p-python`** by **Stanley** from the I2P community.  
 Stanley’s original project is available here: `http://git.community.i2p/stan/termchat-i2p-python`.  
 The initial TUI concept, I2P protocol integration and a significant portion of the core logic come from his work; this repository extends it with a GUI client, an additional TUI, and cross‑platform build and packaging scripts.
+
+---
+
+### Table of contents
+
+- [Features](#features)
+- [GUI screenshots](#gui-screenshots)
+- [Prebuilt binaries](#prebuilt-binaries)
+- [Running from source](#running-from-source)
+- [Cross‑platform builds](#crossplatform-builds)
+- [License](#license)
+- [Buy me a coffee](#buy-me-a-coffee)
 
 ### Features
 
@@ -135,4 +150,66 @@ If you like this project and want to support development, you can send a small d
 - **BTC address**: `bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd`
 
 ![Bitcoin donation QR](btc_donation_qr.png)
+
+---
+
+## I2PChat (RU)
+
+Ниже — краткая информация о проекте на русском языке.
+
+### О проекте
+
+I2PChat — это пиринговый чат‑клиент поверх анонимной сети [I2P](https://geti2p.net), работающий через SAM‑интерфейс.  
+Внутри есть общее асинхронное ядро (`i2p_chat_core.py`) и два интерфейса:
+
+- терминальный TUI (`chat-python.py`, Textual/Rich);
+- графический клиент на PyQt6 (`main_qt.py`).
+
+Проект основан на оригинальном терминальном клиенте `termchat-i2p-python` от Stanley (I2P community):  
+`http://git.community.i2p/stan/termchat-i2p-python`.
+
+### Возможности
+
+- обмен сообщениями через I2P SAM (через `i2plib`);
+- TUI и GUI‑клиенты;
+- передача файлов между участниками;
+- отправка изображений в виде ASCII / braille арта;
+- скрипты сборки под Linux, macOS и Windows.
+
+### Как запустить
+
+1. Установить Python 3.9 и запустить I2P‑роутер c включённым SAM (`127.0.0.1:7656`).
+2. В корне репозитория:
+
+```bash
+python3.9 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+3. Запуск TUI:
+
+```bash
+python chat-python.py
+```
+
+4. Запуск GUI:
+
+```bash
+python main_qt.py
+```
+
+### Сборки
+
+Для удобной упаковки есть скрипты:
+
+- `./build-linux.sh` — TUI‑бинарь для Linux;
+- `./build_appimage.sh` — GUI AppImage для Linux;
+- `./build-macos-app.sh` — TUI‑приложение для macOS;
+- `build-windows.ps1` — GUI‑сборка для Windows (PyInstaller + Python 3.9).
+
+### Поддержать проект
+
+Если хотите «купить мне кофе», можно отправить донат в BTC на адрес  
+`bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd` (QR‑код см. выше.
 
