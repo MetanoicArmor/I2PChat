@@ -16,6 +16,11 @@ from i2p_chat_core import (
     render_bw,
 )
 
+try:
+    from PyQt6.QtMultimedia import QSoundEffect  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover - мультимедиа не везде доступно
+    QSoundEffect = None  # type: ignore[assignment]
+
 
 def get_profiles_dir() -> str:
     """Директория, где лежат/хранятся .dat профили (общая для dev и .app)."""
@@ -64,15 +69,61 @@ class ChatListModel(QtCore.QAbstractListModel):
 
 
 class ChatListView(QtWidgets.QListView):
-    """QListView, который перераскладывает элементы при изменении ширины.
+    """QListView для баблов чата.
 
-    Это обеспечивает корректный перенос строк в баблах при ресайзе окна.
+    - перераскладывает элементы при изменении ширины (для переноса строк)
+    - поддерживает копирование текста (контекстное меню и Cmd/Ctrl+C)
     """
+
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.DefaultContextMenu)
+        self.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectionBehavior.SelectItems
+        )
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self.doItemsLayout()
         self.viewport().update()
+
+    def _copy_index_text(self, index: QtCore.QModelIndex, with_meta: bool = False) -> None:
+        item = index.data(QtCore.Qt.ItemDataRole.DisplayRole)
+        if not isinstance(item, ChatItem):
+            return
+        if with_meta and item.timestamp:
+            text = f"[{item.timestamp}] {item.sender}: {item.text}"
+        else:
+            text = item.text
+        QtWidgets.QApplication.clipboard().setText(text)
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:  # type: ignore[override]
+        index = self.indexAt(event.pos())
+        if not index.isValid():
+            return
+        item = index.data(QtCore.Qt.ItemDataRole.DisplayRole)
+        if not isinstance(item, ChatItem):
+            return
+
+        menu = QtWidgets.QMenu(self)
+        act_copy = menu.addAction("Copy text")
+        act_copy_meta = menu.addAction("Copy with timestamp")
+        chosen = menu.exec(event.globalPos())
+        if chosen == act_copy:
+            self._copy_index_text(index, with_meta=False)
+        elif chosen == act_copy_meta:
+            self._copy_index_text(index, with_meta=True)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # type: ignore[override]
+        if event.matches(QtGui.QKeySequence.StandardKey.Copy):
+            index = self.currentIndex()
+            if index.isValid():
+                self._copy_index_text(index, with_meta=False)
+                return
+        super().keyPressEvent(event)
 
 
 class FlowLayout(QtWidgets.QLayout):
@@ -343,28 +394,31 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 class ChatWindow(QtWidgets.QMainWindow):
     def __init__(self, profile: Optional[str] = None) -> None:
         super().__init__()
-        self.setWindowTitle("I2PChat")
+        self.profile = profile or "default"
+        # Показываем профиль через разделитель-точку, без лишнего маркера в конце.
+        self.setWindowTitle(f"I2PChat • {self.profile}")
         self.resize(900, 600)
 
+        # Тёмная макос‑подобная гамма (в духе Big Sur)
         self.setStyleSheet(
             """
             QMainWindow {
-                background-color: #1e1f29;
+                background-color: #141417;
             }
             QListView {
-                background: #1e1f29;
+                background: #141417;
                 border: none;
                 padding: 8px;
-                color: #f8f8f2;
+                color: #f5f5f7;
             }
             QScrollBar:vertical {
-                background: #1e1f29;
+                background: transparent;
                 width: 8px;
                 margin: 0px;
             }
             QScrollBar::handle:vertical {
-                background: #44475a;
-                min-height: 20px;
+                background: rgba(255, 255, 255, 0.20);
+                min-height: 24px;
                 border-radius: 4px;
             }
             QScrollBar::add-line:vertical,
@@ -372,34 +426,39 @@ class ChatWindow(QtWidgets.QMainWindow):
                 height: 0px;
             }
             QLineEdit {
-                background: #282a36;
-                border: 1px solid #44475a;
-                border-radius: 4px;
+                background: #1f1f23;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 8px;
                 padding: 8px 10px;
-                color: #f8f8f2;
+                color: #f5f5f7;
             }
             QLineEdit:focus {
-                border-color: #6272a4;
+                border-color: #0a84ff;
             }
             QPushButton {
-                background-color: #44475a;
-                border-radius: 4px;
-                padding: 8px 10px;
-                color: #f8f8f2;
+                background-color: #2b2b30;
+                border-radius: 8px;
+                padding: 8px 14px;
+                color: #f5f5f7;
             }
             QPushButton:hover {
-                background-color: #6272a4;
+                background-color: #3a3a40;
             }
             QPushButton:pressed {
-                background-color: #3a7afe;
+                background-color: #0a84ff;
             }
             QLabel {
-                color: #f8f8f2;
+                color: #f5f5f7;
+            }
+            QLabel#StatusLabel {
+                background-color: #1b1b1f;
+                border-radius: 10px;
+                padding: 4px 10px;
+                color: #9fa1b5;
+                font-size: 11px;
             }
             """
         )
-
-        self.profile = profile or "default"
 
         # UI
         central = QtWidgets.QWidget(self)
@@ -411,6 +470,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         # статусная панель
         self.status_label = QtWidgets.QLabel("Status: initializing", self)
+        self.status_label.setObjectName("StatusLabel")
         self.status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         self.status_label.setWordWrap(True)
         self.status_label.setSizePolicy(
@@ -452,21 +512,25 @@ class ChatWindow(QtWidgets.QMainWindow):
         input_layout.addWidget(self.input_edit)
         input_layout.addWidget(self.send_button)
 
-        # панель действий (flow layout: кнопки переносятся на следующий ряд)
-        actions_layout = FlowLayout()
+        # панель действий: простой горизонтальный ряд кнопок с полем адреса
+        actions_layout = QtWidgets.QHBoxLayout()
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(8)
 
         self.load_profile_button = QtWidgets.QPushButton("Load .dat", self)
         self.addr_edit = QtWidgets.QLineEdit(self)
         self.addr_edit.setPlaceholderText("Peer .b32.i2p address")
-        # Адрес — главный элемент панели действий, даём ему больше ширины
-        self.addr_edit.setMinimumWidth(260)
+        # Адрес — главный элемент панели действий
+        self.addr_edit.setMinimumWidth(220)
+        self.addr_edit.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
 
         self.connect_button = QtWidgets.QPushButton("Connect", self)
         self.disconnect_button = QtWidgets.QPushButton("Disconnect", self)
 
         self.send_file_button = QtWidgets.QPushButton("Send File", self)
-        self.send_img_braille_button = QtWidgets.QPushButton("Send Image (braille)", self)
-        self.send_img_bw_button = QtWidgets.QPushButton("Send Image (bw)", self)
         self.lock_peer_button = QtWidgets.QPushButton("Lock to peer", self)
         self.copy_my_addr_button = QtWidgets.QPushButton("Copy My Addr", self)
 
@@ -478,8 +542,6 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.connect_button,
             self.disconnect_button,
             self.send_file_button,
-            self.send_img_braille_button,
-            self.send_img_bw_button,
             self.lock_peer_button,
             self.copy_my_addr_button,
         ]:
@@ -490,8 +552,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         actions_layout.addWidget(self.connect_button)
         actions_layout.addWidget(self.disconnect_button)
         actions_layout.addWidget(self.send_file_button)
-        actions_layout.addWidget(self.send_img_braille_button)
-        actions_layout.addWidget(self.send_img_bw_button)
         actions_layout.addWidget(self.lock_peer_button)
         actions_layout.addWidget(self.copy_my_addr_button)
 
@@ -500,14 +560,42 @@ class ChatWindow(QtWidgets.QMainWindow):
         main_layout.addLayout(input_layout)
         main_layout.addLayout(actions_layout)
 
+        # системный трей/док‑иконка для показа нативных уведомлений от Qt
+        self.tray_icon = QtWidgets.QSystemTrayIcon(self)
+        icon = self.windowIcon()
+        if icon.isNull():
+            icon = self.style().standardIcon(
+                QtWidgets.QStyle.StandardPixmap.SP_MessageBoxInformation
+            )
+        self.tray_icon.setIcon(icon)
+        self.tray_icon.setToolTip("I2PChat")
+        self.tray_icon.show()
+
+        # более мягкий системный звук вместо жёсткого beep,
+        # там, где доступен QtMultimedia.
+        self.notify_sound: Optional["QSoundEffect"] = None
+        if QSoundEffect is not None:
+            try:
+                effect = QSoundEffect(self)
+                # Для macOS берём один из стандартных системных звуков.
+                if sys.platform == "darwin":
+                    sound_path = "/System/Library/Sounds/Glass.aiff"
+                else:
+                    sound_path = ""
+
+                if sound_path and os.path.exists(sound_path):
+                    effect.setSource(QtCore.QUrl.fromLocalFile(sound_path))
+                    effect.setVolume(0.7)
+                    self.notify_sound = effect
+            except Exception:
+                self.notify_sound = None
+
         # сигналы
         self.send_button.clicked.connect(self.on_send_clicked)
         self.input_edit.returnPressed.connect(self.on_send_clicked)
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
         self.send_file_button.clicked.connect(self.on_send_file_clicked)
-        self.send_img_braille_button.clicked.connect(self.on_send_img_braille_clicked)
-        self.send_img_bw_button.clicked.connect(self.on_send_img_bw_clicked)
         self.lock_peer_button.clicked.connect(self.on_lock_peer_clicked)
         self.copy_my_addr_button.clicked.connect(self.on_copy_my_addr_clicked)
         self.load_profile_button.clicked.connect(self.on_load_profile_clicked)
@@ -554,6 +642,58 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         self._append_item(ChatItem(kind=kind, timestamp=ts, sender=sender, text=text))
 
+    @QtCore.pyqtSlot(object)
+    def handle_notify(self, msg: ChatMessage) -> None:
+        """
+        Колбэк уведомлений от ядра: системный тост + звук.
+
+        Используем только для входящих peer‑сообщений.
+        """
+        if not isinstance(msg, ChatMessage) or msg.kind != "peer":
+            return
+
+        preview = msg.text.replace("\n", " ")
+        title = "New message"
+        if self.core.current_peer_addr:
+            clean_peer = self.core.current_peer_addr.replace(".b32.i2p", "")
+            if len(clean_peer) > 12:
+                clean_peer = f"{clean_peer[:6]}..{clean_peer[-6:]}"
+            title = f"New message from {clean_peer}"
+
+        # Системное уведомление и звук показываем только если окно/приложение
+        # не активно (свернуто или в фоне). Если пользователь уже в окне,
+        # полагаемся на визуальный интерфейс без спама уведомлениями.
+        app = QtWidgets.QApplication.instance()
+        is_app_active = (
+            app is not None
+            and app.applicationState()
+            == QtCore.Qt.ApplicationState.ApplicationActive
+        )
+        is_window_active = self.isActiveWindow() and not self.isMinimized()
+
+        if not (is_app_active and is_window_active):
+            # Показываем нативное уведомление через Qt (system tray / Notification Center).
+            if self.tray_icon is not None:
+                self.tray_icon.showMessage(
+                    title,
+                    preview,
+                    QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+                    5000,
+                )
+
+            # Звук: сначала пытаемся проиграть более мягкий системный звук,
+            # если он доступен, иначе падаем обратно на стандартный beep.
+            if self.notify_sound is not None:
+                try:
+                    self.notify_sound.play()
+                except Exception:
+                    QtWidgets.QApplication.beep()
+            else:
+                QtWidgets.QApplication.beep()
+
+        # Отдельный маркер в заголовке для непрочитанных больше не используем:
+        # основным индикатором служит само уведомление и содержимое чата.
+
     @QtCore.pyqtSlot(str)
     def handle_system(self, text: str) -> None:
         self._append_item(ChatItem(kind="system", timestamp="", sender="SYSTEM", text=text))
@@ -564,6 +704,45 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def handle_file_event(self, info: FileTransferInfo) -> None:
+        # Первое уведомление по файлу: спрашиваем, сохранять ли его.
+        if info.received == 0 and info.size > 0:
+            answer = QtWidgets.QMessageBox.question(
+                self,
+                "Incoming file",
+                f"Accept incoming file?\n\n{info.filename} ({info.size} bytes)",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.Yes,
+            )
+            if answer == QtWidgets.QMessageBox.StandardButton.No:
+                # Отклоняем: закрываем и удаляем временный файл, сбрасываем состояние ядра
+                try:
+                    if self.core.incoming_file:  # type: ignore[attr-defined]
+                        try:
+                            self.core.incoming_file.close()  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    if info.filename and os.path.exists(info.filename):
+                        try:
+                            os.remove(info.filename)
+                        except Exception:
+                            pass
+                    self.core.incoming_file = None  # type: ignore[attr-defined]
+                    self.core.incoming_info = None  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+                self._append_item(
+                    ChatItem(
+                        kind="error",
+                        timestamp="",
+                        sender="FILE",
+                        text=f"Incoming file rejected: {info.filename}",
+                    )
+                )
+                return
+
+        # Обновление прогресса/завершения при принятом файле
         self._append_item(
             ChatItem(
                 kind="file",
@@ -591,7 +770,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.refresh_status_label()
 
     def _create_core(self, profile: Optional[str]) -> I2PChatCore:
-        return I2PChatCore(
+        core = I2PChatCore(
             profile=profile or "default",
             on_status=self.handle_status,
             on_message=self.handle_message,
@@ -601,6 +780,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_file_event=self.handle_file_event,
             on_image_received=self.handle_image_received,
         )
+        # динамически навешиваем колбэк уведомлений,
+        # чтобы не менять публичную сигнатуру конструктора ядра
+        setattr(core, "on_notify", self.handle_notify)
+        return core
 
     def refresh_status_label(self) -> None:
         """Обновить строку статуса с учётом профиля и persist-режима."""
@@ -612,6 +795,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             if len(clean) > 12:
                 clean = f"{clean[:6]}..{clean[-6:]}"
             stored_disp = clean + ".b32.i2p"
+            # Если пользователь ещё не ввёл адрес вручную, подставляем сохранённый контакт.
+            if not self.addr_edit.text().strip():
+                # stored уже содержит полный адрес (с суффиксом), используем как есть.
+                self.addr_edit.setText(stored)
         else:
             stored_disp = "none"
 
@@ -633,10 +820,15 @@ class ChatWindow(QtWidgets.QMainWindow):
     def on_connect_clicked(self) -> None:
         addr = self.addr_edit.text().strip()
         if not addr:
-            QtWidgets.QMessageBox.warning(
-                self, "Connect", "Please enter peer address"
-            )
-            return
+            # Если адрес не введён, но есть сохранённый контакт, используем его.
+            if self.core.stored_peer:
+                addr = self.core.stored_peer
+                self.addr_edit.setText(addr)
+            else:
+                QtWidgets.QMessageBox.warning(
+                    self, "Connect", "Please enter peer address"
+                )
+                return
         asyncio.create_task(self.core.connect_to_peer(addr))
 
     @QtCore.pyqtSlot()
@@ -669,7 +861,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             )
             return
 
-        key_file = f"{self.profile}.dat"
+        # Всегда сохраняем .dat в общей папке профилей в домашней директории,
+        # чтобы это работало и из .app, и из dev‑окружения.
+        key_file = os.path.join(get_profiles_dir(), f"{self.profile}.dat")
         try:
             with open(key_file, "a", encoding="utf-8") as f:
                 f.write(self.core.current_peer_addr + "\n")
@@ -727,6 +921,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         """Переключиться на другой профиль (.dat)."""
         await self.core.shutdown()
         self.profile = profile
+        self.setWindowTitle(f"I2PChat • {self.profile}")
         self.core = self._create_core(self.profile)
         self.refresh_status_label()
         await self.core.init_session()
@@ -822,16 +1017,23 @@ def main() -> None:
                 if base not in profiles:
                     profiles.append(base)
 
-        item, ok = QtWidgets.QInputDialog.getItem(
-            None,
-            "Select profile",
-            "Profile name (default = TRANSIENT):",
-            profiles,
-            0,
-            True,  # editable: можно ввести новое имя
+        dialog = QtWidgets.QInputDialog(None)
+        dialog.setWindowTitle("Select profile")
+        # Короткий английский текст с дополнительным вертикальным отступом между строками
+        dialog.setLabelText(
+            "<html>"
+            "Profile name (default = TRANSIENT).<br><br>"
+            "Pick from the list,<br>"
+            "or type a new name to save keys:"
+            "</html>"
         )
-        if not ok:
+        dialog.setComboBoxItems(profiles)
+        dialog.setComboBoxEditable(True)
+        # Даём тексту чуть больше воздуха по ширине, не растягивая слишком сильно
+        dialog.setFixedWidth(360)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
+        item = dialog.textValue()
         profile = item.strip() or None
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)

@@ -182,6 +182,9 @@ class I2PChat(App):
         else:
             self.chat_log.write(content)
 
+        # любое пользовательское действие / вывод можно считать поводом сбросить «непрочитанные»,
+        # но сами счётчики увеличиваем только при входящих peer-сообщениях.
+
     # ----- callbacks из ядра -----
 
     def handle_status(self, status: str) -> None:
@@ -275,7 +278,10 @@ class I2PChat(App):
                 return
 
             if self.core.current_peer_addr:
-                key_file = f"{self.profile}.dat"
+                # Сохраняем .dat в той же директории профилей, что и ядро/GUI.
+                base_dir = os.path.join(os.path.expanduser("~"), ".i2pchat")
+                os.makedirs(base_dir, exist_ok=True)
+                key_file = os.path.join(base_dir, f"{self.profile}.dat")
                 try:
                     with open(key_file, "a") as f:
                         f.write(self.core.current_peer_addr + "\n")

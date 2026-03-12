@@ -98,6 +98,20 @@ class I2PChatCore:
             msg = ChatMessage(kind=kind, text=text, timestamp=datetime.now(timezone.utc))
             self.on_message(msg)
 
+    def _emit_notify(self, kind: str, text: str) -> None:
+        """
+        Уведомление UI о новом сообщении для системных нотификаций.
+
+        Отдельный слой, чтобы ядро не зависело от конкретной реализации уведомлений.
+        """
+        callback = getattr(self, "on_notify", None)
+        if callback is not None:
+            try:
+                callback(ChatMessage(kind=kind, text=text, timestamp=datetime.now(timezone.utc)))
+            except Exception:
+                # Уведомления не должны ломать протокол even if UI callback fails.
+                pass
+
     def _emit_system(self, text: str) -> None:
         if self.on_system:
             self.on_system(text)
@@ -155,7 +169,10 @@ class I2PChatCore:
 
             if len(lines) > 1:
                 self.stored_peer = lines[1]
-                self._emit_system(f"Stored Contact: {self.stored_peer}.b32.i2p")
+                disp_peer = self.stored_peer
+                if not disp_peer.endswith(".b32.i2p"):
+                    disp_peer = disp_peer + ".b32.i2p"
+                self._emit_system(f"Stored Contact: {disp_peer}")
 
         if dest is None:
             self._emit_system("Generating new Ed25519 identity...")
@@ -422,6 +439,20 @@ class I2PChatCore:
 
                 if msg_type == "U":
                     self._emit_message("peer", body)
+                    # Дополнительное уведомление UI о входящем сообщении от собеседника.
+                    notify_cb = getattr(self, "on_notify", None)
+                    if notify_cb is not None:
+                        try:
+                            notify_cb(
+                                ChatMessage(
+                                    kind="peer",
+                                    text=body,
+                                    timestamp=datetime.now(timezone.utc),
+                                )
+                            )
+                        except Exception:
+                            # Ошибка в уведомлении не должна рвать сетевой цикл.
+                            pass
 
                 elif msg_type == "I":
                     if body == "__END__":
