@@ -164,7 +164,7 @@ If you like this project and want to support development, you can send a small d
 
 - **BTC address**: `bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd`
 
-![Bitcoin donation QR](btc_donation_qr.png)
+<img src="btc_donation_qr.png" alt="Bitcoin donation QR" width="220" />
 
 ---
 
