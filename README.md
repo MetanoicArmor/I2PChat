@@ -16,6 +16,7 @@ The initial TUI concept, I2P protocol integration and a significant portion of t
 ### Table of contents
 
 - [Features](#features)
+- [GUI manuals](#gui-manuals)
 - [GUI screenshots](#gui-screenshots)
 - [Prebuilt binaries](#prebuilt-binaries)
 - [Running from source](#running-from-source)
