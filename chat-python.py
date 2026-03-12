@@ -13,8 +13,13 @@ from textual.app import App, ComposeResult
 from textual.reactive import reactive
 from textual.widgets import Input, RichLog, Static
 
-from i2p_chat_core import ChatMessage, FileTransferInfo, I2PChatCore
-from renderer import render_braille, render_bw
+from i2p_chat_core import (
+    ChatMessage,
+    FileTransferInfo,
+    I2PChatCore,
+    render_braille,
+    render_bw,
+)
 
 
 class I2PChat(App):

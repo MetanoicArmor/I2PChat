@@ -5,8 +5,13 @@ from typing import Optional
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
-from i2p_chat_core import ChatMessage, FileTransferInfo, I2PChatCore
-from renderer import render_braille, render_bw
+from i2p_chat_core import (
+    ChatMessage,
+    FileTransferInfo,
+    I2PChatCore,
+    render_braille,
+    render_bw,
+)
 
 
 class ChatWindow(QtWidgets.QMainWindow):

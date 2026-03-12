@@ -5,9 +5,10 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Optional, Tuple
+from typing import Any, Awaitable, Callable, List, Optional, Tuple
 
 import i2plib
+from PIL import Image
 
 
 @dataclass
@@ -529,4 +530,71 @@ class I2PChatCore:
                     self._emit_status("local_ok")
 
             await asyncio.sleep(20)
+
+
+def _load_image(path: str, max_width: int = 80) -> Image.Image:
+    img = Image.open(path).convert("L")
+    w, h = img.size
+    if w > max_width:
+        ratio = max_width / float(w)
+        img = img.resize((max_width, max(int(h * ratio))), Image.LANCZOS)
+    return img
+
+
+def render_bw(path: str) -> List[str]:
+    img = _load_image(path)
+    img = img.point(lambda v: 0 if v < 128 else 255, mode="1")
+
+    chars = {0: "█", 255: " "}
+    pixels = img.load()
+    w, h = img.size
+
+    lines: List[str] = []
+    for y in range(h):
+        row_chars: List[str] = []
+        for x in range(w):
+            row_chars.append(chars[255 if pixels[x, y] else 0])
+        lines.append("".join(row_chars).rstrip())
+    return lines
+
+
+def render_braille(path: str) -> List[str]:
+    img = _load_image(path)
+    w, h = img.size
+    w_aligned = w - (w % 2)
+    h_aligned = h - (h % 4)
+    if w_aligned <= 0 or h_aligned <= 0:
+        return []
+    img = img.crop((0, 0, w_aligned, h_aligned))
+    img = img.point(lambda v: 0 if v < 128 else 1, mode="1")
+    pixels = img.load()
+    w, h = img.size
+
+    def cell_to_braille(cx: int, cy: int) -> str:
+        offsets = [
+            (0, 0, 0),
+            (0, 1, 1),
+            (0, 2, 2),
+            (1, 0, 3),
+            (1, 1, 4),
+            (1, 2, 5),
+            (0, 3, 6),
+            (1, 3, 7),
+        ]
+        value = 0
+        for dx, dy, bit in offsets:
+            if pixels[cx + dx, cy + dy] == 0:
+                value |= 1 << bit
+        if value == 0:
+            return " "
+        return chr(0x2800 + value)
+
+    lines: List[str] = []
+    for cy in range(0, h, 4):
+        row_chars: List[str] = []
+        for cx in range(0, w, 2):
+            row_chars.append(cell_to_braille(cx, cy))
+        lines.append("".join(row_chars).rstrip())
+    return lines
+
 
