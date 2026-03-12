@@ -246,15 +246,12 @@ sound notifications (`QSoundEffect`) for incoming messages.
 
 #### 7.1. First start and sending a message
 
-1. Make sure that:
-   - Python 3.9 is installed;
-   - your I2P router with SAM (`127.0.0.1:7656`) is running;
-   - dependencies are installed (`pip install -r requirements.txt`).
-2. Start the GUI:
+1. Make sure your I2P router with SAM (`127.0.0.1:7656`) is running.
+2. Start I2PChat depending on your platform:
 
-   ```bash
-   python main_qt.py
-   ```
+   - **Windows**: unpack the release archive and run `I2PChat.exe`.
+   - **Linux**: make the AppImage executable (`chmod +x I2PChat-x86_64.AppImage`) and run `./I2PChat-x86_64.AppImage`.
+   - **macOS**: move `I2PChat.app` to `/Applications` (or any convenient folder) and open it as a normal app.
 
 3. In the `Select profile` dialog:
    - keep `default` or type your own profile name (for example, `alice`).
@@ -287,11 +284,11 @@ On the receiving side:
 
 #### 7.3. Switching to a persistent profile and locking to a peer
 
-1. Start the GUI with a profile name:
+1. Start I2PChat with a profile name (optionally via command‑line argument):
 
-   ```bash
-   python main_qt.py myprofile
-   ```
+   - **Windows**: `I2PChat.exe myprofile`.
+   - **Linux**: `./I2PChat-x86_64.AppImage myprofile`.
+   - **macOS**: `open -a I2PChat --args myprofile`.
 
 2. Connect to the desired peer using the address field and `Connect`.
 3. Make sure the connection is active and messages are exchanged.
@@ -373,7 +370,7 @@ The I2PChat GUI provides:
 
 For everyday use you typically only need to:
 
-1. Run `python main_qt.py` (with the desired profile).
+1. Run the I2PChat application (exe / AppImage / `.app`) with the desired profile.
 2. Paste the peer address and press `Connect`.
 3. Chat using the input field and `Send` button.
 4. When needed, send files/images and use profile locking for a long‑term peer.
