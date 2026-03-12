@@ -33,6 +33,11 @@ The initial TUI concept, I2P protocol integration and a significant portion of t
 - **ASCII / braille image rendering** for sending images over text channels
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
+#### GUI manuals
+
+- **English**: `docs/GUI_MANUAL_EN.md`
+- **Russian**: `docs/GUI_MANUAL_RU.md`
+
 ### GUI screenshots
 
 ![I2PChat macOS GUI](screenshots/1.png)
@@ -211,5 +216,5 @@ python main_qt.py
 ### Поддержать проект
 
 Если хотите «купить мне кофе», можно отправить донат в BTC на адрес  
-`bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd` (QR‑код см. выше.)
+`bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd` (QR‑код см. выше).
 
