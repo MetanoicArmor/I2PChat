@@ -26,6 +26,18 @@ How to use it:
 
 **Profiles directory** is OS-dependent: on **macOS** — `~/Library/Application Support/I2PChat`, on **Windows** — `%APPDATA%\I2PChat`, on **Linux** and others — `~/.i2pchat`. On Unix, the directory is restricted to the owner (0700).
 
+#### Where the profile (.dat) folder is on your system
+
+All profile files (e.g. `alice.dat`) are stored in a single folder that the app creates automatically:
+
+| OS      | Path (folder with .dat files) |
+|---------|-------------------------------|
+| Windows | `%APPDATA%\I2PChat` — usually **`C:\Users\<your_username>\AppData\Roaming\I2PChat`** |
+| macOS   | `~/Library/Application Support/I2PChat` |
+| Linux   | `~/.i2pchat` |
+
+On Windows you can paste `%APPDATA%\I2PChat` into the address bar of File Explorer to open the folder.
+
 After choosing or typing a name, press **OK** to continue or **Cancel** to close the dialog and abort starting the chat.
 
 ### 4. Actions bar (connection and profiles)
@@ -190,7 +202,7 @@ The **`Load .dat`** button lets you switch to another profile by picking an exis
 After pressing it:
 
 1. The `Select profile (.dat)` dialog opens:
-   - by default it points to the profiles directory (on Linux: `~/.i2pchat`, on macOS: `~/Library/Application Support/I2PChat`, etc.);
+   - by default it points to the profiles directory (on Windows: `%APPDATA%\I2PChat`, on Linux: `~/.i2pchat`, on macOS: `~/Library/Application Support/I2PChat`);
    - it filters files using the `*.dat` mask.
 2. If no file is chosen, the operation is cancelled.
 3. If a file is chosen:
