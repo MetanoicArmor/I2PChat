@@ -26,6 +26,13 @@ def get_profiles_dir() -> str:
     """Директория, где лежат/хранятся .dat профили (общая для dev и .app)."""
     base_dir = os.path.join(os.path.expanduser("~"), ".i2pchat")
     os.makedirs(base_dir, exist_ok=True)
+    # На Unix-подобных системах ужесточаем права, чтобы только владелец
+    # мог читать/писать содержимое профилей. На Windows эта операция
+    # просто тихо игнорируется.
+    try:
+        os.chmod(base_dir, 0o700)
+    except OSError:
+        pass
     return base_dir
 
 
@@ -395,8 +402,11 @@ class ChatWindow(QtWidgets.QMainWindow):
     def __init__(self, profile: Optional[str] = None) -> None:
         super().__init__()
         self.profile = profile or "default"
-        # Показываем профиль через разделитель-точку, без лишнего маркера в конце.
-        self.setWindowTitle(f"I2PChat • {self.profile}")
+        # Показываем профиль через разделитель-точку;
+        # если вдруг имя профиля уже содержит служебный маркер в конце (" •"),
+        # аккуратно убираем его, чтобы заголовок не заканчивался кружком.
+        clean_profile = self.profile.rstrip(" •")
+        self.setWindowTitle(f"I2PChat • {clean_profile}")
         self.resize(900, 600)
 
         # Тёмная макос‑подобная гамма (в духе Big Sur)
@@ -923,7 +933,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         """Переключиться на другой профиль (.dat)."""
         await self.core.shutdown()
         self.profile = profile
-        self.setWindowTitle(f"I2PChat • {self.profile}")
+        clean_profile = self.profile.rstrip(" •")
+        self.setWindowTitle(f"I2PChat • {clean_profile}")
         self.core = self._create_core(self.profile)
         self.refresh_status_label()
         await self.core.init_session()

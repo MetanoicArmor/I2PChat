@@ -146,6 +146,12 @@ class I2PChatCore:
         """Полный путь к .dat файлу профиля в домашней директории."""
         base_dir = os.path.join(os.path.expanduser("~"), ".i2pchat")
         os.makedirs(base_dir, exist_ok=True)
+        # Ужесточаем права на директорию профилей: только владелец
+        # может читать и изменять содержимое (Unix-подобные системы).
+        try:
+            os.chmod(base_dir, 0o700)
+        except OSError:
+            pass
         return os.path.join(base_dir, f"{self.profile}.dat")
 
     async def init_session(self) -> None:
