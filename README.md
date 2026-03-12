@@ -24,14 +24,6 @@ The initial TUI concept, I2P protocol integration and a significant portion of t
 
 ![I2PChat macOS GUI – profile & notifications](screenshots/2.png)
 
-### Buy me a coffee
-
-If you like this project and want to support development, you can send a small donation in Bitcoin:
-
-- **BTC address**: `bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd`
-
-![Bitcoin donation QR](btc_donation_qr.png)
-
 ### Prebuilt binaries
 
 Releases are published on GitHub under the **Releases** section.
@@ -135,4 +127,12 @@ The resulting `I2PChat.exe` is self‑contained and can be distributed to machin
 
 See `LICENSE` for full license text.  
 Please also respect the original `termchat-i2p-python` licensing and attribution to **Stanley (I2P community)**.
+
+### Buy me a coffee
+
+If you like this project and want to support development, you can send a small donation in Bitcoin:
+
+- **BTC address**: `bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd`
+
+![Bitcoin donation QR](btc_donation_qr.png)
 
