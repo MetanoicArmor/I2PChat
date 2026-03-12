@@ -45,8 +45,8 @@ The initial TUI concept, I2P protocol integration and a significant portion of t
 
 #### Manuals
 
-- **English**: `docs/GUI_MANUAL_EN.md`
-- **Russian**: `docs/GUI_MANUAL_RU.md`
+- **English manual**: [**docs/GUI_MANUAL_EN.md**](docs/GUI_MANUAL_EN.md)
+- **Русский мануал**: [**docs/GUI_MANUAL_RU.md**](docs/GUI_MANUAL_RU.md)
 
 ### Screenshots
 
