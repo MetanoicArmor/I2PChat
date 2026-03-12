@@ -18,9 +18,11 @@ The initial TUI concept, I2P protocol integration and a significant portion of t
 - **ASCII / braille image rendering** for sending images over text channels
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
-### GUI screenshot
+### GUI screenshots
 
 ![I2PChat macOS GUI](screenshots/1.png)
+
+![I2PChat macOS GUI – profile & notifications](screenshots/2.png)
 
 ### Prebuilt binaries
 
