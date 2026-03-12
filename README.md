@@ -4,9 +4,9 @@ I2PChat is an experimental peer‑to‑peer chat client for the [I2P](https://ge
 It provides both a terminal UI (TUI) and a graphical UI (PyQt6) on top of a shared asynchronous core.
 
 **Важно (авторство / credits):**  
-Этот форк основан на оригинальном клиенте **`termchat-i2p-python`**, автором которого является **Stanley** из I2P‑сообщества.  
+I2PChat — **отдельный GUI‑клиент**, который использует идеи и часть логики из оригинального терминального клиента **`termchat-i2p-python`**, автором которого является **Stanley** из I2P‑сообщества.  
 Исходный проект Stanley доступен здесь: [`http://git.community.i2p/stan/termchat-i2p-python`](http://git.community.i2p/stan/termchat-i2p-python).  
-Начальная идея TUI‑клиента, интеграция с протоколом и значительная часть базовой логики взяты из его работы; этот репозиторий дополняет её GUI‑клиентом, кроссплатформенной сборкой и упаковкой.
+Начальная идея TUI‑клиента, интеграция с протоколом и значительная часть базовой логики взяты из его работы; этот репозиторий развивает её в сторону GUI‑клиента, дополнительного TUI, кроссплатформенной сборки и упаковки.
 
 ### Features
 
