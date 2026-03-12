@@ -52,7 +52,7 @@ The initial TUI concept, I2P protocol integration and a significant portion of t
 
 <img src="screenshots/1.png" alt="I2PChat macOS GUI" width="900" />
 
-![I2PChat macOS GUI – profile & notifications](screenshots/2.png)
+<img src="screenshots/2.png" alt="I2PChat macOS GUI – profile & notifications" width="900" />
 
 ### Prebuilt binaries
 

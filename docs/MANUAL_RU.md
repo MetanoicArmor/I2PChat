@@ -4,7 +4,7 @@
 
 При запуске GUI без указания профиля появляется диалог **Select profile**:
 
-<img src="../screenshots/3.png" alt="Окно выбора профиля" width="420" />
+<img src="../screenshots/3.png" alt="Окно выбора профиля" width="700" />
 
 - заголовок окна: **Select profile**;
 - основная надпись:
@@ -88,7 +88,7 @@
 
 Кнопка **`Copy My Addr`** копирует ваш собственный I2P‑адрес в буфер обмена.
 
-<img src="../screenshots/2.png" alt="Получение собственного адреса через Copy My Addr" width="420" />
+<img src="../screenshots/2.png" alt="Получение собственного адреса через Copy My Addr" width="700" />
 
 Логика:
 

@@ -4,7 +4,7 @@
 
 When you start the GUI **without** passing a profile name, the **Select profile** dialog appears:
 
-<img src="../screenshots/3.png" alt="Select profile dialog" width="420" />
+<img src="../screenshots/3.png" alt="Select profile dialog" width="700" />
 
 - window title: **Select profile**;
 - main text:
@@ -88,7 +88,7 @@ After pressing it:
 
 The **`Copy My Addr`** button copies your own I2P destination to the clipboard.
 
-<img src="../screenshots/2.png" alt="Getting your own address via Copy My Addr" width="420" />
+<img src="../screenshots/2.png" alt="Getting your own address via Copy My Addr" width="700" />
 
 Logic:
 
