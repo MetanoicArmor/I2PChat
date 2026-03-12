@@ -3,23 +3,17 @@
 set -e
 
 APP_NAME="TermChat I2P"
-VENV_DIR=".venv"
+VENV_DIR=".venv314"
 
-# Строго Python 3.9: ищем в PATH или в Homebrew
-PY39=""
-if command -v python3.9 &>/dev/null; then
-  PY39="python3.9"
-elif [ -x "/opt/homebrew/bin/python3.9" ]; then
-  PY39="/opt/homebrew/bin/python3.9"
-fi
-if [ -z "${PY39}" ]; then
-  echo "Ошибка: Python 3.9 не найден. Установи: brew install python@3.9"
-  exit 1
+echo "==> Создаю/обновляю виртуальное окружение ${VENV_DIR} (Python 3.14)"
+if command -v python3.14 &>/dev/null; then
+  PY_BIN="python3.14"
+else
+  PY_BIN="python3"
 fi
 
-echo "==> Создаю/обновляю виртуальное окружение ${VENV_DIR} (Python 3.9)"
 if [ ! -d "${VENV_DIR}" ]; then
-  "${PY39}" -m venv "${VENV_DIR}"
+  "${PY_BIN}" -m venv "${VENV_DIR}"
 fi
 
 source "${VENV_DIR}/bin/activate"

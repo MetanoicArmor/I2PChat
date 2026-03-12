@@ -1,16 +1,16 @@
 Param(
-    [string]$VenvDir = ".venv39"
+    [string]$VenvDir = ".venv314"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# строго Python 3.9, как требовалось автором (i2plib и остальное тестировалось на нём)
-Write-Host "==> Create fresh virtual environment $VenvDir (Python 3.9)"
+# Используем актуальный установленный Python 3.x (по умолчанию 3.14)
+Write-Host "==> Create fresh virtual environment $VenvDir (Python 3.14+)"
 if (Test-Path $VenvDir) {
     Remove-Item -Recurse -Force $VenvDir
 }
-py -3.9 -m venv $VenvDir
+py -3.14 -m venv $VenvDir
 
 Write-Host "==> Activate virtual environment"
 & "$VenvDir\Scripts\Activate.ps1"

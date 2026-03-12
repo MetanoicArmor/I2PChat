@@ -3,17 +3,17 @@
 set -e
 
 APP_NAME="termchat-i2p"
-VENV_DIR=".venv39"
+VENV_DIR=".venv314"
 
-echo "==> Создаю/обновляю виртуальное окружение ${VENV_DIR} (Python 3.9)"
-if ! command -v python3.9 >/dev/null 2>&1; then
-  echo "Требуется python3.9 (i2plib не совместим с 3.14+)."
-  echo "Установите python3.9 (через пакеты или pyenv) и повторите."
-  exit 1
+echo "==> Создаю/обновляю виртуальное окружение ${VENV_DIR} (Python 3.14)"
+if command -v python3.14 >/dev/null 2>&1; then
+  PYTHON_BIN="python3.14"
+else
+  PYTHON_BIN="python3"
 fi
 
 if [ ! -d "${VENV_DIR}" ]; then
-  python3.9 -m venv "${VENV_DIR}"
+  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
 fi
 
 source "${VENV_DIR}/bin/activate"
