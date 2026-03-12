@@ -12,6 +12,7 @@ from i2p_chat_core import (
     ChatMessage,
     FileTransferInfo,
     I2PChatCore,
+    get_profiles_dir,
     render_braille,
     render_bw,
 )
@@ -20,20 +21,6 @@ try:
     from PyQt6.QtMultimedia import QSoundEffect  # type: ignore[attr-defined]
 except Exception:  # pragma: no cover - мультимедиа не везде доступно
     QSoundEffect = None  # type: ignore[assignment]
-
-
-def get_profiles_dir() -> str:
-    """Директория, где лежат/хранятся .dat профили (общая для dev и .app)."""
-    base_dir = os.path.join(os.path.expanduser("~"), ".i2pchat")
-    os.makedirs(base_dir, exist_ok=True)
-    # На Unix-подобных системах ужесточаем права, чтобы только владелец
-    # мог читать/писать содержимое профилей. На Windows эта операция
-    # просто тихо игнорируется.
-    try:
-        os.chmod(base_dir, 0o700)
-    except OSError:
-        pass
-    return base_dir
 
 
 @dataclass

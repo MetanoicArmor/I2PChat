@@ -32,6 +32,25 @@ FileEventCallback = Callable[[FileTransferInfo], Any]
 SimpleCallback = Callable[[str], Any]
 
 
+def get_profiles_dir() -> str:
+    """
+    Директория для .dat профилей. На macOS — Application Support (надёжный доступ),
+    на Windows — APPDATA, иначе ~/.i2pchat. Создаёт каталог и на Unix выставляет 0o700.
+    """
+    if sys.platform == "darwin":
+        base = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "I2PChat")
+    elif sys.platform == "win32":
+        base = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "I2PChat")
+    else:
+        base = os.path.join(os.path.expanduser("~"), ".i2pchat")
+    os.makedirs(base, exist_ok=True)
+    try:
+        os.chmod(base, 0o700)
+    except OSError:
+        pass
+    return base
+
+
 class I2PChatCore:
     """
     Ядро I2P-чата без привязки к UI.
@@ -85,6 +104,9 @@ class I2PChatCore:
 
         self._accept_task: Optional[asyncio.Task[Any]] = None
         self._tunnel_task: Optional[asyncio.Task[Any]] = None
+        # Сокет сессии SAM: по спецификации сессия живёт только пока этот сокет открыт.
+        # Если его не хранить, сокет закрывается и сессия умирает — при Connect роутер может падать.
+        self._session_socket: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
 
     # ---------- вспомогательные уведомления ----------
 
@@ -143,16 +165,8 @@ class I2PChatCore:
     # ---------- инициализация сессии ----------
 
     def _profile_path(self) -> str:
-        """Полный путь к .dat файлу профиля в домашней директории."""
-        base_dir = os.path.join(os.path.expanduser("~"), ".i2pchat")
-        os.makedirs(base_dir, exist_ok=True)
-        # Ужесточаем права на директорию профилей: только владелец
-        # может читать и изменять содержимое (Unix-подобные системы).
-        try:
-            os.chmod(base_dir, 0o700)
-        except OSError:
-            pass
-        return os.path.join(base_dir, f"{self.profile}.dat")
+        """Полный путь к .dat файлу профиля (общая директория профилей)."""
+        return os.path.join(get_profiles_dir(), f"{self.profile}.dat")
 
     async def init_session(self) -> None:
         """Создать/загрузить идентичность и SAM-сессию."""
@@ -193,7 +207,9 @@ class I2PChatCore:
 
         self.my_dest = dest
 
-        await i2plib.create_session(
+        # Важно: сохраняем сокет сессии и не закрываем его до shutdown.
+        # Иначе по SAM-спеку сессия умирает при закрытии сокета, и STREAM CONNECT/ACCEPT ломают роутер.
+        self._session_socket = await i2plib.create_session(
             self.session_id,
             destination=self.my_dest,
             sam_address=self.sam_address,
@@ -219,11 +235,21 @@ class I2PChatCore:
 
     # ---------- публичные операции ----------
 
+    # Таймаут на установку соединения (I2P может долго строить туннели)
+    CONNECT_TIMEOUT = 120
+
     async def connect_to_peer(self, target_address: str) -> None:
         try:
             self.current_peer_addr = target_address
-            reader, writer = await i2plib.stream_connect(
-                self.session_id, target_address, sam_address=self.sam_address
+            self._emit_system(
+                f"Connecting to {target_address[:24]}... "
+                "(may take 1–2 min while I2P builds tunnels)"
+            )
+            reader, writer = await asyncio.wait_for(
+                i2plib.stream_connect(
+                    self.session_id, target_address, sam_address=self.sam_address
+                ),
+                timeout=self.CONNECT_TIMEOUT,
             )
 
             if self.my_dest is not None:
@@ -239,6 +265,12 @@ class I2PChatCore:
 
             loop = asyncio.get_running_loop()
             loop.create_task(self.receive_loop(self.conn))
+        except asyncio.TimeoutError:
+            self._emit_error(
+                "Connection timed out. Check: I2P router running, peer address correct, peer online."
+            )
+            self.conn = None
+            self._emit_system("Waiting for incoming connections...")
         except Exception as e:
             self._emit_error(f"Connection failed: {e}")
             self.conn = None
@@ -338,6 +370,13 @@ class I2PChatCore:
             self._accept_task.cancel()
         if self._tunnel_task:
             self._tunnel_task.cancel()
+        if self._session_socket:
+            try:
+                _, writer = self._session_socket
+                writer.close()
+            except Exception:
+                pass
+            self._session_socket = None
 
     # ---------- фоновые циклы ----------
 

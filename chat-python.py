@@ -17,6 +17,7 @@ from i2p_chat_core import (
     ChatMessage,
     FileTransferInfo,
     I2PChatCore,
+    get_profiles_dir,
     render_braille,
     render_bw,
 )
@@ -278,10 +279,7 @@ class I2PChat(App):
                 return
 
             if self.core.current_peer_addr:
-                # Сохраняем .dat в той же директории профилей, что и ядро/GUI.
-                base_dir = os.path.join(os.path.expanduser("~"), ".i2pchat")
-                os.makedirs(base_dir, exist_ok=True)
-                key_file = os.path.join(base_dir, f"{self.profile}.dat")
+                key_file = os.path.join(get_profiles_dir(), f"{self.profile}.dat")
                 try:
                     with open(key_file, "a") as f:
                         f.write(self.core.current_peer_addr + "\n")

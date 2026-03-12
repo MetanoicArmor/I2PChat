@@ -19,10 +19,12 @@ How to use it:
 - **`default`**:
   - leave this value if you want a temporary (TRANSIENT) profile without locking to a single peer;
 - **pick from the list**:
-  - open the drop‑down on the right and select an existing profile (a `.dat` file previously created in `~/.i2pchat`);
+  - open the drop‑down on the right and select an existing profile (a `.dat` file from the profiles directory);
 - **enter a new name**:
   - type your own profile name (for example, `alice`);
-  - when you later use the **Lock to peer** function, keys and metadata will be saved to `~/.i2pchat/<name>.dat`.
+  - when you later use the **Lock to peer** function, keys and metadata will be saved in the profiles directory (see below) as `<name>.dat`.
+
+**Profiles directory** is OS-dependent: on **macOS** — `~/Library/Application Support/I2PChat`, on **Windows** — `%APPDATA%\I2PChat`, on **Linux** and others — `~/.i2pchat`. On Unix, the directory is restricted to the owner (0700).
 
 After choosing or typing a name, press **OK** to continue or **Cancel** to close the dialog and abort starting the chat.
 
@@ -174,7 +176,7 @@ Rules and behaviour:
    ```
 
 4. In all other cases:
-   - the file `~/.i2pchat/<profile>.dat` is created or updated and the peer address is appended there;
+   - the file `<profile>.dat` in the profiles directory is created or updated and the peer address is appended there;
    - a system message appears in the chat:
 
    ```text
@@ -188,12 +190,12 @@ The **`Load .dat`** button lets you switch to another profile by picking an exis
 After pressing it:
 
 1. The `Select profile (.dat)` dialog opens:
-   - by default it points to the profiles directory `~/.i2pchat`;
+   - by default it points to the profiles directory (on Linux: `~/.i2pchat`, on macOS: `~/Library/Application Support/I2PChat`, etc.);
    - it filters files using the `*.dat` mask.
 2. If no file is chosen, the operation is cancelled.
 3. If a file is chosen:
    - the base name without extension (`<base>`) is taken from the path;
-   - the `.dat` file is copied to `~/.i2pchat/<base>.dat` (if it is not already there);
+   - the `.dat` file is copied into the profiles directory as `<base>.dat` (if not already there);
    - the profile is switched asynchronously:
      - the current core is cleanly shut down (`shutdown`);
      - the window title is updated to `I2PChat • <profile_name>`;
@@ -299,7 +301,7 @@ On the receiving side:
 2. Start the GUI (with any profile or via `default`).
 3. Click **`Load .dat`**.
 4. In the file dialog, pick `friend.dat`:
-   - the file will be copied to `~/.i2pchat/friend.dat` (if it is not already there);
+   - the file will be copied into the profiles directory as `friend.dat` (if not already there);
    - the profile will automatically switch to `friend`;
    - the core will be restarted under the new profile.
 
