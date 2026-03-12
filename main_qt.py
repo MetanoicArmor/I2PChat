@@ -164,6 +164,19 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     BUBBLE_SPACING_Y = 10
     BUBBLE_RADIUS = 12
 
+    def _bubble_width(self, cell_width: int, text: str, font: QtGui.QFont) -> int:
+        """
+        Ширина бабла:
+        - не меньше 40% строки (чтобы короткие фразы не выглядели «таблеткой» по центру)
+        - не больше 75% строки (оставляем «воздух» по бокам)
+        - но при этом ограничена реальной длиной текста + отступы
+        """
+        metrics = QtGui.QFontMetrics(font)
+        text_w = metrics.horizontalAdvance(text or " ") + self.PADDING_X * 4
+        min_w = int(cell_width * 0.4)
+        max_w = int(cell_width * 0.75)
+        return max(min_w, min(max_w, text_w))
+
     def paint(
         self,
         painter: QtGui.QPainter,
@@ -181,8 +194,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         cell_width = rect.width()
         base_font = painter.font()
-        # Бабл подстраивается под ширину строки; перенос текста зависит от окна
-        bubble_width = max(80, cell_width - self.PADDING_X * 2)
+        bubble_width = self._bubble_width(cell_width, item.text, base_font)
 
         if is_me:
             bubble_rect = QtCore.QRectF(
@@ -304,7 +316,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         font = option.font
 
         # Используем ту же ширину бабла, что и в paint()
-        bubble_width = max(80, cell_width - self.PADDING_X * 2)
+        bubble_width = self._bubble_width(cell_width, item.text, font)
         available_width = max(10, bubble_width - self.PADDING_X * 2)
 
         metrics = QtGui.QFontMetrics(font)
