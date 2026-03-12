@@ -390,6 +390,22 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         return QtCore.QSize(int(cell_width), int(height))
 
 
+class MessageInputEdit(QtWidgets.QPlainTextEdit):
+    """Многострочное поле ввода: Enter — отправить, Shift+Enter — новая строка."""
+    sendRequested = QtCore.pyqtSignal()
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        key = event.key()
+        if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+            if event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier:
+                self.insertPlainText("\n")
+                return
+            self.sendRequested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class ChatWindow(QtWidgets.QMainWindow):
     def __init__(self, profile: Optional[str] = None) -> None:
         super().__init__()
@@ -428,14 +444,14 @@ class ChatWindow(QtWidgets.QMainWindow):
             QScrollBar::sub-line:vertical {
                 height: 0px;
             }
-            QLineEdit {
+            QLineEdit, QPlainTextEdit {
                 background: #1f1f23;
                 border: 1px solid rgba(255, 255, 255, 0.10);
                 border-radius: 8px;
                 padding: 8px 10px;
                 color: #f5f5f7;
             }
-            QLineEdit:focus {
+            QLineEdit:focus, QPlainTextEdit:focus {
                 border-color: #0a84ff;
             }
             QPushButton {
@@ -499,9 +515,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         input_layout = QtWidgets.QHBoxLayout()
         input_layout.setContentsMargins(0, 0, 0, 0)
         input_layout.setSpacing(8)
-        self.input_edit = QtWidgets.QLineEdit(self)
-        self.input_edit.setPlaceholderText("Type message and press Enter...")
+        self.input_edit = MessageInputEdit(self)
+        self.input_edit.setPlaceholderText("Type message. Enter to send, Shift+Enter for new line.")
         self.input_edit.setMinimumHeight(56)
+        self.input_edit.setMaximumHeight(120)
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
         self.input_edit.setFont(font)
@@ -509,9 +526,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.send_button = QtWidgets.QPushButton("Send", self)
         self.send_button.setMinimumHeight(56)
 
-        # Жёстко фиксируем высоту, чтобы поле и кнопка были на одном уровне
         fixed_height = 56
-        self.input_edit.setFixedHeight(fixed_height)
         self.send_button.setFixedHeight(fixed_height)
         input_layout.addWidget(self.input_edit)
         input_layout.addWidget(self.send_button)
@@ -596,7 +611,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         # сигналы
         self.send_button.clicked.connect(self.on_send_clicked)
-        self.input_edit.returnPressed.connect(self.on_send_clicked)
+        self.input_edit.sendRequested.connect(self.on_send_clicked)
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
         self.send_file_button.clicked.connect(self.on_send_file_clicked)
@@ -814,7 +829,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_send_clicked(self) -> None:
-        text = self.input_edit.text().strip()
+        text = self.input_edit.toPlainText().strip()
         if not text:
             return
         self.input_edit.clear()
