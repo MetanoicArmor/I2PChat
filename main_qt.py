@@ -400,6 +400,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.resize(900, 600)
 
         # Тёмная макос‑подобная гамма (в духе Big Sur)
+        status_font_px = 9 if sys.platform == "win32" else 11
         self.setStyleSheet(
             """
             QMainWindow {
@@ -455,9 +456,10 @@ class ChatWindow(QtWidgets.QMainWindow):
                 border-radius: 10px;
                 padding: 4px 10px;
                 color: #9fa1b5;
-                font-size: 11px;
+                font-size: %(status_font_px)spx;
             }
             """
+            % {"status_font_px": status_font_px}
         )
 
         # UI
@@ -1000,7 +1002,9 @@ def main() -> None:
 
     # Единый стиль и шрифт для всех платформ (более предсказуемый рендеринг)
     app.setStyle("Fusion")
-    base_font = QtGui.QFont("Inter", 13)
+    # На Windows шрифты по умолчанию выглядят крупнее — задаём меньший размер
+    font_pt = 10 if sys.platform == "win32" else 13
+    base_font = QtGui.QFont("Inter", font_pt)
     base_font.setStyleHint(QtGui.QFont.StyleHint.SansSerif)
     app.setFont(base_font)
 

@@ -43,9 +43,3 @@ coll = COLLECT(
     upx_exclude=[],
     name='I2PChat',
 )
-app = BUNDLE(
-    coll,
-    name='I2PChat.app',
-    icon='icon-1024.png',
-    bundle_identifier='net.i2pchat.I2PChat',
-)

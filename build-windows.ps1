@@ -20,7 +20,8 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt pyinstaller
 
 Write-Host "==> Build GUI I2PChat.exe with icon"
-pyinstaller --clean --noconsole --name I2PChat --icon icon-1024.png main_qt.py
+if (Test-Path "dist\I2PChat") { Remove-Item -Recurse -Force "dist\I2PChat" }
+pyinstaller --clean -y --noconsole --name I2PChat --icon icon-1024.png main_qt.py
 
 Write-Host ""
 Write-Host "Done."
