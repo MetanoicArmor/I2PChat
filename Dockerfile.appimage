@@ -1,0 +1,47 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    python3 python3-venv python3-pip \
+    wget git ca-certificates \
+    libxcb-xinerama0 libglu1-mesa libxkbcommon-x11-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# скопируем весь проект внутрь контейнера
+COPY . /app
+
+# ставим зависимости глобально внутри контейнера
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install pyinstaller "PyQt6==6.7.0" qasync i2plib pillow
+
+# собираем PyInstaller-бандл
+RUN pyinstaller --name I2PChat \
+      --windowed \
+      --icon icon-1024.png \
+      main_qt.py
+
+# скачиваем appimagetool
+RUN wget -O appimagetool-x86_64.AppImage \
+      https://github.com/AppImage/appimagetool/releases/latest/download/appimagetool-x86_64.AppImage && \
+    chmod +x appimagetool-x86_64.AppImage
+
+# собираем AppDir
+RUN mkdir -p I2PChat.AppDir/usr/bin \
+    I2PChat.AppDir/usr/share/applications \
+    I2PChat.AppDir/usr/share/icons/hicolor/512x512/apps && \
+    cp dist/I2PChat/I2PChat I2PChat.AppDir/usr/bin/ && \
+    cp icon-1024.png I2PChat.AppDir/usr/share/icons/hicolor/512x512/apps/i2pchat.png && \
+    printf '[Desktop Entry]\nType=Application\nName=I2P Chat\nComment=Secure chat over I2P\nExec=I2PChat\nIcon=i2pchat\nTerminal=false\nCategories=Network;Chat;\n' \
+      > I2PChat.AppDir/usr/share/applications/i2pchat.desktop && \
+    printf '#!/bin/sh\nHERE=\"$(dirname \"$(readlink -f \"$0\")\")\"\nexec \"$HERE/usr/bin/I2PChat\" \"$@\"\n' \
+      > I2PChat.AppDir/AppRun && \
+    chmod +x I2PChat.AppDir/AppRun I2PChat.AppDir/usr/bin/I2PChat
+
+# финальная сборка AppImage
+RUN ./appimagetool-x86_64.AppImage I2PChat.AppDir I2PChat-x86_64.AppImage
+
+CMD ["bash"]
+
