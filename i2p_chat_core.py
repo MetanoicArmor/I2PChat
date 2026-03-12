@@ -128,12 +128,18 @@ class I2PChatCore:
 
     # ---------- инициализация сессии ----------
 
+    def _profile_path(self) -> str:
+        """Полный путь к .dat файлу профиля в домашней директории."""
+        base_dir = os.path.join(os.path.expanduser("~"), ".i2pchat")
+        os.makedirs(base_dir, exist_ok=True)
+        return os.path.join(base_dir, f"{self.profile}.dat")
+
     async def init_session(self) -> None:
         """Создать/загрузить идентичность и SAM-сессию."""
         self._emit_status("initializing")
         self._emit_system(f"Initializing Profile: {self.profile}")
 
-        key_file = f"{self.profile}.dat"
+        key_file = self._profile_path()
         is_persistent = self.profile != "default"
 
         dest: Optional[i2plib.Destination] = None
