@@ -3,10 +3,10 @@
 I2PChat is an experimental peer‑to‑peer chat client for the [I2P](https://geti2p.net) anonymity network.  
 It provides both a terminal UI (TUI) and a graphical UI (PyQt6) on top of a shared asynchronous core.
 
-**Важно (credits):**  
-This project is **based on the `termchat-i2p` client by Stanley from the I2P community**  
-([original repository](http://git.community.i2p/stan/termchat-i2p-python)).  
-The original TUI concept, protocol integration and much of the core logic come from his work; this repository extends it with a GUI, cross‑platform builds and packaging.
+**Важно (авторство / credits):**  
+Этот форк основан на оригинальном клиенте **`termchat-i2p-python`**, автором которого является **Stanley** из I2P‑сообщества.  
+Исходный проект Stanley доступен здесь: [`http://git.community.i2p/stan/termchat-i2p-python`](http://git.community.i2p/stan/termchat-i2p-python).  
+Начальная идея TUI‑клиента, интеграция с протоколом и значительная часть базовой логики взяты из его работы; этот репозиторий дополняет её GUI‑клиентом, кроссплатформенной сборкой и упаковкой.
 
 ### Features
 
@@ -73,7 +73,7 @@ Everywhere, the recommended/runtime version is **Python 3.9** (because of `i2pli
 This:
 
 - Uses `python3.9` and virtualenv `.venv39`.
-- Builds a single‑file TUI binary: `dist/termchat-i2p`.
+- Builds a single‑file TUI binary: `dist/termchat-i2p-python`.
 
 #### Linux (GUI AppImage)
 
@@ -96,7 +96,7 @@ This script:
 This script:
 
 - Uses `python3.9` (from PATH or Homebrew).
-- Builds `dist/termchat-i2p` via PyInstaller.
+- Builds `dist/termchat-i2p-python` via PyInstaller.
 - Then you wrap it into a `.app` bundle using **Platypus** (steps are printed by the script).
 
 ### Windows build (GUI)
@@ -120,5 +120,5 @@ The resulting `I2PChat.exe` is self‑contained and can be distributed to machin
 ### License
 
 See `LICENSE` for full license text.  
-Please also respect the original `termchat-i2p` licensing and attribution to **Stanley (I2P community)**.
+Please also respect the original `termchat-i2p-python` licensing and attribution to **Stanley (I2P community)**.
 
