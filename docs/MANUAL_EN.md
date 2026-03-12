@@ -199,34 +199,12 @@ Using this button you can:
 - quickly import an existing profile;
 - switch between several profiles without restarting the application.
 
-### 5. ASCII / braille image messages
-
-The GUI supports sending images as ASCII/braille art using the `render_braille` and `render_bw` helpers from the core.
-
-In `ChatWindow` there are two handlers:
-
-- `on_send_img_braille_clicked` — send image in braille mode;
-- `on_send_img_bw_clicked` — send image in black‑and‑white ASCII mode.
-
-They follow the same steps:
-
-1. Open a file chooser dialog:
-   - `Select image to send (braille)` or
-   - `Select image to send (bw)`.
-2. Convert the image to a list of text lines (`lines`) using the appropriate renderer.
-3. The resulting text art:
-   - is appended to the chat as your own message (`kind="image_braille"` or `"image_bw"`);
-   - is sent to the peer as a sequence of lines via the core (`send_image_lines(lines)`).
-
-In the current version of the GUI these handlers are not bound to dedicated buttons in the actions bar,  
-but they can be triggered programmatically or wired up to new buttons/menu items in future UI iterations.
-
-### 6. System notifications and sound
+### 5. System notifications and sound
 
 The GUI uses a system tray icon (`QSystemTrayIcon`) and, where supported,  
 sound notifications (`QSoundEffect`) for incoming messages.
 
-#### 6.1. System notifications
+#### 5.1. System notifications
 
 - When an incoming message from a peer (kind `peer`) is received, the `handle_notify` callback is invoked.
 - If the window / application is **not active** (minimised or in the background):
@@ -236,7 +214,7 @@ sound notifications (`QSoundEffect`) for incoming messages.
   - a native system notification (toast) is shown via `QSystemTrayIcon` for about 5 seconds.
 - If the window is active, the GUI relies on the visual chat updates without extra pop‑ups.
 
-#### 6.2. Sound notifications
+#### 5.2. Sound notifications
 
 - If the `QtMultimedia` module is available:
   - a `QSoundEffect` instance is created;
@@ -246,9 +224,9 @@ sound notifications (`QSoundEffect`) for incoming messages.
   - a soft system sound is played;
   - if playback fails, the fallback `QApplication.beep()` is used instead.
 
-### 7. Typical usage scenarios
+### 6. Typical usage scenarios
 
-#### 7.1. First start and sending a message
+#### 6.1. First start and sending a message
 
 1. Make sure your I2P router with SAM (`127.0.0.1:7656`) is running.
 2. Start I2PChat depending on your platform:
@@ -270,7 +248,7 @@ sound notifications (`QSoundEffect`) for incoming messages.
    - press `Enter` or click `Send`.
 7. The new message will appear on the right side of the chat area as your outgoing message.
 
-#### 7.2. Sending a file to a peer
+#### 6.2. Sending a file to a peer
 
 1. Ensure you are connected to the peer (you pressed `Connect` and see no errors).
 2. Click **`Send File`**.
@@ -286,7 +264,7 @@ On the receiving side:
 - a confirmation dialog is shown;
 - if the user rejects the file, it is deleted and a rejection message appears in the chat.
 
-#### 7.3. Switching to a persistent profile and locking to a peer
+#### 6.3. Switching to a persistent profile and locking to a peer
 
 1. Start I2PChat with a profile name (optionally via command‑line argument):
 
@@ -308,7 +286,7 @@ On the receiving side:
    - the status label will show `Stored peer` with the address;
    - if the peer field is empty, the stored address will be auto‑filled.
 
-#### 7.4. Importing an existing `.dat` profile
+#### 6.4. Importing an existing `.dat` profile
 
 1. Make sure you have a profile file, for example `friend.dat`.
 2. Start the GUI (with any profile or via `default`).
@@ -318,9 +296,9 @@ On the receiving side:
    - the profile will automatically switch to `friend`;
    - the core will be restarted under the new profile.
 
-### 8. Common GUI‑level issues
+### 7. Common GUI‑level issues
 
-#### 8.1. No messages appear in the chat
+#### 7.1. No messages appear in the chat
 
 Check the following:
 
@@ -334,7 +312,7 @@ Check the following:
 
 If everything looks correct but there is still no traffic, the problem is most likely in the **I2P/network layer**, not in the GUI.
 
-#### 8.2. Unable to connect to a peer
+#### 7.2. Unable to connect to a peer
 
 Make sure that:
 
@@ -344,7 +322,7 @@ Make sure that:
 
 In this case the GUI will show the relevant system/error messages in the chat area.
 
-#### 8.3. No incoming file prompts
+#### 7.3. No incoming file prompts
 
 When a file is incoming, the GUI should show an `Incoming file` dialog with the question `Accept incoming file?`.
 
@@ -353,7 +331,7 @@ If you do not see it:
 - check whether another modal dialog is blocking it (it might be behind the main window);
 - ensure the application is not stuck due to network issues.
 
-#### 8.4. Copying message text does not work
+#### 7.4. Copying message text does not work
 
 Check:
 
@@ -363,7 +341,7 @@ Check:
   - `Cmd+C` on macOS;
 - you can also use the context menu (`Copy text` / `Copy with timestamp`).
 
-### 9. Summary
+### 8. Summary
 
 The I2PChat GUI provides:
 
