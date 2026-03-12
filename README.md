@@ -211,5 +211,5 @@ python main_qt.py
 ### Поддержать проект
 
 Если хотите «купить мне кофе», можно отправить донат в BTC на адрес  
-`bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd` (QR‑код см. выше.
+`bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd` (QR‑код см. выше.)
 
