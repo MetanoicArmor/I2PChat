@@ -219,7 +219,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     # Базовая 8‑px сетка: все отступы и скругления кратны 4/8.
     PADDING_X = 12
     PADDING_Y = 8
-    BUBBLE_SPACING_Y = 10
+    # Вертикальный зазор между баблами (меньше, чем было изначально)
+    BUBBLE_SPACING_Y = 2
     BUBBLE_RADIUS = 12
 
     def _bubble_width(self, cell_width: int, text: str, font: QtGui.QFont) -> int:
@@ -377,18 +378,22 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         bubble_width = self._bubble_width(cell_width, item.text, font)
         available_width = max(10, bubble_width - self.PADDING_X * 2)
 
-        metrics = QtGui.QFontMetrics(font)
         text = item.text or " "
-        text_rect = metrics.boundingRect(
-            0,
-            0,
-            int(available_width),
-            1000,
-            int(QtCore.Qt.TextFlag.TextWrapAnywhere),
-            text,
-        )
-        # Делаем запас по высоте, чтобы текст не «прилипал» к краям
-        height = text_rect.height() + self.PADDING_Y * 3 + self.BUBBLE_SPACING_Y * 2
+
+        # Используем QTextDocument с WrapAnywhere, чтобы корректно посчитать
+        # высоту многострочного текста (списки, длинные строки и т.п.).
+        doc = QtGui.QTextDocument()
+        doc.setDefaultFont(font)
+        doc.setPlainText(text)
+        text_option = QtGui.QTextOption()
+        text_option.setWrapMode(QtGui.QTextOption.WrapMode.WrapAnywhere)
+        doc.setDefaultTextOption(text_option)
+        doc.setTextWidth(float(available_width))
+        text_height = doc.size().height()
+
+        # Высота самого бабла оставляем приблизительно как раньше —
+        # добавляем вертикальные отступы вокруг текста и внешний зазор.
+        height = int(text_height) + self.PADDING_Y * 3 + self.BUBBLE_SPACING_Y * 2
         if item.timestamp:
             ts_font = QtGui.QFont(font)
             ts_font.setPointSize(max(font.pointSize() - 1, 6))
