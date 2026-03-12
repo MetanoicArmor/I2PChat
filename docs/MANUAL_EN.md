@@ -4,7 +4,7 @@
 
 When you start the GUI **without** passing a profile name, the **Select profile** dialog appears:
 
-<img src="../screenshots/3.png" alt="Select profile dialog" width="700" />
+<img src="../screenshots/3.png" alt="Select profile dialog" width="420" />
 
 - window title: **Select profile**;
 - main text:

@@ -4,7 +4,7 @@
 
 При запуске GUI без указания профиля появляется диалог **Select profile**:
 
-<img src="../screenshots/3.png" alt="Select profile dialog" width="700" />
+<img src="../screenshots/3.png" alt="Select profile dialog" width="420" />
 
 - заголовок окна: **Select profile**;
 - основная надпись:
