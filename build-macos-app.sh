@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+set -e
+
+APP_NAME="TermChat I2P"
+VENV_DIR=".venv"
+
+# Строго Python 3.9: ищем в PATH или в Homebrew
+PY39=""
+if command -v python3.9 &>/dev/null; then
+  PY39="python3.9"
+elif [ -x "/opt/homebrew/bin/python3.9" ]; then
+  PY39="/opt/homebrew/bin/python3.9"
+fi
+if [ -z "${PY39}" ]; then
+  echo "Ошибка: Python 3.9 не найден. Установи: brew install python@3.9"
+  exit 1
+fi
+
+echo "==> Создаю/обновляю виртуальное окружение ${VENV_DIR} (Python 3.9)"
+if [ ! -d "${VENV_DIR}" ]; then
+  "${PY39}" -m venv "${VENV_DIR}"
+fi
+
+source "${VENV_DIR}/bin/activate"
+
+echo "==> Устанавливаю зависимости из requirements.txt"
+pip install --upgrade pip
+pip install -r requirements.txt pyinstaller
+
+echo "==> Собираю одиночный бинарник PyInstaller'ом"
+pyinstaller --clean --onefile --name termchat-i2p chat-python.py
+
+echo
+echo "✔ Бинарник собран: dist/termchat-i2p"
+echo
+echo "Дальше сделай вручную в Platypus (GUI):"
+echo "  1) Запусти Platypus и создай новый проект."
+echo "  2) Script Type: Binary."
+echo "  3) Script: выбери dist/termchat-i2p."
+echo "  4) Interface: Text Window."
+echo "  5) Icon: можешь указать chat.png."
+echo "  6) Name: ${APP_NAME}."
+echo "  7) Нажми «Create App» и сохрани, например, как dist/${APP_NAME}.app."
+echo
+echo "После этого ты сможешь запускать ${APP_NAME}.app обычным двойным кликом."
+
