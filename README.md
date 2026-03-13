@@ -73,7 +73,7 @@ Other platforms are available — see the table below or check [Releases](https:
 Requirements:
 
 - Python **3.14+** (recommended; this is what the bundled `i2plib` copy and current builds are tested with)
-- An I2P router with **SAM** enabled (default port `7656`)
+- [i2pd](https://i2pd.website) router with **SAM** enabled (default port `7656`)
 
 Create and activate a virtual environment, then install dependencies:
 
@@ -154,7 +154,7 @@ If you like this project and want to support development, you can send a small d
 | **macOS** | [I2PChat-macOS.app.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS.app.zip) | Unzip → `I2PChat.app` |
 | **Linux** | [I2PChat-x86_64.AppImage](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-x86_64.AppImage) | `chmod +x` → run |
 
-> **Requirement:** I2P router must be running with SAM API enabled (default port 7656).
+> **Requirement:** [i2pd](https://i2pd.website) router must be running with SAM API enabled (default port 7656).
 
 ### ℹ️ About
 
