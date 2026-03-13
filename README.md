@@ -43,7 +43,6 @@ I2PChat is based on the original **`termchat-i2p-python`** by **Stanley** from t
 - **End‑to‑end communication over I2P SAM** (via `i2plib`)
 - **PyQt6 GUI** with dark theme
 - **File transfer** between peers
-- **ASCII / braille image rendering** for sending images over text channels
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
 #### 📖 Manuals
@@ -170,5 +169,4 @@ Based on the original `termchat-i2p-python` by Stanley (I2P community):
 - Messaging over I2P SAM (via `i2plib`)
 - Cross‑platform GUI (Windows, macOS, Linux)
 - File transfer between peers
-- ASCII / braille image rendering
 
