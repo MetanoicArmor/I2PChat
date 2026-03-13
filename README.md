@@ -8,11 +8,11 @@
   <a href="https://github.com/MetanoicArmor/I2PChat/releases"><img src="https://img.shields.io/github/v/release/MetanoicArmor/I2PChat?label=release" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/MetanoicArmor/I2PChat" alt="License"></a>
   <a href="requirements.txt"><img src="https://img.shields.io/badge/Python-3.14+-blue.svg" alt="Python"></a>
-  <a href="https://geti2p.net"><img src="https://img.shields.io/badge/I2P-SAM%20API-purple.svg" alt="I2P"></a>
+  <a href="https://i2pd.website"><img src="https://img.shields.io/badge/I2P-SAM%20API-purple.svg" alt="I2P"></a>
 </p>
 
 <p align="center">
-  <b>Experimental peer‑to‑peer chat client for the <a href="https://geti2p.net">I2P</a> anonymity network.</b><br>
+  <b>Experimental peer‑to‑peer chat client for the <a href="https://i2pd.website">I2P</a> anonymity network.</b><br>
   Cross‑platform GUI (PyQt6) on top of a shared asynchronous core.
 </p>
 
@@ -158,7 +158,7 @@ If you like this project and want to support development, you can send a small d
 
 ### ℹ️ About
 
-I2PChat is a cross‑platform chat client for the [I2P](https://geti2p.net) anonymity network, using the SAM interface.  
+I2PChat is a cross‑platform chat client for the [I2P](https://i2pd.website) anonymity network, using the SAM interface.  
 PyQt6 GUI with dark theme.
 
 Based on the original `termchat-i2p-python` by Stanley (I2P community):  
