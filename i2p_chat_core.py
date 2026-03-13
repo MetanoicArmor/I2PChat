@@ -473,7 +473,21 @@ class I2PChatCore:
                 try:
                     msg_len = int(len_data.decode())
                 except ValueError:
-                    break
+                    # Fallback: длина не число — возможно, это legacy base64 destination
+                    # (base64 I2P dest часто начинается с 'U', что совпадает с типом сообщения)
+                    remainder = await reader.readline()
+                    try:
+                        raw_dest = (msg_type + len_data.decode() + remainder.decode()).strip()
+                        dest_obj = i2plib.Destination(raw_dest)
+                        self.proven = True
+                        self._emit_status("visible")
+                        self.peer_b32 = dest_obj.base32 + ".b32.i2p"
+                        self.current_peer_addr = self.peer_b32
+                        self._emit_message("info", f"Connected to: {self.peer_b32}")
+                        self._emit_peer_changed(self.peer_b32)
+                    except Exception:
+                        break
+                    continue
 
                 body_data = await reader.readexactly(msg_len)
                 body = body_data.decode("utf-8")
