@@ -377,7 +377,6 @@ class I2PChatCore:
             )
 
             if self.my_dest is not None:
-                writer.write(self.my_dest.base64.encode() + b"\n")
                 writer.write(self.frame_message("S", self.my_dest.base64))
                 await writer.drain()
 
