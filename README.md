@@ -28,18 +28,17 @@ I2PChat is based on the original **`termchat-i2p-python`** by **Stanley** from t
 
 ---
 
-### Table of contents
+### 📑 Table of contents
 
-- [Features](#features)
-- [Manuals](#manuals)
-- [Screenshots](#screenshots)
-- [Prebuilt binaries](#prebuilt-binaries)
-- [Running from source](#running-from-source)
-- [Cross‑platform builds](#crossplatform-builds)
-- [License](#license)
-- [Buy me a coffee](#buy-me-a-coffee)
+- [✨ Features](#-features)
+- [📸 Screenshots](#-screenshots)
+- [📦 Prebuilt binaries](#-prebuilt-binaries)
+- [🛠 Running from source](#-running-from-source)
+- [🔧 Cross‑platform builds](#-crossplatform-builds)
+- [📄 License](#-license)
+- [☕ Buy me a coffee](#-buy-me-a-coffee)
 
-### Features
+### ✨ Features
 
 - **End‑to‑end communication over I2P SAM** (via `i2plib`)
 - **PyQt6 GUI** with dark theme
@@ -47,16 +46,16 @@ I2PChat is based on the original **`termchat-i2p-python`** by **Stanley** from t
 - **ASCII / braille image rendering** for sending images over text channels
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
-#### Manuals
+#### 📖 Manuals
 
 - **English manual**: [**docs/MANUAL_EN.md**](docs/MANUAL_EN.md)
 - **Русский мануал**: [**docs/MANUAL_RU.md**](docs/MANUAL_RU.md)
 
-### Screenshots
+### 📸 Screenshots
 
 <img src="screenshots/2.png" alt="I2PChat macOS GUI – profile & notifications" width="900" />
 
-### Prebuilt binaries
+### 📦 Prebuilt binaries
 
 Releases are published on GitHub under the **Releases** section.
 
@@ -70,7 +69,7 @@ Currently available:
 
 Other platforms are available — see the table below or check [Releases](https://github.com/MetanoicArmor/I2PChat/releases).
 
-### Running from source
+### 🛠 Running from source
 
 Requirements:
 
@@ -85,12 +84,12 @@ source .venv/bin/activate  # on Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-### Cross‑platform builds
+### 🔧 Cross‑platform builds
 
 The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  
 Everywhere, the recommended/runtime version is **Python 3.14+** (the repo includes an updated copy of `i2plib` compatible with modern asyncio).
 
-#### Linux (GUI AppImage)
+#### 🐧 Linux (GUI AppImage)
 
 ```bash
 ./build-linux.sh
@@ -102,7 +101,7 @@ This script:
 - Builds a self‑contained GUI binary via PyInstaller.
 - Packs it into `I2PChat-x86_64.AppImage` using `appimagetool`.
 
-#### macOS (GUI .app bundle)
+#### 🍎 macOS (GUI .app bundle)
 
 ```bash
 ./build-macos.sh
@@ -111,7 +110,7 @@ This script:
 - Uses Python 3.14+ (from PATH or Homebrew).
 - Builds `dist/I2PChat.app` via PyInstaller.
 
-### Windows build (GUI)
+### 🪟 Windows build (GUI)
 
 For reproducible Windows builds there is a PowerShell script:
 
@@ -129,12 +128,12 @@ It will:
 
 The resulting `I2PChat.exe` is self‑contained and can be distributed to machines without Python installed.
 
-### License
+### 📄 License
 
 See `LICENSE` for full license text.  
 Please also respect the original `termchat-i2p-python` licensing and attribution to **Stanley (I2P community)**.
 
-### Buy me a coffee
+### ☕ Buy me a coffee
 
 If you like this project and want to support development, you can send a small donation in Bitcoin:
 
@@ -144,9 +143,9 @@ If you like this project and want to support development, you can send a small d
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
-### Prebuilt Downloads
+### 📥 Prebuilt Downloads
 
 **No Python installation required** — everything is bundled and ready to run.
 
@@ -158,7 +157,7 @@ If you like this project and want to support development, you can send a small d
 
 > **Requirement:** I2P router must be running with SAM API enabled (default port 7656).
 
-### About
+### ℹ️ About
 
 I2PChat is a cross‑platform chat client for the [I2P](https://geti2p.net) anonymity network, using the SAM interface.  
 PyQt6 GUI with dark theme.
@@ -166,7 +165,7 @@ PyQt6 GUI with dark theme.
 Based on the original `termchat-i2p-python` by Stanley (I2P community):  
 `http://git.community.i2p/stan/termchat-i2p-python`.
 
-### Features
+### ✨ Features
 
 - Messaging over I2P SAM (via `i2plib`)
 - Cross‑platform GUI (Windows, macOS, Linux)
