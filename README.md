@@ -1,12 +1,20 @@
-## I2PChat
+<p align="center">
+  <img src="image.png" alt="I2PChat Logo" width="280" />
+</p>
 
-[![Release](https://img.shields.io/github/v/release/MetanoicArmor/I2PChat?label=release)](https://github.com/MetanoicArmor/I2PChat/releases)
-[![License](https://img.shields.io/github/license/MetanoicArmor/I2PChat)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.14+-blue.svg)](requirements.txt)
-[![I2P](https://img.shields.io/badge/I2P-SAM%20API-purple.svg)](https://geti2p.net)
+<h1 align="center">I2PChat</h1>
 
-I2PChat is an experimental peer‑to‑peer chat client for the [I2P](https://geti2p.net) anonymity network.  
-It provides both a terminal UI (TUI) and a graphical UI (PyQt6) on top of a shared asynchronous core.
+<p align="center">
+  <a href="https://github.com/MetanoicArmor/I2PChat/releases"><img src="https://img.shields.io/github/v/release/MetanoicArmor/I2PChat?label=release" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/MetanoicArmor/I2PChat" alt="License"></a>
+  <a href="requirements.txt"><img src="https://img.shields.io/badge/Python-3.14+-blue.svg" alt="Python"></a>
+  <a href="https://geti2p.net"><img src="https://img.shields.io/badge/I2P-SAM%20API-purple.svg" alt="I2P"></a>
+</p>
+
+<p align="center">
+  <b>Experimental peer‑to‑peer chat client for the <a href="https://geti2p.net">I2P</a> anonymity network.</b><br>
+  Terminal UI (TUI) and graphical UI (PyQt6) on top of a shared asynchronous core.
+</p>
 
 ---
 
