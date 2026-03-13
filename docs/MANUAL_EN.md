@@ -102,7 +102,7 @@ After pressing it:
 
 The **`Copy My Addr`** button copies your own I2P destination to the clipboard.
 
-<img src="../screenshots/1.png" alt="Getting your own address via Copy My Addr" width="700" />
+<img src="../screenshots/1.png" alt="Getting your own address via Copy My Addr" width="900" />
 
 Logic:
 

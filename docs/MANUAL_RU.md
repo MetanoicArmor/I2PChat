@@ -102,7 +102,7 @@
 
 Кнопка **`Copy My Addr`** копирует ваш собственный I2P‑адрес в буфер обмена.
 
-<img src="../screenshots/1.png" alt="Получение собственного адреса через Copy My Addr" width="700" />
+<img src="../screenshots/1.png" alt="Получение собственного адреса через Copy My Addr" width="900" />
 
 Логика:
 
