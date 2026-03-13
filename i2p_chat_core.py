@@ -1,6 +1,8 @@
 import asyncio
 import base64
+import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -9,6 +11,12 @@ from typing import Any, Awaitable, Callable, List, Optional, Tuple
 
 import i2plib
 from PIL import Image
+
+import crypto
+
+logger = logging.getLogger("i2pchat")
+
+PROTOCOL_VERSION = 2
 
 
 @dataclass
@@ -49,6 +57,63 @@ def get_profiles_dir() -> str:
     except OSError:
         pass
     return base
+
+
+def get_downloads_dir() -> str:
+    """
+    Безопасная директория для входящих файлов (sandbox).
+    Изолирована внутри profiles директории для предотвращения path traversal.
+    """
+    base = os.path.join(get_profiles_dir(), "downloads")
+    os.makedirs(base, exist_ok=True)
+    try:
+        os.chmod(base, 0o700)
+    except OSError:
+        pass
+    return base
+
+
+SAFE_FILENAME_RE = re.compile(r'^[\w\-. ]+$')
+
+
+def sanitize_filename(name: str) -> str:
+    """
+    Очистка имени файла от потенциально опасных символов.
+    Возвращает безопасное имя или генерирует новое при невалидном вводе.
+    """
+    name = os.path.basename(name)
+    if not name or not SAFE_FILENAME_RE.match(name) or name.startswith('.'):
+        return f"file_{int(time.time())}"
+    if len(name) > 200:
+        ext = os.path.splitext(name)[1][:10]
+        name = f"file_{int(time.time())}{ext}"
+    return name
+
+
+KEYRING_SERVICE = "i2pchat"
+
+
+def _try_keyring_get(profile: str) -> Optional[str]:
+    """Попытка загрузить приватный ключ из системного keyring."""
+    try:
+        import keyring
+        return keyring.get_password(KEYRING_SERVICE, profile)
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+
+def _try_keyring_set(profile: str, private_key: str) -> bool:
+    """Попытка сохранить приватный ключ в системный keyring."""
+    try:
+        import keyring
+        keyring.set_password(KEYRING_SERVICE, profile, private_key)
+        return True
+    except ImportError:
+        return False
+    except Exception:
+        return False
 
 
 class I2PChatCore:
@@ -101,6 +166,15 @@ class I2PChatCore:
 
         # буфер для изображений
         self.image_buffer: list[str] = []
+
+        # криптография (устанавливается при handshake v2)
+        self.shared_key: Optional[bytes] = None
+        self.my_nonce: Optional[bytes] = None
+        self.peer_nonce: Optional[bytes] = None
+        self.my_ephemeral_private: Optional[bytes] = None
+        self.my_ephemeral_public: Optional[bytes] = None
+        self.peer_ephemeral_public: Optional[bytes] = None
+        self.use_encryption: bool = False
 
         self._accept_task: Optional[asyncio.Task[Any]] = None
         self._tunnel_task: Optional[asyncio.Task[Any]] = None
@@ -156,8 +230,37 @@ class I2PChatCore:
 
     # ---------- протокол ----------
 
+    def frame_message(self, msg_type: str, content: str) -> bytes:
+        """
+        Формирует фрейм сообщения.
+        
+        Если установлен shared_key и use_encryption=True:
+        - При наличии NaCl: шифрует тело + добавляет HMAC
+        - Без NaCl: только HMAC
+        
+        Формат без шифрования: TYPE(1) + LEN(4) + BODY + \n
+        Формат с HMAC:         TYPE(1) + LEN(4) + BODY + HMAC(32) + \n
+        Формат с шифрованием:  TYPE(1) + "E" + LEN(6) + ENCRYPTED_BODY + HMAC(32) + \n
+        """
+        body = content.encode("utf-8")
+        
+        if self.shared_key and self.use_encryption:
+            if crypto.NACL_AVAILABLE:
+                encrypted_body = crypto.encrypt_message(self.shared_key, body)
+                length_str = f"{len(encrypted_body):06d}"
+                mac = crypto.compute_mac(self.shared_key, msg_type, encrypted_body)
+                return msg_type.encode() + b"E" + length_str.encode() + encrypted_body + mac + b"\n"
+            else:
+                length_str = f"{len(body):04d}"
+                mac = crypto.compute_mac(self.shared_key, msg_type, body)
+                return msg_type.encode() + length_str.encode() + body + mac + b"\n"
+        else:
+            length_str = f"{len(body):04d}"
+            return msg_type.encode() + length_str.encode() + body + b"\n"
+    
     @staticmethod
-    def frame_message(msg_type: str, content: str) -> bytes:
+    def frame_message_plain(msg_type: str, content: str) -> bytes:
+        """Формирует фрейм без HMAC (для handshake)."""
         body = content.encode("utf-8")
         length_str = f"{len(body):04d}"
         return msg_type.encode() + length_str.encode() + body + b"\n"
@@ -178,21 +281,29 @@ class I2PChatCore:
 
         dest: Optional[i2plib.Destination] = None
 
-        if is_persistent and os.path.exists(key_file):
-            with open(key_file, "r") as f:
-                lines = [line.strip() for line in f.readlines() if line.strip()]
+        if is_persistent:
+            keyring_key = _try_keyring_get(self.profile)
+            if keyring_key:
+                dest = i2plib.Destination(keyring_key, has_private_key=True)
+                self._emit_system(f"Loaded identity from secure keyring")
+            elif os.path.exists(key_file):
+                with open(key_file, "r") as f:
+                    lines = [line.strip() for line in f.readlines() if line.strip()]
 
-            if len(lines) > 0:
-                raw_private_key = lines[0]
-                dest = i2plib.Destination(raw_private_key, has_private_key=True)
-                self._emit_system(f"Loaded identity from {key_file}")
+                if len(lines) > 0:
+                    raw_private_key = lines[0]
+                    dest = i2plib.Destination(raw_private_key, has_private_key=True)
+                    self._emit_system(f"Loaded identity from {key_file}")
 
-            if len(lines) > 1:
-                self.stored_peer = lines[1]
-                disp_peer = self.stored_peer
-                if not disp_peer.endswith(".b32.i2p"):
-                    disp_peer = disp_peer + ".b32.i2p"
-                self._emit_system(f"Stored Contact: {disp_peer}")
+            if os.path.exists(key_file):
+                with open(key_file, "r") as f:
+                    lines = [line.strip() for line in f.readlines() if line.strip()]
+                if len(lines) > 1:
+                    self.stored_peer = lines[1]
+                    disp_peer = self.stored_peer
+                    if not disp_peer.endswith(".b32.i2p"):
+                        disp_peer = disp_peer + ".b32.i2p"
+                    self._emit_system(f"Stored Contact: {disp_peer}")
 
         if dest is None:
             self._emit_system("Generating new Ed25519 identity...")
@@ -201,9 +312,16 @@ class I2PChatCore:
             )
 
             if is_persistent:
-                with open(key_file, "w") as f:
-                    f.write(dest.private_key.base64 + "\n")
-                self._emit_message("success", f"Identity saved to {key_file}")
+                if _try_keyring_set(self.profile, dest.private_key.base64):
+                    self._emit_message("success", "Identity saved to secure keyring")
+                else:
+                    with open(key_file, "w") as f:
+                        f.write(dest.private_key.base64 + "\n")
+                    try:
+                        os.chmod(key_file, 0o600)
+                    except OSError:
+                        pass
+                    self._emit_message("success", f"Identity saved to {key_file}")
 
         self.my_dest = dest
 
@@ -237,6 +355,12 @@ class I2PChatCore:
 
     # Таймаут на установку соединения (I2P может долго строить туннели)
     CONNECT_TIMEOUT = 120
+    # Таймаут на операции чтения в receive_loop (защита от зависания)
+    READ_TIMEOUT = 30.0
+    # Максимальное количество строк в буфере изображения (защита от OOM)
+    MAX_IMAGE_LINES = 500
+    # Максимальный размер принимаемого файла в байтах (защита от заполнения диска)
+    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
     async def connect_to_peer(self, target_address: str) -> None:
         try:
@@ -265,6 +389,8 @@ class I2PChatCore:
 
             loop = asyncio.get_running_loop()
             loop.create_task(self.receive_loop(self.conn))
+            
+            loop.create_task(self.initiate_secure_handshake())
         except asyncio.TimeoutError:
             self._emit_error(
                 "Connection timed out. Check: I2P router running, peer address correct, peer online."
@@ -351,8 +477,9 @@ class I2PChatCore:
         reader, writer = self.conn
         self.conn = None
         self.peer_b32 = "Waiting for incoming connections..."
+        self._reset_crypto_state()
         try:
-            writer.write(self.frame_message("S", "__SIGNAL__:QUIT"))
+            writer.write(self.frame_message_plain("S", "__SIGNAL__:QUIT"))
             await writer.drain()
             writer.close()
             await writer.wait_closed()
@@ -360,6 +487,138 @@ class I2PChatCore:
             pass
         self._emit_message("disconnect", "You disconnected.")
         self._emit_system("Waiting for incoming connections...")
+    
+    def _reset_crypto_state(self) -> None:
+        """Сбрасывает криптографическое состояние при отключении."""
+        self.shared_key = None
+        self.my_nonce = None
+        self.peer_nonce = None
+        self.my_ephemeral_private = None
+        self.my_ephemeral_public = None
+        self.peer_ephemeral_public = None
+        self.use_encryption = False
+
+    async def initiate_secure_handshake(self) -> bool:
+        """
+        Инициирует защищённый handshake (v2 протокол с PFS).
+        
+        При наличии NaCl использует эфемерные X25519 ключи для Perfect Forward Secrecy.
+        Формат: INIT:<nonce_hex>[:<ephemeral_pubkey_hex>]
+        
+        Returns:
+            True если handshake успешен
+        """
+        if not self.conn:
+            return False
+        
+        try:
+            _, writer = self.conn
+            self.my_nonce = crypto.generate_nonce()
+            
+            if crypto.NACL_AVAILABLE:
+                self.my_ephemeral_private, self.my_ephemeral_public = \
+                    crypto.generate_ephemeral_keypair()
+                handshake_data = f"INIT:{self.my_nonce.hex()}:{self.my_ephemeral_public.hex()}"
+                self._emit_system("Initiating secure handshake with PFS...")
+            else:
+                handshake_data = f"INIT:{self.my_nonce.hex()}"
+                self._emit_system("Initiating secure handshake...")
+            
+            writer.write(self.frame_message_plain("H", handshake_data))
+            await writer.drain()
+            return True
+        except Exception as e:
+            logger.error(f"Handshake initiation failed: {e}")
+            return False
+
+    def _compute_final_shared_key(self, is_initiator: bool) -> bytes:
+        """
+        Вычисляет финальный shared_key.
+        
+        С PFS: SHA256(DH_shared || nonce_init || nonce_resp)
+        Без PFS: SHA256(nonce_init || nonce_resp)
+        """
+        import hashlib
+        
+        if (crypto.NACL_AVAILABLE and 
+            self.my_ephemeral_private and 
+            self.peer_ephemeral_public):
+            dh_shared = crypto.compute_dh_shared_secret(
+                self.my_ephemeral_private, self.peer_ephemeral_public
+            )
+            if is_initiator:
+                return hashlib.sha256(
+                    dh_shared + self.my_nonce + self.peer_nonce
+                ).digest()
+            else:
+                return hashlib.sha256(
+                    dh_shared + self.peer_nonce + self.my_nonce
+                ).digest()
+        else:
+            if is_initiator:
+                return crypto.compute_shared_key(self.my_nonce, self.peer_nonce)
+            else:
+                return crypto.compute_shared_key(self.peer_nonce, self.my_nonce)
+
+    async def _handle_handshake_message(
+        self, body: str, writer: asyncio.StreamWriter
+    ) -> None:
+        """Обрабатывает входящее handshake сообщение с поддержкой PFS."""
+        try:
+            if body.startswith("INIT:"):
+                parts = body[5:].split(":")
+                self.peer_nonce = bytes.fromhex(parts[0])
+                
+                if len(parts) > 1 and crypto.NACL_AVAILABLE:
+                    self.peer_ephemeral_public = bytes.fromhex(parts[1])
+                    self.my_ephemeral_private, self.my_ephemeral_public = \
+                        crypto.generate_ephemeral_keypair()
+                
+                self.my_nonce = crypto.generate_nonce()
+                
+                if self.my_ephemeral_public:
+                    response = f"RESP:{self.my_nonce.hex()}:{self.my_ephemeral_public.hex()}"
+                else:
+                    response = f"RESP:{self.my_nonce.hex()}"
+                    
+                writer.write(self.frame_message_plain("H", response))
+                await writer.drain()
+                
+                self.shared_key = self._compute_final_shared_key(is_initiator=False)
+                self.use_encryption = True
+                
+                if self.peer_ephemeral_public:
+                    self._emit_message("success", "Secure channel with PFS established")
+                else:
+                    self._emit_message("success", "Secure channel established (HMAC enabled)")
+                logger.info("Handshake completed (responder)")
+                
+            elif body.startswith("RESP:"):
+                parts = body[5:].split(":")
+                self.peer_nonce = bytes.fromhex(parts[0])
+                
+                if len(parts) > 1 and crypto.NACL_AVAILABLE:
+                    self.peer_ephemeral_public = bytes.fromhex(parts[1])
+                
+                if self.my_nonce is None:
+                    logger.warning("Received RESP without prior INIT")
+                    return
+                
+                self.shared_key = self._compute_final_shared_key(is_initiator=True)
+                self.use_encryption = True
+                
+                if self.peer_ephemeral_public and self.my_ephemeral_private:
+                    self._emit_message("success", "Secure channel with PFS established")
+                else:
+                    self._emit_message("success", "Secure channel established (HMAC enabled)")
+                logger.info("Handshake completed (initiator)")
+                
+            else:
+                logger.warning(f"Unknown handshake message: {body[:20]}")
+                
+        except Exception as e:
+            logger.error(f"Handshake error: {e}")
+            self._emit_error(f"Secure handshake failed: {e}")
 
     async def shutdown(self) -> None:
         """Аккуратно остановить фоновые задачи и закрыть соединения."""
@@ -447,25 +706,69 @@ class I2PChatCore:
                     msg_type = current_type
                     current_type = None
                 else:
-                    type_data = await reader.read(1)
+                    type_data = await asyncio.wait_for(
+                        reader.read(1), timeout=self.READ_TIMEOUT
+                    )
                     if not type_data:
                         break
                     msg_type = type_data.decode()
 
-                if msg_type not in ["U", "S", "P", "O", "F", "D", "E", "I"]:
+                if msg_type not in ["U", "S", "P", "O", "F", "D", "E", "I", "H"]:
+                    logger.warning(f"Invalid message type received: {repr(msg_type)}")
                     break
 
-                len_data = await reader.readexactly(4)
+                first_len_byte = await asyncio.wait_for(
+                    reader.read(1), timeout=self.READ_TIMEOUT
+                )
+                if not first_len_byte:
+                    break
+                
+                is_encrypted = (first_len_byte == b"E")
+                
+                if is_encrypted:
+                    len_data = await asyncio.wait_for(
+                        reader.readexactly(6), timeout=self.READ_TIMEOUT
+                    )
+                else:
+                    remaining_len = await asyncio.wait_for(
+                        reader.readexactly(3), timeout=self.READ_TIMEOUT
+                    )
+                    len_data = first_len_byte + remaining_len
+                
                 try:
                     msg_len = int(len_data.decode())
                 except ValueError:
+                    logger.warning(f"Invalid length field: {repr(len_data)}")
                     break
 
-                body_data = await reader.readexactly(msg_len)
+                body_data = await asyncio.wait_for(
+                    reader.readexactly(msg_len), timeout=self.READ_TIMEOUT
+                )
+                
+                if is_encrypted or (self.shared_key and self.use_encryption):
+                    received_mac = await asyncio.wait_for(
+                        reader.readexactly(crypto.HMAC_SIZE), timeout=self.READ_TIMEOUT
+                    )
+                    if not crypto.verify_mac(self.shared_key, msg_type, body_data, received_mac):
+                        logger.warning("HMAC verification failed - message integrity compromised")
+                        self._emit_error("Message integrity check failed")
+                        break
+                    
+                    if is_encrypted and crypto.NACL_AVAILABLE:
+                        decrypted = crypto.decrypt_message(self.shared_key, body_data)
+                        if decrypted is None:
+                            logger.warning("Decryption failed")
+                            self._emit_error("Failed to decrypt message")
+                            break
+                        body_data = decrypted
+                
                 body = body_data.decode("utf-8")
 
-                delim = await reader.readexactly(1)
+                delim = await asyncio.wait_for(
+                    reader.readexactly(1), timeout=self.READ_TIMEOUT
+                )
                 if delim != b"\n":
+                    logger.warning(f"Invalid delimiter: expected newline, got {repr(delim)}")
                     break
 
                 if msg_type == "U":
@@ -494,20 +797,33 @@ class I2PChatCore:
                         else:
                             self._emit_message("peer", img_text)
                     else:
-                        self.image_buffer.append(body)
+                        if len(self.image_buffer) < self.MAX_IMAGE_LINES:
+                            self.image_buffer.append(body)
+                        elif len(self.image_buffer) == self.MAX_IMAGE_LINES:
+                            self.image_buffer.append("[Image truncated - too large]")
+                            self._emit_error("Image too large, truncating")
 
                 elif msg_type == "F":
                     try:
                         filename, size_str = body.split("|")
-                        filename = os.path.basename(filename)
+                        filename = sanitize_filename(filename)
                         size = int(size_str)
+                        if size > self.MAX_FILE_SIZE:
+                            self._emit_error(
+                                f"File too large: {size} bytes "
+                                f"(max {self.MAX_FILE_SIZE // (1024*1024)} MB)"
+                            )
+                            self.incoming_file = None
+                            self.incoming_info = None
+                            continue
                         safe_name = f"recv_{filename}"
-                        self.incoming_file = open(safe_name, "wb")
+                        safe_path = os.path.join(get_downloads_dir(), safe_name)
+                        self.incoming_file = open(safe_path, "wb")
                         self.incoming_info = FileTransferInfo(
-                            filename=safe_name, size=size, received=0
+                            filename=safe_path, size=size, received=0
                         )
                         self._emit_system(
-                            f"Receiving file: {safe_name} ({size} bytes)"
+                            f"Receiving file: {safe_path} ({size} bytes)"
                         )
                         self._emit_file_event(self.incoming_info)
                     except Exception as e:
@@ -557,18 +873,25 @@ class I2PChatCore:
                         except Exception:
                             pass
 
+                elif msg_type == "H":
+                    await self._handle_handshake_message(body, writer)
+
                 elif msg_type == "P":
                     writer.write(self.frame_message("O", ""))
                     await writer.drain()
 
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
+        except asyncio.TimeoutError:
+            if self.conn == connection:
+                self._emit_error("Connection timed out (no data received)")
         except Exception as e:
             if self.conn == connection:
                 self._emit_error(f"Protocol Error: {e}")
         finally:
             if self.conn == connection:
                 self.conn = None
+                self._reset_crypto_state()
                 self._emit_message("disconnect", "Peer disconnected.")
                 self.peer_b32 = "Waiting for incoming connections..."
                 self._emit_system("Waiting for incoming connections...")
