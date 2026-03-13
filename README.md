@@ -24,7 +24,7 @@
 [![Русский мануал](https://img.shields.io/badge/📖%20Мануал-RU-red.svg)](docs/MANUAL_RU.md)
 
 **Credits / upstream project:**  
-I2PChat is based on the original **`termchat-i2p-python`** by **Stanley** from the I2P community: `http://git.community.i2p/stan/termchat-i2p-python`.  
+I2PChat is based on the original **`termchat-i2p-python`** by **Stanley** from the I2P community: [http://git.community.i2p/stan/termchat-i2p-python](http://git.community.i2p/stan/termchat-i2p-python).  
 
 ---
 
@@ -162,7 +162,7 @@ I2PChat is a cross‑platform chat client for the [I2P](https://geti2p.net) anon
 PyQt6 GUI with dark theme.
 
 Based on the original `termchat-i2p-python` by Stanley (I2P community):  
-`http://git.community.i2p/stan/termchat-i2p-python`.
+[http://git.community.i2p/stan/termchat-i2p-python](http://git.community.i2p/stan/termchat-i2p-python).
 
 ### ✨ Features
 
