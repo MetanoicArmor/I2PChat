@@ -13,7 +13,7 @@
 
 <p align="center">
   <b>Experimental peer‑to‑peer chat client for the <a href="https://geti2p.net">I2P</a> anonymity network.</b><br>
-  Terminal UI (TUI) and graphical UI (PyQt6) on top of a shared asynchronous core.
+  Cross‑platform GUI (PyQt6) on top of a shared asynchronous core.
 </p>
 
 ---
@@ -24,9 +24,7 @@
 [![Русский мануал](https://img.shields.io/badge/📖%20Мануал-RU-red.svg)](docs/MANUAL_RU.md)
 
 **Credits / upstream project:**  
-I2PChat is a **separate GUI client** that reuses ideas and parts of the logic from the original terminal client **`termchat-i2p-python`** by **Stanley** from the I2P community.  
-Stanley’s original project is available here: `http://git.community.i2p/stan/termchat-i2p-python`.  
-The initial TUI concept, I2P protocol integration and a significant portion of the core logic come from his work; this repository extends it with a GUI client, an additional TUI, and cross‑platform build and packaging scripts.
+I2PChat is based on the original **`termchat-i2p-python`** by **Stanley** from the I2P community: `http://git.community.i2p/stan/termchat-i2p-python`.  
 
 ---
 
@@ -44,9 +42,7 @@ The initial TUI concept, I2P protocol integration and a significant portion of t
 ### Features
 
 - **End‑to‑end communication over I2P SAM** (via `i2plib`)
-- **Two frontends**:
-  - Terminal UI (`chat-python.py`)
-  - PyQt6 GUI (`main_qt.py`)
+- **PyQt6 GUI** with dark theme
 - **File transfer** between peers
 - **ASCII / braille image rendering** for sending images over text channels
 - Cross‑platform build scripts (Linux, macOS, Windows)
@@ -72,7 +68,7 @@ Currently available:
   - Built with **Python 3.14** and PyInstaller, includes the Python runtime and all dependencies.
   - **Python is *not* required on the target system** – just unpack the zip and run `I2PChat.exe`.
 
-Other platforms (Linux TUI / Linux AppImage / macOS TUI app) are supported by helper scripts in the repo (see below) and can be added to releases as needed.
+Other platforms are available — see the table below or check [Releases](https://github.com/MetanoicArmor/I2PChat/releases).
 
 ### Running from source
 
@@ -89,12 +85,6 @@ source .venv/bin/activate  # on Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-#### TUI client
-
-```bash
-python chat-python.py
-```
-
 #### GUI client (PyQt6)
 
 ```bash
@@ -106,21 +96,10 @@ python main_qt.py
 The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  
 Everywhere, the recommended/runtime version is **Python 3.14+** (the repo includes an updated copy of `i2plib` compatible with modern asyncio).
 
-#### Linux (TUI binary)
-
-```bash
-./build-linux.sh
-```
-
-This:
-
-- Uses `python3.14` (or default `python3`) and virtualenv `.venv314`.
-- Builds a single‑file TUI binary: `dist/termchat-i2p-python`.
-
 #### Linux (GUI AppImage)
 
 ```bash
-./build_appimage.sh
+./build-linux.sh
 ```
 
 This script:
@@ -129,15 +108,14 @@ This script:
 - Builds a self‑contained GUI binary via PyInstaller.
 - Packs it into `I2PChat-x86_64.AppImage` using `appimagetool`.
 
-#### macOS (TUI app bundle)
+#### macOS (GUI .app bundle)
 
 ```bash
-./build-macos-app.sh
+./build-macos.sh
 ```
 
 - Uses Python 3.14+ (from PATH or Homebrew).
-- Builds `dist/termchat-i2p-python` via PyInstaller.
-- Then you wrap it into a `.app` bundle using **Platypus** (steps are printed by the script).
+- Builds `dist/I2PChat.app` via PyInstaller.
 
 ### Windows build (GUI)
 
@@ -178,22 +156,18 @@ If you like this project and want to support development, you can send a small d
 
 ### О проекте
 
-I2PChat — это пиринговый чат‑клиент поверх анонимной сети [I2P](https://geti2p.net), работающий через SAM‑интерфейс.  
-Внутри есть общее асинхронное ядро (`i2p_chat_core.py`) и два интерфейса:
+I2PChat — это кроссплатформенный чат‑клиент поверх анонимной сети [I2P](https://geti2p.net), работающий через SAM‑интерфейс.  
+Графический интерфейс на PyQt6 с тёмной темой.
 
-- терминальный TUI (`chat-python.py`, Textual/Rich);
-- графический клиент на PyQt6 (`main_qt.py`).
-
-Проект основан на оригинальном терминальном клиенте `termchat-i2p-python` от Stanley (I2P community):  
+Проект основан на оригинальном `termchat-i2p-python` от Stanley (I2P community):  
 `http://git.community.i2p/stan/termchat-i2p-python`.
 
 ### Возможности
 
 - обмен сообщениями через I2P SAM (через `i2plib`);
-- TUI и GUI‑клиенты;
+- кроссплатформенный GUI (Windows, macOS, Linux);
 - передача файлов между участниками;
-- отправка изображений в виде ASCII / braille арта;
-- скрипты сборки под Linux, macOS и Windows.
+- отправка изображений в виде ASCII / braille арта.
 
 ### Готовые сборки
 
