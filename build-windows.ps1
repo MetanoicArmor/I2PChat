@@ -19,9 +19,10 @@ Write-Host "==> Install dependencies from requirements.txt"
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt pyinstaller
 
-Write-Host "==> Build GUI I2PChat.exe with icon"
+Write-Host "==> Build GUI I2PChat.exe using spec file"
 if (Test-Path "dist\I2PChat") { Remove-Item -Recurse -Force "dist\I2PChat" }
-pyinstaller --clean -y --noconsole --name I2PChat --icon icon-1024.png main_qt.py
+if (Test-Path "build\I2PChat") { Remove-Item -Recurse -Force "build\I2PChat" }
+pyinstaller --clean -y I2PChat.spec
 
 Write-Host ""
 Write-Host "Done."
