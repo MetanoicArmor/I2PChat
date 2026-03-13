@@ -85,12 +85,6 @@ source .venv/bin/activate  # on Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-#### GUI client (PyQt6)
-
-```bash
-python main_qt.py
-```
-
 ### Cross‑platform builds
 
 The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  
@@ -150,39 +144,32 @@ If you like this project and want to support development, you can send a small d
 
 ---
 
-## I2PChat (RU)
+## Quick Start
 
-Ниже — краткая информация о проекте на русском языке.
+### Prebuilt Downloads
 
-### О проекте
+**No Python installation required** — everything is bundled and ready to run.
 
-I2PChat — это кроссплатформенный чат‑клиент поверх анонимной сети [I2P](https://geti2p.net), работающий через SAM‑интерфейс.  
-Графический интерфейс на PyQt6 с тёмной темой.
+| Platform | Download | Launch |
+|----------|----------|--------|
+| **Windows** | [I2PChat-windows-x64.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64.zip) | Unzip → `I2PChat.exe` |
+| **macOS** | [I2PChat-macOS.app.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS.app.zip) | Unzip → `I2PChat.app` |
+| **Linux** | [I2PChat-x86_64.AppImage](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-x86_64.AppImage) | `chmod +x` → run |
 
-Проект основан на оригинальном `termchat-i2p-python` от Stanley (I2P community):  
+> **Requirement:** I2P router must be running with SAM API enabled (default port 7656).
+
+### About
+
+I2PChat is a cross‑platform chat client for the [I2P](https://geti2p.net) anonymity network, using the SAM interface.  
+PyQt6 GUI with dark theme.
+
+Based on the original `termchat-i2p-python` by Stanley (I2P community):  
 `http://git.community.i2p/stan/termchat-i2p-python`.
 
-### Возможности
+### Features
 
-- обмен сообщениями через I2P SAM (через `i2plib`);
-- кроссплатформенный GUI (Windows, macOS, Linux);
-- передача файлов между участниками;
-- отправка изображений в виде ASCII / braille арта.
-
-### Готовые сборки
-
-**Установка Python не требуется** — всё уже собрано и готово к запуску.
-
-| Платформа | Скачать | Запуск |
-|-----------|---------|--------|
-| **Windows** | [I2PChat-windows-x64.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64.zip) | Распаковать → `I2PChat.exe` |
-| **macOS** | [I2PChat-macOS.app.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS.app.zip) | Распаковать → `I2PChat.app` |
-| **Linux** | [I2PChat-x86_64.AppImage](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-x86_64.AppImage) | `chmod +x` → запустить |
-
-> **Требование:** I2P‑роутер должен быть запущен с включённым SAM API (порт 7656 по умолчанию).
-
-### Поддержать проект
-
-Если хотите «купить мне кофе», можно отправить донат в BTC на адрес  
-`bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd` (QR‑код см. выше).
+- Messaging over I2P SAM (via `i2plib`)
+- Cross‑platform GUI (Windows, macOS, Linux)
+- File transfer between peers
+- ASCII / braille image rendering
 
