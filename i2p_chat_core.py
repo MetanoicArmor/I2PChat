@@ -206,6 +206,8 @@ class I2PChatCore:
         self._session_socket: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
         # Флаг активной передачи файла (для защиты от timeout в receive_loop)
         self._file_transfer_active: bool = False
+        # Флаг активного receive_loop (предотвращает запуск дублирующих корутин)
+        self._recv_loop_active: bool = False
 
     # ---------- вспомогательные уведомления ----------
 
@@ -795,6 +797,11 @@ class I2PChatCore:
         connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
         initial_type: Optional[str] = None,
     ) -> None:
+        # Предотвращаем запуск дублирующего receive_loop
+        if self._recv_loop_active:
+            return
+        self._recv_loop_active = True
+        
         reader, writer = connection
         current_type = initial_type
         # #region agent log
@@ -1026,6 +1033,7 @@ class I2PChatCore:
             if self.conn == connection:
                 self._emit_error(f"Protocol Error: {e}")
         finally:
+            self._recv_loop_active = False
             # Не сбрасываем соединение если идёт передача или приём файла
             if self.conn == connection and not self._file_transfer_active and self.incoming_info is None:
                 if self._keepalive_task:
