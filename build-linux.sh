@@ -5,6 +5,17 @@ APP_NAME="I2PChat"
 APPDIR="${APP_NAME}.AppDir"
 VENV_DIR=".venv314"
 
+# Определяем архитектуру
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64)  ARCH_SUFFIX="x86_64" ;;
+  aarch64) ARCH_SUFFIX="aarch64" ;;
+  armv7l)  ARCH_SUFFIX="armhf" ;;
+  *)       ARCH_SUFFIX="$ARCH" ;;
+esac
+
+echo "==> Building for architecture: ${ARCH_SUFFIX}"
+
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 if command -v python3.14 >/dev/null 2>&1; then
@@ -73,12 +84,15 @@ EOF
 
 chmod +x "${APPDIR}/AppRun" "${APPDIR}/usr/bin/${APP_NAME}"
 
-# 3) appimagetool
-if [ ! -x appimagetool-x86_64.AppImage ]; then
-  wget https://github.com/AppImage/appimagetool/releases/latest/download/appimagetool-x86_64.AppImage
-  chmod +x appimagetool-x86_64.AppImage
+# 3) appimagetool (скачиваем для текущей архитектуры)
+APPIMAGETOOL="appimagetool-${ARCH}.AppImage"
+if [ ! -x "$APPIMAGETOOL" ]; then
+  echo "==> Downloading appimagetool for ${ARCH}..."
+  wget "https://github.com/AppImage/appimagetool/releases/latest/download/${APPIMAGETOOL}"
+  chmod +x "$APPIMAGETOOL"
 fi
 
-./appimagetool-x86_64.AppImage "${APPDIR}" "${APP_NAME}-x86_64.AppImage"
-echo "Built ${APP_NAME}-x86_64.AppImage"
+OUTPUT_FILE="${APP_NAME}-${ARCH_SUFFIX}.AppImage"
+./"$APPIMAGETOOL" "${APPDIR}" "$OUTPUT_FILE"
+echo "✔ Built ${OUTPUT_FILE}"
 

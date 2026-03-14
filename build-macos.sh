@@ -4,8 +4,17 @@ set -e
 APP_NAME="I2PChat"
 VENV_DIR=".venv314"
 
+# Определяем архитектуру
+ARCH=$(uname -m)
+case "$ARCH" in
+  x86_64) ARCH_SUFFIX="x64" ;;
+  arm64)  ARCH_SUFFIX="arm64" ;;
+  *)      ARCH_SUFFIX="$ARCH" ;;
+esac
+
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+echo "==> Building for architecture: ${ARCH_SUFFIX}"
 echo "==> Активирую окружение ${VENV_DIR}"
 if [ ! -d "${VENV_DIR}" ]; then
   echo "Сначала выполни: ./build-macos-app.sh (создаст venv) или python3.14 -m venv ${VENV_DIR} && pip install -r requirements.txt pyinstaller"
@@ -50,5 +59,6 @@ cat > "dist/${APP_NAME}.app/Contents/Info.plist" << 'PLIST'
 PLIST
 
 echo
-echo "✔ GUI собран: dist/${APP_NAME}.app"
+echo "✔ GUI собран: dist/${APP_NAME}.app (${ARCH_SUFFIX})"
+echo "  Для релиза: zip -r I2PChat-macOS-${ARCH_SUFFIX}.zip dist/${APP_NAME}.app"
 echo "  Можно перенести в /Applications и запускать двойным кликом."
