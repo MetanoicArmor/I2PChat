@@ -476,7 +476,10 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         base_font = painter.font()
         metrics = QtGui.QFontMetrics(base_font)
         
-        action = "↑ Sending" if is_sending else "↓ Receiving"
+        if item.sender == "IMAGE":
+            action = "↑ Uploading image" if is_sending else "↓ Receiving image"
+        else:
+            action = "↑ Sending" if is_sending else "↓ Receiving"
         header_text = f"{action}: {item.text}"
         painter.setPen(QtGui.QColor("#ffffff"))
         header_rect = QtCore.QRectF(
@@ -1100,6 +1103,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         self._last_status: str = "initializing"
         self._transfer_row: Optional[int] = None
+        self._transfer_is_image: bool = False
 
         # Таймер для анимации прогресс-бара
         self._transfer_timer = QtCore.QTimer(self)
@@ -1382,12 +1386,16 @@ class ChatWindow(QtWidgets.QMainWindow):
                     )
                     return
 
-            # Создаём сообщение прогресса в чате
+            # Создаём сообщение прогресса в чате (для картинок — "Uploading image")
+            is_image = info.filename and info.filename.lower().endswith(
+                (".png", ".jpg", ".jpeg", ".webp")
+            )
+            self._transfer_is_image = is_image
             self._append_item(
                 ChatItem(
                     kind="transfer",
                     timestamp="",
-                    sender="FILE",
+                    sender="IMAGE" if is_image else "FILE",
                     text=info.filename,
                     progress=0.0,
                     file_size=info.size,
@@ -1423,28 +1431,33 @@ class ChatWindow(QtWidgets.QMainWindow):
                     ChatItem(
                         kind="error",
                         timestamp="",
-                        sender="FILE",
+                        sender="IMAGE" if self._transfer_is_image else "FILE",
                         text=f"Transfer failed: {info.filename}",
                     ),
                 )
                 self._transfer_row = None
+            self._transfer_is_image = False
             return
 
         # Завершение передачи
         if info.received >= info.size:
             self._transfer_timer.stop()
-            done_action = "sent" if info.is_sending else "received"
             if self._transfer_row is not None:
-                self.chat_model.update_item(
-                    self._transfer_row,
-                    ChatItem(
-                        kind="success",
-                        timestamp="",
-                        sender="FILE",
-                        text=f"✔ File {done_action}: {info.filename} ({info.size:,} bytes)",
-                    ),
-                )
-                self._transfer_row = None
+                if self._transfer_is_image:
+                    # Картинку заменим на превью в handle_inline_image_received
+                    pass
+                else:
+                    done_action = "sent" if info.is_sending else "received"
+                    self.chat_model.update_item(
+                        self._transfer_row,
+                        ChatItem(
+                            kind="success",
+                            timestamp="",
+                            sender="FILE",
+                            text=f"✔ File {done_action}: {info.filename} ({info.size:,} bytes)",
+                        ),
+                    )
+                    self._transfer_row = None
 
     @QtCore.pyqtSlot(str)
     def handle_image_received(self, art: str) -> None:
@@ -1466,16 +1479,31 @@ class ChatWindow(QtWidgets.QMainWindow):
         else:
             sender = "Peer"
         
-        self._append_item(
-            ChatItem(
-                kind="image_inline",
-                timestamp=ts,
-                sender=sender,
-                text="",
-                is_sending=is_from_me,
-                image_path=path,
+        if is_from_me and self._transfer_row is not None and self._transfer_is_image:
+            self.chat_model.update_item(
+                self._transfer_row,
+                ChatItem(
+                    kind="image_inline",
+                    timestamp=ts,
+                    sender=sender,
+                    text="",
+                    is_sending=True,
+                    image_path=path,
+                ),
             )
-        )
+            self._transfer_row = None
+            self._transfer_is_image = False
+        else:
+            self._append_item(
+                ChatItem(
+                    kind="image_inline",
+                    timestamp=ts,
+                    sender=sender,
+                    text="",
+                    is_sending=is_from_me,
+                    image_path=path,
+                ),
+            )
 
     @QtCore.pyqtSlot(object)
     def handle_peer_changed(self, peer: Optional[str]) -> None:
@@ -1775,20 +1803,6 @@ def main() -> None:
         except OSError:
             pass
 
-        # Окно с меню, чтобы на macOS Cmd+Q был в меню и работал при открытом диалоге
-        menu_holder = QtWidgets.QMainWindow()
-        menu_holder.setWindowTitle("I2PChat")
-        menu_holder.setCentralWidget(QtWidgets.QWidget())
-        menu_bar = menu_holder.menuBar()
-        quit_action = QtGui.QAction("Quit", menu_holder)
-        quit_action.setShortcut(QtGui.QKeySequence(QtGui.QKeySequence.StandardKey.Quit))
-        quit_action.setMenuRole(QtGui.QAction.MenuRole.QuitRole)  # macOS: в меню приложения
-        quit_action.triggered.connect(app.quit)
-        menu_bar.addAction(quit_action)
-        menu_holder.resize(1, 1)
-        menu_holder.move(-10000, -10000)
-        menu_holder.show()
-
         dialog = ProfileSelectDialog(profiles)
         app.installEventFilter(dialog)
         try:
@@ -1797,8 +1811,6 @@ def main() -> None:
             profile = dialog.selected_profile()
         finally:
             app.removeEventFilter(dialog)
-            menu_holder.close()
-            menu_holder.deleteLater()
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
 

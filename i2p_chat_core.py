@@ -712,6 +712,9 @@ class I2PChatCore:
             reader, writer = self.conn
             self._emit_system(f"Sending image: {filename} ({filesize} bytes)")
             
+            # Прогресс загрузки в UI
+            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=0, is_sending=True))
+            
             # Отправляем заголовок: G + filename|size
             header = f"{filename}|{filesize}"
             writer.write(self.frame_message("G", header))
@@ -719,6 +722,7 @@ class I2PChatCore:
             
             # Отправляем данные чанками в base64
             sent = 0
+            last_emit_sent = 0
             with open(path, "rb") as f:
                 while True:
                     if self._cancel_transfer:
@@ -735,11 +739,15 @@ class I2PChatCore:
                     await writer.drain()
                     
                     sent += len(chunk)
+                    if sent - last_emit_sent >= 65536:
+                        self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=sent, is_sending=True))
+                        last_emit_sent = sent
             
             # Отправляем маркер завершения
             writer.write(self.frame_message("G", "__IMG_END__"))
             await writer.drain()
             
+            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True))
             self._emit_message("success", f"Image sent: {filename}")
             
             # Уведомляем UI об отправленном изображении
@@ -751,10 +759,12 @@ class I2PChatCore:
             return local_path
             
         except (ConnectionError, ConnectionResetError, BrokenPipeError, OSError) as e:
+            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True))
             self._emit_error(f"Image transfer interrupted: connection lost")
             return None
             
         except Exception as e:
+            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True))
             self._emit_error(f"Image transfer failed: {e}")
             return None
         finally:
