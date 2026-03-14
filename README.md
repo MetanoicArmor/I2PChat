@@ -183,3 +183,10 @@ Originally derived from [`termchat-i2p-python`](http://git.community.i2p/stan/te
 
 </details>
 
+---
+
+<p align="center">
+  Created with ❤️ by <b>Vade</b> for the privacy and anonymity community
+  <br><br>
+  © 2026 Vade
+</p>
