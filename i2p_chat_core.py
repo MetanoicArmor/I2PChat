@@ -200,6 +200,7 @@ class I2PChatCore:
 
         self._accept_task: Optional[asyncio.Task[Any]] = None
         self._tunnel_task: Optional[asyncio.Task[Any]] = None
+        self._keepalive_task: Optional[asyncio.Task[Any]] = None
         # Сокет сессии SAM: по спецификации сессия живёт только пока этот сокет открыт.
         # Если его не хранить, сокет закрывается и сессия умирает — при Connect роутер может падать.
         self._session_socket: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
@@ -412,8 +413,8 @@ class I2PChatCore:
 
             loop = asyncio.get_running_loop()
             loop.create_task(self.receive_loop(self.conn))
-            
             loop.create_task(self.initiate_secure_handshake())
+            self._keepalive_task = loop.create_task(self._keepalive_loop())
         except asyncio.TimeoutError:
             self._emit_error(
                 "Connection timed out. Check: I2P router running, peer address correct, peer online."
@@ -552,6 +553,10 @@ class I2PChatCore:
     async def disconnect(self) -> None:
         if not self.conn:
             return
+        # Останавливаем keepalive
+        if self._keepalive_task:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
         reader, writer = self.conn
         self.conn = None
         self.peer_b32 = "Waiting for incoming connections..."
@@ -565,6 +570,18 @@ class I2PChatCore:
             pass
         self._emit_message("disconnect", "You disconnected.")
         self._emit_system("Waiting for incoming connections...")
+    
+    async def _keepalive_loop(self) -> None:
+        """Отправляет Ping каждые 20 секунд для поддержания соединения."""
+        while self.conn:
+            await asyncio.sleep(20)
+            if self.conn and not self._file_transfer_active:
+                try:
+                    _, writer = self.conn
+                    writer.write(self.frame_message("P", ""))
+                    await writer.drain()
+                except Exception:
+                    break
     
     def _reset_crypto_state(self) -> None:
         """Сбрасывает криптографическое состояние при отключении."""
@@ -769,6 +786,7 @@ class I2PChatCore:
 
                 loop = asyncio.get_running_loop()
                 loop.create_task(self.receive_loop(self.conn))
+                self._keepalive_task = loop.create_task(self._keepalive_loop())
             except Exception:
                 await asyncio.sleep(1)
 
@@ -1010,6 +1028,9 @@ class I2PChatCore:
         finally:
             # Не сбрасываем соединение если идёт передача или приём файла
             if self.conn == connection and not self._file_transfer_active and self.incoming_info is None:
+                if self._keepalive_task:
+                    self._keepalive_task.cancel()
+                    self._keepalive_task = None
                 self.conn = None
                 self._reset_crypto_state()
                 self._emit_message("disconnect", "Peer disconnected.")
