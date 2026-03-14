@@ -80,6 +80,12 @@ source .venv/bin/activate  # on Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
+Run the application:
+
+```bash
+python main_qt.py
+```
+
 ### 🔧 Cross‑platform builds
 
 The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  
