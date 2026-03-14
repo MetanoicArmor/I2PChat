@@ -74,19 +74,21 @@ def get_downloads_dir() -> str:
     return base
 
 
-SAFE_FILENAME_RE = re.compile(r'^[\w\-. ]+$')
+UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 def sanitize_filename(name: str) -> str:
     """
     Очистка имени файла от потенциально опасных символов.
-    Возвращает безопасное имя или генерирует новое при невалидном вводе.
+    Поддерживает Unicode (кириллица, иероглифы и т.д.).
     """
-    name = os.path.basename(name)
-    if not name or not SAFE_FILENAME_RE.match(name) or name.startswith('.'):
+    name = os.path.basename(name).strip()
+    name = UNSAFE_FILENAME_CHARS.sub('_', name)
+    if not name or name.startswith('.'):
         return f"file_{int(time.time())}"
     if len(name) > 200:
-        ext = os.path.splitext(name)[1][:10]
+        base, ext = os.path.splitext(name)
+        ext = ext[:10]
         name = f"file_{int(time.time())}{ext}"
     return name
 
