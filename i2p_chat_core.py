@@ -1149,6 +1149,7 @@ class I2PChatCore:
                             
                             # Проверяем размер
                             if len(self.inline_image_buffer) > MAX_IMAGE_SIZE:
+                                self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False))
                                 self._emit_error("Received image too large, discarding")
                                 self.inline_image_buffer = bytearray()
                                 self.inline_image_info = None
@@ -1162,6 +1163,7 @@ class I2PChatCore:
                             elif header[:3] == b'\xff\xd8\xff':
                                 detected_ext = 'jpeg'
                             if detected_ext is None:
+                                self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False))
                                 self._emit_error("Received image has invalid format")
                                 self.inline_image_buffer = bytearray()
                                 self.inline_image_info = None
@@ -1181,12 +1183,15 @@ class I2PChatCore:
                                 is_valid, error_msg, _ = validate_image(safe_path)
                                 if not is_valid:
                                     os.remove(safe_path)
+                                    self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False))
                                     self._emit_error(f"Received invalid image: {error_msg}")
                                 else:
+                                    self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=expected_size, is_sending=False))
                                     self._emit_system(f"Image received: {filename}")
                                     self._emit_inline_image(safe_path, is_from_me=False)
                                     cleanup_images_cache()
                             except Exception as e:
+                                self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False))
                                 self._emit_error(f"Failed to save image: {e}")
                             
                             self.inline_image_buffer = bytearray()
@@ -1206,7 +1211,9 @@ class I2PChatCore:
                                 else:
                                     self.inline_image_info = (filename, size)
                                     self.inline_image_buffer = bytearray()
+                                    self._inline_image_last_emit = 0
                                     self._emit_system(f"Receiving image: {filename} ({size} bytes)")
+                                    self._emit_file_event(FileTransferInfo(filename=filename, size=size, received=0, is_sending=False))
                         except Exception as e:
                             self._emit_error(f"Invalid image header: {e}")
                     else:
@@ -1214,8 +1221,17 @@ class I2PChatCore:
                         try:
                             chunk = base64.b64decode(body)
                             self.inline_image_buffer.extend(chunk)
+                            if self.inline_image_info:
+                                fn, total = self.inline_image_info
+                                received = len(self.inline_image_buffer)
+                                if received - getattr(self, "_inline_image_last_emit", 0) >= 65536 or received == total:
+                                    self._inline_image_last_emit = received
+                                    self._emit_file_event(FileTransferInfo(filename=fn, size=total, received=received, is_sending=False))
                         except Exception as e:
                             self._emit_error(f"Image data error: {e}")
+                            if self.inline_image_info:
+                                fn, sz = self.inline_image_info
+                                self._emit_file_event(FileTransferInfo(filename=fn, size=sz, received=-1, is_sending=False))
                             self.inline_image_buffer = bytearray()
                             self.inline_image_info = None
 

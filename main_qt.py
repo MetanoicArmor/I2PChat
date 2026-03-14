@@ -1349,8 +1349,11 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         # Начало передачи
         if info.received == 0 and info.size > 0:
-            # Для входящих файлов спрашиваем подтверждение
-            if not info.is_sending:
+            is_image = info.filename and info.filename.lower().endswith(
+                (".png", ".jpg", ".jpeg", ".webp")
+            )
+            # Для входящих файлов (не картинок) спрашиваем подтверждение
+            if not info.is_sending and not is_image:
                 answer = QtWidgets.QMessageBox.question(
                     self,
                     "Incoming file",
@@ -1386,10 +1389,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     )
                     return
 
-            # Создаём сообщение прогресса в чате (для картинок — "Uploading image")
-            is_image = info.filename and info.filename.lower().endswith(
-                (".png", ".jpg", ".jpeg", ".webp")
-            )
+            # Создаём сообщение прогресса в чате (для картинок — "Uploading/Receiving image")
             self._transfer_is_image = is_image
             self._append_item(
                 ChatItem(
@@ -1479,7 +1479,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         else:
             sender = "Peer"
         
-        if is_from_me and self._transfer_row is not None and self._transfer_is_image:
+        if self._transfer_row is not None and self._transfer_is_image:
             self.chat_model.update_item(
                 self._transfer_row,
                 ChatItem(
@@ -1487,7 +1487,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     timestamp=ts,
                     sender=sender,
                     text="",
-                    is_sending=True,
+                    is_sending=is_from_me,
                     image_path=path,
                 ),
             )
