@@ -498,6 +498,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
         self._last_status: str = "initializing"
+        self._file_progress: Optional[QtWidgets.QProgressDialog] = None
 
         # основной чат
         self.chat_view = ChatListView(self)
@@ -761,15 +762,39 @@ class ChatWindow(QtWidgets.QMainWindow):
                 )
                 return
 
-        # Обновление прогресса/завершения при принятом файле
-        self._append_item(
-            ChatItem(
-                kind="file",
-                timestamp="",
-                sender="FILE",
-                text=f"{info.filename}: {info.received}/{info.size} bytes",
+            # Создаём окно прогресса
+            self._file_progress = QtWidgets.QProgressDialog(
+                f"Receiving: {info.filename}",
+                None,  # Без кнопки отмены
+                0,
+                info.size,
+                self,
             )
-        )
+            self._file_progress.setWindowTitle("File Transfer")
+            self._file_progress.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+            self._file_progress.setMinimumDuration(0)
+            self._file_progress.show()
+
+        # Обновление прогресса
+        if self._file_progress is not None:
+            self._file_progress.setValue(info.received)
+            self._file_progress.setLabelText(
+                f"Receiving: {info.filename}\n{info.received:,} / {info.size:,} bytes"
+            )
+
+        # Завершение передачи
+        if info.received >= info.size:
+            if self._file_progress is not None:
+                self._file_progress.close()
+                self._file_progress = None
+            self._append_item(
+                ChatItem(
+                    kind="success",
+                    timestamp="",
+                    sender="FILE",
+                    text=f"✔ File received: {info.filename} ({info.size:,} bytes)",
+                )
+            )
 
     @QtCore.pyqtSlot(str)
     def handle_image_received(self, art: str) -> None:
