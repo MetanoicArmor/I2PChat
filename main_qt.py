@@ -786,6 +786,13 @@ class ChatWindow(QtWidgets.QMainWindow):
                 f"{action}: {info.filename}\n{info.received:,} / {info.size:,} bytes"
             )
 
+        # Ошибка передачи (received=-1)
+        if info.received < 0:
+            if self._file_progress is not None:
+                self._file_progress.close()
+                self._file_progress = None
+            return
+
         # Завершение передачи
         if info.received >= info.size:
             if self._file_progress is not None:

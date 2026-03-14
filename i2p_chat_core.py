@@ -419,11 +419,12 @@ class I2PChatCore:
         if not self.conn:
             self._emit_error("No active connection.")
             return
+        
+        filename = os.path.basename(path)
+        filesize = os.path.getsize(path)
+        
         try:
             reader, writer = self.conn
-            filename = os.path.basename(path)
-            filesize = os.path.getsize(path)
-
             self._emit_system(f"Sending file: {filename} ({filesize} bytes)")
 
             header = f"{filename}|{filesize}"
@@ -436,6 +437,10 @@ class I2PChatCore:
             sent = 0
             with open(path, "rb") as f:
                 while True:
+                    # Проверка соединения перед каждым чанком
+                    if not self.conn:
+                        raise ConnectionError("Connection lost during transfer")
+                    
                     chunk = f.read(4096)
                     if not chunk:
                         break
@@ -455,7 +460,17 @@ class I2PChatCore:
             info = FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True)
             self._emit_file_event(info)
             self._emit_message("success", f"File sent: {filename}")
+            
+        except (ConnectionError, ConnectionResetError, BrokenPipeError, OSError) as e:
+            # Эмитим событие с -1 чтобы GUI закрыл окно прогресса
+            info = FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True)
+            self._emit_file_event(info)
+            self._emit_error(f"File transfer interrupted: connection lost")
+            
         except Exception as e:
+            # Эмитим событие с -1 чтобы GUI закрыл окно прогресса
+            info = FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True)
+            self._emit_file_event(info)
             self._emit_error(f"File transfer failed: {e}")
 
     async def send_image_lines(self, lines: list[str]) -> None:
