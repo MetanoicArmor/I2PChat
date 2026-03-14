@@ -627,6 +627,26 @@ class ChatWindow(QtWidgets.QMainWindow):
                 color: #9fa1b5;
                 font-size: %(status_font_px)spx;
             }
+            QMessageBox {
+                background-color: #1f1f23;
+                color: #f5f5f7;
+            }
+            QMessageBox QLabel {
+                color: #f5f5f7;
+            }
+            QMessageBox QPushButton {
+                background-color: #2b2b30;
+                border-radius: 6px;
+                padding: 6px 16px;
+                color: #f5f5f7;
+                min-width: 70px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #3a3a40;
+            }
+            QMessageBox QPushButton:pressed {
+                background-color: #0a84ff;
+            }
             """
             % {"status_font_px": status_font_px}
         )
