@@ -1,106 +1,13 @@
 # Authors
 
-## Original Author
+**Stanley** (I2P Community)  
+Original `termchat-i2p-python` prototype  
+http://git.community.i2p/stan/termchat-i2p-python
 
-**Stanley** (I2P Community)
-- Original terminal prototype: `termchat-i2p-python`
-- Repository: http://git.community.i2p/stan/termchat-i2p-python
-- Core concept: peer-to-peer chat over I2P SAM API
-
-## Current Maintainer
-
-**Vade** (2026)
-- Complete rewrite and modernization
-- Cross-platform PyQt6 GUI
-- Security-focused protocol v2
+**Vade** (2026)  
+I2PChat — cross-platform GUI, protocol v2, security rewrite  
+https://github.com/MetanoicArmor/I2PChat
 
 ---
 
-## Project Evolution
-
-### Phase 1: Original Prototype (Stanley)
-
-A minimal terminal-based I2P chat using SAM API. Single-file implementation with basic message exchange over I2P tunnels.
-
-### Phase 2: I2PChat (Vade)
-
-Complete architectural overhaul with separation of concerns:
-
-- **Core/UI separation**: `i2p_chat_core.py` as shared backend
-- **Dual interfaces**: PyQt6 GUI (`main_qt.py`) + Textual TUI (`chat-python.py`)
-- **Cross-platform builds**: macOS (.app), Windows (.exe), Linux (AppImage)
-
----
-
-## Security Improvements (Protocol v2)
-
-**Breaking change**: Protocol v2 is incompatible with v1. All participants must upgrade.
-
-### Cryptographic Enhancements
-
-| Feature | v1 (Original) | v2 (Current) |
-|---------|---------------|--------------|
-| Encryption | None (I2P transport only) | XSalsa20-Poly1305 (NaCl SecretBox) |
-| Integrity | None | HMAC-SHA256 on all frames |
-| Authentication | I2P destination only | Challenge-response + nonce exchange |
-| Forward Secrecy | None | Ephemeral X25519 key exchange (PFS) |
-
-### Secure Handshake Protocol
-
-```
-Initiator                              Responder
-    |                                      |
-    |-- H:INIT:<nonce_A>:<pubkey_A> ------>|
-    |                                      |
-    |<----- H:RESP:<nonce_B>:<pubkey_B> ---|
-    |                                      |
-    |   shared_key = SHA256(DH || nonces)  |
-    |                                      |
-    |====== Encrypted channel open ========|
-```
-
-### DoS Protections
-
-- **Timeouts**: 30-second timeout on all network operations
-- **Image buffer limit**: Max 500 lines (prevents memory exhaustion)
-- **File size limit**: Max 2 GB (configurable)
-- **Path traversal protection**: Sandbox directory + filename sanitization
-
-### Key Storage Security
-
-- File permissions: `chmod 600` (owner-only)
-- System keyring integration (macOS Keychain, Windows Credential Locker, Linux Secret Service)
-- Fallback to encrypted file storage
-
-### Frame Format
-
-```
-v1: TYPE(1) + LEN(4) + BODY + \n
-v2: TYPE(1) + [E] + LEN(4-6) + BODY + [HMAC(32)] + \n
-```
-
----
-
-## New Components
-
-| File | Description |
-|------|-------------|
-| `crypto.py` | Cryptographic module (HMAC, NaCl encryption, X25519 DH) |
-| `main_qt.py` | PyQt6 GUI application |
-| `i2p_chat_core.py` | Shared async core (protocol, SAM, crypto) |
-| `I2PChat.spec` | PyInstaller build specification |
-
----
-
-## Dependencies Added
-
-- `PyQt6` — Cross-platform GUI framework
-- `pynacl` — E2E encryption and Perfect Forward Secrecy
-- `Pillow` — Image processing for in-chat image sharing
-- `pyperclip` — Clipboard integration
-
----
-
-## License
-
-See `LICENSE` file. Original work by Stanley, modifications by Vade.
+Both projects are licensed under MIT. No license conflicts.
