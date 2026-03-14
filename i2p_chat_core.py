@@ -182,6 +182,8 @@ class I2PChatCore:
         # Сокет сессии SAM: по спецификации сессия живёт только пока этот сокет открыт.
         # Если его не хранить, сокет закрывается и сессия умирает — при Connect роутер может падать.
         self._session_socket: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
+        # Флаг активной передачи файла (для защиты от timeout в receive_loop)
+        self._file_transfer_active: bool = False
 
     # ---------- вспомогательные уведомления ----------
 
@@ -423,6 +425,8 @@ class I2PChatCore:
         filename = os.path.basename(path)
         filesize = os.path.getsize(path)
         
+        self._file_transfer_active = True
+        
         try:
             reader, writer = self.conn
             self._emit_system(f"Sending file: {filename} ({filesize} bytes)")
@@ -437,18 +441,18 @@ class I2PChatCore:
             sent = 0
             with open(path, "rb") as f:
                 while True:
-                    # Проверка соединения перед каждым чанком
                     if not self.conn:
                         raise ConnectionError("Connection lost during transfer")
                     
                     chunk = f.read(4096)
                     if not chunk:
                         break
+                    
                     encoded = base64.b64encode(chunk).decode()
                     writer.write(self.frame_message("D", encoded))
                     await writer.drain()
+                    
                     sent += len(chunk)
-                    # Обновляем прогресс каждые ~64KB чтобы не спамить
                     if sent % 65536 < 4096:
                         info = FileTransferInfo(filename=filename, size=filesize, received=sent, is_sending=True)
                         self._emit_file_event(info)
@@ -456,22 +460,29 @@ class I2PChatCore:
             writer.write(self.frame_message("E", ""))
             await writer.drain()
 
-            # Финальное событие
             info = FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True)
             self._emit_file_event(info)
             self._emit_message("success", f"File sent: {filename}")
             
+            # Перезапуск receive_loop если он был прерван timeout'ом во время передачи
+            if self.conn:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.receive_loop(self.conn))
+                except RuntimeError:
+                    pass
+            
         except (ConnectionError, ConnectionResetError, BrokenPipeError, OSError) as e:
-            # Эмитим событие с -1 чтобы GUI закрыл окно прогресса
             info = FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True)
             self._emit_file_event(info)
             self._emit_error(f"File transfer interrupted: connection lost")
             
         except Exception as e:
-            # Эмитим событие с -1 чтобы GUI закрыл окно прогресса
             info = FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True)
             self._emit_file_event(info)
             self._emit_error(f"File transfer failed: {e}")
+        finally:
+            self._file_transfer_active = False
 
     async def send_image_lines(self, lines: list[str]) -> None:
         """Отправить уже отрендеренное изображение построчно."""
@@ -909,13 +920,15 @@ class I2PChatCore:
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         except asyncio.TimeoutError:
+            if self._file_transfer_active:
+                return
             if self.conn == connection:
                 self._emit_error("Connection timed out (no data received)")
         except Exception as e:
             if self.conn == connection:
                 self._emit_error(f"Protocol Error: {e}")
         finally:
-            if self.conn == connection:
+            if self.conn == connection and not self._file_transfer_active:
                 self.conn = None
                 self._reset_crypto_state()
                 self._emit_message("disconnect", "Peer disconnected.")
