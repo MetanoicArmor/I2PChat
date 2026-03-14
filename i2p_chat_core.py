@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import json
 import logging
 import os
 import re
@@ -16,26 +15,6 @@ from PIL import Image
 import crypto
 
 logger = logging.getLogger("i2pchat")
-
-# #region agent log
-def _get_debug_log_path():
-    if sys.platform == "darwin":
-        return os.path.expanduser("~/Library/Logs/I2PChat/debug-transfer.log")
-    elif sys.platform == "win32":
-        return os.path.join(os.environ.get("TEMP", "."), "i2pchat-debug-transfer.log")
-    else:
-        return "/tmp/i2pchat-debug-transfer.log"
-
-_DBG_LOG = _get_debug_log_path()
-os.makedirs(os.path.dirname(_DBG_LOG), exist_ok=True) if os.path.dirname(_DBG_LOG) else None
-
-def _debug_log(msg, **data):
-    try:
-        entry = {"timestamp": int(time.time()*1000), "message": msg, "data": data}
-        with open(_DBG_LOG, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except: pass
-# #endregion
 
 PROTOCOL_VERSION = 2
 
@@ -450,9 +429,6 @@ class I2PChatCore:
         filesize = os.path.getsize(path)
         
         self._file_transfer_active = True
-        # #region agent log
-        _debug_log("send_file_start", hypothesisId="B,C", filename=filename, filesize=filesize)
-        # #endregion
         
         try:
             reader, writer = self.conn
@@ -466,13 +442,9 @@ class I2PChatCore:
             self._emit_file_event(info)
 
             sent = 0
-            chunk_count = 0
             with open(path, "rb") as f:
                 while True:
                     if not self.conn:
-                        # #region agent log
-                        _debug_log("send_conn_lost", hypothesisId="E", sent=sent, chunk_count=chunk_count)
-                        # #endregion
                         raise ConnectionError("Connection lost during transfer")
                     
                     chunk = f.read(4096)
@@ -484,11 +456,6 @@ class I2PChatCore:
                     await writer.drain()
                     
                     sent += len(chunk)
-                    chunk_count += 1
-                    # #region agent log
-                    if chunk_count % 100 == 0:
-                        _debug_log("send_progress", hypothesisId="B,C", sent=sent, chunk_count=chunk_count, filesize=filesize)
-                    # #endregion
                     if sent % 65536 < 4096:
                         info = FileTransferInfo(filename=filename, size=filesize, received=sent, is_sending=True)
                         self._emit_file_event(info)
@@ -499,9 +466,6 @@ class I2PChatCore:
             info = FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True)
             self._emit_file_event(info)
             self._emit_message("success", f"File sent: {filename}")
-            # #region agent log
-            _debug_log("send_file_done", hypothesisId="B,C", sent=sent, chunk_count=chunk_count)
-            # #endregion
             
             # Перезапуск receive_loop если он был прерван timeout'ом во время передачи
             if self.conn:
@@ -512,18 +476,11 @@ class I2PChatCore:
                     pass
             
         except (ConnectionError, ConnectionResetError, BrokenPipeError, OSError) as e:
-            # #region agent log
-            _debug_log("send_file_conn_error", hypothesisId="B,C,D", error=str(e), sent=sent if 'sent' in dir() else 0)
-            # #endregion
             info = FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True)
             self._emit_file_event(info)
             self._emit_error(f"File transfer interrupted: connection lost")
             
         except Exception as e:
-            # #region agent log
-            import traceback
-            _debug_log("send_file_error", hypothesisId="B,C", error=str(e), tb=traceback.format_exc())
-            # #endregion
             info = FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True)
             self._emit_file_event(info)
             self._emit_error(f"File transfer failed: {e}")
@@ -804,9 +761,6 @@ class I2PChatCore:
         
         reader, writer = connection
         current_type = initial_type
-        # #region agent log
-        _debug_log("recv_loop_start", hypothesisId="E", file_active=self._file_transfer_active)
-        # #endregion
 
         try:
             while True:
@@ -916,9 +870,6 @@ class I2PChatCore:
                         filename, size_str = body.split("|")
                         filename = sanitize_filename(filename)
                         size = int(size_str)
-                        # #region agent log
-                        _debug_log("recv_file_header", hypothesisId="A", filename=filename, size=size)
-                        # #endregion
                         if size > self.MAX_FILE_SIZE:
                             self._emit_error(
                                 f"File too large: {size} bytes "
@@ -933,7 +884,6 @@ class I2PChatCore:
                         self.incoming_info = FileTransferInfo(
                             filename=safe_path, size=size, received=0
                         )
-                        self._recv_chunk_count = 0  # для debug
                         self._emit_system(
                             f"Receiving file: {safe_path} ({size} bytes)"
                         )
@@ -947,23 +897,12 @@ class I2PChatCore:
                             chunk = base64.b64decode(body)
                             self.incoming_file.write(chunk)
                             self.incoming_info.received += len(chunk)
-                            self._recv_chunk_count = getattr(self, '_recv_chunk_count', 0) + 1
-                            # #region agent log
-                            if self._recv_chunk_count % 100 == 0:
-                                _debug_log("recv_progress", hypothesisId="A", received=self.incoming_info.received, chunk_count=self._recv_chunk_count, size=self.incoming_info.size)
-                            # #endregion
                             self._emit_file_event(self.incoming_info)
                     except Exception as e:
-                        # #region agent log
-                        _debug_log("recv_chunk_error", hypothesisId="A", error=str(e))
-                        # #endregion
                         self._emit_error(f"File chunk error: {e}")
 
                 elif msg_type == "E":
                     if self.incoming_file and self.incoming_info:
-                        # #region agent log
-                        _debug_log("recv_file_done", hypothesisId="A", received=self.incoming_info.received, size=self.incoming_info.size)
-                        # #endregion
                         self.incoming_file.close()
                         self._emit_message(
                             "success",
@@ -1003,33 +942,18 @@ class I2PChatCore:
                     writer.write(self.frame_message("O", ""))
                     await writer.drain()
 
-        except (asyncio.IncompleteReadError, ConnectionResetError) as e:
-            # #region agent log
-            _debug_log("recv_conn_reset", hypothesisId="D", error=str(type(e).__name__), recv=getattr(getattr(self, 'incoming_info', None), 'received', 0))
-            # #endregion
+        except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         except asyncio.TimeoutError:
-            # #region agent log
-            _debug_log("recv_timeout", hypothesisId="A,F", file_active=self._file_transfer_active, incoming=self.incoming_info is not None, recv=getattr(getattr(self, 'incoming_info', None), 'received', 0))
-            # #endregion
-            # Не рвём соединение если идёт передача (отправка) или приём файла
             if self._file_transfer_active:
                 return
             if self.incoming_info is not None:
-                # Приём файла в процессе — просто перезапускаем receive_loop
-                # #region agent log
-                _debug_log("recv_timeout_restart", hypothesisId="F", recv=self.incoming_info.received)
-                # #endregion
                 loop = asyncio.get_running_loop()
                 loop.create_task(self.receive_loop(connection))
                 return
             if self.conn == connection:
                 self._emit_error("Connection timed out (no data received)")
         except Exception as e:
-            # #region agent log
-            import traceback
-            _debug_log("recv_exception", hypothesisId="A,D", error=str(e), tb=traceback.format_exc())
-            # #endregion
             if self.conn == connection:
                 self._emit_error(f"Protocol Error: {e}")
         finally:
