@@ -74,7 +74,167 @@ def get_downloads_dir() -> str:
     return base
 
 
+def get_images_dir() -> str:
+    """
+    Безопасная директория для входящих изображений (sandbox).
+    Изолирована внутри profiles директории для предотвращения path traversal.
+    """
+    base = os.path.join(get_profiles_dir(), "images")
+    os.makedirs(base, exist_ok=True)
+    try:
+        os.chmod(base, 0o700)
+    except OSError:
+        pass
+    return base
+
+
 UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+# Безопасные форматы изображений (magic bytes -> extension)
+ALLOWED_IMAGE_FORMATS = {
+    b'\x89PNG\r\n\x1a\n': 'png',
+    b'\xff\xd8\xff': 'jpeg',
+}
+# WebP: RIFF....WEBP
+WEBP_MAGIC_START = b'RIFF'
+WEBP_MAGIC_END = b'WEBP'
+
+# GIF: GIF87a or GIF89a (6 bytes), then width/height at 6-9 (LE 16-bit each)
+GIF_MAGIC_87 = b'GIF87a'
+GIF_MAGIC_89 = b'GIF89a'
+
+MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB
+MAX_IMAGE_DIMENSION = 4096  # max width/height in pixels
+MAX_IMAGES_CACHE_SIZE = 100 * 1024 * 1024  # 100 MB auto-cleanup threshold
+MAX_GIF_FRAMES = 200  # max frames for animated GIF (decompression bomb protection)
+
+
+def _gif_dimensions_from_header(header: bytes) -> Optional[Tuple[int, int]]:
+    """
+    Читает размер логического экрана GIF из заголовка (без декодирования).
+    GIF: 6 bytes signature, then 2 bytes width (LE), 2 bytes height (LE).
+    """
+    if len(header) < 10:
+        return None
+    if header[:6] not in (GIF_MAGIC_87, GIF_MAGIC_89):
+        return None
+    width = header[6] | (header[7] << 8)
+    height = header[8] | (header[9] << 8)
+    return (width, height)
+
+
+def validate_image(path: str) -> Tuple[bool, str, Optional[str]]:
+    """
+    Валидация изображения перед отправкой/отображением.
+    
+    Returns:
+        (is_valid, error_message, detected_extension)
+    """
+    if not os.path.exists(path):
+        return False, "File does not exist", None
+    
+    file_size = os.path.getsize(path)
+    if file_size > MAX_IMAGE_SIZE:
+        return False, f"Image too large: {file_size} bytes (max {MAX_IMAGE_SIZE // (1024*1024)} MB)", None
+    
+    if file_size == 0:
+        return False, "Empty file", None
+    
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(12)
+    except IOError as e:
+        return False, f"Cannot read file: {e}", None
+    
+    detected_ext = None
+    
+    # Check PNG (8 bytes magic)
+    if header[:8] == b'\x89PNG\r\n\x1a\n':
+        detected_ext = 'png'
+    # Check JPEG (3 bytes magic)
+    elif header[:3] == b'\xff\xd8\xff':
+        detected_ext = 'jpeg'
+    # Check WebP (RIFF....WEBP)
+    elif header[:4] == WEBP_MAGIC_START and header[8:12] == WEBP_MAGIC_END:
+        detected_ext = 'webp'
+    # Check GIF (GIF87a/GIF89a) — проверяем размеры из заголовка до декодирования
+    elif header[:6] in (GIF_MAGIC_87, GIF_MAGIC_89):
+        dims = _gif_dimensions_from_header(header)
+        if dims is None:
+            return False, "Invalid GIF header", None
+        gif_width, gif_height = dims
+        if gif_width > MAX_IMAGE_DIMENSION or gif_height > MAX_IMAGE_DIMENSION:
+            return False, (
+                f"GIF too large: {gif_width}x{gif_height} "
+                f"(max {MAX_IMAGE_DIMENSION}x{MAX_IMAGE_DIMENSION})"
+            ), None
+        if gif_width <= 0 or gif_height <= 0:
+            return False, "Invalid GIF dimensions", None
+        detected_ext = 'gif'
+    
+    if detected_ext is None:
+        return False, "Unsupported image format (only PNG, JPEG, WebP, GIF allowed)", None
+    
+    # Validate with PIL for extra safety
+    try:
+        with Image.open(path) as img:
+            width, height = img.size
+            if width > MAX_IMAGE_DIMENSION or height > MAX_IMAGE_DIMENSION:
+                return False, f"Image too large: {width}x{height} (max {MAX_IMAGE_DIMENSION}x{MAX_IMAGE_DIMENSION})", None
+            
+            # Для GIF: лимит числа кадров (защита от decompression bomb в анимации)
+            if detected_ext == 'gif':
+                n_frames = getattr(img, 'n_frames', 1)
+                if n_frames > MAX_GIF_FRAMES:
+                    return False, f"GIF has too many frames: {n_frames} (max {MAX_GIF_FRAMES})", None
+                # Ограничиваем суммарный объём пикселей (кадры × площадь)
+                total_pixels = width * height * n_frames
+                max_pixels = MAX_IMAGE_DIMENSION * MAX_IMAGE_DIMENSION * MAX_GIF_FRAMES
+                if total_pixels > max_pixels:
+                    return False, f"GIF too large (frames × size)", None
+            
+            # Force load to detect corrupted images (для GIF загрузится первый кадр)
+            img.load()
+    except Exception as e:
+        return False, f"Invalid or corrupted image: {e}", None
+    
+    return True, "", detected_ext
+
+
+def cleanup_images_cache() -> None:
+    """
+    Автоочистка кэша изображений при превышении лимита.
+    Удаляет самые старые файлы.
+    """
+    images_dir = get_images_dir()
+    if not os.path.exists(images_dir):
+        return
+    
+    files = []
+    total_size = 0
+    
+    for name in os.listdir(images_dir):
+        path = os.path.join(images_dir, name)
+        if os.path.isfile(path):
+            stat = os.stat(path)
+            files.append((path, stat.st_mtime, stat.st_size))
+            total_size += stat.st_size
+    
+    if total_size <= MAX_IMAGES_CACHE_SIZE:
+        return
+    
+    # Sort by modification time (oldest first)
+    files.sort(key=lambda x: x[1])
+    
+    for path, _, size in files:
+        if total_size <= MAX_IMAGES_CACHE_SIZE * 0.8:  # Clean to 80%
+            break
+        try:
+            os.remove(path)
+            total_size -= size
+            logger.info(f"Cleaned up old image: {path}")
+        except OSError:
+            pass
 
 
 def sanitize_filename(name: str) -> str:
@@ -141,6 +301,7 @@ class I2PChatCore:
         on_error: Optional[SimpleCallback] = None,
         on_file_event: Optional[FileEventCallback] = None,
         on_image_received: Optional[Callable[[str], Any]] = None,
+        on_inline_image_received: Optional[Callable[[str, bool], Any]] = None,
     ) -> None:
         self.sam_address = sam_address
         self.profile = profile or "default"
@@ -152,6 +313,7 @@ class I2PChatCore:
         self.on_error = on_error
         self.on_file_event = on_file_event
         self.on_image_received = on_image_received
+        self.on_inline_image_received = on_inline_image_received
 
         self.session_id = f"chat_{self.profile}_{int(time.time())}"
         self.network_status = "initializing"
@@ -167,8 +329,12 @@ class I2PChatCore:
         self.incoming_file = None
         self.incoming_info: Optional[FileTransferInfo] = None
 
-        # буфер для изображений
+        # буфер для изображений (ASCII-арт)
         self.image_buffer: list[str] = []
+        
+        # буфер для inline-изображений (бинарные данные)
+        self.inline_image_buffer: bytearray = bytearray()
+        self.inline_image_info: Optional[Tuple[str, int]] = None  # (filename, size)
 
         # криптография (устанавливается при handshake v2)
         self.shared_key: Optional[bytes] = None
@@ -187,6 +353,8 @@ class I2PChatCore:
         self._session_socket: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
         # Флаг активной передачи файла (для защиты от timeout в receive_loop)
         self._file_transfer_active: bool = False
+        # Флаг отмены передачи
+        self._cancel_transfer: bool = False
         # Флаг активного receive_loop (предотвращает запуск дублирующих корутин)
         self._recv_loop_active: bool = False
 
@@ -235,6 +403,10 @@ class I2PChatCore:
     def _emit_file_event(self, info: FileTransferInfo) -> None:
         if self.on_file_event:
             self.on_file_event(info)
+
+    def _emit_inline_image(self, path: str, is_from_me: bool) -> None:
+        if self.on_inline_image_received:
+            self.on_inline_image_received(path, is_from_me)
 
     # ---------- протокол ----------
 
@@ -340,8 +512,8 @@ class I2PChatCore:
             destination=self.my_dest,
             sam_address=self.sam_address,
             options={
-                "inbound.length": "3",
-                "outbound.length": "3",
+                "inbound.length": "2",
+                "outbound.length": "2",
                 "inbound.quantity": "3",
                 "outbound.quantity": "3",
             },
@@ -422,6 +594,24 @@ class I2PChatCore:
             self._emit_error(f"Failed to send message: {e}")
             self.conn = None
 
+    def cancel_file_transfer(self) -> None:
+        """Отменить текущую передачу файла."""
+        self._cancel_transfer = True
+        if self.incoming_file:
+            try:
+                self.incoming_file.close()
+            except Exception:
+                pass
+            self.incoming_file = None
+        if self.incoming_info:
+            self._emit_file_event(FileTransferInfo(
+                filename=self.incoming_info.filename,
+                size=self.incoming_info.size,
+                received=-1,
+                is_sending=False,
+            ))
+            self.incoming_info = None
+
     async def send_file(self, path: str) -> None:
         if not self.conn:
             self._emit_error("No active connection.")
@@ -431,6 +621,7 @@ class I2PChatCore:
         filesize = os.path.getsize(path)
         
         self._file_transfer_active = True
+        self._cancel_transfer = False
         
         try:
             reader, writer = self.conn
@@ -446,6 +637,8 @@ class I2PChatCore:
             sent = 0
             with open(path, "rb") as f:
                 while True:
+                    if self._cancel_transfer:
+                        raise Exception("Transfer cancelled by user")
                     if not self.conn:
                         raise ConnectionError("Connection lost during transfer")
                     
@@ -500,6 +693,99 @@ class I2PChatCore:
             writer.write(self.frame_message("I", line))
         writer.write(self.frame_message("I", "__END__"))
         await writer.drain()
+
+    async def send_image(self, path: str) -> Optional[str]:
+        """
+        Отправить изображение (PNG/JPEG/WebP) с валидацией.
+        
+        Args:
+            path: путь к файлу изображения
+            
+        Returns:
+            путь к копии изображения в images/ или None при ошибке
+        """
+        if not self.conn:
+            self._emit_error("No active connection.")
+            return None
+        
+        # Валидация изображения
+        is_valid, error_msg, detected_ext = validate_image(path)
+        if not is_valid:
+            self._emit_error(f"Invalid image: {error_msg}")
+            return None
+        
+        filename = sanitize_filename(os.path.basename(path))
+        filesize = os.path.getsize(path)
+        
+        # Копируем изображение в images/ для локального отображения
+        import hashlib
+        with open(path, 'rb') as f:
+            file_hash = hashlib.md5(f.read()).hexdigest()[:8]
+        
+        local_filename = f"img_{int(time.time())}_{file_hash}.{detected_ext}"
+        local_path = os.path.join(get_images_dir(), local_filename)
+        
+        try:
+            import shutil
+            shutil.copy2(path, local_path)
+        except Exception as e:
+            self._emit_error(f"Failed to copy image: {e}")
+            return None
+        
+        self._file_transfer_active = True
+        self._cancel_transfer = False
+        
+        try:
+            reader, writer = self.conn
+            self._emit_system(f"Sending image: {filename} ({filesize} bytes)")
+            
+            # Отправляем заголовок: G + filename|size
+            header = f"{filename}|{filesize}"
+            writer.write(self.frame_message("G", header))
+            await writer.drain()
+            
+            # Отправляем данные чанками в base64
+            sent = 0
+            with open(path, "rb") as f:
+                while True:
+                    if self._cancel_transfer:
+                        raise Exception("Transfer cancelled by user")
+                    if not self.conn:
+                        raise ConnectionError("Connection lost during transfer")
+                    
+                    chunk = f.read(4096)
+                    if not chunk:
+                        break
+                    
+                    encoded = base64.b64encode(chunk).decode()
+                    writer.write(self.frame_message("G", encoded))
+                    await writer.drain()
+                    
+                    sent += len(chunk)
+            
+            # Отправляем маркер завершения
+            writer.write(self.frame_message("G", "__IMG_END__"))
+            await writer.drain()
+            
+            self._emit_message("success", f"Image sent: {filename}")
+            
+            # Уведомляем UI об отправленном изображении
+            self._emit_inline_image(local_path, is_from_me=True)
+            
+            # Очистка кэша при необходимости
+            cleanup_images_cache()
+            
+            return local_path
+            
+        except (ConnectionError, ConnectionResetError, BrokenPipeError, OSError) as e:
+            self._emit_error(f"Image transfer interrupted: connection lost")
+            return None
+            
+        except Exception as e:
+            self._emit_error(f"Image transfer failed: {e}")
+            return None
+        finally:
+            self._file_transfer_active = False
 
     async def send_control(self, signal: str) -> None:
         if not self.conn:
@@ -777,7 +1063,7 @@ class I2PChatCore:
                         break
                     msg_type = type_data.decode()
 
-                if msg_type not in ["U", "S", "P", "O", "F", "D", "E", "I", "H"]:
+                if msg_type not in ["U", "S", "P", "O", "F", "D", "E", "I", "H", "G"]:
                     logger.warning(f"Invalid message type received: {repr(msg_type)}")
                     break
 
@@ -866,6 +1152,94 @@ class I2PChatCore:
                         elif len(self.image_buffer) == self.MAX_IMAGE_LINES:
                             self.image_buffer.append("[Image truncated - too large]")
                             self._emit_error("Image too large, truncating")
+
+                elif msg_type == "G":
+                    # Inline image (binary PNG/JPEG/WebP)
+                    if body == "__IMG_END__":
+                        # Завершение приёма изображения
+                        if self.inline_image_info and self.inline_image_buffer:
+                            filename, expected_size = self.inline_image_info
+                            
+                            # Проверяем размер
+                            if len(self.inline_image_buffer) > MAX_IMAGE_SIZE:
+                                self._emit_error("Received image too large, discarding")
+                                self.inline_image_buffer = bytearray()
+                                self.inline_image_info = None
+                                continue
+                            
+                            # Проверяем magic bytes
+                            header = bytes(self.inline_image_buffer[:12])
+                            detected_ext = None
+                            if header[:8] == b'\x89PNG\r\n\x1a\n':
+                                detected_ext = 'png'
+                            elif header[:3] == b'\xff\xd8\xff':
+                                detected_ext = 'jpeg'
+                            elif header[:4] == WEBP_MAGIC_START and header[8:12] == WEBP_MAGIC_END:
+                                detected_ext = 'webp'
+                            elif header[:6] in (GIF_MAGIC_87, GIF_MAGIC_89):
+                                dims = _gif_dimensions_from_header(self.inline_image_buffer[:10])
+                                if dims and 0 < dims[0] <= MAX_IMAGE_DIMENSION and 0 < dims[1] <= MAX_IMAGE_DIMENSION:
+                                    detected_ext = 'gif'
+                                else:
+                                    detected_ext = None
+
+                            if detected_ext is None:
+                                self._emit_error("Received image has invalid format")
+                                self.inline_image_buffer = bytearray()
+                                self.inline_image_info = None
+                                continue
+                            
+                            # Сохраняем изображение
+                            import hashlib
+                            file_hash = hashlib.md5(self.inline_image_buffer).hexdigest()[:8]
+                            safe_filename = f"img_{int(time.time())}_{file_hash}.{detected_ext}"
+                            safe_path = os.path.join(get_images_dir(), safe_filename)
+                            
+                            try:
+                                with open(safe_path, 'wb') as f:
+                                    f.write(self.inline_image_buffer)
+                                
+                                # Валидация с PIL
+                                is_valid, error_msg, _ = validate_image(safe_path)
+                                if not is_valid:
+                                    os.remove(safe_path)
+                                    self._emit_error(f"Received invalid image: {error_msg}")
+                                else:
+                                    self._emit_system(f"Image received: {filename}")
+                                    self._emit_inline_image(safe_path, is_from_me=False)
+                                    cleanup_images_cache()
+                            except Exception as e:
+                                self._emit_error(f"Failed to save image: {e}")
+                            
+                            self.inline_image_buffer = bytearray()
+                            self.inline_image_info = None
+                    elif self.inline_image_info is None:
+                        # Заголовок: filename|size
+                        try:
+                            parts = body.split("|")
+                            if len(parts) == 2:
+                                filename = sanitize_filename(parts[0])
+                                size = int(parts[1])
+                                if size > MAX_IMAGE_SIZE:
+                                    self._emit_error(
+                                        f"Incoming image too large: {size} bytes "
+                                        f"(max {MAX_IMAGE_SIZE // (1024*1024)} MB)"
+                                    )
+                                else:
+                                    self.inline_image_info = (filename, size)
+                                    self.inline_image_buffer = bytearray()
+                                    self._emit_system(f"Receiving image: {filename} ({size} bytes)")
+                        except Exception as e:
+                            self._emit_error(f"Invalid image header: {e}")
+                    else:
+                        # Данные изображения (base64)
+                        try:
+                            chunk = base64.b64decode(body)
+                            self.inline_image_buffer.extend(chunk)
+                        except Exception as e:
+                            self._emit_error(f"Image data error: {e}")
+                            self.inline_image_buffer = bytearray()
+                            self.inline_image_info = None
 
                 elif msg_type == "F":
                     try:

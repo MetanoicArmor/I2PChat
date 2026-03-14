@@ -15,6 +15,7 @@ from i2p_chat_core import (
     FileTransferInfo,
     I2PChatCore,
     get_profiles_dir,
+    get_images_dir,
     render_braille,
     render_bw,
 )
@@ -27,13 +28,14 @@ except Exception:  # pragma: no cover - мультимедиа не везде �
 
 @dataclass
 class ChatItem:
-    kind: str
+    kind: str  # "me", "peer", "system", "error", "success", "transfer", "image_inline", etc.
     timestamp: str
     sender: str
     text: str
     progress: float = 0.0
     file_size: int = 0
     is_sending: bool = False
+    image_path: Optional[str] = None  # путь к inline-изображению
 
 
 class ChatListModel(QtCore.QAbstractListModel):
@@ -78,7 +80,10 @@ class ChatListView(QtWidgets.QListView):
 
     - перераскладывает элементы при изменении ширины (для переноса строк)
     - поддерживает копирование текста (контекстное меню и Cmd/Ctrl+C)
+    - открывает изображения по двойному клику
     """
+    cancelTransferRequested = QtCore.pyqtSignal()
+    imageOpenRequested = QtCore.pyqtSignal(str)  # path to image
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -129,6 +134,28 @@ class ChatListView(QtWidgets.QListView):
                 self._copy_index_text(index, with_meta=False)
                 return
         super().keyPressEvent(event)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        index = self.indexAt(event.pos())
+        if index.isValid():
+            item = index.data(QtCore.Qt.ItemDataRole.DisplayRole)
+            if isinstance(item, ChatItem) and item.kind == "transfer":
+                delegate = self.itemDelegate()
+                if isinstance(delegate, ChatItemDelegate):
+                    rect = self.visualRect(index)
+                    if delegate.is_cancel_button_hit(rect, event.pos(), item):
+                        self.cancelTransferRequested.emit()
+                        return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        index = self.indexAt(event.pos())
+        if index.isValid():
+            item = index.data(QtCore.Qt.ItemDataRole.DisplayRole)
+            if isinstance(item, ChatItem) and item.kind == "image_inline" and item.image_path:
+                self.imageOpenRequested.emit(item.image_path)
+                return
+        super().mouseDoubleClickEvent(event)
 
 
 class FlowLayout(QtWidgets.QLayout):
@@ -220,6 +247,37 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     # Вертикальный зазор между баблами (меньше, чем было изначально)
     BUBBLE_SPACING_Y = 2
     BUBBLE_RADIUS = 12
+    
+    # Настройки для inline-изображений
+    IMAGE_MAX_WIDTH = 300
+    IMAGE_MAX_HEIGHT = 200
+    
+    # Кэш для QPixmap (путь -> pixmap)
+    _pixmap_cache: dict = {}
+    
+    def _load_pixmap(self, path: str) -> Optional[QtGui.QPixmap]:
+        """Загрузить изображение с кэшированием."""
+        if path in self._pixmap_cache:
+            return self._pixmap_cache[path]
+        
+        if not os.path.exists(path):
+            return None
+        
+        pixmap = QtGui.QPixmap(path)
+        if pixmap.isNull():
+            return None
+        
+        # Масштабируем если нужно
+        if pixmap.width() > self.IMAGE_MAX_WIDTH or pixmap.height() > self.IMAGE_MAX_HEIGHT:
+            pixmap = pixmap.scaled(
+                self.IMAGE_MAX_WIDTH,
+                self.IMAGE_MAX_HEIGHT,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+        
+        self._pixmap_cache[path] = pixmap
+        return pixmap
 
     def _bubble_width(self, cell_width: int, text: str, font: QtGui.QFont) -> int:
         """
@@ -248,6 +306,11 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         if item.kind == "transfer":
             self._paint_transfer(painter, option, item)
+            painter.restore()
+            return
+
+        if item.kind == "image_inline" and item.image_path:
+            self._paint_image(painter, option, item)
             painter.restore()
             return
 
@@ -494,6 +557,167 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 int(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop),
                 size_text,
             )
+        
+        cancel_btn_size = 24
+        cancel_rect = QtCore.QRectF(
+            inner_rect.right() - cancel_btn_size,
+            inner_rect.top(),
+            cancel_btn_size,
+            cancel_btn_size,
+        )
+        painter.setBrush(QtGui.QColor("#ff5555"))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(cancel_rect, cancel_btn_size / 2, cancel_btn_size / 2)
+        
+        painter.setPen(QtGui.QColor("#ffffff"))
+        painter.setFont(base_font)
+        painter.drawText(
+            cancel_rect,
+            int(QtCore.Qt.AlignmentFlag.AlignCenter),
+            "✕",
+        )
+
+    def _paint_image(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionViewItem,
+        item: ChatItem,
+    ) -> None:
+        """Рисует бабл с inline-изображением."""
+        rect = option.rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
+        cell_width = rect.width()
+        
+        # Загружаем изображение
+        pixmap = self._load_pixmap(item.image_path) if item.image_path else None
+        
+        if pixmap is None:
+            # Показываем placeholder если изображение не загружено
+            bubble_width = int(cell_width * 0.4)
+            is_me = item.is_sending
+            if is_me:
+                bubble_rect = QtCore.QRectF(
+                    rect.right() - bubble_width - self.PADDING_X,
+                    rect.top(),
+                    bubble_width,
+                    60,
+                )
+            else:
+                bubble_rect = QtCore.QRectF(
+                    rect.left() + self.PADDING_X,
+                    rect.top(),
+                    bubble_width,
+                    60,
+                )
+            
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+            painter.setBrush(QtGui.QColor("#44475a"))
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(bubble_rect, self.BUBBLE_RADIUS, self.BUBBLE_RADIUS)
+            
+            painter.setPen(QtGui.QColor("#f8f8f2"))
+            painter.drawText(
+                bubble_rect,
+                int(QtCore.Qt.AlignmentFlag.AlignCenter),
+                "[Image not found]",
+            )
+            return
+        
+        # Размеры бабла на основе размера изображения
+        img_width = pixmap.width()
+        img_height = pixmap.height()
+        bubble_width = img_width + self.PADDING_X * 2
+        bubble_height = img_height + self.PADDING_Y * 2
+        
+        is_me = item.is_sending
+        if is_me:
+            bubble_rect = QtCore.QRectF(
+                rect.right() - bubble_width - self.PADDING_X,
+                rect.top(),
+                bubble_width,
+                bubble_height,
+            )
+            bg_color = QtGui.QColor("#3a7afe")
+        else:
+            bubble_rect = QtCore.QRectF(
+                rect.left() + self.PADDING_X,
+                rect.top(),
+                bubble_width,
+                bubble_height,
+            )
+            bg_color = QtGui.QColor("#7c3aed")
+        
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(bg_color)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(bubble_rect, self.BUBBLE_RADIUS, self.BUBBLE_RADIUS)
+        
+        # Рисуем изображение внутри бабла
+        img_rect = QtCore.QRectF(
+            bubble_rect.left() + self.PADDING_X,
+            bubble_rect.top() + self.PADDING_Y,
+            img_width,
+            img_height,
+        )
+        
+        # Скругляем углы изображения
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(img_rect, self.BUBBLE_RADIUS - 4, self.BUBBLE_RADIUS - 4)
+        painter.setClipPath(path)
+        painter.drawPixmap(img_rect.toRect(), pixmap)
+        painter.setClipping(False)
+        
+        # Добавляем тонкую рамку вокруг изображения
+        border_pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 40))
+        border_pen.setWidth(1)
+        painter.setPen(border_pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(img_rect, self.BUBBLE_RADIUS - 4, self.BUBBLE_RADIUS - 4)
+
+    def _get_cancel_button_rect(
+        self, cell_rect: QtCore.QRect, item: ChatItem
+    ) -> QtCore.QRectF:
+        rect = cell_rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
+        cell_width = rect.width()
+        bubble_width = int(cell_width * 0.6)
+        
+        if item.is_sending:
+            bubble_rect = QtCore.QRectF(
+                rect.right() - bubble_width - self.PADDING_X,
+                rect.top(),
+                bubble_width,
+                rect.height(),
+            )
+        else:
+            bubble_rect = QtCore.QRectF(
+                rect.left() + self.PADDING_X,
+                rect.top(),
+                bubble_width,
+                rect.height(),
+            )
+        
+        bubble_rect = bubble_rect.adjusted(
+            self.PADDING_X / 2,
+            self.PADDING_Y / 2,
+            -self.PADDING_X / 2,
+            -self.PADDING_Y / 2,
+        )
+        inner_rect = bubble_rect.adjusted(
+            self.PADDING_X, self.PADDING_Y, -self.PADDING_X, -self.PADDING_Y
+        )
+        
+        cancel_btn_size = 24
+        return QtCore.QRectF(
+            inner_rect.right() - cancel_btn_size,
+            inner_rect.top(),
+            cancel_btn_size,
+            cancel_btn_size,
+        )
+
+    def is_cancel_button_hit(
+        self, cell_rect: QtCore.QRect, pos: QtCore.QPoint, item: ChatItem
+    ) -> bool:
+        cancel_rect = self._get_cancel_button_rect(cell_rect, item)
+        return cancel_rect.contains(QtCore.QPointF(pos))
 
     def sizeHint(
         self,
@@ -507,6 +731,16 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         if item.kind == "transfer":
             cell_width = option.rect.width() if option.rect.width() > 0 else 600
             height = self.PADDING_Y * 4 + 18 + 18 + 20 + self.BUBBLE_SPACING_Y * 2
+            return QtCore.QSize(int(cell_width), int(height))
+
+        if item.kind == "image_inline" and item.image_path:
+            cell_width = option.rect.width() if option.rect.width() > 0 else 600
+            pixmap = self._load_pixmap(item.image_path)
+            if pixmap:
+                img_height = pixmap.height()
+                height = img_height + self.PADDING_Y * 2 + self.BUBBLE_SPACING_Y * 2
+            else:
+                height = 60 + self.BUBBLE_SPACING_Y * 2
             return QtCore.QSize(int(cell_width), int(height))
 
         cell_width = option.rect.width() if option.rect.width() > 0 else 600
@@ -727,6 +961,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.disconnect_button = QtWidgets.QPushButton("Disconnect", self)
 
         self.send_file_button = QtWidgets.QPushButton("Send File", self)
+        self.send_pic_button = QtWidgets.QPushButton("Send Pic", self)
         self.lock_peer_button = QtWidgets.QPushButton("Lock to peer", self)
         self.copy_my_addr_button = QtWidgets.QPushButton("Copy My Addr", self)
 
@@ -738,6 +973,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.connect_button,
             self.disconnect_button,
             self.send_file_button,
+            self.send_pic_button,
             self.lock_peer_button,
             self.copy_my_addr_button,
         ]:
@@ -748,6 +984,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         actions_layout.addWidget(self.connect_button)
         actions_layout.addWidget(self.disconnect_button)
         actions_layout.addWidget(self.send_file_button)
+        actions_layout.addWidget(self.send_pic_button)
         actions_layout.addWidget(self.lock_peer_button)
         actions_layout.addWidget(self.copy_my_addr_button)
 
@@ -792,9 +1029,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
         self.send_file_button.clicked.connect(self.on_send_file_clicked)
+        self.send_pic_button.clicked.connect(self.on_send_pic_clicked)
         self.lock_peer_button.clicked.connect(self.on_lock_peer_clicked)
         self.copy_my_addr_button.clicked.connect(self.on_copy_my_addr_clicked)
         self.load_profile_button.clicked.connect(self.on_load_profile_clicked)
+        self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
+        self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
 
         # ядро
         self.core = self._create_core(self.profile)
@@ -1021,6 +1261,26 @@ class ChatWindow(QtWidgets.QMainWindow):
             )
         )
 
+    @QtCore.pyqtSlot(str, bool)
+    def handle_inline_image_received(self, path: str, is_from_me: bool) -> None:
+        """Обработчик для inline-изображений (PNG/JPEG/WebP)."""
+        ts = ""
+        if is_from_me:
+            sender = "Me"
+        else:
+            sender = "Peer"
+        
+        self._append_item(
+            ChatItem(
+                kind="image_inline",
+                timestamp=ts,
+                sender=sender,
+                text="",
+                is_sending=is_from_me,
+                image_path=path,
+            )
+        )
+
     @QtCore.pyqtSlot(object)
     def handle_peer_changed(self, peer: Optional[str]) -> None:
         if peer:
@@ -1037,6 +1297,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_error=self.handle_error,
             on_file_event=self.handle_file_event,
             on_image_received=self.handle_image_received,
+            on_inline_image_received=self.handle_inline_image_received,
         )
         # динамически навешиваем колбэк уведомлений,
         # чтобы не менять публичную сигнатуру конструктора ядра
@@ -1092,6 +1353,22 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def on_disconnect_clicked(self) -> None:
         asyncio.create_task(self.core.disconnect())
+
+    @QtCore.pyqtSlot()
+    def on_cancel_transfer(self) -> None:
+        self.core.cancel_file_transfer()
+        self._transfer_timer.stop()
+        if self._transfer_row is not None:
+            self.chat_model.update_item(
+                self._transfer_row,
+                ChatItem(
+                    kind="error",
+                    timestamp="",
+                    sender="FILE",
+                    text="Transfer cancelled",
+                ),
+            )
+            self._transfer_row = None
 
     @QtCore.pyqtSlot()
     def on_lock_peer_clicked(self) -> None:
@@ -1193,6 +1470,28 @@ class ChatWindow(QtWidgets.QMainWindow):
         if not path:
             return
         asyncio.create_task(self.core.send_file(path))
+
+    @QtCore.pyqtSlot()
+    def on_send_pic_clicked(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select image to send",
+            "",
+            "Images (*.png *.jpg *.jpeg *.webp *.gif);;All Files (*)",
+        )
+        if not path:
+            return
+        asyncio.create_task(self.core.send_image(path))
+
+    @QtCore.pyqtSlot(str)
+    def on_image_open_requested(self, path: str) -> None:
+        """Открыть изображение в системном просмотрщике."""
+        if not os.path.exists(path):
+            self.handle_error(f"Image not found: {path}")
+            return
+        
+        url = QtCore.QUrl.fromLocalFile(path)
+        QtGui.QDesktopServices.openUrl(url)
 
     @QtCore.pyqtSlot()
     def on_send_img_braille_clicked(self) -> None:
