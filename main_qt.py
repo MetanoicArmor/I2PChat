@@ -724,47 +724,51 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def handle_file_event(self, info: FileTransferInfo) -> None:
-        # Первое уведомление по файлу: спрашиваем, сохранять ли его.
+        action = "Sending" if info.is_sending else "Receiving"
+        
+        # Начало передачи
         if info.received == 0 and info.size > 0:
-            answer = QtWidgets.QMessageBox.question(
-                self,
-                "Incoming file",
-                f"Accept incoming file?\n\n{info.filename} ({info.size} bytes)",
-                QtWidgets.QMessageBox.StandardButton.Yes
-                | QtWidgets.QMessageBox.StandardButton.No,
-                QtWidgets.QMessageBox.StandardButton.Yes,
-            )
-            if answer == QtWidgets.QMessageBox.StandardButton.No:
-                # Отклоняем: закрываем и удаляем временный файл, сбрасываем состояние ядра
-                try:
-                    if self.core.incoming_file:  # type: ignore[attr-defined]
-                        try:
-                            self.core.incoming_file.close()  # type: ignore[attr-defined]
-                        except Exception:
-                            pass
-                    if info.filename and os.path.exists(info.filename):
-                        try:
-                            os.remove(info.filename)
-                        except Exception:
-                            pass
-                    self.core.incoming_file = None  # type: ignore[attr-defined]
-                    self.core.incoming_info = None  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-
-                self._append_item(
-                    ChatItem(
-                        kind="error",
-                        timestamp="",
-                        sender="FILE",
-                        text=f"Incoming file rejected: {info.filename}",
-                    )
+            # Для входящих файлов спрашиваем подтверждение
+            if not info.is_sending:
+                answer = QtWidgets.QMessageBox.question(
+                    self,
+                    "Incoming file",
+                    f"Accept incoming file?\n\n{info.filename} ({info.size} bytes)",
+                    QtWidgets.QMessageBox.StandardButton.Yes
+                    | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.Yes,
                 )
-                return
+                if answer == QtWidgets.QMessageBox.StandardButton.No:
+                    # Отклоняем: закрываем и удаляем временный файл
+                    try:
+                        if self.core.incoming_file:  # type: ignore[attr-defined]
+                            try:
+                                self.core.incoming_file.close()  # type: ignore[attr-defined]
+                            except Exception:
+                                pass
+                        if info.filename and os.path.exists(info.filename):
+                            try:
+                                os.remove(info.filename)
+                            except Exception:
+                                pass
+                        self.core.incoming_file = None  # type: ignore[attr-defined]
+                        self.core.incoming_info = None  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+
+                    self._append_item(
+                        ChatItem(
+                            kind="error",
+                            timestamp="",
+                            sender="FILE",
+                            text=f"Incoming file rejected: {info.filename}",
+                        )
+                    )
+                    return
 
             # Создаём окно прогресса
             self._file_progress = QtWidgets.QProgressDialog(
-                f"Receiving: {info.filename}",
+                f"{action}: {info.filename}",
                 None,  # Без кнопки отмены
                 0,
                 info.size,
@@ -779,7 +783,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         if self._file_progress is not None:
             self._file_progress.setValue(info.received)
             self._file_progress.setLabelText(
-                f"Receiving: {info.filename}\n{info.received:,} / {info.size:,} bytes"
+                f"{action}: {info.filename}\n{info.received:,} / {info.size:,} bytes"
             )
 
         # Завершение передачи
@@ -787,12 +791,13 @@ class ChatWindow(QtWidgets.QMainWindow):
             if self._file_progress is not None:
                 self._file_progress.close()
                 self._file_progress = None
+            done_action = "sent" if info.is_sending else "received"
             self._append_item(
                 ChatItem(
                     kind="success",
                     timestamp="",
                     sender="FILE",
-                    text=f"✔ File received: {info.filename} ({info.size:,} bytes)",
+                    text=f"✔ File {done_action}: {info.filename} ({info.size:,} bytes)",
                 )
             )
 

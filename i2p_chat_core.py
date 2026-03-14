@@ -31,6 +31,7 @@ class FileTransferInfo:
     filename: str
     size: int
     received: int = 0
+    is_sending: bool = False
 
 
 StatusCallback = Callable[[str], Any]
@@ -429,9 +430,10 @@ class I2PChatCore:
             writer.write(self.frame_message("F", header))
             await writer.drain()
 
-            info = FileTransferInfo(filename=filename, size=filesize, received=0)
+            info = FileTransferInfo(filename=filename, size=filesize, received=0, is_sending=True)
             self._emit_file_event(info)
 
+            sent = 0
             with open(path, "rb") as f:
                 while True:
                     chunk = f.read(4096)
@@ -440,10 +442,18 @@ class I2PChatCore:
                     encoded = base64.b64encode(chunk).decode()
                     writer.write(self.frame_message("D", encoded))
                     await writer.drain()
+                    sent += len(chunk)
+                    # Обновляем прогресс каждые ~64KB чтобы не спамить
+                    if sent % 65536 < 4096:
+                        info = FileTransferInfo(filename=filename, size=filesize, received=sent, is_sending=True)
+                        self._emit_file_event(info)
 
             writer.write(self.frame_message("E", ""))
             await writer.drain()
 
+            # Финальное событие
+            info = FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True)
+            self._emit_file_event(info)
             self._emit_message("success", f"File sent: {filename}")
         except Exception as e:
             self._emit_error(f"File transfer failed: {e}")
