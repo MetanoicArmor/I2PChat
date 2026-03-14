@@ -25,6 +25,8 @@ try:
 except Exception:  # pragma: no cover - мультимедиа не везде доступно
     QSoundEffect = None  # type: ignore[assignment]
 
+APP_VERSION = "0.2.1"
+
 
 @dataclass
 class ChatItem:
@@ -251,9 +253,6 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     # Настройки для inline-изображений
     IMAGE_MAX_WIDTH = 300
     IMAGE_MAX_HEIGHT = 200
-    
-    # Кнопка отмены передачи файла (компактная, не слишком яркая)
-    CANCEL_BTN_SIZE = 18
     
     # Кэш для QPixmap (путь -> pixmap)
     _pixmap_cache: dict = {}
@@ -561,25 +560,22 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 size_text,
             )
         
-        cancel_btn_size = self.CANCEL_BTN_SIZE
-        cancel_rect = QtCore.QRectF(
-            inner_rect.right() - cancel_btn_size,
-            inner_rect.top(),
-            cancel_btn_size,
-            cancel_btn_size,
-        )
-        painter.setBrush(QtGui.QColor("#ff5555"))
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(cancel_rect, cancel_btn_size / 2, cancel_btn_size / 2)
-        
+        # Надпись Cancel снизу справа (не перекрывает имя файла)
         small_font = QtGui.QFont(base_font)
         small_font.setPointSize(max(base_font.pointSize() - 2, 8))
         painter.setFont(small_font)
-        painter.setPen(QtGui.QColor("#ffffff"))
+        cancel_label = "Cancel"
+        cancel_rect = QtCore.QRectF(
+            inner_rect.left(),
+            size_rect.bottom() + 2,
+            inner_rect.width(),
+            metrics.height(),
+        )
+        painter.setPen(QtGui.QColor("#a78bfa"))
         painter.drawText(
             cancel_rect,
-            int(QtCore.Qt.AlignmentFlag.AlignCenter),
-            "✕",
+            int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter),
+            cancel_label,
         )
 
     def _paint_image(
@@ -710,12 +706,23 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             self.PADDING_X, self.PADDING_Y, -self.PADDING_X, -self.PADDING_Y
         )
         
-        cancel_btn_size = self.CANCEL_BTN_SIZE
+        # Прямоугольник надписи "Cancel" снизу справа (как в _paint_transfer)
+        view = self.parent()
+        font = view.font() if isinstance(view, QtWidgets.QWidget) else QtGui.QFont()
+        small_font = QtGui.QFont(font)
+        small_font.setPointSize(max(font.pointSize() - 2, 8))
+        metrics = QtGui.QFontMetrics(small_font)
+        bar_height = 18
+        header_h = metrics.height()
+        size_rect_top = inner_rect.top() + header_h + 8 + bar_height + 4
+        cancel_top = size_rect_top + metrics.height() + 2
+        cancel_w = metrics.horizontalAdvance("Cancel")
+        cancel_h = metrics.height()
         return QtCore.QRectF(
-            inner_rect.right() - cancel_btn_size,
-            inner_rect.top(),
-            cancel_btn_size,
-            cancel_btn_size,
+            inner_rect.right() - cancel_w,
+            cancel_top,
+            cancel_w,
+            cancel_h,
         )
 
     def is_cancel_button_hit(
@@ -735,7 +742,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         
         if item.kind == "transfer":
             cell_width = option.rect.width() if option.rect.width() > 0 else 600
-            height = self.PADDING_Y * 4 + 18 + 18 + 20 + self.BUBBLE_SPACING_Y * 2
+            # заголовок + прогресс-бар + размер + надпись Cancel
+            height = self.PADDING_Y * 4 + 18 + 18 + 20 + 20 + self.BUBBLE_SPACING_Y * 2
             return QtCore.QSize(int(cell_width), int(height))
 
         if item.kind == "image_inline" and item.image_path:
@@ -796,6 +804,189 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
         super().keyPressEvent(event)
 
 
+class ProfileComboWithArrow(QtWidgets.QWidget):
+    """QComboBox с видимой стрелкой ▼ поверх области выпадающего списка."""
+    
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.combo = QtWidgets.QComboBox(self)
+        layout.addWidget(self.combo)
+        self._arrow = QtWidgets.QLabel("∨", self)
+        self._arrow.setStyleSheet("color: #9fa1b5; font-size: 10px; background: transparent;")
+        self._arrow.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self._arrow.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        drop_width = 28
+        self._arrow.setGeometry(
+            self.width() - drop_width, 0,
+            drop_width, self.height(),
+        )
+
+
+class ProfileSelectDialog(QtWidgets.QDialog):
+    """Начальное окно выбора профиля в стиле приложения."""
+    
+    def __init__(
+        self,
+        profiles: List[str],
+        parent: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("I2PChat")
+        self.setMinimumSize(420, 300)
+        self.setMaximumWidth(480)
+        
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #141417;
+            }
+            QLabel {
+                color: #f5f5f7;
+            }
+            QComboBox {
+                background: #1f1f23;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+                padding: 10px 12px;
+                color: #f5f5f7;
+                min-height: 20px;
+            }
+            QComboBox:hover {
+                border-color: rgba(255, 255, 255, 0.2);
+            }
+            QComboBox:focus {
+                border-color: #0a84ff;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 28px;
+                background: rgba(255, 255, 255, 0.1);
+                border-left: 1px solid rgba(255, 255, 255, 0.15);
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }
+            QPushButton {
+                background-color: #2b2b30;
+                border-radius: 8px;
+                padding: 10px 24px;
+                color: #f5f5f7;
+                min-width: 115px;
+            }
+            QPushButton:hover {
+                background-color: #3a3a40;
+            }
+            QPushButton:pressed {
+                background-color: #0a84ff;
+            }
+            QPushButton#PrimaryButton {
+                background-color: #0a84ff;
+            }
+            QPushButton#PrimaryButton:hover {
+                background-color: #409cff;
+            }
+        """)
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(28, 28, 28, 28)
+        
+        title = QtWidgets.QLabel("I2PChat")
+        title_font = title.font()
+        title_font.setPointSize(18)
+        title_font.setWeight(QtGui.QFont.Weight.DemiBold)
+        title.setFont(title_font)
+        title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        
+        subtitle = QtWidgets.QLabel("Choose profile")
+        subtitle.setStyleSheet("color: #9fa1b5;")
+        subtitle.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(subtitle)
+        
+        layout.addSpacing(8)
+        
+        hint = QtWidgets.QLabel(
+            "Use <b>default</b> for a one-time session, or enter a name to save your identity."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #9fa1b5; font-size: 12px;")
+        hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
+        
+        profile_label = QtWidgets.QLabel("Profile:")
+        profile_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        layout.addWidget(profile_label)
+        
+        combo_widget = ProfileComboWithArrow(self)
+        self.combo = combo_widget.combo
+        self.combo.setEditable(True)
+        self.combo.addItems(profiles)
+        self.combo.setCurrentIndex(0)
+        self.combo.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
+        layout.addWidget(combo_widget)
+        
+        combo_hint = QtWidgets.QLabel("Click the list on the right to pick an existing profile, or type a new name above.")
+        combo_hint.setWordWrap(True)
+        combo_hint.setStyleSheet("color: #6c6e7e; font-size: 11px;")
+        layout.addWidget(combo_hint)
+        
+        profiles_path = get_profiles_dir()
+        path_hint = QtWidgets.QLabel(f"Profiles folder: {profiles_path}")
+        path_hint.setWordWrap(True)
+        path_hint.setStyleSheet("color: #6c6e7e; font-size: 11px;")
+        path_hint.setToolTip(profiles_path)
+        layout.addWidget(path_hint)
+        
+        layout.addSpacing(12)
+        
+        btn_layout = QtWidgets.QHBoxLayout()
+        btn_layout.setSpacing(12)
+        btn_layout.addStretch()
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.setMinimumWidth(120)
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        continue_btn = QtWidgets.QPushButton("Continue")
+        continue_btn.setMinimumWidth(120)
+        continue_btn.setObjectName("PrimaryButton")
+        continue_btn.setDefault(True)
+        continue_btn.setAutoDefault(True)
+        continue_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(continue_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        
+        self.combo.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+    
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if event.type() == QtCore.QEvent.Type.KeyPress and isinstance(event, QtGui.QKeyEvent):
+            # На macOS Command = MetaModifier; стандартный Quit тоже проверяем
+            if event.matches(QtGui.QKeySequence.StandardKey.Quit):
+                QtWidgets.QApplication.quit()
+                return True
+            if sys.platform == "darwin" and event.key() == QtCore.Qt.Key.Key_Q and (
+                event.modifiers() == QtCore.Qt.KeyboardModifier.MetaModifier
+            ):
+                QtWidgets.QApplication.quit()
+                return True
+        return super().eventFilter(obj, event)
+    
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+            self.accept()
+            return
+        super().keyPressEvent(event)
+    
+    def selected_profile(self) -> Optional[str]:
+        text = self.combo.currentText().strip() if self.combo.currentText() else ""
+        return text or None
+
+
 class ChatWindow(QtWidgets.QMainWindow):
     def __init__(self, profile: Optional[str] = None) -> None:
         super().__init__()
@@ -804,7 +995,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         # если вдруг имя профиля уже содержит служебный маркер в конце (" •"),
         # аккуратно убираем его, чтобы заголовок не заканчивался кружком.
         clean_profile = self.profile.rstrip(" •")
-        self.setWindowTitle(f"I2PChat • {clean_profile}")
+        self.setWindowTitle(f"I2PChat @ {clean_profile}")
         self.resize(900, 600)
 
         # Тёмная макос‑подобная гамма (в духе Big Sur)
@@ -1462,7 +1653,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         await self.core.shutdown()
         self.profile = profile
         clean_profile = self.profile.rstrip(" •")
-        self.setWindowTitle(f"I2PChat • {clean_profile}")
+        self.setWindowTitle(f"I2PChat @ {clean_profile}")
         self.core = self._create_core(self.profile)
         self.refresh_status_label()
         await self.core.init_session()
@@ -1575,31 +1766,39 @@ def main() -> None:
     else:
         # 2) для .app / обычного запуска без аргументов показываем диалог выбора профиля
         profiles = ["default"]
-        # ищем *.dat в папке профилей в домашней директории
-        for name in os.listdir(get_profiles_dir()):
-            if name.endswith(".dat"):
-                base = os.path.splitext(name)[0]
-                if base not in profiles:
-                    profiles.append(base)
+        try:
+            for name in os.listdir(get_profiles_dir()):
+                if name.endswith(".dat"):
+                    base = os.path.splitext(name)[0]
+                    if base not in profiles:
+                        profiles.append(base)
+        except OSError:
+            pass
 
-        dialog = QtWidgets.QInputDialog(None)
-        dialog.setWindowTitle("Select profile")
-        # Короткий английский текст с дополнительным вертикальным отступом между строками
-        dialog.setLabelText(
-            "<html>"
-            "Profile name (default = TRANSIENT).<br><br>"
-            "Pick from the list,<br>"
-            "or type a new name to save keys:"
-            "</html>"
-        )
-        dialog.setComboBoxItems(profiles)
-        dialog.setComboBoxEditable(True)
-        # Даём тексту чуть больше воздуха по ширине, не растягивая слишком сильно
-        dialog.setFixedWidth(360)
-        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
-        item = dialog.textValue()
-        profile = item.strip() or None
+        # Окно с меню, чтобы на macOS Cmd+Q был в меню и работал при открытом диалоге
+        menu_holder = QtWidgets.QMainWindow()
+        menu_holder.setWindowTitle("I2PChat")
+        menu_holder.setCentralWidget(QtWidgets.QWidget())
+        menu_bar = menu_holder.menuBar()
+        quit_action = QtGui.QAction("Quit", menu_holder)
+        quit_action.setShortcut(QtGui.QKeySequence(QtGui.QKeySequence.StandardKey.Quit))
+        quit_action.setMenuRole(QtGui.QAction.MenuRole.QuitRole)  # macOS: в меню приложения
+        quit_action.triggered.connect(app.quit)
+        menu_bar.addAction(quit_action)
+        menu_holder.resize(1, 1)
+        menu_holder.move(-10000, -10000)
+        menu_holder.show()
+
+        dialog = ProfileSelectDialog(profiles)
+        app.installEventFilter(dialog)
+        try:
+            if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                return
+            profile = dialog.selected_profile()
+        finally:
+            app.removeEventFilter(dialog)
+            menu_holder.close()
+            menu_holder.deleteLater()
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
 
