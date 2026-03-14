@@ -536,7 +536,8 @@ class I2PChatCore:
     # Таймаут на установку соединения (I2P может долго строить туннели)
     CONNECT_TIMEOUT = 120
     # Таймаут на операции чтения в receive_loop (защита от зависания)
-    READ_TIMEOUT = 30.0
+    # Увеличен для устойчивости при простое: keepalive 15s + запас на латентность I2P
+    READ_TIMEOUT = 50.0
     # Максимальное количество строк в буфере изображения (защита от OOM)
     MAX_IMAGE_LINES = 500
     # Максимальный размер принимаемого файла в байтах (защита от заполнения диска)
@@ -819,9 +820,9 @@ class I2PChatCore:
         self._emit_system("Waiting for incoming connections...")
     
     async def _keepalive_loop(self) -> None:
-        """Отправляет Ping каждые 20 секунд для поддержания соединения."""
+        """Отправляет Ping каждые 15 секунд для поддержания соединения при простое."""
         while self.conn:
-            await asyncio.sleep(20)
+            await asyncio.sleep(15)
             if self.conn and not self._file_transfer_active:
                 try:
                     _, writer = self.conn

@@ -252,6 +252,9 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     IMAGE_MAX_WIDTH = 300
     IMAGE_MAX_HEIGHT = 200
     
+    # Кнопка отмены передачи файла (компактная, не слишком яркая)
+    CANCEL_BTN_SIZE = 18
+    
     # Кэш для QPixmap (путь -> pixmap)
     _pixmap_cache: dict = {}
     
@@ -558,19 +561,21 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 size_text,
             )
         
-        cancel_btn_size = 24
+        cancel_btn_size = self.CANCEL_BTN_SIZE
         cancel_rect = QtCore.QRectF(
             inner_rect.right() - cancel_btn_size,
             inner_rect.top(),
             cancel_btn_size,
             cancel_btn_size,
         )
-        painter.setBrush(QtGui.QColor("#ff5555"))
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QColor("#7a4a4a"))  # приглушённый красный
+        painter.setPen(QtGui.QPen(QtGui.QColor("#5a3535"), 1))
         painter.drawRoundedRect(cancel_rect, cancel_btn_size / 2, cancel_btn_size / 2)
         
-        painter.setPen(QtGui.QColor("#ffffff"))
-        painter.setFont(base_font)
+        small_font = QtGui.QFont(base_font)
+        small_font.setPointSize(max(base_font.pointSize() - 2, 8))
+        painter.setFont(small_font)
+        painter.setPen(QtGui.QColor("#e0e0e0"))
         painter.drawText(
             cancel_rect,
             int(QtCore.Qt.AlignmentFlag.AlignCenter),
@@ -705,7 +710,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             self.PADDING_X, self.PADDING_Y, -self.PADDING_X, -self.PADDING_Y
         )
         
-        cancel_btn_size = 24
+        cancel_btn_size = self.CANCEL_BTN_SIZE
         return QtCore.QRectF(
             inner_rect.right() - cancel_btn_size,
             inner_rect.top(),
@@ -972,8 +977,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.load_profile_button,
             self.connect_button,
             self.disconnect_button,
-            self.send_file_button,
             self.send_pic_button,
+            self.send_file_button,
             self.lock_peer_button,
             self.copy_my_addr_button,
         ]:
@@ -983,8 +988,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         actions_layout.addWidget(self.addr_edit)
         actions_layout.addWidget(self.connect_button)
         actions_layout.addWidget(self.disconnect_button)
-        actions_layout.addWidget(self.send_file_button)
         actions_layout.addWidget(self.send_pic_button)
+        actions_layout.addWidget(self.send_file_button)
         actions_layout.addWidget(self.lock_peer_button)
         actions_layout.addWidget(self.copy_my_addr_button)
 
