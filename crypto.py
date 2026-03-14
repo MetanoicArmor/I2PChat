@@ -42,7 +42,9 @@ def compute_mac(key: bytes, msg_type: str, body: bytes) -> bytes:
     Returns:
         32-байтный HMAC
     """
-    return hmac.new(key, msg_type.encode() + body, hashlib.sha256).digest()
+    # Явный UTF-8 для одинакового результата на всех платформах (Linux/Windows/macOS)
+    type_bytes = msg_type.encode("utf-8") if isinstance(msg_type, str) else msg_type
+    return hmac.new(key, type_bytes + body, hashlib.sha256).digest()
 
 
 def verify_mac(key: bytes, msg_type: str, body: bytes, mac: bytes) -> bool:

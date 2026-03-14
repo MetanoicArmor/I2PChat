@@ -1073,8 +1073,12 @@ class I2PChatCore:
                         reader.readexactly(crypto.HMAC_SIZE), timeout=self.READ_TIMEOUT
                     )
                     if not crypto.verify_mac(self.shared_key, msg_type, body_data, received_mac):
-                        logger.warning("HMAC verification failed - message integrity compromised")
+                        logger.warning(
+                            "HMAC verification failed - message integrity compromised "
+                            "(msg_type=%r body_len=%d)", msg_type, len(body_data)
+                        )
                         self._emit_error("Message integrity check failed")
+                        await self.disconnect()
                         break
                     
                     if is_encrypted and crypto.NACL_AVAILABLE:
