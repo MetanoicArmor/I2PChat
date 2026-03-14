@@ -95,32 +95,9 @@ ALLOWED_IMAGE_FORMATS = {
     b'\x89PNG\r\n\x1a\n': 'png',
     b'\xff\xd8\xff': 'jpeg',
 }
-# WebP: RIFF....WEBP
-WEBP_MAGIC_START = b'RIFF'
-WEBP_MAGIC_END = b'WEBP'
-
-# GIF: GIF87a or GIF89a (6 bytes), then width/height at 6-9 (LE 16-bit each)
-GIF_MAGIC_87 = b'GIF87a'
-GIF_MAGIC_89 = b'GIF89a'
-
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB
 MAX_IMAGE_DIMENSION = 4096  # max width/height in pixels
 MAX_IMAGES_CACHE_SIZE = 100 * 1024 * 1024  # 100 MB auto-cleanup threshold
-MAX_GIF_FRAMES = 200  # max frames for animated GIF (decompression bomb protection)
-
-
-def _gif_dimensions_from_header(header: bytes) -> Optional[Tuple[int, int]]:
-    """
-    Читает размер логического экрана GIF из заголовка (без декодирования).
-    GIF: 6 bytes signature, then 2 bytes width (LE), 2 bytes height (LE).
-    """
-    if len(header) < 10:
-        return None
-    if header[:6] not in (GIF_MAGIC_87, GIF_MAGIC_89):
-        return None
-    width = header[6] | (header[7] << 8)
-    height = header[8] | (header[9] << 8)
-    return (width, height)
 
 
 def validate_image(path: str) -> Tuple[bool, str, Optional[str]]:
@@ -154,26 +131,8 @@ def validate_image(path: str) -> Tuple[bool, str, Optional[str]]:
     # Check JPEG (3 bytes magic)
     elif header[:3] == b'\xff\xd8\xff':
         detected_ext = 'jpeg'
-    # Check WebP (RIFF....WEBP)
-    elif header[:4] == WEBP_MAGIC_START and header[8:12] == WEBP_MAGIC_END:
-        detected_ext = 'webp'
-    # Check GIF (GIF87a/GIF89a) — проверяем размеры из заголовка до декодирования
-    elif header[:6] in (GIF_MAGIC_87, GIF_MAGIC_89):
-        dims = _gif_dimensions_from_header(header)
-        if dims is None:
-            return False, "Invalid GIF header", None
-        gif_width, gif_height = dims
-        if gif_width > MAX_IMAGE_DIMENSION or gif_height > MAX_IMAGE_DIMENSION:
-            return False, (
-                f"GIF too large: {gif_width}x{gif_height} "
-                f"(max {MAX_IMAGE_DIMENSION}x{MAX_IMAGE_DIMENSION})"
-            ), None
-        if gif_width <= 0 or gif_height <= 0:
-            return False, "Invalid GIF dimensions", None
-        detected_ext = 'gif'
-    
     if detected_ext is None:
-        return False, "Unsupported image format (only PNG, JPEG, WebP, GIF allowed)", None
+        return False, "Unsupported image format (only PNG and JPEG allowed)", None
     
     # Validate with PIL for extra safety
     try:
@@ -181,19 +140,7 @@ def validate_image(path: str) -> Tuple[bool, str, Optional[str]]:
             width, height = img.size
             if width > MAX_IMAGE_DIMENSION or height > MAX_IMAGE_DIMENSION:
                 return False, f"Image too large: {width}x{height} (max {MAX_IMAGE_DIMENSION}x{MAX_IMAGE_DIMENSION})", None
-            
-            # Для GIF: лимит числа кадров (защита от decompression bomb в анимации)
-            if detected_ext == 'gif':
-                n_frames = getattr(img, 'n_frames', 1)
-                if n_frames > MAX_GIF_FRAMES:
-                    return False, f"GIF has too many frames: {n_frames} (max {MAX_GIF_FRAMES})", None
-                # Ограничиваем суммарный объём пикселей (кадры × площадь)
-                total_pixels = width * height * n_frames
-                max_pixels = MAX_IMAGE_DIMENSION * MAX_IMAGE_DIMENSION * MAX_GIF_FRAMES
-                if total_pixels > max_pixels:
-                    return False, f"GIF too large (frames × size)", None
-            
-            # Force load to detect corrupted images (для GIF загрузится первый кадр)
+            # Force load to detect corrupted images
             img.load()
     except Exception as e:
         return False, f"Invalid or corrupted image: {e}", None
@@ -353,8 +300,10 @@ class I2PChatCore:
         self._session_socket: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
         # Флаг активной передачи файла (для защиты от timeout в receive_loop)
         self._file_transfer_active: bool = False
-        # Флаг отмены передачи
+        # Флаг отмены передачи (локальная отмена пользователем)
         self._cancel_transfer: bool = False
+        # Получен сигнал ABORT_FILE от пира — отменить текущую отправку
+        self._transfer_aborted_by_peer: bool = False
         # Флаг активного receive_loop (предотвращает запуск дублирующих корутин)
         self._recv_loop_active: bool = False
 
@@ -595,8 +544,19 @@ class I2PChatCore:
             self._emit_error(f"Failed to send message: {e}")
             self.conn = None
 
+    async def _send_abort_file(self) -> None:
+        """Отправить пиру сигнал отмены передачи файла (получатель отменил или отправитель)."""
+        if not self.conn:
+            return
+        try:
+            _, writer = self.conn
+            writer.write(self.frame_message("S", "__SIGNAL__:ABORT_FILE"))
+            await writer.drain()
+        except Exception:
+            pass
+
     def cancel_file_transfer(self) -> None:
-        """Отменить текущую передачу файла."""
+        """Отменить текущую передачу файла (на получателе — также уведомить отправителя)."""
         self._cancel_transfer = True
         if self.incoming_file:
             try:
@@ -612,6 +572,13 @@ class I2PChatCore:
                 is_sending=False,
             ))
             self.incoming_info = None
+        # Уведомить отправителя, чтобы он прекратил слать чанки
+        if self.conn:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._send_abort_file())
+            except RuntimeError:
+                pass
 
     async def send_file(self, path: str) -> None:
         if not self.conn:
@@ -623,6 +590,7 @@ class I2PChatCore:
         
         self._file_transfer_active = True
         self._cancel_transfer = False
+        self._transfer_aborted_by_peer = False
         
         try:
             reader, writer = self.conn
@@ -639,7 +607,11 @@ class I2PChatCore:
             with open(path, "rb") as f:
                 while True:
                     if self._cancel_transfer:
+                        await self._send_abort_file()
                         raise Exception("Transfer cancelled by user")
+                    if self._transfer_aborted_by_peer:
+                        self._emit_system("Receiver cancelled the transfer")
+                        raise Exception("Transfer cancelled by receiver")
                     if not self.conn:
                         raise ConnectionError("Connection lost during transfer")
                     
@@ -1175,15 +1147,6 @@ class I2PChatCore:
                                 detected_ext = 'png'
                             elif header[:3] == b'\xff\xd8\xff':
                                 detected_ext = 'jpeg'
-                            elif header[:4] == WEBP_MAGIC_START and header[8:12] == WEBP_MAGIC_END:
-                                detected_ext = 'webp'
-                            elif header[:6] in (GIF_MAGIC_87, GIF_MAGIC_89):
-                                dims = _gif_dimensions_from_header(self.inline_image_buffer[:10])
-                                if dims and 0 < dims[0] <= MAX_IMAGE_DIMENSION and 0 < dims[1] <= MAX_IMAGE_DIMENSION:
-                                    detected_ext = 'gif'
-                                else:
-                                    detected_ext = None
-
                             if detected_ext is None:
                                 self._emit_error("Received image has invalid format")
                                 self.inline_image_buffer = bytearray()
@@ -1294,6 +1257,23 @@ class I2PChatCore:
                         if "QUIT" in body:
                             self._emit_system("Peer requested disconnect.")
                             break
+                        if "ABORT_FILE" in body:
+                            self._transfer_aborted_by_peer = True
+                            if self.incoming_file and self.incoming_info:
+                                try:
+                                    self.incoming_file.close()
+                                except Exception:
+                                    pass
+                                self.incoming_file = None
+                                self._emit_file_event(FileTransferInfo(
+                                    filename=self.incoming_info.filename,
+                                    size=self.incoming_info.size,
+                                    received=-1,
+                                    is_sending=False,
+                                ))
+                                self.incoming_info = None
+                                self._emit_system("Sender cancelled the transfer")
+                            continue
                     else:
                         try:
                             dest_obj = i2plib.Destination(body)

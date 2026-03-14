@@ -568,14 +568,14 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             cancel_btn_size,
             cancel_btn_size,
         )
-        painter.setBrush(QtGui.QColor("#7a4a4a"))  # приглушённый красный
-        painter.setPen(QtGui.QPen(QtGui.QColor("#5a3535"), 1))
+        painter.setBrush(QtGui.QColor("#ff5555"))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawRoundedRect(cancel_rect, cancel_btn_size / 2, cancel_btn_size / 2)
         
         small_font = QtGui.QFont(base_font)
         small_font.setPointSize(max(base_font.pointSize() - 2, 8))
         painter.setFont(small_font)
-        painter.setPen(QtGui.QColor("#e0e0e0"))
+        painter.setPen(QtGui.QColor("#ffffff"))
         painter.drawText(
             cancel_rect,
             int(QtCore.Qt.AlignmentFlag.AlignCenter),
@@ -1482,7 +1482,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             self,
             "Select image to send",
             "",
-            "Images (*.png *.jpg *.jpeg *.webp *.gif);;All Files (*)",
+            "Images (*.png *.jpg *.jpeg);;All Files (*)",
         )
         if not path:
             return
