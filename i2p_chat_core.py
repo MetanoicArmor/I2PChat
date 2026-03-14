@@ -338,8 +338,8 @@ class I2PChatCore:
             destination=self.my_dest,
             sam_address=self.sam_address,
             options={
-                "inbound.length": "2",
-                "outbound.length": "2",
+                "inbound.length": "3",
+                "outbound.length": "3",
                 "inbound.quantity": "3",
                 "outbound.quantity": "3",
             },
@@ -878,7 +878,7 @@ class I2PChatCore:
                             self.incoming_file = None
                             self.incoming_info = None
                             continue
-                        safe_name = f"recv_{filename}"
+                        safe_name = os.path.basename(filename)
                         safe_path = os.path.join(get_downloads_dir(), safe_name)
                         self.incoming_file = open(safe_path, "wb")
                         self.incoming_info = FileTransferInfo(

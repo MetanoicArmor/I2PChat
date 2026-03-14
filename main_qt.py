@@ -1,8 +1,10 @@
 import asyncio
+import math
 import os
 import shutil
 import sys
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
@@ -29,6 +31,9 @@ class ChatItem:
     timestamp: str
     sender: str
     text: str
+    progress: float = 0.0
+    file_size: int = 0
+    is_sending: bool = False
 
 
 class ChatListModel(QtCore.QAbstractListModel):
@@ -60,6 +65,12 @@ class ChatListModel(QtCore.QAbstractListModel):
         self.beginInsertRows(QtCore.QModelIndex(), row, row)
         self._items.append(item)
         self.endInsertRows()
+
+    def update_item(self, row: int, item: ChatItem) -> None:
+        if 0 <= row < len(self._items):
+            self._items[row] = item
+            index = self.index(row, 0)
+            self.dataChanged.emit(index, index)
 
 
 class ChatListView(QtWidgets.QListView):
@@ -235,6 +246,11 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         painter.save()
 
+        if item.kind == "transfer":
+            self._paint_transfer(painter, option, item)
+            painter.restore()
+            return
+
         is_me = item.kind in {"me", "image_braille", "image_bw"}
         rect = option.rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
 
@@ -349,6 +365,136 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         painter.restore()
 
+    def _paint_transfer(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionViewItem,
+        item: ChatItem,
+    ) -> None:
+        rect = option.rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
+        cell_width = rect.width()
+        bubble_width = int(cell_width * 0.6)
+        
+        is_sending = item.is_sending
+        if is_sending:
+            bubble_rect = QtCore.QRectF(
+                rect.right() - bubble_width - self.PADDING_X,
+                rect.top(),
+                bubble_width,
+                rect.height(),
+            )
+        else:
+            bubble_rect = QtCore.QRectF(
+                rect.left() + self.PADDING_X,
+                rect.top(),
+                bubble_width,
+                rect.height(),
+            )
+
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        
+        bg_color = QtGui.QColor("#1e3a5f") if is_sending else QtGui.QColor("#2d1b4e")
+        painter.setBrush(bg_color)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        bubble_rect = bubble_rect.adjusted(
+            self.PADDING_X / 2,
+            self.PADDING_Y / 2,
+            -self.PADDING_X / 2,
+            -self.PADDING_Y / 2,
+        )
+        painter.drawRoundedRect(bubble_rect, self.BUBBLE_RADIUS, self.BUBBLE_RADIUS)
+        
+        inner_rect = bubble_rect.adjusted(
+            self.PADDING_X, self.PADDING_Y, -self.PADDING_X, -self.PADDING_Y
+        )
+        
+        base_font = painter.font()
+        metrics = QtGui.QFontMetrics(base_font)
+        
+        action = "↑ Sending" if is_sending else "↓ Receiving"
+        header_text = f"{action}: {item.text}"
+        painter.setPen(QtGui.QColor("#ffffff"))
+        header_rect = QtCore.QRectF(
+            inner_rect.left(),
+            inner_rect.top(),
+            inner_rect.width(),
+            metrics.height(),
+        )
+        painter.drawText(
+            header_rect,
+            int(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter),
+            metrics.elidedText(header_text, QtCore.Qt.TextElideMode.ElideMiddle, int(header_rect.width())),
+        )
+        
+        bar_height = 18
+        bar_rect = QtCore.QRectF(
+            inner_rect.left(),
+            inner_rect.top() + metrics.height() + 8,
+            inner_rect.width(),
+            bar_height,
+        )
+        
+        painter.setBrush(QtGui.QColor("#0d1b2a"))
+        painter.drawRoundedRect(bar_rect, bar_height / 2, bar_height / 2)
+        
+        progress = max(0.0, min(1.0, item.progress))
+        if progress > 0:
+            fill_width = max(bar_height, bar_rect.width() * progress)
+            fill_rect = QtCore.QRectF(bar_rect.left(), bar_rect.top(), fill_width, bar_height)
+            
+            gradient = QtGui.QLinearGradient(fill_rect.topLeft(), fill_rect.topRight())
+            if is_sending:
+                gradient.setColorAt(0.0, QtGui.QColor("#0066cc"))
+                gradient.setColorAt(0.5, QtGui.QColor("#3399ff"))
+                gradient.setColorAt(1.0, QtGui.QColor("#0066cc"))
+            else:
+                gradient.setColorAt(0.0, QtGui.QColor("#7c3aed"))
+                gradient.setColorAt(0.5, QtGui.QColor("#a78bfa"))
+                gradient.setColorAt(1.0, QtGui.QColor("#7c3aed"))
+            
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(fill_rect, bar_height / 2, bar_height / 2)
+            
+            pulse = (time.time() % 1.0)
+            glow_alpha = int(40 + 30 * math.sin(pulse * math.pi * 2))
+            glow_color = QtGui.QColor(255, 255, 255, glow_alpha)
+            painter.setBrush(glow_color)
+            painter.drawRoundedRect(fill_rect, bar_height / 2, bar_height / 2)
+        
+        pct = int(progress * 100)
+        pct_text = f"{pct}%"
+        painter.setPen(QtGui.QColor("#ffffff"))
+        painter.drawText(
+            bar_rect,
+            int(QtCore.Qt.AlignmentFlag.AlignCenter),
+            pct_text,
+        )
+        
+        if item.file_size > 0:
+            received = int(item.file_size * progress)
+            if item.file_size >= 1024 * 1024:
+                size_text = f"{received / (1024*1024):.1f} / {item.file_size / (1024*1024):.1f} MB"
+            elif item.file_size >= 1024:
+                size_text = f"{received / 1024:.0f} / {item.file_size / 1024:.0f} KB"
+            else:
+                size_text = f"{received} / {item.file_size} B"
+            
+            small_font = QtGui.QFont(base_font)
+            small_font.setPointSize(max(base_font.pointSize() - 2, 8))
+            painter.setFont(small_font)
+            painter.setPen(QtGui.QColor("#a0a0a0"))
+            size_rect = QtCore.QRectF(
+                inner_rect.left(),
+                bar_rect.bottom() + 4,
+                inner_rect.width(),
+                metrics.height(),
+            )
+            painter.drawText(
+                size_rect,
+                int(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop),
+                size_text,
+            )
+
     def sizeHint(
         self,
         option: QtWidgets.QStyleOptionViewItem,
@@ -357,6 +503,11 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         item = index.data(QtCore.Qt.ItemDataRole.DisplayRole)
         if not isinstance(item, ChatItem):
             return QtCore.QSize(0, 0)
+        
+        if item.kind == "transfer":
+            cell_width = option.rect.width() if option.rect.width() > 0 else 600
+            height = self.PADDING_Y * 4 + 18 + 18 + 20 + self.BUBBLE_SPACING_Y * 2
+            return QtCore.QSize(int(cell_width), int(height))
 
         cell_width = option.rect.width() if option.rect.width() > 0 else 600
         font = option.font
@@ -498,7 +649,12 @@ class ChatWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
         self._last_status: str = "initializing"
-        self._file_progress: Optional[QtWidgets.QProgressDialog] = None
+        self._transfer_row: Optional[int] = None
+
+        # Таймер для анимации прогресс-бара
+        self._transfer_timer = QtCore.QTimer(self)
+        self._transfer_timer.timeout.connect(self._animate_transfer)
+        self._transfer_timer.setInterval(50)
 
         # основной чат
         self.chat_view = ChatListView(self)
@@ -722,10 +878,15 @@ class ChatWindow(QtWidgets.QMainWindow):
     def handle_error(self, text: str) -> None:
         self._append_item(ChatItem(kind="error", timestamp="", sender="ERROR", text=text))
 
+    def _animate_transfer(self) -> None:
+        if self._transfer_row is not None:
+            index = self.chat_model.index(self._transfer_row, 0)
+            self.chat_model.dataChanged.emit(index, index)
+
     @QtCore.pyqtSlot(object)
     def handle_file_event(self, info: FileTransferInfo) -> None:
-        action = "Sending" if info.is_sending else "Receiving"
-        
+        progress = info.received / info.size if info.size > 0 else 0.0
+
         # Начало передачи
         if info.received == 0 and info.size > 0:
             # Для входящих файлов спрашиваем подтверждение
@@ -739,7 +900,6 @@ class ChatWindow(QtWidgets.QMainWindow):
                     QtWidgets.QMessageBox.StandardButton.Yes,
                 )
                 if answer == QtWidgets.QMessageBox.StandardButton.No:
-                    # Отклоняем: закрываем и удаляем временный файл
                     try:
                         if self.core.incoming_file:  # type: ignore[attr-defined]
                             try:
@@ -766,47 +926,69 @@ class ChatWindow(QtWidgets.QMainWindow):
                     )
                     return
 
-            # Создаём окно прогресса
-            self._file_progress = QtWidgets.QProgressDialog(
-                f"{action}: {info.filename}",
-                None,  # Без кнопки отмены
-                0,
-                info.size,
-                self,
+            # Создаём сообщение прогресса в чате
+            self._append_item(
+                ChatItem(
+                    kind="transfer",
+                    timestamp="",
+                    sender="FILE",
+                    text=info.filename,
+                    progress=0.0,
+                    file_size=info.size,
+                    is_sending=info.is_sending,
+                )
             )
-            self._file_progress.setWindowTitle("File Transfer")
-            self._file_progress.setWindowModality(QtCore.Qt.WindowModality.NonModal)
-            self._file_progress.setMinimumDuration(0)
-            self._file_progress.show()
+            self._transfer_row = self.chat_model.rowCount() - 1
+            self._transfer_timer.start()
+            return
 
         # Обновление прогресса
-        if self._file_progress is not None:
-            self._file_progress.setValue(info.received)
-            self._file_progress.setLabelText(
-                f"{action}: {info.filename}\n{info.received:,} / {info.size:,} bytes"
+        if self._transfer_row is not None and 0 < info.received < info.size:
+            self.chat_model.update_item(
+                self._transfer_row,
+                ChatItem(
+                    kind="transfer",
+                    timestamp="",
+                    sender="FILE",
+                    text=info.filename,
+                    progress=progress,
+                    file_size=info.size,
+                    is_sending=info.is_sending,
+                ),
             )
+            return
 
         # Ошибка передачи (received=-1)
         if info.received < 0:
-            if self._file_progress is not None:
-                self._file_progress.close()
-                self._file_progress = None
+            self._transfer_timer.stop()
+            if self._transfer_row is not None:
+                self.chat_model.update_item(
+                    self._transfer_row,
+                    ChatItem(
+                        kind="error",
+                        timestamp="",
+                        sender="FILE",
+                        text=f"Transfer failed: {info.filename}",
+                    ),
+                )
+                self._transfer_row = None
             return
 
         # Завершение передачи
         if info.received >= info.size:
-            if self._file_progress is not None:
-                self._file_progress.close()
-                self._file_progress = None
+            self._transfer_timer.stop()
             done_action = "sent" if info.is_sending else "received"
-            self._append_item(
-                ChatItem(
-                    kind="success",
-                    timestamp="",
-                    sender="FILE",
-                    text=f"✔ File {done_action}: {info.filename} ({info.size:,} bytes)",
+            if self._transfer_row is not None:
+                self.chat_model.update_item(
+                    self._transfer_row,
+                    ChatItem(
+                        kind="success",
+                        timestamp="",
+                        sender="FILE",
+                        text=f"✔ File {done_action}: {info.filename} ({info.size:,} bytes)",
+                    ),
                 )
-            )
+                self._transfer_row = None
 
     @QtCore.pyqtSlot(str)
     def handle_image_received(self, art: str) -> None:
