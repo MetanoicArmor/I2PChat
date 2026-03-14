@@ -60,5 +60,5 @@ PLIST
 
 echo
 echo "✔ GUI собран: dist/${APP_NAME}.app (${ARCH_SUFFIX})"
-echo "  Для релиза: zip -r I2PChat-macOS.zip dist/${APP_NAME}.app"
+echo "  Для релиза: zip -r I2PChat-macOS-${ARCH_SUFFIX}.zip dist/${APP_NAME}.app"
 echo "  Можно перенести в /Applications и запускать двойным кликом."
