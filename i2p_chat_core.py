@@ -384,7 +384,7 @@ class I2PChatCore:
                 self._emit_status("visible")
 
             self.conn = (reader, writer)
-            self._emit_message("success", "Handshake sent. Establishing tunnel...")
+            self._emit_message("success", "Handshake sent. Establishing secure channel... Wait")
 
             loop = asyncio.get_running_loop()
             loop.create_task(self.receive_loop(self.conn))
@@ -590,6 +590,7 @@ class I2PChatCore:
                     self._emit_message("success", "Secure channel with PFS established")
                 else:
                     self._emit_message("success", "Secure channel established (HMAC enabled)")
+                self._emit_system("✔ Ready! You can now send messages.")
                 logger.info("Handshake completed (responder)")
                 
             elif body.startswith("RESP:"):
@@ -610,6 +611,7 @@ class I2PChatCore:
                     self._emit_message("success", "Secure channel with PFS established")
                 else:
                     self._emit_message("success", "Secure channel established (HMAC enabled)")
+                self._emit_system("✔ Ready! You can now send messages.")
                 logger.info("Handshake completed (initiator)")
                 
             else:
