@@ -360,7 +360,7 @@ class I2PChatCore:
     # Максимальное количество строк в буфере изображения (защита от OOM)
     MAX_IMAGE_LINES = 500
     # Максимальный размер принимаемого файла в байтах (защита от заполнения диска)
-    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+    MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
 
     async def connect_to_peer(self, target_address: str) -> None:
         try:
