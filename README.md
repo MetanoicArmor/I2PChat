@@ -5,7 +5,7 @@
 <h1 align="center">I2PChat</h1>
 
 <p align="center">
-  <a href="https://github.com/MetanoicArmor/I2PChat/releases"><img src="https://img.shields.io/github/v/release/MetanoicArmor/I2PChat?label=release" alt="Release"></a>
+  <a href="https://github.com/MetanoicArmor/I2PChat/releases/latest"><img src="https://img.shields.io/github/v/release/MetanoicArmor/I2PChat?label=release" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/MetanoicArmor/I2PChat" alt="License"></a>
   <a href="requirements.txt"><img src="https://img.shields.io/badge/Python-3.14+-blue.svg" alt="Python"></a>
   <a href="https://i2pd.website"><img src="https://img.shields.io/badge/I2P-SAM%20API-purple.svg" alt="I2P"></a>
@@ -55,7 +55,7 @@
 
 ### 📦 Prebuilt binaries
 
-Releases are published on GitHub under the **Releases** section.
+**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt binaries for Windows, macOS, and Linux.
 
 Currently available:
 
@@ -65,7 +65,7 @@ Currently available:
   - Built with **Python 3.14** and PyInstaller, includes the Python runtime and all dependencies.
   - **Python is *not* required on the target system** – just unpack the zip and run `I2PChat.exe`.
 
-Other platforms are available — see the table below or check [Releases](https://github.com/MetanoicArmor/I2PChat/releases).
+Other platforms are available — see the table below or check [Releases](https://github.com/MetanoicArmor/I2PChat/releases/latest).
 
 ### 🛠 Running from source
 
@@ -183,7 +183,7 @@ If you like this project and want to support development, you can send a small d
 
 ### 📥 Prebuilt Downloads
 
-**No Python installation required** — everything is bundled and ready to run.
+**[Download latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — no Python installation required; everything is bundled and ready to run.
 
 | Platform | Download | Launch |
 |----------|----------|--------|
