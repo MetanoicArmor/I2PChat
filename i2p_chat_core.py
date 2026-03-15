@@ -482,11 +482,37 @@ class I2PChatCore:
         )
 
         my_address = self.my_dest.base32 + ".b32.i2p"
-        self._emit_status("local_ok")
-        self._emit_message("success", f"Online! My Address: {my_address}")
+        self._emit_system("Building I2P tunnels (may take 1–2 min)...")
+        tunnels_ready = False
+        wait_until = time.monotonic() + 90
+        while time.monotonic() < wait_until:
+            try:
+                await asyncio.wait_for(
+                    i2plib.dest_lookup(
+                        my_address,
+                        sam_address=self.sam_address,
+                    ),
+                    timeout=5.0,
+                )
+                tunnels_ready = True
+                break
+            except (asyncio.TimeoutError, Exception):
+                await asyncio.sleep(3)
+
+        if tunnels_ready:
+            self._emit_status("visible")
+            self._emit_message("success", f"Online! My Address: {my_address}")
+            self._emit_system("Tunnels ready. Waiting for incoming connections...")
+        else:
+            self._emit_status("local_ok")
+            self._emit_message("success", f"Online! My Address: {my_address}")
+            self._emit_system(
+                "Tunnels may still be building. Wait 1–2 min before connecting."
+            )
+
         self.peer_b32 = f"My Addr: {my_address}"
 
-        # запуск фоновых задач сразу — не блокируем приём и подключения
+        # запуск фоновых задач
         loop = asyncio.get_running_loop()
         self._accept_task = loop.create_task(self.accept_loop())
         self._tunnel_task = loop.create_task(self.tunnel_watcher())
