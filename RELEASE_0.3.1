@@ -60,6 +60,20 @@
 
 Эффект: предотвращено накопление «висячих» задач при закрытии.
 
+### 5) Устранён ложный downgrade после успешного handshake
+
+После стабилизации asyncio-пути был выявлен отдельный практический сценарий:
+
+- при закрытии соединения `__SIGNAL__:QUIT` мог отправляться plaintext-кадром даже при уже установленном secure-channel;
+- keepalive (`P`) мог уходить до полной готовности secure-состояния на обоих концах.
+
+Исправлено:
+
+- в `disconnect()` сигнал `QUIT` отправляется шифрованно (`frame_message`), если secure-channel уже активен;
+- в `_keepalive_loop()` ping отправляется только когда канал полностью готов (`handshake_complete && use_encryption && shared_key`).
+
+Эффект: устранены ложные срабатывания `Protocol downgrade detected: plaintext frame after handshake` в стабильной сессии.
+
 ---
 
 ## Изменённые файлы
@@ -98,6 +112,15 @@ python3 -m unittest tests/test_asyncio_regression.py -v
 - `5dfda6f` — Fix asyncio re-entrancy during handshake disconnect flow
 - `49a1154` — Add asyncio regression tests for disconnect scheduling
 - `04f709e` — Stub PIL in asyncio regression tests
+- `b6860a0` — Increase secure handshake timeout around TOFU confirmation
+- `cea1a63` — Fix signing key derivation fallback and keyring-related edge cases
+
+---
+
+## Совместимость
+
+`v0.3.1` не возвращает legacy-совместимость со старыми handshake-форматами.
+Клиенты до `0.3.0` остаются **legacy**; для корректной защищённой связи обе стороны должны быть минимум `0.3.x`.
 
 ---
 
@@ -108,5 +131,6 @@ python3 -m unittest tests/test_asyncio_regression.py -v
 - устранён re-entrant конфликт задач `asyncio`,
 - стабилизирован путь аварийного отключения,
 - закрыт класс проблем с «pending task destroyed» после протокольного сбоя,
+- устранены ложные downgrade-срабатывания на `QUIT`/keepalive после handshake,
 - добавлены регрессионные тесты, фиксирующие поведение.
 
