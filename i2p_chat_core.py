@@ -33,6 +33,7 @@ class FileTransferInfo:
     received: int = 0
     is_sending: bool = False
     is_inline_image: bool = False  # True только для Send Pic (G), не для Send File (F/D)
+    rejected_by_peer: bool = False  # True если получатель отклонил входящий файл
 
 
 StatusCallback = Callable[[str], Any]
@@ -309,6 +310,8 @@ class I2PChatCore:
         self._cancel_transfer: bool = False
         # Получен сигнал ABORT_FILE от пира — отменить текущую отправку
         self._transfer_aborted_by_peer: bool = False
+        # Получен сигнал REJECT_FILE — получатель отклонил входящий файл
+        self._transfer_rejected_by_peer: bool = False
         # Флаг активного receive_loop (предотвращает запуск дублирующих корутин)
         self._recv_loop_active: bool = False
 
@@ -563,6 +566,17 @@ class I2PChatCore:
         except Exception:
             pass
 
+    async def reject_incoming_file(self, filename: str) -> None:
+        """Уведомить отправителя, что получатель отклонил входящий файл."""
+        if not self.conn:
+            return
+        try:
+            _, writer = self.conn
+            writer.write(self.frame_message("S", f"__SIGNAL__:REJECT_FILE|{filename}"))
+            await writer.drain()
+        except Exception:
+            pass
+
     def cancel_file_transfer(self) -> None:
         """Отменить текущую передачу файла (на получателе — также уведомить отправителя)."""
         self._cancel_transfer = True
@@ -599,6 +613,7 @@ class I2PChatCore:
         self._file_transfer_active = True
         self._cancel_transfer = False
         self._transfer_aborted_by_peer = False
+        self._transfer_rejected_by_peer = False
         
         try:
             reader, writer = self.conn
@@ -620,6 +635,8 @@ class I2PChatCore:
                     if self._transfer_aborted_by_peer:
                         self._emit_system("Receiver cancelled the transfer")
                         raise Exception("Transfer cancelled by receiver")
+                    if self._transfer_rejected_by_peer:
+                        raise Exception("Receiver rejected the file")
                     if not self.conn:
                         raise ConnectionError("Connection lost during transfer")
                     
@@ -658,9 +675,19 @@ class I2PChatCore:
             self._emit_error(f"File transfer interrupted: connection lost")
             
         except Exception as e:
-            info = FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True)
+            rejected = "rejected" in str(e).lower()
+            info = FileTransferInfo(
+                filename=filename,
+                size=filesize,
+                received=-1,
+                is_sending=True,
+                rejected_by_peer=rejected,
+            )
             self._emit_file_event(info)
-            self._emit_error(f"File transfer failed: {e}")
+            if rejected:
+                self._emit_error("Receiver rejected the file.")
+            else:
+                self._emit_error(f"File transfer failed: {e}")
         finally:
             self._file_transfer_active = False
 
@@ -1318,6 +1345,8 @@ class I2PChatCore:
                                     self.on_file_delivered(ack_filename)
                             except Exception:
                                 pass
+                        elif "REJECT_FILE|" in body:
+                            self._transfer_rejected_by_peer = True
                         elif "QUIT" in body:
                             self._emit_system("Peer requested disconnect.")
                             break

@@ -1456,6 +1456,8 @@ class ChatWindow(QtWidgets.QMainWindow):
                                 pass
                         self.core.incoming_file = None  # type: ignore[attr-defined]
                         self.core.incoming_info = None  # type: ignore[attr-defined]
+                        # Уведомить отправителя, что файл отклонён
+                        asyncio.create_task(self.core.reject_incoming_file(info.filename))
                     except Exception:
                         pass
 
@@ -1506,13 +1508,17 @@ class ChatWindow(QtWidgets.QMainWindow):
         if info.received < 0:
             self._transfer_timer.stop()
             if self._transfer_row is not None:
+                if getattr(info, "rejected_by_peer", False):
+                    err_text = f"Receiver rejected the file: {info.filename}"
+                else:
+                    err_text = f"Transfer failed: {info.filename}"
                 self.chat_model.update_item(
                     self._transfer_row,
                     ChatItem(
                         kind="error",
                         timestamp="",
                         sender="IMAGE" if self._transfer_is_image else "FILE",
-                        text=f"Transfer failed: {info.filename}",
+                        text=err_text,
                     ),
                 )
                 self._transfer_row = None
@@ -1571,7 +1577,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                                 kind="success",
                                 timestamp="",
                                 sender="FILE",
-                                text=f"✔ File sent: {info.filename} ({info.size:,} bytes)",
+                                text=f"File sent: {info.filename} ({info.size:,} bytes)",
                                 file_name=info.filename,
                                 is_sending=True,
                             ),
