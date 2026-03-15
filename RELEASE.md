@@ -1,59 +1,59 @@
 # I2PChat v2.0 Security Release
 
-## Обзор
+## Overview
 
-Данный релиз полностью переработан с точки зрения безопасности. Реализованы защитные меры против всех выявленных уязвимостей протокола, добавлено end-to-end шифрование с Perfect Forward Secrecy.
+This release is a full security overhaul. It addresses all identified protocol vulnerabilities and adds end-to-end encryption with Perfect Forward Secrecy.
 
-**Протокол**: v2 (несовместим с v1)
-
----
-
-## Сравнение: до и после
-
-### Протокол сообщений
-
-| Аспект | v1 (было) | v2 (стало) |
-|--------|-----------|------------|
-| Формат фрейма | `TYPE(1) + LEN(4) + BODY + \n` | `TYPE(1) + [E] + LEN(4-6) + BODY + [HMAC(32)] + \n` |
-| Шифрование | Нет (только I2P транспорт) | XSalsa20-Poly1305 (NaCl SecretBox) |
-| Проверка целостности | Нет | HMAC-SHA256 |
-| Аутентификация | Только I2P destination | Challenge-response + nonce exchange |
-| Perfect Forward Secrecy | Нет | Эфемерные X25519 ключи |
-
-### Защитные меры
-
-| Уязвимость | v1 (было) | v2 (стало) |
-|------------|-----------|------------|
-| Зависание на чтении | Нет защиты | Таймаут 30 сек на все операции |
-| OOM через image_buffer | Неограничен | Лимит 500 строк |
-| Заполнение диска файлами | Неограничен | Лимит 50 MB |
-| Path traversal | Частичная защита | Sandbox директория + sanitize |
-| Plaintext ключи | `chmod` директории | `chmod 600` файлов + keyring |
-| Логирование | Тихий break | logging с деталями |
+**Protocol**: v2 (incompatible with v1)
 
 ---
 
-## Детали изменений
+## Before and after
 
-### 1. Защита от DoS
+### Message protocol
 
-#### 1.1 Таймауты на сетевые операции
+| Aspect | v1 (before) | v2 (after) |
+|--------|-------------|------------|
+| Frame format | `TYPE(1) + LEN(4) + BODY + \n` | `TYPE(1) + [E] + LEN(4-6) + BODY + [HMAC(32)] + \n` |
+| Encryption | None (I2P transport only) | XSalsa20-Poly1305 (NaCl SecretBox) |
+| Integrity | None | HMAC-SHA256 |
+| Authentication | I2P destination only | Challenge-response + nonce exchange |
+| Perfect Forward Secrecy | No | Ephemeral X25519 keys |
+
+### Security measures
+
+| Vulnerability | v1 (before) | v2 (after) |
+|---------------|-------------|------------|
+| Read hang | No protection | 30s timeout on all operations |
+| OOM via image_buffer | Unbounded | 500-line limit |
+| Disk fill via files | Unbounded | 50 MB limit |
+| Path traversal | Partial | Sandbox directory + sanitize |
+| Plaintext keys | Directory chmod | File chmod 600 + keyring |
+| Logging | Silent break | Logging with details |
+
+---
+
+## Change details
+
+### 1. DoS protection
+
+#### 1.1 Timeouts on network operations
 ```python
-# БЫЛО:
+# BEFORE:
 len_data = await reader.readexactly(4)
 
-# СТАЛО:
+# AFTER:
 len_data = await asyncio.wait_for(
-    reader.readexactly(4), timeout=self.READ_TIMEOUT  # 30 сек
+    reader.readexactly(4), timeout=self.READ_TIMEOUT  # 30s
 )
 ```
 
-#### 1.2 Ограничение буфера изображений
+#### 1.2 Image buffer limit
 ```python
-# БЫЛО:
-self.image_buffer.append(body)  # без ограничений
+# BEFORE:
+self.image_buffer.append(body)  # no limit
 
-# СТАЛО:
+# AFTER:
 MAX_IMAGE_LINES = 500
 if len(self.image_buffer) < self.MAX_IMAGE_LINES:
     self.image_buffer.append(body)
@@ -61,27 +61,27 @@ else:
     self._emit_error("Image too large, truncating")
 ```
 
-#### 1.3 Ограничение размера файлов
+#### 1.3 File size limit
 ```python
-# БЫЛО:
-self.incoming_file = open(safe_name, "wb")  # любой размер
+# BEFORE:
+self.incoming_file = open(safe_name, "wb")  # any size
 
-# СТАЛО:
+# AFTER:
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 if size > self.MAX_FILE_SIZE:
     self._emit_error(f"File too large: {size} bytes")
     continue
 ```
 
-### 2. Безопасность файловой системы
+### 2. Filesystem security
 
-#### 2.1 Sandbox для загрузок
+#### 2.1 Sandbox for downloads
 ```python
-# БЫЛО:
+# BEFORE:
 safe_name = f"recv_{filename}"
-self.incoming_file = open(safe_name, "wb")  # в текущей директории
+self.incoming_file = open(safe_name, "wb")  # current directory
 
-# СТАЛО:
+# AFTER:
 def get_downloads_dir() -> str:
     base = os.path.join(get_profiles_dir(), "downloads")
     os.makedirs(base, exist_ok=True)
@@ -91,12 +91,12 @@ def get_downloads_dir() -> str:
 safe_path = os.path.join(get_downloads_dir(), safe_name)
 ```
 
-#### 2.2 Валидация имён файлов
+#### 2.2 Filename validation
 ```python
-# БЫЛО:
+# BEFORE:
 filename = os.path.basename(filename)
 
-# СТАЛО:
+# AFTER:
 SAFE_FILENAME_RE = re.compile(r'^[\w\-. ]+$')
 
 def sanitize_filename(name: str) -> str:
@@ -108,37 +108,37 @@ def sanitize_filename(name: str) -> str:
     return name
 ```
 
-### 3. Защита ключей
+### 3. Key protection
 
-#### 3.1 Права доступа
+#### 3.1 File permissions
 ```python
-# БЫЛО:
+# BEFORE:
 with open(key_file, "w") as f:
     f.write(dest.private_key.base64 + "\n")
 
-# СТАЛО:
+# AFTER:
 with open(key_file, "w") as f:
     f.write(dest.private_key.base64 + "\n")
-os.chmod(key_file, 0o600)  # только владелец
+os.chmod(key_file, 0o600)  # owner only
 ```
 
-#### 3.2 Интеграция с системным keyring
+#### 3.2 System keyring integration
 ```python
-# БЫЛО: только файловое хранение
+# BEFORE: file storage only
 
-# СТАЛО: приоритет keyring, fallback на файл
+# AFTER: keyring preferred, file fallback
 if _try_keyring_set(self.profile, dest.private_key.base64):
     self._emit_message("success", "Identity saved to secure keyring")
 else:
     # fallback to file
 ```
 
-### 4. Криптография
+### 4. Cryptography
 
-#### 4.1 Новый модуль `crypto.py`
+#### 4.1 New `crypto.py` module
 
 ```python
-# HMAC для проверки целостности
+# HMAC for integrity
 def compute_mac(key: bytes, msg_type: str, body: bytes) -> bytes:
     return hmac.new(key, msg_type.encode() + body, hashlib.sha256).digest()
 
@@ -147,7 +147,7 @@ def verify_mac(key: bytes, msg_type: str, body: bytes, mac: bytes) -> bool:
     return hmac.compare_digest(expected, mac)  # timing-safe
 ```
 
-#### 4.2 E2E шифрование (при наличии pynacl)
+#### 4.2 E2E encryption (when pynacl is available)
 ```python
 def encrypt_message(key: bytes, plaintext: bytes) -> bytes:
     box = SecretBox(key)
@@ -169,19 +169,19 @@ def compute_dh_shared_secret(my_private: bytes, peer_public: bytes) -> bytes:
     return bytes(box.shared_key())
 ```
 
-### 5. Secure Handshake (v2)
+### 5. Secure handshake (v2)
 
-#### Протокол:
+#### Protocol:
 ```
 1. Initiator -> Responder: H:INIT:<nonce_hex>:<ephemeral_pubkey_hex>
 2. Responder -> Initiator: H:RESP:<nonce_hex>:<ephemeral_pubkey_hex>
-3. Обе стороны вычисляют:
+3. Both sides compute:
    - DH shared = X25519(my_ephemeral, peer_ephemeral)
    - shared_key = SHA256(DH_shared || nonce_init || nonce_resp)
-4. Включается шифрование всех последующих сообщений
+4. All subsequent messages are encrypted
 ```
 
-#### Диаграмма:
+#### Diagram:
 ```
 Initiator                              Responder
     |                                      |
@@ -194,14 +194,14 @@ Initiator                              Responder
     |====== Encrypted channel open ========|
 ```
 
-### 6. Логирование
+### 6. Logging
 
 ```python
-# БЫЛО:
+# BEFORE:
 if msg_type not in [...]:
-    break  # тихий выход
+    break  # silent exit
 
-# СТАЛО:
+# AFTER:
 logger = logging.getLogger("i2pchat")
 
 if msg_type not in [...]:
@@ -211,64 +211,64 @@ if msg_type not in [...]:
 
 ---
 
-## Новые файлы
+## New files
 
-| Файл | Описание |
-|------|----------|
-| `crypto.py` | Криптографический модуль (HMAC, шифрование, DH) |
+| File | Description |
+|------|-------------|
+| `crypto.py` | Crypto module (HMAC, encryption, DH) |
 
-## Обновлённые зависимости
+## Updated dependencies
 
 ```
 # requirements.txt
-+ pynacl  # для E2E шифрования и PFS
++ pynacl  # for E2E encryption and PFS
 ```
 
 ---
 
-## Режимы работы
+## Operation modes
 
-### С pynacl (рекомендуется)
-- HMAC-SHA256 для всех сообщений
-- XSalsa20-Poly1305 шифрование
-- X25519 эфемерные ключи (PFS)
-- Защита от replay атак
+### With pynacl (recommended)
+- HMAC-SHA256 for all messages
+- XSalsa20-Poly1305 encryption
+- X25519 ephemeral keys (PFS)
+- Replay protection
 
-### Без pynacl (fallback)
-- HMAC-SHA256 для всех сообщений
-- SHA256(nonce_A || nonce_B) как shared_key
-- Нет PFS
+### Without pynacl (fallback)
+- HMAC-SHA256 for all messages
+- SHA256(nonce_A || nonce_B) as shared_key
+- No PFS
 
 ---
 
-## Миграция
+## Migration
 
-**Важно:** Протокол v2 несовместим с v1. Оба участника чата должны обновиться.
+**Important:** Protocol v2 is incompatible with v1. Both peers must upgrade.
 
-1. Обновить зависимости:
+1. Update dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
-2. Существующие профили и ключи совместимы - миграция не требуется.
+2. Existing profiles and keys are compatible — no migration needed.
 
-3. При первом подключении автоматически выполняется secure handshake.
-
----
-
-## Известные ограничения
-
-1. **Отсутствие подписи эфемерных ключей**: В текущей реализации эфемерные ключи не подписываются долгосрочными Ed25519 ключами I2P. Это планируется в следующем релизе.
-
-2. **Replay атаки**: Защита реализована через nonce, но не через timestamp. При компрометации shared_key старые сообщения могут быть воспроизведены в пределах одной сессии.
-
-3. **Keyring на Windows**: Зависит от наличия Windows Credential Locker.
+3. On first connection, the secure handshake runs automatically.
 
 ---
 
-## Рекомендации по безопасности
+## Known limitations
 
-1. **Всегда используйте pynacl** для полной защиты
-2. **Используйте persistent профили** для сохранения ключей
-3. **Проверяйте fingerprint пира** при первом соединении
-4. **Регулярно обновляйте** приложение
+1. **Ephemeral keys not signed**: In the current implementation, ephemeral keys are not signed by long-term I2P Ed25519 keys. This is planned for a future release.
+
+2. **Replay attacks**: Protection is via nonce, not timestamp. If shared_key is compromised, old messages could be replayed within the same session.
+
+3. **Keyring on Windows**: Depends on Windows Credential Locker availability.
+
+---
+
+## Security recommendations
+
+1. **Always use pynacl** for full protection
+2. **Use persistent profiles** to store keys
+3. **Verify peer fingerprint** on first connection
+4. **Keep the app updated**
