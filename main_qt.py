@@ -1279,19 +1279,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.tray_icon.setToolTip("I2PChat")
         self.tray_icon.show()
 
-        # более мягкий системный звук вместо жёсткого beep,
-        # там, где доступен QtMultimedia.
+        # Кастомный звук уведомления можно задать через I2PCHAT_NOTIFY_SOUND.
+        # Если не задан или недоступен, используем fallback на QApplication.beep().
         self.notify_sound: Optional["QSoundEffect"] = None
         if QSoundEffect is not None:
             try:
-                effect = QSoundEffect(self)
-                # Для macOS берём один из стандартных системных звуков.
-                if sys.platform == "darwin":
-                    sound_path = "/System/Library/Sounds/Glass.aiff"
-                else:
-                    sound_path = ""
-
-                if sound_path and os.path.exists(sound_path):
+                sound_path = os.environ.get("I2PCHAT_NOTIFY_SOUND", "").strip()
+                if sound_path and os.path.isfile(sound_path):
+                    effect = QSoundEffect(self)
                     effect.setSource(QtCore.QUrl.fromLocalFile(sound_path))
                     effect.setVolume(0.7)
                     self.notify_sound = effect
