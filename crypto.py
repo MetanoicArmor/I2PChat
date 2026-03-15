@@ -38,8 +38,6 @@ def compute_mac(key: bytes, msg_type: str, body: bytes, seq: Optional[int] = Non
         key: 32-байтный секретный ключ
         msg_type: тип сообщения (1 символ)
         body: тело сообщения
-    
-    Args:
         seq: опциональный номер сообщения (anti-replay)
 
     Returns:
@@ -80,6 +78,16 @@ try:
     from nacl.encoding import RawEncoder
     
     NACL_AVAILABLE = True
+
+    def generate_signing_keypair() -> Tuple[bytes, bytes]:
+        """
+        Генерирует пару Ed25519 ключей для подписи handshake.
+
+        Returns:
+            (seed32, verify_key32)
+        """
+        sk = SigningKey.generate()
+        return bytes(sk.encode()), bytes(sk.verify_key)
     
     def encrypt_message(key: bytes, plaintext: bytes) -> bytes:
         """
@@ -173,6 +181,9 @@ try:
 
 except ImportError:
     NACL_AVAILABLE = False
+    
+    def generate_signing_keypair() -> Tuple[bytes, bytes]:
+        raise NotImplementedError("pynacl not installed")
     
     def encrypt_message(key: bytes, plaintext: bytes) -> bytes:
         raise NotImplementedError("pynacl not installed")

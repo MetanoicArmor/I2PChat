@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import logging
 import os
 import re
@@ -203,6 +204,7 @@ def sanitize_filename(name: str) -> str:
 
 
 KEYRING_SERVICE = "i2pchat"
+SIGNING_KEYRING_SUFFIX = "__signing_seed__"
 
 
 def _try_keyring_get(profile: str) -> Optional[str]:
@@ -296,6 +298,10 @@ class I2PChatCore:
         self.my_ephemeral_private: Optional[bytes] = None
         self.my_ephemeral_public: Optional[bytes] = None
         self.peer_ephemeral_public: Optional[bytes] = None
+        self.my_signing_seed: Optional[bytes] = None
+        self.my_signing_public: Optional[bytes] = None
+        self.peer_signing_public: Optional[bytes] = None
+        self.peer_trusted_signing_keys: dict[str, str] = {}
         self.use_encryption: bool = False
         self.handshake_complete: bool = False
         self._handshake_initiated: bool = False
@@ -446,6 +452,167 @@ class I2PChatCore:
         """Полный путь к .dat файлу профиля (общая директория профилей)."""
         return os.path.join(get_profiles_dir(), f"{self.profile}.dat")
 
+    def _trust_store_path(self) -> str:
+        """Файл TOFU pinning для handshake signing keys."""
+        return os.path.join(get_profiles_dir(), f"{self.profile}.trust.json")
+
+    def _load_trust_store(self) -> None:
+        """Загружает pinning-таблицу peer_addr -> signing_pub_hex."""
+        self.peer_trusted_signing_keys = {}
+        if self.profile == "default":
+            return
+        path = self._trust_store_path()
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    if isinstance(k, str) and isinstance(v, str):
+                        self.peer_trusted_signing_keys[k] = v.lower()
+        except Exception as e:
+            logger.warning("Failed to load trust store %s: %s", path, e)
+
+    def _save_trust_store(self) -> None:
+        if self.profile == "default":
+            return
+        path = self._trust_store_path()
+        tmp_path = path + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self.peer_trusted_signing_keys, f, ensure_ascii=True, indent=2, sort_keys=True)
+            os.replace(tmp_path, path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        except Exception as e:
+            logger.warning("Failed to save trust store %s: %s", path, e)
+
+    @staticmethod
+    def _fingerprint_pubkey(pubkey: bytes) -> str:
+        import hashlib
+
+        return hashlib.sha256(pubkey).hexdigest()[:16]
+
+    def _normalize_peer_addr(self, addr: str) -> str:
+        raw = (addr or "").strip().lower()
+        if raw and not raw.endswith(".b32.i2p"):
+            raw += ".b32.i2p"
+        return raw
+
+    def _pin_or_verify_peer_signing_key(self, peer_addr: str, verify_key: bytes) -> bool:
+        peer_addr = self._normalize_peer_addr(peer_addr)
+        if not peer_addr:
+            self._emit_error("Cannot pin signing key: unknown peer address")
+            return False
+        fp = self._fingerprint_pubkey(verify_key)
+        current_hex = verify_key.hex().lower()
+        pinned_hex = self.peer_trusted_signing_keys.get(peer_addr)
+        if pinned_hex is None:
+            self.peer_trusted_signing_keys[peer_addr] = current_hex
+            self._save_trust_store()
+            self._emit_system(
+                f"TOFU: pinned peer signing key {fp} for {peer_addr[:20]}..."
+            )
+            self._emit_system(
+                "Verify peer fingerprint out-of-band to mitigate first-contact MITM."
+            )
+            return True
+        if pinned_hex != current_hex:
+            self._emit_error(
+                f"Peer signing key mismatch for {peer_addr[:20]}... "
+                f"(expected {pinned_hex[:16]}, got {current_hex[:16]})"
+            )
+            return False
+        return True
+
+    def _ensure_local_signing_key(self) -> None:
+        """Гарантирует наличие стабильного Ed25519 ключа подписи handshake."""
+        if not crypto.NACL_AVAILABLE:
+            raise RuntimeError("PyNaCl is required for handshake signing")
+
+        if self.profile == "default":
+            seed, pub = crypto.generate_signing_keypair()
+            self.my_signing_seed = seed
+            self.my_signing_public = pub
+            return
+
+        keyring_name = f"{self.profile}{SIGNING_KEYRING_SUFFIX}"
+        seed_hex = _try_keyring_get(keyring_name)
+        if seed_hex:
+            try:
+                seed = bytes.fromhex(seed_hex)
+                if len(seed) != 32:
+                    raise ValueError("invalid seed length")
+                self.my_signing_seed = seed
+                self.my_signing_public = bytes(crypto.SigningKey(seed).verify_key)
+                return
+            except Exception:
+                logger.warning("Invalid signing seed in keyring for profile %s", self.profile)
+
+        path = os.path.join(get_profiles_dir(), f"{self.profile}.signing")
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    raw = f.read().strip()
+                seed = bytes.fromhex(raw)
+                if len(seed) != 32:
+                    raise ValueError("invalid seed length")
+                self.my_signing_seed = seed
+                self.my_signing_public = bytes(crypto.SigningKey(seed).verify_key)
+                return
+            except Exception:
+                logger.warning("Invalid signing seed file %s", path)
+
+        seed, pub = crypto.generate_signing_keypair()
+        self.my_signing_seed = seed
+        self.my_signing_public = pub
+        if not _try_keyring_set(keyring_name, seed.hex()):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(seed.hex())
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+
+    def _build_init_sig_payload(
+        self,
+        signer_addr: str,
+        remote_addr: str,
+        nonce_hex: str,
+        eph_hex: str,
+        sign_pub_hex: str,
+    ) -> bytes:
+        signer_addr = self._normalize_peer_addr(signer_addr)
+        remote_addr = self._normalize_peer_addr(remote_addr)
+        payload = (
+            f"I2PCHAT-HS3|INIT|{signer_addr}|{remote_addr}|"
+            f"{nonce_hex}|{eph_hex}|{sign_pub_hex}"
+        )
+        return payload.encode("utf-8")
+
+    def _build_resp_sig_payload(
+        self,
+        signer_addr: str,
+        remote_addr: str,
+        init_nonce_hex: str,
+        init_eph_hex: str,
+        init_sign_pub_hex: str,
+        resp_nonce_hex: str,
+        resp_eph_hex: str,
+        resp_sign_pub_hex: str,
+    ) -> bytes:
+        signer_addr = self._normalize_peer_addr(signer_addr)
+        remote_addr = self._normalize_peer_addr(remote_addr)
+        payload = (
+            f"I2PCHAT-HS3|RESP|{signer_addr}|{remote_addr}|"
+            f"{init_nonce_hex}|{init_eph_hex}|{init_sign_pub_hex}|"
+            f"{resp_nonce_hex}|{resp_eph_hex}|{resp_sign_pub_hex}"
+        )
+        return payload.encode("utf-8")
+
     async def init_session(self) -> None:
         """Создать/загрузить идентичность и SAM-сессию."""
         self._emit_status("initializing")
@@ -499,6 +666,8 @@ class I2PChatCore:
                     self._emit_message("success", f"Identity saved to {key_file}")
 
         self.my_dest = dest
+        self._load_trust_store()
+        self._ensure_local_signing_key()
 
         self._emit_system("Starting I2P session, please wait…")
 
@@ -925,6 +1094,7 @@ class I2PChatCore:
         self.my_ephemeral_private = None
         self.my_ephemeral_public = None
         self.peer_ephemeral_public = None
+        self.peer_signing_public = None
         self.use_encryption = False
         self.handshake_complete = False
         self._handshake_initiated = False
@@ -936,7 +1106,7 @@ class I2PChatCore:
         Инициирует защищённый handshake (v2 протокол с PFS).
         
         Обязательный NaCl-режим с эфемерными X25519 ключами (PFS).
-        Формат: INIT:<nonce_hex>:<ephemeral_pubkey_hex>
+        Формат: INIT:<nonce_hex>:<ephemeral_pubkey_hex>:<sign_pub_hex>:<signature_hex>
         
         Returns:
             True если handshake успешен
@@ -953,7 +1123,29 @@ class I2PChatCore:
             self.my_nonce = crypto.generate_nonce()
             self.my_ephemeral_private, self.my_ephemeral_public = \
                 crypto.generate_ephemeral_keypair()
-            handshake_data = f"INIT:{self.my_nonce.hex()}:{self.my_ephemeral_public.hex()}"
+            if not self.my_signing_seed or not self.my_signing_public:
+                raise ValueError("Local handshake signing key is missing")
+            if not self.current_peer_addr:
+                raise ValueError("Peer address is unknown")
+            init_nonce_hex = self.my_nonce.hex()
+            init_eph_hex = self.my_ephemeral_public.hex()
+            init_sign_pub_hex = self.my_signing_public.hex()
+            if not self.my_dest:
+                raise ValueError("Local destination is not initialized")
+            init_sig_payload = self._build_init_sig_payload(
+                self.my_dest.base32,
+                self.current_peer_addr,
+                init_nonce_hex,
+                init_eph_hex,
+                init_sign_pub_hex,
+            )
+            init_sig_hex = crypto.sign_data(
+                self.my_signing_seed,
+                init_sig_payload,
+            ).hex()
+            handshake_data = (
+                f"INIT:{init_nonce_hex}:{init_eph_hex}:{init_sign_pub_hex}:{init_sig_hex}"
+            )
             self._handshake_initiated = True
             self._emit_system("Initiating secure handshake with PFS...")
             writer.write(self.frame_message_plain("H", handshake_data))
@@ -991,36 +1183,91 @@ class I2PChatCore:
     async def _handle_handshake_message(
         self, body: str, writer: asyncio.StreamWriter
     ) -> None:
-        """Обрабатывает входящее handshake сообщение с поддержкой PFS."""
+        """Обрабатывает входящее signed-handshake сообщение с поддержкой PFS."""
         try:
             if not crypto.NACL_AVAILABLE:
                 raise RuntimeError("PyNaCl is required for secure protocol")
 
-            def _parse_nonce_and_pub(payload: str) -> Tuple[bytes, bytes]:
+            def _parse_signed_payload(
+                payload: str,
+            ) -> Tuple[bytes, bytes, bytes, bytes, str, str, str]:
                 parts = payload.split(":")
-                if len(parts) != 2:
-                    raise ValueError("Handshake payload must contain nonce and ephemeral key")
-                nonce = bytes.fromhex(parts[0])
-                eph_pub = bytes.fromhex(parts[1])
+                if len(parts) != 4:
+                    raise ValueError(
+                        "Handshake payload must contain nonce, ephemeral key, signing key and signature"
+                    )
+                nonce_hex, eph_hex, sign_pub_hex, signature_hex = [p.strip().lower() for p in parts]
+                nonce = bytes.fromhex(nonce_hex)
+                eph_pub = bytes.fromhex(eph_hex)
+                sign_pub = bytes.fromhex(sign_pub_hex)
+                signature = bytes.fromhex(signature_hex)
                 if len(nonce) != crypto.NONCE_SIZE:
                     raise ValueError("Invalid handshake nonce length")
                 if len(eph_pub) != 32:
                     raise ValueError("Invalid ephemeral public key length")
-                return nonce, eph_pub
+                if len(sign_pub) != 32:
+                    raise ValueError("Invalid handshake signing public key length")
+                if len(signature) != 64:
+                    raise ValueError("Invalid handshake signature length")
+                return nonce, eph_pub, sign_pub, signature, nonce_hex, eph_hex, sign_pub_hex
 
             if body.startswith("INIT:"):
-                self.peer_nonce, self.peer_ephemeral_public = _parse_nonce_and_pub(body[5:])
+                if not self.current_peer_addr or not self.my_dest:
+                    raise ValueError("Missing peer/local address for INIT verification")
+                if not self.my_signing_seed or not self.my_signing_public:
+                    raise ValueError("Missing local handshake signing key")
+                (
+                    self.peer_nonce,
+                    self.peer_ephemeral_public,
+                    peer_sign_pub,
+                    peer_signature,
+                    init_nonce_hex,
+                    init_eph_hex,
+                    init_sign_pub_hex,
+                ) = _parse_signed_payload(body[5:])
+                init_sig_payload = self._build_init_sig_payload(
+                    self.current_peer_addr,
+                    self.my_dest.base32,
+                    init_nonce_hex,
+                    init_eph_hex,
+                    init_sign_pub_hex,
+                )
+                if not crypto.verify_signature(peer_sign_pub, init_sig_payload, peer_signature):
+                    raise ValueError("INIT signature verification failed")
+                if not self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
+                    raise ValueError("Peer signing key does not match pinned key")
+                self.peer_signing_public = peer_sign_pub
+
                 self.my_ephemeral_private, self.my_ephemeral_public = \
                     crypto.generate_ephemeral_keypair()
                 self.my_nonce = crypto.generate_nonce()
 
-                response = f"RESP:{self.my_nonce.hex()}:{self.my_ephemeral_public.hex()}"
+                resp_nonce_hex = self.my_nonce.hex()
+                resp_eph_hex = self.my_ephemeral_public.hex()
+                resp_sign_pub_hex = self.my_signing_public.hex()
+                resp_sig_payload = self._build_resp_sig_payload(
+                    self.my_dest.base32,
+                    self.current_peer_addr,
+                    init_nonce_hex,
+                    init_eph_hex,
+                    init_sign_pub_hex,
+                    resp_nonce_hex,
+                    resp_eph_hex,
+                    resp_sign_pub_hex,
+                )
+                resp_signature_hex = crypto.sign_data(
+                    self.my_signing_seed, resp_sig_payload
+                ).hex()
+                response = (
+                    f"RESP:{resp_nonce_hex}:{resp_eph_hex}:{resp_sign_pub_hex}:{resp_signature_hex}"
+                )
                 writer.write(self.frame_message_plain("H", response))
                 await writer.drain()
 
                 self.shared_key = self._compute_final_shared_key(is_initiator=False)
                 self.use_encryption = True
                 self.handshake_complete = True
+                self._handshake_initiated = False
                 self._recv_seq = 0
                 self._send_seq = 0
                 self._cancel_handshake_watchdog()
@@ -1029,15 +1276,50 @@ class I2PChatCore:
                 logger.info("Handshake completed (responder)")
 
             elif body.startswith("RESP:"):
-                if not self._handshake_initiated or self.my_nonce is None:
+                if (
+                    not self._handshake_initiated
+                    or self.my_nonce is None
+                    or self.my_ephemeral_public is None
+                ):
                     logger.warning("Received RESP without prior INIT")
                     await self.disconnect()
                     return
+                if not self.current_peer_addr or not self.my_dest:
+                    raise ValueError("Missing peer/local address for RESP verification")
+                if not self.my_signing_public:
+                    raise ValueError("Missing local handshake signing public key")
 
-                self.peer_nonce, self.peer_ephemeral_public = _parse_nonce_and_pub(body[5:])
+                (
+                    self.peer_nonce,
+                    self.peer_ephemeral_public,
+                    peer_sign_pub,
+                    peer_signature,
+                    resp_nonce_hex,
+                    resp_eph_hex,
+                    resp_sign_pub_hex,
+                ) = _parse_signed_payload(body[5:])
+                init_nonce_hex = self.my_nonce.hex()
+                init_eph_hex = self.my_ephemeral_public.hex()
+                init_sign_pub_hex = self.my_signing_public.hex()
+                resp_sig_payload = self._build_resp_sig_payload(
+                    self.current_peer_addr,
+                    self.my_dest.base32,
+                    init_nonce_hex,
+                    init_eph_hex,
+                    init_sign_pub_hex,
+                    resp_nonce_hex,
+                    resp_eph_hex,
+                    resp_sign_pub_hex,
+                )
+                if not crypto.verify_signature(peer_sign_pub, resp_sig_payload, peer_signature):
+                    raise ValueError("RESP signature verification failed")
+                if not self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
+                    raise ValueError("Peer signing key does not match pinned key")
+                self.peer_signing_public = peer_sign_pub
                 self.shared_key = self._compute_final_shared_key(is_initiator=True)
                 self.use_encryption = True
                 self.handshake_complete = True
+                self._handshake_initiated = False
                 self._recv_seq = 0
                 self._send_seq = 0
                 self._cancel_handshake_watchdog()
@@ -1161,6 +1443,11 @@ class I2PChatCore:
 
                 if msg_type not in ["U", "S", "P", "O", "F", "D", "E", "I", "H", "G"]:
                     logger.warning(f"Invalid message type received: {repr(msg_type)}")
+                    break
+                if self.handshake_complete and msg_type == "H":
+                    logger.warning("Unexpected handshake frame after secure channel established")
+                    self._emit_error("Protocol violation: unexpected handshake frame")
+                    await self.disconnect()
                     break
                 if not self.handshake_complete and msg_type not in ["S", "H", "P", "O"]:
                     logger.warning(
