@@ -238,10 +238,10 @@ sound notifications (`QSoundEffect`) for incoming messages.
 
 - If the `QtMultimedia` module is available:
   - a `QSoundEffect` instance is created;
-  - on macOS one of the standard system sounds is used (`/System/Library/Sounds/Glass.aiff`);
+  - if `I2PCHAT_NOTIFY_SOUND` is set, the specified local audio file is used;
   - default volume is about 70%.
 - For incoming messages when the window is not active:
-  - a soft system sound is played;
+  - a custom sound is played (if configured and available);
   - if playback fails, the fallback `QApplication.beep()` is used instead.
 
 ### 6. Typical usage scenarios
