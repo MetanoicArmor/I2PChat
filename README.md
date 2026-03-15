@@ -49,8 +49,6 @@
 
 ### 📸 Screenshots
 
-<img src="screenshots/2.png" alt="I2PChat macOS GUI – profile & notifications" width="900" />
-
 <img src="screenshots/4.png" alt="I2PChat – chat and file transfer (sending)" width="900" />
 
 <img src="screenshots/5.png" alt="I2PChat – received image and chat" width="900" />
