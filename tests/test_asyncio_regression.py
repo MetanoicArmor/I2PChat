@@ -1,7 +1,19 @@
 import asyncio
+import sys
+import types
 import unittest
 from typing import Optional
 from unittest.mock import AsyncMock
+
+# CI/agent environment may not have Pillow installed; for these tests
+# image functionality is irrelevant, so a lightweight stub is enough.
+if "PIL" not in sys.modules:
+    pil_module = types.ModuleType("PIL")
+    pil_image_module = types.ModuleType("PIL.Image")
+    pil_image_module.Image = object  # type: ignore[attr-defined]
+    pil_module.Image = pil_image_module  # type: ignore[attr-defined]
+    sys.modules["PIL"] = pil_module
+    sys.modules["PIL.Image"] = pil_image_module
 
 from i2p_chat_core import I2PChatCore
 
