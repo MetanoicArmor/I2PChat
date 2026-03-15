@@ -1,0 +1,112 @@
+# I2PChat v0.3.1 — Отчёт по исправлению протокола
+
+## Контекст
+
+От пользователя Debian получен отчёт о падении во время протокольного downgrade после handshake:
+
+- `Protocol downgrade detected: plaintext frame after handshake`
+- каскад `RuntimeError: Cannot enter into task ... while another task ... is being executed`
+- «висячие» задачи при завершении: `Task was destroyed but it is pending`
+
+Проблема проявлялась в среде Qt/qasync при конфликте активной корутины `receive_loop` и параллельно отменяемых/запускаемых задач (`handshake watchdog`, `disconnect`, фоновые циклы).
+
+---
+
+## Корневая причина
+
+1. В «горячем» протокольном пути использовались прямые `await self.disconnect()` и `task.cancel()` из текущей исполняемой корутины.
+2. В сочетании с интеграцией `asyncio + qasync` это могло приводить к re-entrant входу в шаг другой Task.
+3. При ошибках handshake/downgrade возникал каскад исключений и некорректное завершение фоновых задач.
+
+---
+
+## Что исправлено
+
+### 1) Безопасное управление handshake watchdog
+
+Вместо немедленной отмены watchdog через `task.cancel()` внутри активной корутины:
+
+- введён generation-механизм: `self._handshake_watchdog_generation`;
+- добавлен безопасный запуск watchdog: `_start_handshake_watchdog(connection)`;
+- отмена теперь реализована через инвалидирование поколения (`_cancel_handshake_watchdog`), а не через прямой re-entrant cancel.
+
+Эффект: снижен риск re-entrant конфликтов задач во время протокольных ошибок.
+
+### 2) Планирование disconnect вместо немедленного await в критическом пути
+
+Добавлен `_schedule_disconnect()`:
+
+- создаёт единственную задачу disconnect;
+- повторные вызовы идемпотентны;
+- учитывает флаги `_disconnecting` / `_disconnect_task`.
+
+В протокольной логике (`receive_loop`, handshake error paths, downgrade, HMAC/seq нарушения) прямые `await self.disconnect()` заменены на безопасное планирование disconnect.
+
+Эффект: `receive_loop` не провоцирует re-entrant переходы между задачами при аварийном разрыве.
+
+### 3) TOFU-решение переведено в безопасный async-путь
+
+- `_pin_or_verify_peer_signing_key` сделан `async`;
+- добавлен `_request_trust_decision(...)` через `loop.call_soon(...) + Future`.
+
+Это убирает блокирующий/реэнтрантный сценарий при UI-confirmation в handshake-процессе.
+
+### 4) Более корректный shutdown фоновых задач
+
+В `shutdown()`:
+
+- централизованно собираются и отменяются фоновые задачи (`accept/tunnel/keepalive/watchdog/disconnect`);
+- используется `asyncio.gather(..., return_exceptions=True)` для аккуратного завершения.
+
+Эффект: предотвращено накопление «висячих» задач при закрытии.
+
+---
+
+## Изменённые файлы
+
+- `i2p_chat_core.py` — основное исправление конкурентности и поведения протокольного disconnect.
+- `tests/test_asyncio_regression.py` — регрессионные тесты под данный класс ошибок.
+
+---
+
+## Регрессионные тесты (добавлены)
+
+Файл: `tests/test_asyncio_regression.py`
+
+1. `test_protocol_downgrade_schedules_disconnect_without_reentrancy`
+   - эмуляция plaintext-frame после handshake;
+   - проверка, что фиксируется downgrade, соединение корректно закрывается, receive-loop завершается без дублирования.
+
+2. `test_schedule_disconnect_is_idempotent_while_task_running`
+   - проверка, что `_schedule_disconnect()` не запускает несколько одновременных disconnect-задач.
+
+3. `test_pin_or_verify_waits_for_trust_decision_future`
+   - проверка async-пути TOFU подтверждения через `Future`.
+
+Запуск:
+
+```bash
+python3 -m unittest tests/test_asyncio_regression.py -v
+```
+
+Результат: `OK` (3 tests).
+
+---
+
+## Коммиты, вошедшие в исправление
+
+- `5dfda6f` — Fix asyncio re-entrancy during handshake disconnect flow
+- `49a1154` — Add asyncio regression tests for disconnect scheduling
+- `04f709e` — Stub PIL in asyncio regression tests
+
+---
+
+## Итог
+
+В `v0.3.1` исправлен протокольный аварийный сценарий при downgrade/handshake-error в окружении Debian/Qt:
+
+- устранён re-entrant конфликт задач `asyncio`,
+- стабилизирован путь аварийного отключения,
+- закрыт класс проблем с «pending task destroyed» после протокольного сбоя,
+- добавлены регрессионные тесты, фиксирующие поведение.
+
