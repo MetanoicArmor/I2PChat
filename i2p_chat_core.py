@@ -251,6 +251,7 @@ class I2PChatCore:
         on_image_received: Optional[Callable[[str], Any]] = None,
         on_inline_image_received: Optional[Callable[..., Any]] = None,
         on_image_delivered: Optional[Callable[[str], Any]] = None,
+        on_file_delivered: Optional[Callable[[str], Any]] = None,
     ) -> None:
         self.sam_address = sam_address
         self.profile = profile or "default"
@@ -264,6 +265,7 @@ class I2PChatCore:
         self.on_image_received = on_image_received
         self.on_inline_image_received = on_inline_image_received
         self.on_image_delivered = on_image_delivered
+        self.on_file_delivered = on_file_delivered
 
         self.session_id = f"chat_{self.profile}_{int(time.time())}"
         self.network_status = "initializing"
@@ -1284,14 +1286,21 @@ class I2PChatCore:
                 elif msg_type == "E":
                     if self.incoming_file and self.incoming_info:
                         self.incoming_file.close()
+                        ack_filename = self.incoming_info.filename
                         self._emit_file_event(FileTransferInfo(
-                            filename=self.incoming_info.filename,
+                            filename=ack_filename,
                             size=self.incoming_info.size,
                             received=self.incoming_info.size,
                             is_sending=False,
                         ))
                         self.incoming_file = None
                         self.incoming_info = None
+                        # Подтверждение получения файла (галочки у отправителя)
+                        try:
+                            writer.write(self.frame_message("S", f"__SIGNAL__:FILE_ACK|{ack_filename}"))
+                            await writer.drain()
+                        except Exception:
+                            pass
 
                 elif msg_type == "S":
                     if "__SIGNAL__:" in body:
@@ -1300,6 +1309,13 @@ class I2PChatCore:
                                 ack_filename = body.split("IMG_ACK|", 1)[1].strip()
                                 if self.on_image_delivered:
                                     self.on_image_delivered(ack_filename)
+                            except Exception:
+                                pass
+                        elif "FILE_ACK|" in body:
+                            try:
+                                ack_filename = body.split("FILE_ACK|", 1)[1].strip()
+                                if self.on_file_delivered:
+                                    self.on_file_delivered(ack_filename)
                             except Exception:
                                 pass
                         elif "QUIT" in body:

@@ -324,7 +324,9 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             painter.restore()
             return
 
-        is_me = item.kind in {"me", "image_braille", "image_bw"}
+        is_me = item.kind in {"me", "image_braille", "image_bw"} or (
+            item.kind == "success" and getattr(item, "is_sending", False)
+        )
         rect = option.rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
 
         cell_width = rect.width()
@@ -434,6 +436,35 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                     | QtCore.Qt.AlignmentFlag.AlignVCenter
                 ),
                 item.timestamp,
+            )
+
+        # Галочки доставки для «File sent» (как у картинок)
+        if (
+            item.kind == "success"
+            and getattr(item, "file_name", None)
+            and getattr(item, "is_sending", False)
+        ):
+            tick_font = QtGui.QFont(base_font)
+            tick_font.setPointSize(max(base_font.pointSize() - 2, 9))
+            painter.setFont(tick_font)
+            tick_rect = QtCore.QRectF(
+                bubble_rect.right() - 28,
+                bubble_rect.bottom() - 22,
+                24,
+                18,
+            )
+            ticks = "✓✓" if getattr(item, "delivered", False) else "✓"
+            painter.setPen(QtGui.QColor(0, 0, 0, 160))
+            painter.drawText(
+                tick_rect.translated(1, 1),
+                int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom),
+                ticks,
+            )
+            painter.setPen(QtGui.QColor("#ffffff"))
+            painter.drawText(
+                tick_rect,
+                int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom),
+                ticks,
             )
 
         painter.restore()
@@ -1541,6 +1572,8 @@ class ChatWindow(QtWidgets.QMainWindow):
                                 timestamp="",
                                 sender="FILE",
                                 text=f"✔ File sent: {info.filename} ({info.size:,} bytes)",
+                                file_name=info.filename,
+                                is_sending=True,
                             ),
                         )
                     self._transfer_row = None
@@ -1593,6 +1626,16 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self.chat_model.update_item(row, replace(item, delivered=True))
                 return
 
+    @QtCore.pyqtSlot(str)
+    def handle_file_delivered(self, filename: str) -> None:
+        """Галочка доставки: адресат получил файл с этим именем."""
+        for row in range(self.chat_model.rowCount()):
+            idx = self.chat_model.index(row, 0)
+            item = idx.data(QtCore.Qt.ItemDataRole.DisplayRole)
+            if isinstance(item, ChatItem) and item.kind == "success" and item.file_name == filename and item.is_sending:
+                self.chat_model.update_item(row, replace(item, delivered=True))
+                return
+
     @QtCore.pyqtSlot(object)
     def handle_peer_changed(self, peer: Optional[str]) -> None:
         if peer:
@@ -1611,6 +1654,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_image_received=self.handle_image_received,
             on_inline_image_received=self.handle_inline_image_received,
             on_image_delivered=self.handle_image_delivered,
+            on_file_delivered=self.handle_file_delivered,
         )
         # динамически навешиваем колбэк уведомлений,
         # чтобы не менять публичную сигнатуру конструктора ядра
