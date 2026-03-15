@@ -630,7 +630,9 @@ class I2PChatCore:
                     await writer.drain()
                     
                     sent += len(chunk)
-                    if sent % 65536 < 4096:
+                    # Для маленьких файлов — чаще эмитить прогресс, чтобы виджет успел появиться у отправителя
+                    step = 4096 if filesize <= 65536 else 65536
+                    if sent % step < len(chunk) or sent == filesize:
                         info = FileTransferInfo(filename=filename, size=filesize, received=sent, is_sending=True)
                         self._emit_file_event(info)
 

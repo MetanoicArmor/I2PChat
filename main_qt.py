@@ -691,7 +691,6 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             tick_font = QtGui.QFont(base_font)
             tick_font.setPointSize(max(base_font.pointSize() - 2, 9))
             painter.setFont(tick_font)
-            painter.setPen(QtGui.QColor("#ffffff"))
             tick_rect = QtCore.QRectF(
                 bubble_rect.right() - 28,
                 bubble_rect.bottom() - 22,
@@ -699,7 +698,19 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 18,
             )
             ticks = "✓✓" if item.delivered else "✓"
-            painter.drawText(tick_rect, int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom), ticks)
+            # Тень, чтобы галочки были видны на белой картинке
+            painter.setPen(QtGui.QColor(0, 0, 0, 160))
+            painter.drawText(
+                tick_rect.translated(1, 1),
+                int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom),
+                ticks,
+            )
+            painter.setPen(QtGui.QColor("#ffffff"))
+            painter.drawText(
+                tick_rect,
+                int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom),
+                ticks,
+            )
 
     def _get_cancel_button_rect(
         self, cell_rect: QtCore.QRect, item: ChatItem
