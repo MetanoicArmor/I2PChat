@@ -30,7 +30,7 @@ def compute_shared_key(nonce_a: bytes, nonce_b: bytes) -> bytes:
     return hashlib.sha256(nonce_a + nonce_b).digest()
 
 
-def compute_mac(key: bytes, msg_type: str, body: bytes) -> bytes:
+def compute_mac(key: bytes, msg_type: str, body: bytes, seq: Optional[int] = None) -> bytes:
     """
     Вычисляет HMAC-SHA256 для сообщения.
     
@@ -39,22 +39,36 @@ def compute_mac(key: bytes, msg_type: str, body: bytes) -> bytes:
         msg_type: тип сообщения (1 символ)
         body: тело сообщения
     
+    Args:
+        seq: опциональный номер сообщения (anti-replay)
+
     Returns:
         32-байтный HMAC
     """
     # Явный UTF-8 для одинакового результата на всех платформах (Linux/Windows/macOS)
     type_bytes = msg_type.encode("utf-8") if isinstance(msg_type, str) else msg_type
-    return hmac.new(key, type_bytes + body, hashlib.sha256).digest()
+    if seq is None:
+        mac_input = type_bytes + body
+    else:
+        # Фиксированное 8-байтное представление номера кадра.
+        mac_input = type_bytes + int(seq).to_bytes(8, "big", signed=False) + body
+    return hmac.new(key, mac_input, hashlib.sha256).digest()
 
 
-def verify_mac(key: bytes, msg_type: str, body: bytes, mac: bytes) -> bool:
+def verify_mac(
+    key: bytes,
+    msg_type: str,
+    body: bytes,
+    mac: bytes,
+    seq: Optional[int] = None,
+) -> bool:
     """
     Проверяет HMAC сообщения с защитой от timing attack.
     
     Returns:
         True если MAC валиден
     """
-    expected = compute_mac(key, msg_type, body)
+    expected = compute_mac(key, msg_type, body, seq=seq)
     return hmac.compare_digest(expected, mac)
 
 

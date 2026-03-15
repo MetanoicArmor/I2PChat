@@ -297,10 +297,15 @@ class I2PChatCore:
         self.my_ephemeral_public: Optional[bytes] = None
         self.peer_ephemeral_public: Optional[bytes] = None
         self.use_encryption: bool = False
+        self.handshake_complete: bool = False
+        self._handshake_initiated: bool = False
+        self._send_seq: int = 0
+        self._recv_seq: int = 0
 
         self._accept_task: Optional[asyncio.Task[Any]] = None
         self._tunnel_task: Optional[asyncio.Task[Any]] = None
         self._keepalive_task: Optional[asyncio.Task[Any]] = None
+        self._handshake_watchdog_task: Optional[asyncio.Task[Any]] = None
         # Сокет сессии SAM: по спецификации сессия живёт только пока этот сокет открыт.
         # Если его не хранить, сокет закрывается и сессия умирает — при Connect роутер может падать.
         self._session_socket: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
@@ -368,6 +373,30 @@ class I2PChatCore:
             else:
                 self.on_inline_image_received(path, is_from_me)
 
+    def _require_secure_channel(self) -> bool:
+        """Проверяет, что можно отправлять пользовательские данные."""
+        if not self.conn:
+            self._emit_error("No active connection.")
+            return False
+        if not self.handshake_complete:
+            self._emit_error("Secure channel not ready yet. Wait for 'Ready'.")
+            return False
+        return True
+
+    def _cancel_handshake_watchdog(self) -> None:
+        if self._handshake_watchdog_task:
+            self._handshake_watchdog_task.cancel()
+            self._handshake_watchdog_task = None
+
+    async def _handshake_watchdog(
+        self, connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter]
+    ) -> None:
+        """Закрывает соединение, если handshake не завершился вовремя."""
+        await asyncio.sleep(self.HANDSHAKE_TIMEOUT)
+        if self.conn == connection and not self.handshake_complete:
+            self._emit_error("Secure handshake timed out")
+            await self.disconnect()
+
     # ---------- протокол ----------
 
     def frame_message(self, msg_type: str, content: str) -> bytes:
@@ -375,25 +404,31 @@ class I2PChatCore:
         Формирует фрейм сообщения.
         
         Если установлен shared_key и use_encryption=True:
-        - При наличии NaCl: шифрует тело + добавляет HMAC
-        - Без NaCl: только HMAC
+        - Обязательно шифрует тело (NaCl) + добавляет HMAC и sequence number
         
         Формат без шифрования: TYPE(1) + LEN(4) + BODY + \n
-        Формат с HMAC:         TYPE(1) + LEN(4) + BODY + HMAC(32) + \n
-        Формат с шифрованием:  TYPE(1) + "E" + LEN(6) + ENCRYPTED_BODY + HMAC(32) + \n
+        Формат с шифрованием:  TYPE(1) + "E" + SEQ(8 hex) + LEN(6) + ENCRYPTED_BODY + HMAC(32) + \n
         """
         body = content.encode("utf-8")
         
         if self.shared_key and self.use_encryption:
-            if crypto.NACL_AVAILABLE:
-                encrypted_body = crypto.encrypt_message(self.shared_key, body)
-                length_str = f"{len(encrypted_body):06d}"
-                mac = crypto.compute_mac(self.shared_key, msg_type, encrypted_body)
-                return msg_type.encode() + b"E" + length_str.encode() + encrypted_body + mac + b"\n"
-            else:
-                length_str = f"{len(body):04d}"
-                mac = crypto.compute_mac(self.shared_key, msg_type, body)
-                return msg_type.encode() + length_str.encode() + body + mac + b"\n"
+            if not crypto.NACL_AVAILABLE:
+                raise RuntimeError("NaCl is required for secure protocol mode")
+            self._send_seq += 1
+            seq = self._send_seq
+            encrypted_body = crypto.encrypt_message(self.shared_key, body)
+            length_str = f"{len(encrypted_body):06d}"
+            seq_hex = f"{seq:08x}".encode()
+            mac = crypto.compute_mac(self.shared_key, msg_type, encrypted_body, seq=seq)
+            return (
+                msg_type.encode()
+                + b"E"
+                + seq_hex
+                + length_str.encode()
+                + encrypted_body
+                + mac
+                + b"\n"
+            )
         else:
             length_str = f"{len(body):04d}"
             return msg_type.encode() + length_str.encode() + body + b"\n"
@@ -524,14 +559,22 @@ class I2PChatCore:
     # Таймаут на операции чтения в receive_loop (защита от зависания)
     # Увеличен для устойчивости при простое: keepalive 15s + запас на латентность I2P
     READ_TIMEOUT = 50.0
+    # Таймаут на установление защищённого канала после TCP/I2P connect
+    HANDSHAKE_TIMEOUT = 20.0
     # Максимальное количество строк в буфере изображения (защита от OOM)
     MAX_IMAGE_LINES = 500
     # Максимальный размер принимаемого файла в байтах (защита от заполнения диска)
     MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+    # Ограничение на размер одного фрейма протокола (защита от memory DoS)
+    MAX_FRAME_BODY = 2 * 1024 * 1024  # 2 MB
 
     async def connect_to_peer(self, target_address: str) -> None:
+        if not crypto.NACL_AVAILABLE:
+            self._emit_error("Secure protocol requires PyNaCl. Install dependency: pynacl")
+            return
         try:
             self.current_peer_addr = target_address
+            self._reset_crypto_state()
             self._emit_system(
                 f"Connecting to {target_address[:24]}... "
                 "(may take 1–2 min while I2P builds tunnels)"
@@ -556,6 +599,8 @@ class I2PChatCore:
             loop = asyncio.get_running_loop()
             loop.create_task(self.receive_loop(self.conn))
             loop.create_task(self.initiate_secure_handshake())
+            self._cancel_handshake_watchdog()
+            self._handshake_watchdog_task = loop.create_task(self._handshake_watchdog(self.conn))
             self._keepalive_task = loop.create_task(self._keepalive_loop())
         except asyncio.TimeoutError:
             self._emit_error(
@@ -569,8 +614,7 @@ class I2PChatCore:
             self._emit_system("Waiting for incoming connections...")
 
     async def send_text(self, text: str) -> None:
-        if not self.conn:
-            self._emit_error("No active connection.")
+        if not self._require_secure_channel():
             return
         try:
             _, writer = self.conn
@@ -629,8 +673,7 @@ class I2PChatCore:
                 pass
 
     async def send_file(self, path: str) -> None:
-        if not self.conn:
-            self._emit_error("No active connection.")
+        if not self._require_secure_channel():
             return
         
         filename = os.path.basename(path)
@@ -720,8 +763,7 @@ class I2PChatCore:
 
     async def send_image_lines(self, lines: list[str]) -> None:
         """Отправить уже отрендеренное изображение построчно."""
-        if not self.conn:
-            self._emit_error("No active connection.")
+        if not self._require_secure_channel():
             return
         reader, writer = self.conn
 
@@ -740,8 +782,7 @@ class I2PChatCore:
         Returns:
             путь к копии изображения в images/ или None при ошибке
         """
-        if not self.conn:
-            self._emit_error("No active connection.")
+        if not self._require_secure_channel():
             return None
         
         # Валидация изображения
@@ -845,6 +886,7 @@ class I2PChatCore:
     async def disconnect(self) -> None:
         if not self.conn:
             return
+        self._cancel_handshake_watchdog()
         # Останавливаем keepalive
         if self._keepalive_task:
             self._keepalive_task.cancel()
@@ -884,33 +926,36 @@ class I2PChatCore:
         self.my_ephemeral_public = None
         self.peer_ephemeral_public = None
         self.use_encryption = False
+        self.handshake_complete = False
+        self._handshake_initiated = False
+        self._send_seq = 0
+        self._recv_seq = 0
 
     async def initiate_secure_handshake(self) -> bool:
         """
         Инициирует защищённый handshake (v2 протокол с PFS).
         
-        При наличии NaCl использует эфемерные X25519 ключи для Perfect Forward Secrecy.
-        Формат: INIT:<nonce_hex>[:<ephemeral_pubkey_hex>]
+        Обязательный NaCl-режим с эфемерными X25519 ключами (PFS).
+        Формат: INIT:<nonce_hex>:<ephemeral_pubkey_hex>
         
         Returns:
             True если handshake успешен
         """
         if not self.conn:
             return False
+        if not crypto.NACL_AVAILABLE:
+            self._emit_error("PyNaCl is required for secure protocol")
+            await self.disconnect()
+            return False
         
         try:
             _, writer = self.conn
             self.my_nonce = crypto.generate_nonce()
-            
-            if crypto.NACL_AVAILABLE:
-                self.my_ephemeral_private, self.my_ephemeral_public = \
-                    crypto.generate_ephemeral_keypair()
-                handshake_data = f"INIT:{self.my_nonce.hex()}:{self.my_ephemeral_public.hex()}"
-                self._emit_system("Initiating secure handshake with PFS...")
-            else:
-                handshake_data = f"INIT:{self.my_nonce.hex()}"
-                self._emit_system("Initiating secure handshake...")
-            
+            self.my_ephemeral_private, self.my_ephemeral_public = \
+                crypto.generate_ephemeral_keypair()
+            handshake_data = f"INIT:{self.my_nonce.hex()}:{self.my_ephemeral_public.hex()}"
+            self._handshake_initiated = True
+            self._emit_system("Initiating secure handshake with PFS...")
             writer.write(self.frame_message_plain("H", handshake_data))
             await writer.drain()
             return True
@@ -923,94 +968,94 @@ class I2PChatCore:
         Вычисляет финальный shared_key.
         
         С PFS: SHA256(DH_shared || nonce_init || nonce_resp)
-        Без PFS: SHA256(nonce_init || nonce_resp)
         """
         import hashlib
-        
-        if (crypto.NACL_AVAILABLE and 
-            self.my_ephemeral_private and 
-            self.peer_ephemeral_public):
-            dh_shared = crypto.compute_dh_shared_secret(
-                self.my_ephemeral_private, self.peer_ephemeral_public
-            )
-            if is_initiator:
-                return hashlib.sha256(
-                    dh_shared + self.my_nonce + self.peer_nonce
-                ).digest()
-            else:
-                return hashlib.sha256(
-                    dh_shared + self.peer_nonce + self.my_nonce
-                ).digest()
-        else:
-            if is_initiator:
-                return crypto.compute_shared_key(self.my_nonce, self.peer_nonce)
-            else:
-                return crypto.compute_shared_key(self.peer_nonce, self.my_nonce)
+        if not crypto.NACL_AVAILABLE:
+            raise RuntimeError("PyNaCl is required for secure protocol")
+        if not self.my_ephemeral_private or not self.peer_ephemeral_public:
+            raise ValueError("Missing ephemeral keys")
+        if not self.my_nonce or not self.peer_nonce:
+            raise ValueError("Missing handshake nonces")
+
+        dh_shared = crypto.compute_dh_shared_secret(
+            self.my_ephemeral_private, self.peer_ephemeral_public
+        )
+        if is_initiator:
+            return hashlib.sha256(
+                dh_shared + self.my_nonce + self.peer_nonce
+            ).digest()
+        return hashlib.sha256(
+            dh_shared + self.peer_nonce + self.my_nonce
+        ).digest()
 
     async def _handle_handshake_message(
         self, body: str, writer: asyncio.StreamWriter
     ) -> None:
         """Обрабатывает входящее handshake сообщение с поддержкой PFS."""
         try:
+            if not crypto.NACL_AVAILABLE:
+                raise RuntimeError("PyNaCl is required for secure protocol")
+
+            def _parse_nonce_and_pub(payload: str) -> Tuple[bytes, bytes]:
+                parts = payload.split(":")
+                if len(parts) != 2:
+                    raise ValueError("Handshake payload must contain nonce and ephemeral key")
+                nonce = bytes.fromhex(parts[0])
+                eph_pub = bytes.fromhex(parts[1])
+                if len(nonce) != crypto.NONCE_SIZE:
+                    raise ValueError("Invalid handshake nonce length")
+                if len(eph_pub) != 32:
+                    raise ValueError("Invalid ephemeral public key length")
+                return nonce, eph_pub
+
             if body.startswith("INIT:"):
-                parts = body[5:].split(":")
-                self.peer_nonce = bytes.fromhex(parts[0])
-                
-                if len(parts) > 1 and crypto.NACL_AVAILABLE:
-                    self.peer_ephemeral_public = bytes.fromhex(parts[1])
-                    self.my_ephemeral_private, self.my_ephemeral_public = \
-                        crypto.generate_ephemeral_keypair()
-                
+                self.peer_nonce, self.peer_ephemeral_public = _parse_nonce_and_pub(body[5:])
+                self.my_ephemeral_private, self.my_ephemeral_public = \
+                    crypto.generate_ephemeral_keypair()
                 self.my_nonce = crypto.generate_nonce()
-                
-                if self.my_ephemeral_public:
-                    response = f"RESP:{self.my_nonce.hex()}:{self.my_ephemeral_public.hex()}"
-                else:
-                    response = f"RESP:{self.my_nonce.hex()}"
-                    
+
+                response = f"RESP:{self.my_nonce.hex()}:{self.my_ephemeral_public.hex()}"
                 writer.write(self.frame_message_plain("H", response))
                 await writer.drain()
-                
+
                 self.shared_key = self._compute_final_shared_key(is_initiator=False)
                 self.use_encryption = True
-                
-                if self.peer_ephemeral_public:
-                    self._emit_message("success", "Secure channel with PFS established")
-                else:
-                    self._emit_message("success", "Secure channel established (HMAC enabled)")
+                self.handshake_complete = True
+                self._recv_seq = 0
+                self._send_seq = 0
+                self._cancel_handshake_watchdog()
+                self._emit_message("success", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
                 logger.info("Handshake completed (responder)")
-                
+
             elif body.startswith("RESP:"):
-                parts = body[5:].split(":")
-                self.peer_nonce = bytes.fromhex(parts[0])
-                
-                if len(parts) > 1 and crypto.NACL_AVAILABLE:
-                    self.peer_ephemeral_public = bytes.fromhex(parts[1])
-                
-                if self.my_nonce is None:
+                if not self._handshake_initiated or self.my_nonce is None:
                     logger.warning("Received RESP without prior INIT")
+                    await self.disconnect()
                     return
-                
+
+                self.peer_nonce, self.peer_ephemeral_public = _parse_nonce_and_pub(body[5:])
                 self.shared_key = self._compute_final_shared_key(is_initiator=True)
                 self.use_encryption = True
-                
-                if self.peer_ephemeral_public and self.my_ephemeral_private:
-                    self._emit_message("success", "Secure channel with PFS established")
-                else:
-                    self._emit_message("success", "Secure channel established (HMAC enabled)")
+                self.handshake_complete = True
+                self._recv_seq = 0
+                self._send_seq = 0
+                self._cancel_handshake_watchdog()
+                self._emit_message("success", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
                 logger.info("Handshake completed (initiator)")
-                
+
             else:
                 logger.warning(f"Unknown handshake message: {body[:20]}")
                 
         except Exception as e:
             logger.error(f"Handshake error: {e}")
             self._emit_error(f"Secure handshake failed: {e}")
+            await self.disconnect()
 
     async def shutdown(self) -> None:
         """Аккуратно остановить фоновые задачи и закрыть соединения."""
+        self._cancel_handshake_watchdog()
         if self.conn:
             await self.disconnect()
 
@@ -1030,6 +1075,10 @@ class I2PChatCore:
 
     async def accept_loop(self) -> None:
         while True:
+            if not crypto.NACL_AVAILABLE:
+                self._emit_error("PyNaCl is required for secure protocol")
+                await asyncio.sleep(5)
+                continue
             if self.conn:
                 await asyncio.sleep(1)
                 continue
@@ -1078,6 +1127,8 @@ class I2PChatCore:
 
                 loop = asyncio.get_running_loop()
                 loop.create_task(self.receive_loop(self.conn))
+                self._cancel_handshake_watchdog()
+                self._handshake_watchdog_task = loop.create_task(self._handshake_watchdog(self.conn))
                 self._keepalive_task = loop.create_task(self._keepalive_loop())
             except Exception:
                 await asyncio.sleep(1)
@@ -1111,6 +1162,15 @@ class I2PChatCore:
                 if msg_type not in ["U", "S", "P", "O", "F", "D", "E", "I", "H", "G"]:
                     logger.warning(f"Invalid message type received: {repr(msg_type)}")
                     break
+                if not self.handshake_complete and msg_type not in ["S", "H", "P", "O"]:
+                    logger.warning(
+                        "Protocol violation: non-handshake frame before secure channel "
+                        "(msg_type=%r)",
+                        msg_type,
+                    )
+                    self._emit_error("Protocol violation: data before secure handshake")
+                    await self.disconnect()
+                    break
 
                 first_len_byte = await asyncio.wait_for(
                     reader.read(1), timeout=self.READ_TIMEOUT
@@ -1119,12 +1179,26 @@ class I2PChatCore:
                     break
                 
                 is_encrypted = (first_len_byte == b"E")
+                seq_num: Optional[int] = None
                 
                 if is_encrypted:
+                    seq_data = await asyncio.wait_for(
+                        reader.readexactly(8), timeout=self.READ_TIMEOUT
+                    )
+                    try:
+                        seq_num = int(seq_data.decode(), 16)
+                    except ValueError:
+                        logger.warning(f"Invalid sequence field: {repr(seq_data)}")
+                        break
                     len_data = await asyncio.wait_for(
                         reader.readexactly(6), timeout=self.READ_TIMEOUT
                     )
                 else:
+                    if self.handshake_complete:
+                        logger.warning("Protocol downgrade detected: plaintext frame after handshake")
+                        self._emit_error("Protocol downgrade detected")
+                        await self.disconnect()
+                        break
                     remaining_len = await asyncio.wait_for(
                         reader.readexactly(3), timeout=self.READ_TIMEOUT
                     )
@@ -1135,16 +1209,34 @@ class I2PChatCore:
                 except ValueError:
                     logger.warning(f"Invalid length field: {repr(len_data)}")
                     break
+                if msg_len < 0 or msg_len > self.MAX_FRAME_BODY:
+                    logger.warning("Frame too large: msg_len=%d", msg_len)
+                    self._emit_error("Protocol error: frame too large")
+                    break
 
                 body_data = await asyncio.wait_for(
                     reader.readexactly(msg_len), timeout=self.READ_TIMEOUT
                 )
                 
-                if is_encrypted or (self.shared_key and self.use_encryption):
+                if is_encrypted:
+                    if not self.shared_key or not self.use_encryption:
+                        logger.warning("Encrypted frame received before key setup")
+                        self._emit_error("Protocol error: encrypted frame before handshake")
+                        await self.disconnect()
+                        break
+                    if seq_num is None:
+                        logger.warning("Missing sequence number for encrypted frame")
+                        break
                     received_mac = await asyncio.wait_for(
                         reader.readexactly(crypto.HMAC_SIZE), timeout=self.READ_TIMEOUT
                     )
-                    if not crypto.verify_mac(self.shared_key, msg_type, body_data, received_mac):
+                    if not crypto.verify_mac(
+                        self.shared_key,
+                        msg_type,
+                        body_data,
+                        received_mac,
+                        seq=seq_num,
+                    ):
                         logger.warning(
                             "HMAC verification failed - message integrity compromised "
                             "(msg_type=%r body_len=%d)", msg_type, len(body_data)
@@ -1152,14 +1244,24 @@ class I2PChatCore:
                         self._emit_error("Message integrity check failed")
                         await self.disconnect()
                         break
-                    
-                    if is_encrypted and crypto.NACL_AVAILABLE:
-                        decrypted = crypto.decrypt_message(self.shared_key, body_data)
-                        if decrypted is None:
-                            logger.warning("Decryption failed")
-                            self._emit_error("Failed to decrypt message")
-                            break
-                        body_data = decrypted
+                    expected_seq = self._recv_seq + 1
+                    if seq_num != expected_seq:
+                        logger.warning(
+                            "Replay/out-of-order frame detected: got=%d expected=%d",
+                            seq_num,
+                            expected_seq,
+                        )
+                        self._emit_error("Replay protection triggered")
+                        await self.disconnect()
+                        break
+
+                    decrypted = crypto.decrypt_message(self.shared_key, body_data)
+                    if decrypted is None:
+                        logger.warning("Decryption failed")
+                        self._emit_error("Failed to decrypt message")
+                        break
+                    body_data = decrypted
+                    self._recv_seq = seq_num
                 
                 body = body_data.decode("utf-8")
 
@@ -1442,6 +1544,7 @@ class I2PChatCore:
             self._recv_loop_active = False
             # Не сбрасываем соединение если идёт передача или приём файла
             if self.conn == connection and not self._file_transfer_active and self.incoming_info is None:
+                self._cancel_handshake_watchdog()
                 if self._keepalive_task:
                     self._keepalive_task.cancel()
                     self._keepalive_task = None
