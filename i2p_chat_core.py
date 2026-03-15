@@ -319,6 +319,9 @@ class I2PChatCore:
         self._tunnel_task: Optional[asyncio.Task[Any]] = None
         self._keepalive_task: Optional[asyncio.Task[Any]] = None
         self._handshake_watchdog_task: Optional[asyncio.Task[Any]] = None
+        self._handshake_watchdog_generation: int = 0
+        self._disconnect_task: Optional[asyncio.Task[Any]] = None
+        self._disconnecting: bool = False
         # Сокет сессии SAM: по спецификации сессия живёт только пока этот сокет открыт.
         # Если его не хранить, сокет закрывается и сессия умирает — при Connect роутер может падать.
         self._session_socket: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
@@ -397,18 +400,47 @@ class I2PChatCore:
         return True
 
     def _cancel_handshake_watchdog(self) -> None:
-        if self._handshake_watchdog_task:
-            self._handshake_watchdog_task.cancel()
-            self._handshake_watchdog_task = None
+        # Не отменяем задачу напрямую внутри активной корутины: в некоторых
+        # loop-интеграциях (Qt/qasync) это может вызвать re-entrant step Task.
+        self._handshake_watchdog_generation += 1
+        self._handshake_watchdog_task = None
+
+    def _start_handshake_watchdog(
+        self, connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter]
+    ) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._cancel_handshake_watchdog()
+        generation = self._handshake_watchdog_generation
+        self._handshake_watchdog_task = loop.create_task(
+            self._handshake_watchdog(connection, generation)
+        )
+
+    def _schedule_disconnect(self) -> None:
+        if self._disconnecting or self.conn is None:
+            return
+        if self._disconnect_task is not None and not self._disconnect_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._disconnect_task = loop.create_task(self.disconnect())
 
     async def _handshake_watchdog(
-        self, connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        self,
+        connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
+        generation: int,
     ) -> None:
         """Закрывает соединение, если handshake не завершился вовремя."""
         await asyncio.sleep(self.HANDSHAKE_TIMEOUT)
+        if generation != self._handshake_watchdog_generation:
+            return
         if self.conn == connection and not self.handshake_complete:
             self._emit_error("Secure handshake timed out")
-            await self.disconnect()
+            self._schedule_disconnect()
 
     # ---------- протокол ----------
 
@@ -509,7 +541,28 @@ class I2PChatCore:
             raw += ".b32.i2p"
         return raw
 
-    def _pin_or_verify_peer_signing_key(self, peer_addr: str, verify_key: bytes) -> bool:
+    async def _request_trust_decision(
+        self, peer_addr: str, fingerprint: str, signing_key_hex: str
+    ) -> bool:
+        """Запрашивает TOFU-решение у UI без блокировки активной корутины."""
+        if self.on_trust_decision is None:
+            return False
+        loop = asyncio.get_running_loop()
+        decision_future: asyncio.Future[bool] = loop.create_future()
+
+        def _ask_user() -> None:
+            try:
+                approved = bool(self.on_trust_decision(peer_addr, fingerprint, signing_key_hex))
+            except Exception as e:
+                logger.warning("TOFU trust callback failed: %s", e)
+                approved = False
+            if not decision_future.done():
+                decision_future.set_result(approved)
+
+        loop.call_soon(_ask_user)
+        return await decision_future
+
+    async def _pin_or_verify_peer_signing_key(self, peer_addr: str, verify_key: bytes) -> bool:
         peer_addr = self._normalize_peer_addr(peer_addr)
         if not peer_addr:
             self._emit_error("Cannot pin signing key: unknown peer address")
@@ -521,18 +574,9 @@ class I2PChatCore:
             if self.on_trust_decision is not None:
                 # Продлеваем окно handshake перед блокирующим UI-диалогом TOFU.
                 if self.conn is not None and not self.handshake_complete:
-                    try:
-                        loop = asyncio.get_running_loop()
-                        self._cancel_handshake_watchdog()
-                        self._handshake_watchdog_task = loop.create_task(self._handshake_watchdog(self.conn))
-                    except RuntimeError:
-                        pass
+                    self._start_handshake_watchdog(self.conn)
                 self._emit_system("Waiting for TOFU trust confirmation...")
-                try:
-                    approved = bool(self.on_trust_decision(peer_addr, fp, current_hex))
-                except Exception as e:
-                    logger.warning("TOFU trust callback failed: %s", e)
-                    approved = False
+                approved = await self._request_trust_decision(peer_addr, fp, current_hex)
                 if not approved:
                     self._emit_error(
                         f"TOFU rejected: peer signing key {fp} for {peer_addr[:20]}..."
@@ -797,8 +841,7 @@ class I2PChatCore:
             loop = asyncio.get_running_loop()
             loop.create_task(self.receive_loop(self.conn))
             loop.create_task(self.initiate_secure_handshake())
-            self._cancel_handshake_watchdog()
-            self._handshake_watchdog_task = loop.create_task(self._handshake_watchdog(self.conn))
+            self._start_handshake_watchdog(self.conn)
             self._keepalive_task = loop.create_task(self._keepalive_loop())
         except asyncio.TimeoutError:
             self._emit_error(
@@ -1082,26 +1125,32 @@ class I2PChatCore:
             pass
 
     async def disconnect(self) -> None:
-        if not self.conn:
+        if self._disconnecting or not self.conn:
             return
-        self._cancel_handshake_watchdog()
-        # Останавливаем keepalive
-        if self._keepalive_task:
-            self._keepalive_task.cancel()
-            self._keepalive_task = None
-        reader, writer = self.conn
-        self.conn = None
-        self.peer_b32 = "Waiting for incoming connections..."
-        self._reset_crypto_state()
+        self._disconnecting = True
         try:
-            writer.write(self.frame_message_plain("S", "__SIGNAL__:QUIT"))
-            await writer.drain()
-            writer.close()
-            await writer.wait_closed()
-        except Exception:
-            pass
-        self._emit_message("disconnect", "You disconnected.")
-        self._emit_system("Waiting for incoming connections...")
+            self._cancel_handshake_watchdog()
+            # Останавливаем keepalive
+            if self._keepalive_task:
+                asyncio.get_running_loop().call_soon(self._keepalive_task.cancel)
+                self._keepalive_task = None
+            _, writer = self.conn
+            self.conn = None
+            self.peer_b32 = "Waiting for incoming connections..."
+            self._reset_crypto_state()
+            try:
+                writer.write(self.frame_message_plain("S", "__SIGNAL__:QUIT"))
+                await writer.drain()
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+            self._emit_message("disconnect", "You disconnected.")
+            self._emit_system("Waiting for incoming connections...")
+        finally:
+            self._disconnecting = False
+            if self._disconnect_task is asyncio.current_task():
+                self._disconnect_task = None
     
     async def _keepalive_loop(self) -> None:
         """Отправляет Ping каждые 15 секунд для поддержания соединения при простое."""
@@ -1144,7 +1193,7 @@ class I2PChatCore:
             return False
         if not crypto.NACL_AVAILABLE:
             self._emit_error("PyNaCl is required for secure protocol")
-            await self.disconnect()
+            self._schedule_disconnect()
             return False
         
         try:
@@ -1264,7 +1313,7 @@ class I2PChatCore:
                 )
                 if not crypto.verify_signature(peer_sign_pub, init_sig_payload, peer_signature):
                     raise ValueError("INIT signature verification failed")
-                if not self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
+                if not await self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
                     raise ValueError("Peer signing key does not match pinned key")
                 self.peer_signing_public = peer_sign_pub
 
@@ -1312,7 +1361,7 @@ class I2PChatCore:
                     or self.my_ephemeral_public is None
                 ):
                     logger.warning("Received RESP without prior INIT")
-                    await self.disconnect()
+                    self._schedule_disconnect()
                     return
                 if not self.current_peer_addr or not self.my_dest:
                     raise ValueError("Missing peer/local address for RESP verification")
@@ -1343,7 +1392,7 @@ class I2PChatCore:
                 )
                 if not crypto.verify_signature(peer_sign_pub, resp_sig_payload, peer_signature):
                     raise ValueError("RESP signature verification failed")
-                if not self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
+                if not await self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
                     raise ValueError("Peer signing key does not match pinned key")
                 self.peer_signing_public = peer_sign_pub
                 self.shared_key = self._compute_final_shared_key(is_initiator=True)
@@ -1363,18 +1412,30 @@ class I2PChatCore:
         except Exception as e:
             logger.error(f"Handshake error: {e}")
             self._emit_error(f"Secure handshake failed: {e}")
-            await self.disconnect()
+            self._schedule_disconnect()
 
     async def shutdown(self) -> None:
         """Аккуратно остановить фоновые задачи и закрыть соединения."""
-        self._cancel_handshake_watchdog()
+        self._handshake_watchdog_generation += 1
         if self.conn:
             await self.disconnect()
 
-        if self._accept_task:
-            self._accept_task.cancel()
-        if self._tunnel_task:
-            self._tunnel_task.cancel()
+        tasks_to_cancel: list[asyncio.Task[Any]] = []
+        for attr in (
+            "_accept_task",
+            "_tunnel_task",
+            "_keepalive_task",
+            "_handshake_watchdog_task",
+            "_disconnect_task",
+        ):
+            task = getattr(self, attr)
+            if task is not None and not task.done():
+                task.cancel()
+                tasks_to_cancel.append(task)
+            setattr(self, attr, None)
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
         if self._session_socket:
             try:
                 _, writer = self._session_socket
@@ -1439,8 +1500,7 @@ class I2PChatCore:
 
                 loop = asyncio.get_running_loop()
                 loop.create_task(self.receive_loop(self.conn))
-                self._cancel_handshake_watchdog()
-                self._handshake_watchdog_task = loop.create_task(self._handshake_watchdog(self.conn))
+                self._start_handshake_watchdog(self.conn)
                 self._keepalive_task = loop.create_task(self._keepalive_loop())
             except Exception:
                 await asyncio.sleep(1)
@@ -1477,7 +1537,7 @@ class I2PChatCore:
                 if self.handshake_complete and msg_type == "H":
                     logger.warning("Unexpected handshake frame after secure channel established")
                     self._emit_error("Protocol violation: unexpected handshake frame")
-                    await self.disconnect()
+                    self._schedule_disconnect()
                     break
                 if not self.handshake_complete and msg_type not in ["S", "H", "P", "O"]:
                     logger.warning(
@@ -1486,7 +1546,7 @@ class I2PChatCore:
                         msg_type,
                     )
                     self._emit_error("Protocol violation: data before secure handshake")
-                    await self.disconnect()
+                    self._schedule_disconnect()
                     break
 
                 first_len_byte = await asyncio.wait_for(
@@ -1514,7 +1574,7 @@ class I2PChatCore:
                     if self.handshake_complete:
                         logger.warning("Protocol downgrade detected: plaintext frame after handshake")
                         self._emit_error("Protocol downgrade detected")
-                        await self.disconnect()
+                        self._schedule_disconnect()
                         break
                     remaining_len = await asyncio.wait_for(
                         reader.readexactly(3), timeout=self.READ_TIMEOUT
@@ -1539,7 +1599,7 @@ class I2PChatCore:
                     if not self.shared_key or not self.use_encryption:
                         logger.warning("Encrypted frame received before key setup")
                         self._emit_error("Protocol error: encrypted frame before handshake")
-                        await self.disconnect()
+                        self._schedule_disconnect()
                         break
                     if seq_num is None:
                         logger.warning("Missing sequence number for encrypted frame")
@@ -1559,7 +1619,7 @@ class I2PChatCore:
                             "(msg_type=%r body_len=%d)", msg_type, len(body_data)
                         )
                         self._emit_error("Message integrity check failed")
-                        await self.disconnect()
+                        self._schedule_disconnect()
                         break
                     expected_seq = self._recv_seq + 1
                     if seq_num != expected_seq:
@@ -1569,7 +1629,7 @@ class I2PChatCore:
                             expected_seq,
                         )
                         self._emit_error("Replay protection triggered")
-                        await self.disconnect()
+                        self._schedule_disconnect()
                         break
 
                     decrypted = crypto.decrypt_message(self.shared_key, body_data)
