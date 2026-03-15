@@ -16,6 +16,24 @@ from PIL import Image
 import crypto
 
 logger = logging.getLogger("i2pchat")
+_DEBUG_LOG_PATH = "/Users/vade/GitHub/termchat-i2p-python/.cursor/debug-a91a6a.log"
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    try:
+        payload = {
+            "sessionId": "a91a6a",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
 
 PROTOCOL_VERSION = 2
 
@@ -475,6 +493,22 @@ class I2PChatCore:
                 + b"\n"
             )
         else:
+            if self.handshake_complete:
+                # region agent log
+                _debug_log(
+                    run_id="run1",
+                    hypothesis_id="H1_H2",
+                    location="i2p_chat_core.py:frame_message:plaintext_after_handshake",
+                    message="plaintext_send_attempt_after_handshake",
+                    data={
+                        "msg_type": msg_type,
+                        "use_encryption": self.use_encryption,
+                        "has_shared_key": bool(self.shared_key),
+                        "send_seq": self._send_seq,
+                        "recv_seq": self._recv_seq,
+                    },
+                )
+                # endregion
             length_str = f"{len(body):04d}"
             return msg_type.encode() + length_str.encode() + body + b"\n"
     
@@ -1137,14 +1171,32 @@ class I2PChatCore:
             _, writer = self.conn
             self.conn = None
             self.peer_b32 = "Waiting for incoming connections..."
-            self._reset_crypto_state()
+            had_secure_channel = self.handshake_complete and self.use_encryption and bool(self.shared_key)
+            # region agent log
+            _debug_log(
+                run_id="run1",
+                hypothesis_id="H5",
+                location="i2p_chat_core.py:disconnect:pre_quit_signal",
+                message="disconnect_quit_signal_mode_selected",
+                data={
+                    "had_secure_channel": had_secure_channel,
+                    "handshake_complete": self.handshake_complete,
+                    "use_encryption": self.use_encryption,
+                    "has_shared_key": bool(self.shared_key),
+                },
+            )
+            # endregion
             try:
-                writer.write(self.frame_message_plain("S", "__SIGNAL__:QUIT"))
+                if had_secure_channel:
+                    writer.write(self.frame_message("S", "__SIGNAL__:QUIT"))
+                else:
+                    writer.write(self.frame_message_plain("S", "__SIGNAL__:QUIT"))
                 await writer.drain()
                 writer.close()
                 await writer.wait_closed()
             except Exception:
                 pass
+            self._reset_crypto_state()
             self._emit_message("disconnect", "You disconnected.")
             self._emit_system("Waiting for incoming connections...")
         finally:
@@ -1157,8 +1209,37 @@ class I2PChatCore:
         while self.conn:
             await asyncio.sleep(15)
             if self.conn and not self._file_transfer_active:
+                if not (self.handshake_complete and self.use_encryption and self.shared_key):
+                    # region agent log
+                    _debug_log(
+                        run_id="run1",
+                        hypothesis_id="H6",
+                        location="i2p_chat_core.py:_keepalive_loop:skip_plaintext_ping",
+                        message="skip_keepalive_until_secure_channel",
+                        data={
+                            "handshake_complete": self.handshake_complete,
+                            "use_encryption": self.use_encryption,
+                            "has_shared_key": bool(self.shared_key),
+                        },
+                    )
+                    # endregion
+                    continue
                 try:
                     _, writer = self.conn
+                    # region agent log
+                    _debug_log(
+                        run_id="run1",
+                        hypothesis_id="H6",
+                        location="i2p_chat_core.py:_keepalive_loop:send_ping",
+                        message="send_encrypted_keepalive_ping",
+                        data={
+                            "handshake_complete": self.handshake_complete,
+                            "use_encryption": self.use_encryption,
+                            "has_shared_key": bool(self.shared_key),
+                            "send_seq": self._send_seq,
+                        },
+                    )
+                    # endregion
                     writer.write(self.frame_message("P", ""))
                     await writer.drain()
                 except Exception:
@@ -1166,6 +1247,21 @@ class I2PChatCore:
     
     def _reset_crypto_state(self) -> None:
         """Сбрасывает криптографическое состояние при отключении."""
+        # region agent log
+        _debug_log(
+            run_id="run1",
+            hypothesis_id="H1_H2_H4",
+            location="i2p_chat_core.py:_reset_crypto_state",
+            message="reset_crypto_state_called",
+            data={
+                "had_handshake_complete": self.handshake_complete,
+                "had_use_encryption": self.use_encryption,
+                "had_shared_key": bool(self.shared_key),
+                "send_seq": self._send_seq,
+                "recv_seq": self._recv_seq,
+            },
+        )
+        # endregion
         self.shared_key = None
         self.my_nonce = None
         self.peer_nonce = None
@@ -1349,6 +1445,21 @@ class I2PChatCore:
                 self._handshake_initiated = False
                 self._recv_seq = 0
                 self._send_seq = 0
+                # region agent log
+                _debug_log(
+                    run_id="run1",
+                    hypothesis_id="H2",
+                    location="i2p_chat_core.py:_handle_handshake_message:responder_complete",
+                    message="handshake_complete_set_responder",
+                    data={
+                        "handshake_complete": self.handshake_complete,
+                        "use_encryption": self.use_encryption,
+                        "has_shared_key": bool(self.shared_key),
+                        "send_seq": self._send_seq,
+                        "recv_seq": self._recv_seq,
+                    },
+                )
+                # endregion
                 self._cancel_handshake_watchdog()
                 self._emit_message("success", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
@@ -1401,6 +1512,21 @@ class I2PChatCore:
                 self._handshake_initiated = False
                 self._recv_seq = 0
                 self._send_seq = 0
+                # region agent log
+                _debug_log(
+                    run_id="run1",
+                    hypothesis_id="H2",
+                    location="i2p_chat_core.py:_handle_handshake_message:initiator_complete",
+                    message="handshake_complete_set_initiator",
+                    data={
+                        "handshake_complete": self.handshake_complete,
+                        "use_encryption": self.use_encryption,
+                        "has_shared_key": bool(self.shared_key),
+                        "send_seq": self._send_seq,
+                        "recv_seq": self._recv_seq,
+                    },
+                )
+                # endregion
                 self._cancel_handshake_watchdog()
                 self._emit_message("success", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
@@ -1557,6 +1683,23 @@ class I2PChatCore:
                 
                 is_encrypted = (first_len_byte == b"E")
                 seq_num: Optional[int] = None
+                # region agent log
+                _debug_log(
+                    run_id="run1",
+                    hypothesis_id="H1_H2_H3",
+                    location="i2p_chat_core.py:receive_loop:frame_header",
+                    message="frame_header_parsed",
+                    data={
+                        "msg_type": msg_type,
+                        "is_encrypted": is_encrypted,
+                        "first_len_byte": first_len_byte.decode("latin1"),
+                        "handshake_complete": self.handshake_complete,
+                        "use_encryption": self.use_encryption,
+                        "has_shared_key": bool(self.shared_key),
+                        "recv_seq": self._recv_seq,
+                    },
+                )
+                # endregion
                 
                 if is_encrypted:
                     seq_data = await asyncio.wait_for(
@@ -1572,6 +1715,23 @@ class I2PChatCore:
                     )
                 else:
                     if self.handshake_complete:
+                        # region agent log
+                        _debug_log(
+                            run_id="run1",
+                            hypothesis_id="H1_H2_H3_H4",
+                            location="i2p_chat_core.py:receive_loop:downgrade_detected",
+                            message="plaintext_after_handshake",
+                            data={
+                                "msg_type": msg_type,
+                                "first_len_byte": first_len_byte.decode("latin1"),
+                                "handshake_complete": self.handshake_complete,
+                                "use_encryption": self.use_encryption,
+                                "has_shared_key": bool(self.shared_key),
+                                "send_seq": self._send_seq,
+                                "recv_seq": self._recv_seq,
+                            },
+                        )
+                        # endregion
                         logger.warning("Protocol downgrade detected: plaintext frame after handshake")
                         self._emit_error("Protocol downgrade detected")
                         self._schedule_disconnect()
