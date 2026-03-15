@@ -14,6 +14,7 @@ from i2p_chat_core import (
     ChatMessage,
     FileTransferInfo,
     I2PChatCore,
+    get_downloads_dir,
     get_profiles_dir,
     get_images_dir,
     render_braille,
@@ -38,6 +39,7 @@ class ChatItem:
     file_size: int = 0
     is_sending: bool = False
     image_path: Optional[str] = None  # путь к inline-изображению
+    open_folder_path: Optional[str] = None  # для "File received" — открыть папку по клику
 
 
 class ChatListModel(QtCore.QAbstractListModel):
@@ -141,13 +143,17 @@ class ChatListView(QtWidgets.QListView):
         index = self.indexAt(event.pos())
         if index.isValid():
             item = index.data(QtCore.Qt.ItemDataRole.DisplayRole)
-            if isinstance(item, ChatItem) and item.kind == "transfer":
-                delegate = self.itemDelegate()
-                if isinstance(delegate, ChatItemDelegate):
-                    rect = self.visualRect(index)
-                    if delegate.is_cancel_button_hit(rect, event.pos(), item):
-                        self.cancelTransferRequested.emit()
-                        return
+            if isinstance(item, ChatItem):
+                if item.kind == "transfer":
+                    delegate = self.itemDelegate()
+                    if isinstance(delegate, ChatItemDelegate):
+                        rect = self.visualRect(index)
+                        if delegate.is_cancel_button_hit(rect, event.pos(), item):
+                            self.cancelTransferRequested.emit()
+                            return
+                elif item.kind == "success" and item.open_folder_path and os.path.isdir(item.open_folder_path):
+                    QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(item.open_folder_path))
+                    return
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
@@ -1472,15 +1478,28 @@ class ChatWindow(QtWidgets.QMainWindow):
                         ),
                     )
                     done_action = "sent" if info.is_sending else "received"
-                    self.chat_model.update_item(
-                        self._transfer_row,
-                        ChatItem(
-                            kind="success",
-                            timestamp="",
-                            sender="FILE",
-                            text=f"✔ File {done_action}: {info.filename} ({info.size:,} bytes)",
-                        ),
-                    )
+                    if done_action == "received":
+                        downloads_dir = get_downloads_dir()
+                        self.chat_model.update_item(
+                            self._transfer_row,
+                            ChatItem(
+                                kind="success",
+                                timestamp="",
+                                sender="FILE",
+                                text=f"✔ File received: {info.filename} ({info.size:,} bytes). Открыть папку загрузок",
+                                open_folder_path=downloads_dir,
+                            ),
+                        )
+                    else:
+                        self.chat_model.update_item(
+                            self._transfer_row,
+                            ChatItem(
+                                kind="success",
+                                timestamp="",
+                                sender="FILE",
+                                text=f"✔ File sent: {info.filename} ({info.size:,} bytes)",
+                            ),
+                        )
                     self._transfer_row = None
 
     @QtCore.pyqtSlot(str)

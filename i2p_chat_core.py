@@ -633,7 +633,6 @@ class I2PChatCore:
 
             info = FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True)
             self._emit_file_event(info)
-            self._emit_message("success", f"File sent: {filename}")
             
             # Перезапуск receive_loop если он был прерван timeout'ом во время передачи
             if self.conn:
@@ -1272,11 +1271,12 @@ class I2PChatCore:
                 elif msg_type == "E":
                     if self.incoming_file and self.incoming_info:
                         self.incoming_file.close()
-                        self._emit_message(
-                            "success",
-                            f"File received: {self.incoming_info.filename} "
-                            f"({self.incoming_info.received} bytes)",
-                        )
+                        self._emit_file_event(FileTransferInfo(
+                            filename=self.incoming_info.filename,
+                            size=self.incoming_info.size,
+                            received=self.incoming_info.size,
+                            is_sending=False,
+                        ))
                         self.incoming_file = None
                         self.incoming_info = None
 
