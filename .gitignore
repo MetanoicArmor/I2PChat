@@ -15,6 +15,9 @@ env/
 build/
 dist/
 
+# Profile data (keys) — never commit
+*.dat
+
 # IDE / editor
 .cursor/
 *.log
