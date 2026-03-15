@@ -4,6 +4,7 @@ set -euo pipefail
 APP_NAME="I2PChat"
 APPDIR="${APP_NAME}.AppDir"
 VENV_DIR=".venv314"
+RELEASE_VERSION="0.3.0"
 
 # Определяем архитектуру
 ARCH=$(uname -m)
@@ -35,6 +36,21 @@ source "${VENV_DIR}/bin/activate"
 pip install --upgrade pip
 pip install -r requirements.txt pillow pyinstaller
 
+# Security gate: secure protocol requires PyNaCl
+python - <<'PY'
+import sys
+try:
+    import nacl
+    from nacl.secret import SecretBox  # noqa: F401
+except Exception as exc:
+    print(f"ERROR: PyNaCl is required for secure protocol build: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
+PY
+
+# Быстрая проверка синтаксиса критичных модулей протокола
+python -m compileall i2p_chat_core.py crypto.py main_qt.py
+
 # 1) сборка PyInstaller с использованием spec файла (включает crypto модули)
 rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"
 pyinstaller --clean -y I2PChat.spec
@@ -62,7 +78,7 @@ cat > "${APPDIR}/usr/share/applications/i2pchat.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=I2P Chat
-Comment=Secure chat over I2P
+Comment=Secure chat over I2P (signed handshake, TOFU)
 Exec=${APP_NAME}
 Icon=i2pchat
 Terminal=false
@@ -92,7 +108,7 @@ if [ ! -x "$APPIMAGETOOL" ]; then
   chmod +x "$APPIMAGETOOL"
 fi
 
-OUTPUT_FILE="${APP_NAME}-${ARCH_SUFFIX}.AppImage"
+OUTPUT_FILE="${APP_NAME}-v${RELEASE_VERSION}-${ARCH_SUFFIX}.AppImage"
 ./"$APPIMAGETOOL" "${APPDIR}" "$OUTPUT_FILE"
 echo "✔ Built ${OUTPUT_FILE}"
 
