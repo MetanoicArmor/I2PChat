@@ -15,6 +15,11 @@ env/
 build/
 dist/
 
+# Release archives (host on GitHub Releases only; avoid >100MB)
+I2PChat-macOS-arm64*.zip
+I2PChat-windows*.zip
+I2PChat-*.AppImage
+
 # Profile data (keys) — never commit
 *.dat
 
