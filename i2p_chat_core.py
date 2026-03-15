@@ -214,8 +214,10 @@ def _try_keyring_get(profile: str) -> Optional[str]:
         import keyring
         return keyring.get_password(KEYRING_SERVICE, profile)
     except ImportError:
+        logger.debug("keyring not available, using file storage")
         return None
-    except Exception:
+    except Exception as e:
+        logger.debug("keyring get failed (%s), using file storage: %s", profile, e)
         return None
 
 
@@ -226,8 +228,10 @@ def _try_keyring_set(profile: str, private_key: str) -> bool:
         keyring.set_password(KEYRING_SERVICE, profile, private_key)
         return True
     except ImportError:
+        logger.debug("keyring not available, using file storage")
         return False
-    except Exception:
+    except Exception as e:
+        logger.debug("keyring set failed (%s), using file storage: %s", profile, e)
         return False
 
 
@@ -561,7 +565,7 @@ class I2PChatCore:
                 if len(seed) != 32:
                     raise ValueError("invalid seed length")
                 self.my_signing_seed = seed
-                self.my_signing_public = bytes(crypto.SigningKey(seed).verify_key)
+                self.my_signing_public = crypto.get_verify_key_from_seed(seed)
                 return
             except Exception:
                 logger.warning("Invalid signing seed in keyring for profile %s", self.profile)
@@ -575,7 +579,7 @@ class I2PChatCore:
                 if len(seed) != 32:
                     raise ValueError("invalid seed length")
                 self.my_signing_seed = seed
-                self.my_signing_public = bytes(crypto.SigningKey(seed).verify_key)
+                self.my_signing_public = crypto.get_verify_key_from_seed(seed)
                 return
             except Exception:
                 logger.warning("Invalid signing seed file %s", path)
@@ -1209,7 +1213,8 @@ class I2PChatCore:
                 parts = payload.split(":")
                 if len(parts) != 4:
                     raise ValueError(
-                        "Handshake payload must contain nonce, ephemeral key, signing key and signature"
+                        "Handshake payload must contain nonce, ephemeral key, signing key and signature. "
+                        "If the peer runs a pre-0.3.0 (legacy) client, both sides must use 0.3.0 or newer."
                     )
                 nonce_hex, eph_hex, sign_pub_hex, signature_hex = [p.strip().lower() for p in parts]
                 nonce = bytes.fromhex(nonce_hex)

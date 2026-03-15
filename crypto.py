@@ -89,6 +89,11 @@ try:
         """
         sk = SigningKey.generate()
         return bytes(sk.encode()), bytes(sk.verify_key)
+
+    def get_verify_key_from_seed(seed: bytes) -> bytes:
+        """Возвращает 32-байтный verify_key по seed (32 байта). Для handshake pinning."""
+        key = SigningKey(seed[:32])
+        return bytes(key.verify_key)
     
     def encrypt_message(key: bytes, plaintext: bytes) -> bytes:
         """
@@ -183,6 +188,9 @@ try:
 except ImportError as _nacl_err:
     NACL_AVAILABLE = False
     NACL_IMPORT_ERROR = str(_nacl_err)
+
+    def get_verify_key_from_seed(seed: bytes) -> bytes:
+        raise NotImplementedError("pynacl not installed")
     
     def generate_signing_keypair() -> Tuple[bytes, bytes]:
         raise NotImplementedError("pynacl not installed")
