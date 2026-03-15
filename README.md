@@ -187,9 +187,9 @@ If you like this project and want to support development, you can send a small d
 
 | Platform | Download | Launch |
 |----------|----------|--------|
-| **Windows** | [Windows build](https://github.com/MetanoicArmor/I2PChat/releases/latest) | Unzip → `I2PChat.exe` |
-| **macOS** | [macOS build](https://github.com/MetanoicArmor/I2PChat/releases/latest) | Unzip → `I2PChat.app` |
-| **Linux** | [Linux build](https://github.com/MetanoicArmor/I2PChat/releases/latest) | `chmod +x` → run |
+| **Windows** | [I2PChat-windows-x64.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64.zip) | Unzip → `I2PChat.exe` |
+| **macOS** | [I2PChat-macOS-arm64-v0.3.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v0.3.0.zip) | Unzip → `I2PChat.app` |
+| **Linux** | [I2PChat-v0.3.0-x86_64.AppImage](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-v0.3.0-x86_64.AppImage) | `chmod +x` → run |
 
 > **Requirement:** [i2pd](https://i2pd.website) router must be running with SAM API enabled (default port 7656).
 
