@@ -34,6 +34,7 @@
           buildInputs = [ pythonEnv pkgs.qt6.qtbase ];
           
           dontBuild = true;
+          dontWrapQtApps = true;
           
           installPhase = ''
             mkdir -p $out/lib/i2pchat $out/bin
