@@ -438,7 +438,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 item.timestamp,
             )
 
-        # Галочки доставки для «File sent» (как у картинок)
+        # Галочки доставки для «File sent» — тёмный цвет как у текста, хорошо читается на зелёном
         if (
             item.kind == "success"
             and getattr(item, "file_name", None)
@@ -454,13 +454,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 18,
             )
             ticks = "✓✓" if getattr(item, "delivered", False) else "✓"
-            painter.setPen(QtGui.QColor(0, 0, 0, 160))
-            painter.drawText(
-                tick_rect.translated(1, 1),
-                int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom),
-                ticks,
-            )
-            painter.setPen(QtGui.QColor("#ffffff"))
+            painter.setPen(QtGui.QColor("#282a36"))  # тёмно-серый, как текст в success-бабле
             painter.drawText(
                 tick_rect,
                 int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom),
