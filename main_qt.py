@@ -1661,11 +1661,39 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_inline_image_received=self.handle_inline_image_received,
             on_image_delivered=self.handle_image_delivered,
             on_file_delivered=self.handle_file_delivered,
+            on_trust_decision=self.handle_trust_decision,
         )
         # динамически навешиваем колбэк уведомлений,
         # чтобы не менять публичную сигнатуру конструктора ядра
         setattr(core, "on_notify", self.handle_notify)
         return core
+
+    def handle_trust_decision(self, peer_addr: str, fingerprint: str, signing_key_hex: str) -> bool:
+        """
+        TOFU-подтверждение: показать пользователю fingerprint нового ключа пира.
+
+        Возвращает True, если пользователь доверяет ключу и согласен его закрепить.
+        """
+        short_addr = (peer_addr or "").strip()
+        if len(short_addr) > 40:
+            short_addr = f"{short_addr[:18]}...{short_addr[-18:]}"
+        short_key = (signing_key_hex or "")[:24]
+        msg = (
+            "First contact with this peer signing key.\n\n"
+            f"Peer: {short_addr}\n"
+            f"Fingerprint (SHA-256, short): {fingerprint}\n"
+            f"PubKey (hex, prefix): {short_key}...\n\n"
+            "Trust and pin this key (TOFU)?"
+        )
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Trust on First Use (TOFU)",
+            msg,
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        return answer == QtWidgets.QMessageBox.StandardButton.Yes
 
     def refresh_status_label(self) -> None:
         """Обновить строку статуса с учётом профиля и persist-режима."""

@@ -42,6 +42,7 @@ MessageCallback = Callable[[ChatMessage], Any]
 PeerChangedCallback = Callable[[Optional[str]], Any]
 FileEventCallback = Callable[[FileTransferInfo], Any]
 SimpleCallback = Callable[[str], Any]
+TrustDecisionCallback = Callable[[str, str, str], bool]
 
 
 def get_profiles_dir() -> str:
@@ -255,6 +256,7 @@ class I2PChatCore:
         on_inline_image_received: Optional[Callable[..., Any]] = None,
         on_image_delivered: Optional[Callable[[str], Any]] = None,
         on_file_delivered: Optional[Callable[[str], Any]] = None,
+        on_trust_decision: Optional[TrustDecisionCallback] = None,
     ) -> None:
         self.sam_address = sam_address
         self.profile = profile or "default"
@@ -269,6 +271,7 @@ class I2PChatCore:
         self.on_inline_image_received = on_inline_image_received
         self.on_image_delivered = on_image_delivered
         self.on_file_delivered = on_file_delivered
+        self.on_trust_decision = on_trust_decision
 
         self.session_id = f"chat_{self.profile}_{int(time.time())}"
         self.network_status = "initializing"
@@ -511,6 +514,17 @@ class I2PChatCore:
         current_hex = verify_key.hex().lower()
         pinned_hex = self.peer_trusted_signing_keys.get(peer_addr)
         if pinned_hex is None:
+            if self.on_trust_decision is not None:
+                try:
+                    approved = bool(self.on_trust_decision(peer_addr, fp, current_hex))
+                except Exception as e:
+                    logger.warning("TOFU trust callback failed: %s", e)
+                    approved = False
+                if not approved:
+                    self._emit_error(
+                        f"TOFU rejected: peer signing key {fp} for {peer_addr[:20]}..."
+                    )
+                    return False
             self.peer_trusted_signing_keys[peer_addr] = current_hex
             self._save_trust_store()
             self._emit_system(
