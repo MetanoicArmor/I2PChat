@@ -649,9 +649,10 @@ class I2PChatCore:
                     await writer.drain()
                     
                     sent += len(chunk)
-                    # Для маленьких файлов — чаще эмитить прогресс, чтобы виджет успел появиться у отправителя
+                    # Эмитить прогресс: после первого чанка (чтобы виджет успел появиться), затем по шагу
                     step = 4096 if filesize <= 65536 else 65536
-                    if sent % step < len(chunk) or sent == filesize:
+                    first_chunk_done = sent <= 4096 and sent > 0
+                    if first_chunk_done or sent % step < len(chunk) or sent == filesize:
                         info = FileTransferInfo(filename=filename, size=filesize, received=sent, is_sending=True)
                         self._emit_file_event(info)
 
@@ -1322,9 +1323,14 @@ class I2PChatCore:
                         ))
                         self.incoming_file = None
                         self.incoming_info = None
-                        # Подтверждение получения файла (галочки у отправителя)
+                        # Подтверждение получения файла (галочки у отправителя); отправляем basename, чтобы совпало с file_name у отправителя
                         try:
-                            writer.write(self.frame_message("S", f"__SIGNAL__:FILE_ACK|{ack_filename}"))
+                            writer.write(
+                                self.frame_message(
+                                    "S",
+                                    f"__SIGNAL__:FILE_ACK|{os.path.basename(ack_filename)}",
+                                )
+                            )
                             await writer.drain()
                         except Exception:
                             pass

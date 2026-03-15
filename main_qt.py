@@ -1635,10 +1635,16 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def handle_file_delivered(self, filename: str) -> None:
         """Галочка доставки: адресат получил файл с этим именем."""
+        name = os.path.basename(filename) if filename else ""
         for row in range(self.chat_model.rowCount()):
             idx = self.chat_model.index(row, 0)
             item = idx.data(QtCore.Qt.ItemDataRole.DisplayRole)
-            if isinstance(item, ChatItem) and item.kind == "success" and item.file_name == filename and item.is_sending:
+            if not isinstance(item, ChatItem) or item.kind != "success" or not item.is_sending:
+                continue
+            item_name = (item.file_name or "").strip()
+            if not item_name:
+                continue
+            if item_name == name or os.path.basename(item_name) == name:
                 self.chat_model.update_item(row, replace(item, delivered=True))
                 return
 
