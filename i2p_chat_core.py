@@ -748,7 +748,6 @@ class I2PChatCore:
             await writer.drain()
             
             self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True))
-            self._emit_message("success", f"Image sent: {filename}")
             
             # Уведомляем UI об отправленном изображении
             self._emit_inline_image(local_path, is_from_me=True)
@@ -1187,7 +1186,6 @@ class I2PChatCore:
                                     self._emit_error(f"Received invalid image: {error_msg}")
                                 else:
                                     self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=expected_size, is_sending=False))
-                                    self._emit_system(f"Image received: {filename}")
                                     self._emit_inline_image(safe_path, is_from_me=False)
                                     cleanup_images_cache()
                             except Exception as e:

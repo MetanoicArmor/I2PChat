@@ -1413,7 +1413,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 ChatItem(
                     kind="transfer",
                     timestamp="",
-                    sender="FILE",
+                    sender="IMAGE" if self._transfer_is_image else "FILE",
                     text=info.filename,
                     progress=progress,
                     file_size=info.size,
@@ -1444,9 +1444,33 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._transfer_timer.stop()
             if self._transfer_row is not None:
                 if self._transfer_is_image:
-                    # Картинку заменим на превью в handle_inline_image_received
-                    pass
+                    # Сначала показываем 100%, потом заменим на превью в handle_inline_image_received
+                    self.chat_model.update_item(
+                        self._transfer_row,
+                        ChatItem(
+                            kind="transfer",
+                            timestamp="",
+                            sender="IMAGE" if self._transfer_is_image else "FILE",
+                            text=info.filename,
+                            progress=1.0,
+                            file_size=info.size,
+                            is_sending=info.is_sending,
+                        ),
+                    )
                 else:
+                    # Сначала 100%, затем сообщение об успехе — чтобы не зависало на 99%
+                    self.chat_model.update_item(
+                        self._transfer_row,
+                        ChatItem(
+                            kind="transfer",
+                            timestamp="",
+                            sender="FILE",
+                            text=info.filename,
+                            progress=1.0,
+                            file_size=info.size,
+                            is_sending=info.is_sending,
+                        ),
+                    )
                     done_action = "sent" if info.is_sending else "received"
                     self.chat_model.update_item(
                         self._transfer_row,
