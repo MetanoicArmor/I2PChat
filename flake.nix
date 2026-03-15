@@ -67,6 +67,8 @@
           type = "app";
           program = "${self.packages.${system}.default}/bin/i2pchat-tui";
         };
+
+        checks.default = self.packages.${system}.default;
         
         devShells.default = pkgs.mkShell {
           buildInputs = [
