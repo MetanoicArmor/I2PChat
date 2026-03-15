@@ -6,3 +6,4 @@ PyQt6
 qasync
 Pillow
 pynacl
+keyring
