@@ -519,6 +519,15 @@ class I2PChatCore:
         pinned_hex = self.peer_trusted_signing_keys.get(peer_addr)
         if pinned_hex is None:
             if self.on_trust_decision is not None:
+                # Продлеваем окно handshake перед блокирующим UI-диалогом TOFU.
+                if self.conn is not None and not self.handshake_complete:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        self._cancel_handshake_watchdog()
+                        self._handshake_watchdog_task = loop.create_task(self._handshake_watchdog(self.conn))
+                    except RuntimeError:
+                        pass
+                self._emit_system("Waiting for TOFU trust confirmation...")
                 try:
                     approved = bool(self.on_trust_decision(peer_addr, fp, current_hex))
                 except Exception as e:
@@ -746,8 +755,9 @@ class I2PChatCore:
     # Таймаут на операции чтения в receive_loop (защита от зависания)
     # Увеличен для устойчивости при простое: keepalive 15s + запас на латентность I2P
     READ_TIMEOUT = 50.0
-    # Таймаут на установление защищённого канала после TCP/I2P connect
-    HANDSHAKE_TIMEOUT = 20.0
+    # Таймаут на установление защищённого канала после TCP/I2P connect.
+    # Учитывает задержки I2P и возможное TOFU-подтверждение пользователем.
+    HANDSHAKE_TIMEOUT = 90.0
     # Максимальное количество строк в буфере изображения (защита от OOM)
     MAX_IMAGE_LINES = 500
     # Максимальный размер принимаемого файла в байтах (защита от заполнения диска)
