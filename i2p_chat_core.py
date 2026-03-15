@@ -32,6 +32,7 @@ class FileTransferInfo:
     size: int
     received: int = 0
     is_sending: bool = False
+    is_inline_image: bool = False  # True только для Send Pic (G), не для Send File (F/D)
 
 
 StatusCallback = Callable[[str], Any]
@@ -248,7 +249,8 @@ class I2PChatCore:
         on_error: Optional[SimpleCallback] = None,
         on_file_event: Optional[FileEventCallback] = None,
         on_image_received: Optional[Callable[[str], Any]] = None,
-        on_inline_image_received: Optional[Callable[[str, bool], Any]] = None,
+        on_inline_image_received: Optional[Callable[..., Any]] = None,
+        on_image_delivered: Optional[Callable[[str], Any]] = None,
     ) -> None:
         self.sam_address = sam_address
         self.profile = profile or "default"
@@ -261,6 +263,7 @@ class I2PChatCore:
         self.on_file_event = on_file_event
         self.on_image_received = on_image_received
         self.on_inline_image_received = on_inline_image_received
+        self.on_image_delivered = on_image_delivered
 
         self.session_id = f"chat_{self.profile}_{int(time.time())}"
         self.network_status = "initializing"
@@ -353,9 +356,12 @@ class I2PChatCore:
         if self.on_file_event:
             self.on_file_event(info)
 
-    def _emit_inline_image(self, path: str, is_from_me: bool) -> None:
+    def _emit_inline_image(self, path: str, is_from_me: bool, sent_filename: Optional[str] = None) -> None:
         if self.on_inline_image_received:
-            self.on_inline_image_received(path, is_from_me)
+            if sent_filename is not None:
+                self.on_inline_image_received(path, is_from_me, sent_filename)
+            else:
+                self.on_inline_image_received(path, is_from_me)
 
     # ---------- протокол ----------
 
@@ -711,8 +717,8 @@ class I2PChatCore:
             reader, writer = self.conn
             self._emit_system(f"Sending image: {filename} ({filesize} bytes)")
             
-            # Прогресс загрузки в UI
-            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=0, is_sending=True))
+            # Прогресс загрузки в UI (is_inline_image — чтобы GUI заменил виджет на превью, не «File sent»)
+            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=0, is_sending=True, is_inline_image=True))
             
             # Отправляем заголовок: G + filename|size
             header = f"{filename}|{filesize}"
@@ -739,17 +745,17 @@ class I2PChatCore:
                     
                     sent += len(chunk)
                     if sent - last_emit_sent >= 65536:
-                        self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=sent, is_sending=True))
+                        self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=sent, is_sending=True, is_inline_image=True))
                         last_emit_sent = sent
             
             # Отправляем маркер завершения
             writer.write(self.frame_message("G", "__IMG_END__"))
             await writer.drain()
             
-            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True))
+            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True, is_inline_image=True))
             
-            # Уведомляем UI об отправленном изображении
-            self._emit_inline_image(local_path, is_from_me=True)
+            # Уведомляем UI об отправленном изображении (filename для галочки доставки)
+            self._emit_inline_image(local_path, is_from_me=True, sent_filename=filename)
             
             # Очистка кэша при необходимости
             cleanup_images_cache()
@@ -757,12 +763,12 @@ class I2PChatCore:
             return local_path
             
         except (ConnectionError, ConnectionResetError, BrokenPipeError, OSError) as e:
-            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True))
+            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True, is_inline_image=True))
             self._emit_error(f"Image transfer interrupted: connection lost")
             return None
             
         except Exception as e:
-            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True))
+            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True, is_inline_image=True))
             self._emit_error(f"Image transfer failed: {e}")
             return None
         finally:
@@ -1147,7 +1153,7 @@ class I2PChatCore:
                             
                             # Проверяем размер
                             if len(self.inline_image_buffer) > MAX_IMAGE_SIZE:
-                                self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False))
+                                self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                 self._emit_error("Received image too large, discarding")
                                 self.inline_image_buffer = bytearray()
                                 self.inline_image_info = None
@@ -1161,7 +1167,7 @@ class I2PChatCore:
                             elif header[:3] == b'\xff\xd8\xff':
                                 detected_ext = 'jpeg'
                             if detected_ext is None:
-                                self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False))
+                                self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                 self._emit_error("Received image has invalid format")
                                 self.inline_image_buffer = bytearray()
                                 self.inline_image_info = None
@@ -1181,14 +1187,19 @@ class I2PChatCore:
                                 is_valid, error_msg, _ = validate_image(safe_path)
                                 if not is_valid:
                                     os.remove(safe_path)
-                                    self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False))
+                                    self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                     self._emit_error(f"Received invalid image: {error_msg}")
                                 else:
-                                    self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=expected_size, is_sending=False))
+                                    self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=expected_size, is_sending=False, is_inline_image=True))
                                     self._emit_inline_image(safe_path, is_from_me=False)
+                                    try:
+                                        writer.write(self.frame_message("S", f"__SIGNAL__:IMG_ACK|{filename}"))
+                                        await writer.drain()
+                                    except Exception:
+                                        pass
                                     cleanup_images_cache()
                             except Exception as e:
-                                self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False))
+                                self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                 self._emit_error(f"Failed to save image: {e}")
                             
                             self.inline_image_buffer = bytearray()
@@ -1210,7 +1221,7 @@ class I2PChatCore:
                                     self.inline_image_buffer = bytearray()
                                     self._inline_image_last_emit = 0
                                     self._emit_system(f"Receiving image: {filename} ({size} bytes)")
-                                    self._emit_file_event(FileTransferInfo(filename=filename, size=size, received=0, is_sending=False))
+                                    self._emit_file_event(FileTransferInfo(filename=filename, size=size, received=0, is_sending=False, is_inline_image=True))
                         except Exception as e:
                             self._emit_error(f"Invalid image header: {e}")
                     else:
@@ -1223,12 +1234,12 @@ class I2PChatCore:
                                 received = len(self.inline_image_buffer)
                                 if received - getattr(self, "_inline_image_last_emit", 0) >= 65536 or received == total:
                                     self._inline_image_last_emit = received
-                                    self._emit_file_event(FileTransferInfo(filename=fn, size=total, received=received, is_sending=False))
+                                    self._emit_file_event(FileTransferInfo(filename=fn, size=total, received=received, is_sending=False, is_inline_image=True))
                         except Exception as e:
                             self._emit_error(f"Image data error: {e}")
                             if self.inline_image_info:
                                 fn, sz = self.inline_image_info
-                                self._emit_file_event(FileTransferInfo(filename=fn, size=sz, received=-1, is_sending=False))
+                                self._emit_file_event(FileTransferInfo(filename=fn, size=sz, received=-1, is_sending=False, is_inline_image=True))
                             self.inline_image_buffer = bytearray()
                             self.inline_image_info = None
 
@@ -1282,10 +1293,17 @@ class I2PChatCore:
 
                 elif msg_type == "S":
                     if "__SIGNAL__:" in body:
-                        if "QUIT" in body:
+                        if "IMG_ACK|" in body:
+                            try:
+                                ack_filename = body.split("IMG_ACK|", 1)[1].strip()
+                                if self.on_image_delivered:
+                                    self.on_image_delivered(ack_filename)
+                            except Exception:
+                                pass
+                        elif "QUIT" in body:
                             self._emit_system("Peer requested disconnect.")
                             break
-                        if "ABORT_FILE" in body:
+                        elif "ABORT_FILE" in body:
                             self._transfer_aborted_by_peer = True
                             if self.incoming_file and self.incoming_info:
                                 try:

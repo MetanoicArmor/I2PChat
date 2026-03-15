@@ -4,7 +4,7 @@ import os
 import shutil
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
@@ -40,6 +40,8 @@ class ChatItem:
     is_sending: bool = False
     image_path: Optional[str] = None  # путь к inline-изображению
     open_folder_path: Optional[str] = None  # для "File received" — открыть папку по клику
+    file_name: Optional[str] = None  # имя отправленного файла/картинки для ACK
+    delivered: bool = False  # галочка доставки для отправленных картинок
 
 
 class ChatListModel(QtCore.QAbstractListModel):
@@ -682,6 +684,21 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         painter.setPen(border_pen)
         painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(img_rect, self.BUBBLE_RADIUS - 4, self.BUBBLE_RADIUS - 4)
+
+        # Галочка доставки для отправленных картинок (как в мессенджерах)
+        if is_me and item.delivered:
+            base_font = painter.font()
+            tick_font = QtGui.QFont(base_font)
+            tick_font.setPointSize(max(base_font.pointSize() - 2, 9))
+            painter.setFont(tick_font)
+            painter.setPen(QtGui.QColor("#ffffff"))
+            tick_rect = QtCore.QRectF(
+                bubble_rect.right() - 28,
+                bubble_rect.bottom() - 22,
+                24,
+                18,
+            )
+            painter.drawText(tick_rect, int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom), "✓✓")
 
     def _get_cancel_button_rect(
         self, cell_rect: QtCore.QRect, item: ChatItem
@@ -1355,9 +1372,8 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         # Начало передачи
         if info.received == 0 and info.size > 0:
-            is_image = info.filename and info.filename.lower().endswith(
-                (".png", ".jpg", ".jpeg", ".webp")
-            )
+            # Только Send Pic (G) помечен как inline image; Send File (F/D) — обычный файл
+            is_image = getattr(info, "is_inline_image", False)
             # Для входящих файлов (не картинок) спрашиваем подтверждение
             if not info.is_sending and not is_image:
                 answer = QtWidgets.QMessageBox.question(
@@ -1486,7 +1502,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                                 kind="success",
                                 timestamp="",
                                 sender="FILE",
-                                text=f"✔ File received: {info.filename} ({info.size:,} bytes). Открыть папку загрузок",
+                                text=f"✔ File received: {info.filename} ({info.size:,} bytes). Open downloads folder",
                                 open_folder_path=downloads_dir,
                             ),
                         )
@@ -1514,39 +1530,41 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
 
     @QtCore.pyqtSlot(str, bool)
-    def handle_inline_image_received(self, path: str, is_from_me: bool) -> None:
-        """Обработчик для inline-изображений (PNG/JPEG/WebP)."""
+    def handle_inline_image_received(self, path: str, is_from_me: bool, sent_filename: Optional[str] = None) -> None:
+        """Обработчик для inline-изображений (PNG/JPEG/WebP). sent_filename — для галочки доставки."""
         ts = ""
         if is_from_me:
             sender = "Me"
         else:
             sender = "Peer"
-        
+        item_kw = dict(
+            kind="image_inline",
+            timestamp=ts,
+            sender=sender,
+            text="",
+            is_sending=is_from_me,
+            image_path=path,
+            file_name=sent_filename if is_from_me else None,
+        )
         if self._transfer_row is not None and self._transfer_is_image:
             self.chat_model.update_item(
                 self._transfer_row,
-                ChatItem(
-                    kind="image_inline",
-                    timestamp=ts,
-                    sender=sender,
-                    text="",
-                    is_sending=is_from_me,
-                    image_path=path,
-                ),
+                ChatItem(**item_kw),
             )
             self._transfer_row = None
             self._transfer_is_image = False
         else:
-            self._append_item(
-                ChatItem(
-                    kind="image_inline",
-                    timestamp=ts,
-                    sender=sender,
-                    text="",
-                    is_sending=is_from_me,
-                    image_path=path,
-                ),
-            )
+            self._append_item(ChatItem(**item_kw))
+
+    @QtCore.pyqtSlot(str)
+    def handle_image_delivered(self, filename: str) -> None:
+        """Галочка доставки: адресат получил картинку с этим именем."""
+        for row in range(self.chat_model.rowCount()):
+            idx = self.chat_model.index(row, 0)
+            item = idx.data(QtCore.Qt.ItemDataRole.DisplayRole)
+            if isinstance(item, ChatItem) and item.kind == "image_inline" and item.is_sending and item.file_name == filename:
+                self.chat_model.update_item(row, replace(item, delivered=True))
+                return
 
     @QtCore.pyqtSlot(object)
     def handle_peer_changed(self, peer: Optional[str]) -> None:
@@ -1565,6 +1583,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_file_event=self.handle_file_event,
             on_image_received=self.handle_image_received,
             on_inline_image_received=self.handle_inline_image_received,
+            on_image_delivered=self.handle_image_delivered,
         )
         # динамически навешиваем колбэк уведомлений,
         # чтобы не менять публичную сигнатуру конструктора ядра
