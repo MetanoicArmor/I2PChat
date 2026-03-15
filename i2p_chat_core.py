@@ -460,6 +460,8 @@ class I2PChatCore:
 
         self.my_dest = dest
 
+        self._emit_system("Starting I2P session, please wait…")
+
         # Важно: сохраняем сокет сессии и не закрываем его до shutdown.
         # Иначе по SAM-спеку сессия умирает при закрытии сокета, и STREAM CONNECT/ACCEPT ломают роутер.
         self._session_socket = await i2plib.create_session(
@@ -477,9 +479,6 @@ class I2PChatCore:
         my_address = self.my_dest.base32 + ".b32.i2p"
         self._emit_status("local_ok")
         self._emit_message("success", f"Online! My Address: {my_address}")
-        self._emit_system(
-            "Building I2P tunnels (1–2 min). Wait before connecting."
-        )
         self.peer_b32 = f"My Addr: {my_address}"
 
         # запуск фоновых задач сразу — не блокируем приём и подключения

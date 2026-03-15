@@ -854,6 +854,21 @@ class ProfileComboWithArrow(QtWidgets.QWidget):
         )
 
 
+class _ClickableFolderLabel(QtWidgets.QLabel):
+    """QLabel, по клику открывающий папку (как «Open downloads folder» в чате)."""
+
+    def __init__(self, text: str, folder_path: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(text, parent)
+        self._folder_path = folder_path
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton and os.path.isdir(self._folder_path):
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(self._folder_path))
+            return
+        super().mousePressEvent(event)
+
+
 class ProfileSelectDialog(QtWidgets.QDialog):
     """Начальное окно выбора профиля в стиле приложения."""
     
@@ -963,10 +978,10 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         layout.addWidget(combo_hint)
         
         profiles_path = get_profiles_dir()
-        path_hint = QtWidgets.QLabel(f"Profiles folder: {profiles_path}")
+        path_hint = _ClickableFolderLabel(f"Profiles folder: {profiles_path}", profiles_path)
         path_hint.setWordWrap(True)
         path_hint.setStyleSheet("color: #6c6e7e; font-size: 11px;")
-        path_hint.setToolTip(profiles_path)
+        path_hint.setToolTip("Click to open folder")
         layout.addWidget(path_hint)
         
         layout.addSpacing(12)
