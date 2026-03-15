@@ -78,6 +78,7 @@ try:
     from nacl.encoding import RawEncoder
     
     NACL_AVAILABLE = True
+    NACL_IMPORT_ERROR = ""
 
     def generate_signing_keypair() -> Tuple[bytes, bytes]:
         """
@@ -179,8 +180,9 @@ try:
         except Exception:
             return False
 
-except ImportError:
+except ImportError as _nacl_err:
     NACL_AVAILABLE = False
+    NACL_IMPORT_ERROR = str(_nacl_err)
     
     def generate_signing_keypair() -> Tuple[bytes, bytes]:
         raise NotImplementedError("pynacl not installed")

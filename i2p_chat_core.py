@@ -753,7 +753,8 @@ class I2PChatCore:
 
     async def connect_to_peer(self, target_address: str) -> None:
         if not crypto.NACL_AVAILABLE:
-            self._emit_error("Secure protocol requires PyNaCl. Install dependency: pynacl")
+            detail = getattr(crypto, "NACL_IMPORT_ERROR", "") or "pynacl not installed"
+            self._emit_error(f"Secure protocol requires PyNaCl. Install: pip install pynacl. ({detail})")
             return
         try:
             self.current_peer_addr = target_address

@@ -26,7 +26,7 @@ try:
 except Exception:  # pragma: no cover - мультимедиа не везде доступно
     QSoundEffect = None  # type: ignore[assignment]
 
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.3.0"
 
 
 @dataclass

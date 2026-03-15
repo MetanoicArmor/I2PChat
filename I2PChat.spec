@@ -6,7 +6,12 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=['rich', 'textual', 'pyperclip', 'crypto', 'nacl', 'nacl.secret', 'nacl.public', 'nacl.signing', 'nacl.encoding', 'nacl.exceptions'],
+    # pynacl (nacl.*) + cffi required for secure protocol / E2E encryption
+    hiddenimports=[
+        'rich', 'textual', 'pyperclip', 'crypto',
+        'cffi', '_cffi_backend',  # PyNaCl depends on cffi at runtime
+        'nacl', 'nacl.secret', 'nacl.public', 'nacl.signing', 'nacl.encoding', 'nacl.exceptions',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
