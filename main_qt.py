@@ -685,8 +685,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(img_rect, self.BUBBLE_RADIUS - 4, self.BUBBLE_RADIUS - 4)
 
-        # Галочка доставки для отправленных картинок (как в мессенджерах)
-        if is_me and item.delivered:
+        # Галочки для отправленных картинок: одна — отправлено, две — доставлено
+        if is_me:
             base_font = painter.font()
             tick_font = QtGui.QFont(base_font)
             tick_font.setPointSize(max(base_font.pointSize() - 2, 9))
@@ -698,7 +698,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 24,
                 18,
             )
-            painter.drawText(tick_rect, int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom), "✓✓")
+            ticks = "✓✓" if item.delivered else "✓"
+            painter.drawText(tick_rect, int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom), ticks)
 
     def _get_cancel_button_rect(
         self, cell_rect: QtCore.QRect, item: ChatItem
