@@ -2,6 +2,7 @@ import asyncio
 import sys
 import types
 import unittest
+from types import SimpleNamespace
 from typing import Optional
 from unittest.mock import AsyncMock
 
@@ -16,6 +17,7 @@ if "PIL" not in sys.modules:
     sys.modules["PIL.Image"] = pil_image_module
 
 from i2p_chat_core import I2PChatCore
+from protocol_codec import ProtocolCodec
 
 
 class _FakeReader:
@@ -62,6 +64,36 @@ class _FakeWriter:
 
 
 class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connect_sends_identity_line_before_framed_identity(self) -> None:
+        core = I2PChatCore()
+        core.my_dest = SimpleNamespace(base64="DEST_B64")
+        core._start_handshake_watchdog = lambda _conn: None  # type: ignore[assignment]
+        core.receive_loop = AsyncMock(return_value=None)  # type: ignore[method-assign]
+        core.initiate_secure_handshake = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        core._keepalive_loop = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+        reader = _FakeReader(b"")
+        writer = _FakeWriter()
+
+        import i2p_chat_core as core_module
+
+        original_stream_connect = core_module.i2plib.stream_connect
+        original_nacl_available = core_module.crypto.NACL_AVAILABLE
+
+        async def _fake_stream_connect(session_id: str, target: str, sam_address=None):
+            return reader, writer
+
+        core_module.i2plib.stream_connect = _fake_stream_connect  # type: ignore[assignment]
+        core_module.crypto.NACL_AVAILABLE = True
+        try:
+            await core.connect_to_peer("peer.b32.i2p")
+        finally:
+            core_module.i2plib.stream_connect = original_stream_connect  # type: ignore[assignment]
+            core_module.crypto.NACL_AVAILABLE = original_nacl_available
+
+        payload = bytes(writer.buffer)
+        self.assertTrue(payload.startswith(b"DEST_B64\n"))
+
     async def test_protocol_downgrade_schedules_disconnect_without_reentrancy(self) -> None:
         errors: list[str] = []
         core = I2PChatCore(on_error=errors.append)
@@ -69,7 +101,12 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         core.use_encryption = True
         core.shared_key = b"x" * 32
 
-        reader = _FakeReader(b"U0001x\n")
+        codec = ProtocolCodec(
+            allowed_types={"U", "S", "P", "O", "F", "D", "E", "I", "H", "G"},
+            max_frame_body=core.MAX_FRAME_BODY,
+        )
+        # Plaintext user data after handshake must be treated as downgrade.
+        reader = _FakeReader(codec.encode("U", b"x", msg_id=1, flags=0))
         writer = _FakeWriter()
         core.conn = (reader, writer)
 

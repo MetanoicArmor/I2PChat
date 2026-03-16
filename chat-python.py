@@ -60,6 +60,7 @@ class I2PChat(App):
             on_error=self.handle_error,
             on_file_event=self.handle_file_event,
             on_image_received=self.handle_image_received,
+            legacy_compat=os.environ.get("I2PCHAT_LEGACY_COMPAT", "").strip() in {"1", "true", "yes", "on"},
         )
 
     def compose(self) -> ComposeResult:
@@ -112,6 +113,12 @@ class I2PChat(App):
             conn_viz = f"[bold {link_color}]{link_symbol}[/] [dim]CONNECTED[/]"
         else:
             conn_viz = f"[dim]{dot} [dim]STANDBY[/]"
+        try:
+            ack_drop_total = int(sum(self.core.get_ack_telemetry().values()))
+        except Exception:
+            ack_drop_total = 0
+        if ack_drop_total > 0:
+            conn_viz = f"{conn_viz} [dim]ACKdrop:{ack_drop_total}[/]"
 
         if self.core.my_dest:
             full_addr = self.core.my_dest.base32

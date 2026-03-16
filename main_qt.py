@@ -1657,6 +1657,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_image_delivered=self.handle_image_delivered,
             on_file_delivered=self.handle_file_delivered,
             on_trust_decision=self.handle_trust_decision,
+            legacy_compat=os.environ.get("I2PCHAT_LEGACY_COMPAT", "").strip().lower() in {"1", "true", "yes", "on"},
         )
         # динамически навешиваем колбэк уведомлений,
         # чтобы не менять публичную сигнатуру конструктора ядра
@@ -1694,6 +1695,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         """Обновить строку статуса с учётом профиля и persist-режима."""
         status = self._last_status
         mode = "PERSISTENT" if self.profile != "default" else "TRANSIENT"
+        ack_drop_total = 0
+        try:
+            telemetry = self.core.get_ack_telemetry()
+            ack_drop_total = int(sum(int(v) for v in telemetry.values()))
+        except Exception:
+            ack_drop_total = 0
         stored = self.core.stored_peer
         if stored:
             clean = stored.replace(".b32.i2p", "")
@@ -1707,8 +1714,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         else:
             stored_disp = "none"
 
+        ack_part = f" | ACKdrop: {ack_drop_total}" if ack_drop_total > 0 else ""
         self.status_label.setText(
-            f"Status: {status} | Profile: {self.profile} ({mode}) | Stored peer: {stored_disp}"
+            f"Status: {status} | Profile: {self.profile} ({mode}) | Stored peer: {stored_disp}{ack_part}"
         )
 
     # ----- обработчики UI -----

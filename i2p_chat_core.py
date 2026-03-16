@@ -14,9 +14,14 @@ import i2plib
 from PIL import Image
 
 import crypto
+from protocol_codec import (
+    ENCRYPTED_TRAILER_SIZE,
+    FLAG_ENCRYPTED,
+    ProtocolCodec,
+)
 
 logger = logging.getLogger("i2pchat")
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 4
 
 
 @dataclass
@@ -34,6 +39,16 @@ class FileTransferInfo:
     is_sending: bool = False
     is_inline_image: bool = False  # True только для Send Pic (G), не для Send File (F/D)
     rejected_by_peer: bool = False  # True если получатель отклонил входящий файл
+
+
+@dataclass
+class PendingAckEntry:
+    token: str
+    ack_kind: str
+    created_at: float
+    peer_addr: str
+    ack_session_epoch: int
+    state: str = "awaiting_ack"
 
 
 StatusCallback = Callable[[str], Any]
@@ -260,6 +275,7 @@ class I2PChatCore:
         on_image_delivered: Optional[Callable[[str], Any]] = None,
         on_file_delivered: Optional[Callable[[str], Any]] = None,
         on_trust_decision: Optional[TrustDecisionCallback] = None,
+        legacy_compat: bool = False,
     ) -> None:
         self.sam_address = sam_address
         self.profile = profile or "default"
@@ -275,6 +291,7 @@ class I2PChatCore:
         self.on_image_delivered = on_image_delivered
         self.on_file_delivered = on_file_delivered
         self.on_trust_decision = on_trust_decision
+        self.legacy_compat = legacy_compat
 
         self.session_id = f"chat_{self.profile}_{int(time.time())}"
         self.network_status = "initializing"
@@ -313,6 +330,20 @@ class I2PChatCore:
         self._handshake_initiated: bool = False
         self._send_seq: int = 0
         self._recv_seq: int = 0
+        self._next_msg_id: int = 1
+        self._pending_text_acks: dict[int, PendingAckEntry] = {}
+        self._pending_file_acks: dict[int, PendingAckEntry] = {}
+        self._pending_image_acks: dict[int, PendingAckEntry] = {}
+        self._incoming_file_msg_id: Optional[int] = None
+        self._incoming_image_msg_id: Optional[int] = None
+        self._last_ack_prune_ts: float = time.monotonic()
+        self._ack_session_epoch: int = 0
+        self._ack_drop_counters: dict[str, int] = {
+            "unknown_id": 0,
+            "context_mismatch": 0,
+            "invalid_format": 0,
+            "expired_or_state": 0,
+        }
 
         self._accept_task: Optional[asyncio.Task[Any]] = None
         self._tunnel_task: Optional[asyncio.Task[Any]] = None
@@ -334,6 +365,13 @@ class I2PChatCore:
         self._transfer_rejected_by_peer: bool = False
         # Флаг активного receive_loop (предотвращает запуск дублирующих корутин)
         self._recv_loop_active: bool = False
+        self._codec = ProtocolCodec(
+            allowed_types={"U", "S", "P", "O", "F", "D", "E", "I", "H", "G"},
+            max_frame_body=self.MAX_FRAME_BODY,
+            # Keep strict vNext by default; legacy mode should be explicit
+            # and only re-enabled with full negotiation support.
+            allow_legacy=False,
+        )
 
     # ---------- вспомогательные уведомления ----------
 
@@ -443,46 +481,52 @@ class I2PChatCore:
 
     # ---------- протокол ----------
 
-    def frame_message(self, msg_type: str, content: str) -> bytes:
+    def _allocate_msg_id(self) -> int:
+        msg_id = self._next_msg_id
+        self._next_msg_id += 1
+        if self._next_msg_id > 0xFFFFFFFFFFFFFFFF:
+            self._next_msg_id = 1
+        return msg_id
+
+    def frame_message_with_id(
+        self, msg_type: str, content: str, *, force_plain: bool = False
+    ) -> tuple[bytes, int]:
         """
-        Формирует фрейм сообщения.
-        
-        Если установлен shared_key и use_encryption=True:
-        - Обязательно шифрует тело (NaCl) + добавляет HMAC и sequence number
-        
-        Формат без шифрования: TYPE(1) + LEN(4) + BODY + \n
-        Формат с шифрованием:  TYPE(1) + "E" + SEQ(8 hex) + LEN(6) + ENCRYPTED_BODY + HMAC(32) + \n
+        Формирует vNext-фрейм:
+        MAGIC | VERSION | TYPE | FLAGS | MSG_ID | LEN | PAYLOAD
         """
         body = content.encode("utf-8")
-        
-        if self.shared_key and self.use_encryption:
+        msg_id = self._allocate_msg_id()
+
+        if (
+            self.shared_key
+            and self.use_encryption
+            and not force_plain
+        ):
             if not crypto.NACL_AVAILABLE:
                 raise RuntimeError("NaCl is required for secure protocol mode")
             self._send_seq += 1
             seq = self._send_seq
             encrypted_body = crypto.encrypt_message(self.shared_key, body)
-            length_str = f"{len(encrypted_body):06d}"
-            seq_hex = f"{seq:08x}".encode()
             mac = crypto.compute_mac(self.shared_key, msg_type, encrypted_body, seq=seq)
+            payload = seq.to_bytes(8, "big", signed=False) + encrypted_body + mac
             return (
-                msg_type.encode()
-                + b"E"
-                + seq_hex
-                + length_str.encode()
-                + encrypted_body
-                + mac
-                + b"\n"
+                self._codec.encode(
+                    msg_type, payload, msg_id=msg_id, flags=FLAG_ENCRYPTED
+                ),
+                msg_id,
             )
-        else:
-            length_str = f"{len(body):04d}"
-            return msg_type.encode() + length_str.encode() + body + b"\n"
-    
-    @staticmethod
-    def frame_message_plain(msg_type: str, content: str) -> bytes:
-        """Формирует фрейм без HMAC (для handshake)."""
-        body = content.encode("utf-8")
-        length_str = f"{len(body):04d}"
-        return msg_type.encode() + length_str.encode() + body + b"\n"
+
+        return self._codec.encode(msg_type, body, msg_id=msg_id, flags=0), msg_id
+
+    def frame_message(self, msg_type: str, content: str) -> bytes:
+        frame, _ = self.frame_message_with_id(msg_type, content)
+        return frame
+
+    def frame_message_plain(self, msg_type: str, content: str) -> bytes:
+        """Формирует незашифрованный фрейм (handshake/control)."""
+        frame, _ = self.frame_message_with_id(msg_type, content, force_plain=True)
+        return frame
 
     # ---------- инициализация сессии ----------
 
@@ -807,6 +851,90 @@ class I2PChatCore:
     MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
     # Ограничение на размер одного фрейма протокола (защита от memory DoS)
     MAX_FRAME_BODY = 2 * 1024 * 1024  # 2 MB
+    # Ограничения на pending ACK-контекст (anti-spoofing / anti-memory-growth)
+    ACK_TTL_SECONDS = 300.0
+    ACK_MAX_PENDING = 4096
+    ACK_PRUNE_INTERVAL = 15.0
+
+    def _activate_ack_session(self) -> None:
+        self._ack_session_epoch += 1
+        if self._ack_session_epoch > 0x7FFFFFFF:
+            self._ack_session_epoch = 1
+
+    def _current_ack_peer(self) -> str:
+        return self._normalize_peer_addr(self.current_peer_addr or "")
+
+    def _total_pending_acks(self) -> int:
+        return (
+            len(self._pending_text_acks)
+            + len(self._pending_file_acks)
+            + len(self._pending_image_acks)
+        )
+
+    def _prune_pending_acks(self, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_ack_prune_ts < self.ACK_PRUNE_INTERVAL:
+            return
+        expiry_threshold = now - self.ACK_TTL_SECONDS
+        for table in (
+            self._pending_text_acks,
+            self._pending_file_acks,
+            self._pending_image_acks,
+        ):
+            stale_ids = [
+                ack_id
+                for ack_id, entry in table.items()
+                if entry.state != "awaiting_ack" or entry.created_at < expiry_threshold
+            ]
+            for ack_id in stale_ids:
+                table.pop(ack_id, None)
+
+        while self._total_pending_acks() > self.ACK_MAX_PENDING:
+            oldest_ref: Optional[tuple[dict[int, PendingAckEntry], int, float]] = None
+            for table in (
+                self._pending_text_acks,
+                self._pending_file_acks,
+                self._pending_image_acks,
+            ):
+                for ack_id, entry in table.items():
+                    if oldest_ref is None or entry.created_at < oldest_ref[2]:
+                        oldest_ref = (table, ack_id, entry.created_at)
+            if oldest_ref is None:
+                break
+            oldest_ref[0].pop(oldest_ref[1], None)
+        self._last_ack_prune_ts = now
+
+    def _register_pending_ack(
+        self,
+        table: dict[int, PendingAckEntry],
+        msg_id: int,
+        *,
+        token: str,
+        ack_kind: str,
+    ) -> None:
+        self._prune_pending_acks(force=False)
+        table[msg_id] = PendingAckEntry(
+            token=token,
+            ack_kind=ack_kind,
+            created_at=time.monotonic(),
+            peer_addr=self._current_ack_peer(),
+            ack_session_epoch=self._ack_session_epoch,
+            state="awaiting_ack",
+        )
+        self._prune_pending_acks(force=False)
+
+    def _record_ack_drop(self, reason: str, details: str = "") -> None:
+        if reason not in self._ack_drop_counters:
+            self._ack_drop_counters[reason] = 0
+        self._ack_drop_counters[reason] += 1
+        if details:
+            logger.warning("ACK dropped (%s): %s", reason, details)
+        else:
+            logger.warning("ACK dropped (%s)", reason)
+
+    def get_ack_telemetry(self) -> dict[str, int]:
+        """Returns counters for dropped/invalid ACK signals."""
+        return dict(self._ack_drop_counters)
 
     async def connect_to_peer(self, target_address: str) -> None:
         if not crypto.NACL_AVAILABLE:
@@ -828,6 +956,8 @@ class I2PChatCore:
             )
 
             if self.my_dest is not None:
+                # Backward-safe identity preface for accept_loop(reader.readline()).
+                writer.write(self.my_dest.base64.encode("utf-8") + b"\n")
                 writer.write(self.frame_message("S", self.my_dest.base64))
                 await writer.drain()
 
@@ -835,6 +965,7 @@ class I2PChatCore:
                 self._emit_status("visible")
 
             self.conn = (reader, writer)
+            self._activate_ack_session()
             self._emit_message("success", "Handshake sent. Establishing secure channel... Wait")
 
             loop = asyncio.get_running_loop()
@@ -858,8 +989,15 @@ class I2PChatCore:
             return
         try:
             _, writer = self.conn
-            writer.write(self.frame_message("U", text))
+            frame, msg_id = self.frame_message_with_id("U", text)
+            writer.write(frame)
             await writer.drain()
+            self._register_pending_ack(
+                self._pending_text_acks,
+                msg_id,
+                token=text[:128],
+                ack_kind="msg",
+            )
             self._emit_message("me", text)
         except Exception as e:
             self._emit_error(f"Failed to send message: {e}")
@@ -929,8 +1067,15 @@ class I2PChatCore:
             self._emit_system(f"Sending file: {filename} ({filesize} bytes)")
 
             header = f"{filename}|{filesize}"
-            writer.write(self.frame_message("F", header))
+            header_frame, file_msg_id = self.frame_message_with_id("F", header)
+            writer.write(header_frame)
             await writer.drain()
+            self._register_pending_ack(
+                self._pending_file_acks,
+                file_msg_id,
+                token=os.path.basename(filename),
+                ack_kind="file",
+            )
 
             info = FileTransferInfo(filename=filename, size=filesize, received=0, is_sending=True)
             self._emit_file_event(info)
@@ -1061,8 +1206,15 @@ class I2PChatCore:
             
             # Отправляем заголовок: G + filename|size
             header = f"{filename}|{filesize}"
-            writer.write(self.frame_message("G", header))
+            header_frame, image_msg_id = self.frame_message_with_id("G", header)
+            writer.write(header_frame)
             await writer.drain()
+            self._register_pending_ack(
+                self._pending_image_acks,
+                image_msg_id,
+                token=os.path.basename(filename),
+                ack_kind="image",
+            )
             
             # Отправляем данные чанками в base64
             sent = 0
@@ -1183,6 +1335,12 @@ class I2PChatCore:
         self._handshake_initiated = False
         self._send_seq = 0
         self._recv_seq = 0
+        self._pending_text_acks.clear()
+        self._pending_file_acks.clear()
+        self._pending_image_acks.clear()
+        self._incoming_file_msg_id = None
+        self._incoming_image_msg_id = None
+        self._ack_session_epoch = 0
 
     async def initiate_secure_handshake(self) -> bool:
         """
@@ -1502,6 +1660,7 @@ class I2PChatCore:
                     await writer.drain()
 
                 self.conn = (reader, writer)
+                self._activate_ack_session()
 
                 loop = asyncio.get_running_loop()
                 loop.create_task(self.receive_loop(self.conn))
@@ -1525,20 +1684,32 @@ class I2PChatCore:
 
         try:
             while True:
+                self._prune_pending_acks(force=False)
+                msg_id = 0
                 if current_type:
                     msg_type = current_type
                     current_type = None
+                    body_data = b""
+                    is_encrypted = False
                 else:
-                    type_data = await asyncio.wait_for(
-                        reader.read(1), timeout=self.READ_TIMEOUT
-                    )
-                    if not type_data:
-                        break
-                    msg_type = type_data.decode()
+                    try:
+                        frame = await asyncio.wait_for(
+                            self._codec.read_frame(reader), timeout=self.READ_TIMEOUT
+                        )
+                    except ValueError as e:
+                        if self.handshake_complete and "prefix" in str(e).lower():
+                            logger.warning(
+                                "Protocol downgrade detected: invalid vNext prefix after handshake"
+                            )
+                            self._emit_error("Protocol downgrade detected")
+                            self._schedule_disconnect()
+                            break
+                        raise
+                    msg_type = frame.msg_type
+                    msg_id = frame.msg_id
+                    body_data = frame.payload
+                    is_encrypted = bool(frame.flags & FLAG_ENCRYPTED)
 
-                if msg_type not in ["U", "S", "P", "O", "F", "D", "E", "I", "H", "G"]:
-                    logger.warning(f"Invalid message type received: {repr(msg_type)}")
-                    break
                 if self.handshake_complete and msg_type == "H":
                     logger.warning("Unexpected handshake frame after secure channel established")
                     self._emit_error("Protocol violation: unexpected handshake frame")
@@ -1553,69 +1724,28 @@ class I2PChatCore:
                     self._emit_error("Protocol violation: data before secure handshake")
                     self._schedule_disconnect()
                     break
-
-                first_len_byte = await asyncio.wait_for(
-                    reader.read(1), timeout=self.READ_TIMEOUT
-                )
-                if not first_len_byte:
-                    break
-                
-                is_encrypted = (first_len_byte == b"E")
                 seq_num: Optional[int] = None
-                
-                if is_encrypted:
-                    seq_data = await asyncio.wait_for(
-                        reader.readexactly(8), timeout=self.READ_TIMEOUT
-                    )
-                    try:
-                        seq_num = int(seq_data.decode(), 16)
-                    except ValueError:
-                        logger.warning(f"Invalid sequence field: {repr(seq_data)}")
-                        break
-                    len_data = await asyncio.wait_for(
-                        reader.readexactly(6), timeout=self.READ_TIMEOUT
-                    )
-                else:
-                    if self.handshake_complete:
-                        logger.warning("Protocol downgrade detected: plaintext frame after handshake")
-                        self._emit_error("Protocol downgrade detected")
-                        self._schedule_disconnect()
-                        break
-                    remaining_len = await asyncio.wait_for(
-                        reader.readexactly(3), timeout=self.READ_TIMEOUT
-                    )
-                    len_data = first_len_byte + remaining_len
-                
-                try:
-                    msg_len = int(len_data.decode())
-                except ValueError:
-                    logger.warning(f"Invalid length field: {repr(len_data)}")
-                    break
-                if msg_len < 0 or msg_len > self.MAX_FRAME_BODY:
-                    logger.warning("Frame too large: msg_len=%d", msg_len)
-                    self._emit_error("Protocol error: frame too large")
-                    break
-
-                body_data = await asyncio.wait_for(
-                    reader.readexactly(msg_len), timeout=self.READ_TIMEOUT
-                )
-                
                 if is_encrypted:
                     if not self.shared_key or not self.use_encryption:
                         logger.warning("Encrypted frame received before key setup")
                         self._emit_error("Protocol error: encrypted frame before handshake")
                         self._schedule_disconnect()
                         break
-                    if seq_num is None:
-                        logger.warning("Missing sequence number for encrypted frame")
+                    if len(body_data) < ENCRYPTED_TRAILER_SIZE:
+                        logger.warning("Encrypted payload is too short")
+                        self._emit_error("Protocol error: encrypted payload too short")
+                        self._schedule_disconnect()
                         break
-                    received_mac = await asyncio.wait_for(
-                        reader.readexactly(crypto.HMAC_SIZE), timeout=self.READ_TIMEOUT
-                    )
+                    seq_num = int.from_bytes(body_data[:8], "big", signed=False)
+                    encrypted_body = body_data[8:-crypto.HMAC_SIZE]
+                    received_mac = body_data[-crypto.HMAC_SIZE:]
+                    if len(encrypted_body) == 0:
+                        logger.warning("Encrypted body is empty")
+                        break
                     if not crypto.verify_mac(
                         self.shared_key,
                         msg_type,
-                        body_data,
+                        encrypted_body,
                         received_mac,
                         seq=seq_num,
                     ):
@@ -1637,22 +1767,24 @@ class I2PChatCore:
                         self._schedule_disconnect()
                         break
 
-                    decrypted = crypto.decrypt_message(self.shared_key, body_data)
+                    decrypted = crypto.decrypt_message(self.shared_key, encrypted_body)
                     if decrypted is None:
                         logger.warning("Decryption failed")
                         self._emit_error("Failed to decrypt message")
                         break
                     body_data = decrypted
                     self._recv_seq = seq_num
-                
-                body = body_data.decode("utf-8")
-
-                delim = await asyncio.wait_for(
-                    reader.readexactly(1), timeout=self.READ_TIMEOUT
-                )
-                if delim != b"\n":
-                    logger.warning(f"Invalid delimiter: expected newline, got {repr(delim)}")
+                elif self.handshake_complete:
+                    logger.warning(
+                        "Protocol downgrade detected: plaintext frame after handshake "
+                        "(msg_type=%r)",
+                        msg_type,
+                    )
+                    self._emit_error("Protocol downgrade detected")
+                    self._schedule_disconnect()
                     break
+
+                body = body_data.decode("utf-8")
 
                 if msg_type == "U":
                     self._emit_message("peer", body)
@@ -1669,6 +1801,17 @@ class I2PChatCore:
                             )
                         except Exception:
                             # Ошибка в уведомлении не должна рвать сетевой цикл.
+                            pass
+                    # Подтверждение доставки по MSG_ID (vNext)
+                    if msg_id:
+                        try:
+                            writer.write(
+                                self.frame_message(
+                                    "S", f"__SIGNAL__:MSG_ACK|{msg_id}"
+                                )
+                            )
+                            await writer.drain()
+                        except Exception:
                             pass
 
                 elif msg_type == "I":
@@ -1735,7 +1878,13 @@ class I2PChatCore:
                                     self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=expected_size, is_sending=False, is_inline_image=True))
                                     self._emit_inline_image(safe_path, is_from_me=False)
                                     try:
-                                        writer.write(self.frame_message("S", f"__SIGNAL__:IMG_ACK|{filename}"))
+                                        ack_id = self._incoming_image_msg_id or 0
+                                        writer.write(
+                                            self.frame_message(
+                                                "S",
+                                                f"__SIGNAL__:IMG_ACK|{filename}|{ack_id}",
+                                            )
+                                        )
                                         await writer.drain()
                                     except Exception:
                                         pass
@@ -1746,6 +1895,7 @@ class I2PChatCore:
                             
                             self.inline_image_buffer = bytearray()
                             self.inline_image_info = None
+                            self._incoming_image_msg_id = None
                     elif self.inline_image_info is None:
                         # Заголовок: filename|size
                         try:
@@ -1760,6 +1910,7 @@ class I2PChatCore:
                                     )
                                 else:
                                     self.inline_image_info = (filename, size)
+                                    self._incoming_image_msg_id = msg_id or None
                                     self.inline_image_buffer = bytearray()
                                     self._inline_image_last_emit = 0
                                     self._emit_system(f"Receiving image: {filename} ({size} bytes)")
@@ -1784,6 +1935,7 @@ class I2PChatCore:
                                 self._emit_file_event(FileTransferInfo(filename=fn, size=sz, received=-1, is_sending=False, is_inline_image=True))
                             self.inline_image_buffer = bytearray()
                             self.inline_image_info = None
+                            self._incoming_image_msg_id = None
 
                 elif msg_type == "F":
                     try:
@@ -1801,6 +1953,7 @@ class I2PChatCore:
                         safe_name = os.path.basename(filename)
                         safe_path = os.path.join(get_downloads_dir(), safe_name)
                         self.incoming_file = open(safe_path, "wb")
+                        self._incoming_file_msg_id = msg_id or None
                         self.incoming_info = FileTransferInfo(
                             filename=safe_path, size=size, received=0
                         )
@@ -1825,6 +1978,7 @@ class I2PChatCore:
                     if self.incoming_file and self.incoming_info:
                         self.incoming_file.close()
                         ack_filename = self.incoming_info.filename
+                        ack_msg_id = self._incoming_file_msg_id or 0
                         self._emit_file_event(FileTransferInfo(
                             filename=ack_filename,
                             size=self.incoming_info.size,
@@ -1838,29 +1992,125 @@ class I2PChatCore:
                             writer.write(
                                 self.frame_message(
                                     "S",
-                                    f"__SIGNAL__:FILE_ACK|{os.path.basename(ack_filename)}",
+                                    f"__SIGNAL__:FILE_ACK|{os.path.basename(ack_filename)}|{ack_msg_id}",
                                 )
                             )
                             await writer.drain()
                         except Exception:
                             pass
+                        self._incoming_file_msg_id = None
 
                 elif msg_type == "S":
                     if "__SIGNAL__:" in body:
+                        if "MSG_ACK|" in body:
+                            try:
+                                ack_id_raw = body.split("MSG_ACK|", 1)[1].strip().split("|", 1)[0]
+                                ack_id = int(ack_id_raw)
+                                entry = self._pending_text_acks.get(ack_id)
+                                if entry is None:
+                                    self._record_ack_drop("unknown_id", f"MSG_ACK id={ack_id}")
+                                elif entry.state != "awaiting_ack":
+                                    self._record_ack_drop(
+                                        "expired_or_state",
+                                        f"MSG_ACK id={ack_id} state={entry.state}",
+                                    )
+                                elif (
+                                    entry.ack_kind != "msg"
+                                    or entry.peer_addr != self._current_ack_peer()
+                                    or entry.ack_session_epoch != self._ack_session_epoch
+                                ):
+                                    self._record_ack_drop(
+                                        "context_mismatch",
+                                        f"MSG_ACK id={ack_id}",
+                                    )
+                                else:
+                                    self._pending_text_acks.pop(ack_id, None)
+                            except Exception:
+                                self._record_ack_drop("invalid_format", "MSG_ACK parse failed")
                         if "IMG_ACK|" in body:
                             try:
-                                ack_filename = body.split("IMG_ACK|", 1)[1].strip()
-                                if self.on_image_delivered:
+                                ack_payload = body.split("IMG_ACK|", 1)[1].strip()
+                                parts = ack_payload.split("|")
+                                ack_filename = parts[0].strip()
+                                ack_valid = False
+                                if len(parts) > 1:
+                                    try:
+                                        ack_id = int(parts[1].strip())
+                                        entry = self._pending_image_acks.get(ack_id)
+                                        ack_name = os.path.basename(ack_filename)
+                                        if entry is None:
+                                            self._record_ack_drop(
+                                                "unknown_id",
+                                                f"IMG_ACK id={ack_id} name={ack_name}",
+                                            )
+                                        elif entry.state != "awaiting_ack":
+                                            self._record_ack_drop(
+                                                "expired_or_state",
+                                                f"IMG_ACK id={ack_id} state={entry.state}",
+                                            )
+                                        elif (
+                                            entry.ack_kind == "image"
+                                            and os.path.basename(entry.token) == ack_name
+                                            and entry.peer_addr == self._current_ack_peer()
+                                            and entry.ack_session_epoch == self._ack_session_epoch
+                                        ):
+                                            self._pending_image_acks.pop(ack_id, None)
+                                            ack_valid = True
+                                        else:
+                                            self._record_ack_drop(
+                                                "context_mismatch",
+                                                f"IMG_ACK id={ack_id} name={ack_name}",
+                                            )
+                                    except Exception:
+                                        self._record_ack_drop("invalid_format", "IMG_ACK parse id failed")
+                                else:
+                                    self._record_ack_drop("invalid_format", "IMG_ACK missing id")
+                                if ack_valid and self.on_image_delivered:
                                     self.on_image_delivered(ack_filename)
                             except Exception:
-                                pass
+                                self._record_ack_drop("invalid_format", "IMG_ACK parse failed")
                         elif "FILE_ACK|" in body:
                             try:
-                                ack_filename = body.split("FILE_ACK|", 1)[1].strip()
-                                if self.on_file_delivered:
+                                ack_payload = body.split("FILE_ACK|", 1)[1].strip()
+                                parts = ack_payload.split("|")
+                                ack_filename = parts[0].strip()
+                                ack_valid = False
+                                if len(parts) > 1:
+                                    try:
+                                        ack_id = int(parts[1].strip())
+                                        entry = self._pending_file_acks.get(ack_id)
+                                        ack_name = os.path.basename(ack_filename)
+                                        if entry is None:
+                                            self._record_ack_drop(
+                                                "unknown_id",
+                                                f"FILE_ACK id={ack_id} name={ack_name}",
+                                            )
+                                        elif entry.state != "awaiting_ack":
+                                            self._record_ack_drop(
+                                                "expired_or_state",
+                                                f"FILE_ACK id={ack_id} state={entry.state}",
+                                            )
+                                        elif (
+                                            entry.ack_kind == "file"
+                                            and os.path.basename(entry.token) == ack_name
+                                            and entry.peer_addr == self._current_ack_peer()
+                                            and entry.ack_session_epoch == self._ack_session_epoch
+                                        ):
+                                            self._pending_file_acks.pop(ack_id, None)
+                                            ack_valid = True
+                                        else:
+                                            self._record_ack_drop(
+                                                "context_mismatch",
+                                                f"FILE_ACK id={ack_id} name={ack_name}",
+                                            )
+                                    except Exception:
+                                        self._record_ack_drop("invalid_format", "FILE_ACK parse id failed")
+                                else:
+                                    self._record_ack_drop("invalid_format", "FILE_ACK missing id")
+                                if ack_valid and self.on_file_delivered:
                                     self.on_file_delivered(ack_filename)
                             except Exception:
-                                pass
+                                self._record_ack_drop("invalid_format", "FILE_ACK parse failed")
                         elif "REJECT_FILE|" in body:
                             self._transfer_rejected_by_peer = True
                         elif "QUIT" in body:
