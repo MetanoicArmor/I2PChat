@@ -1768,7 +1768,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(f"I2PChat @ {clean_profile}")
         self.resize(900, 600)
 
-        self._status_font_px = 9 if sys.platform == "win32" else 11
+        self._status_font_px = 10 if sys.platform == "win32" else 11
 
         # UI
         central = QtWidgets.QWidget(self)
