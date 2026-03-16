@@ -4,7 +4,14 @@ Param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ReleaseVersion = "0.3.0"
+$VersionFile = "VERSION"
+if (-not (Test-Path $VersionFile)) {
+    throw "VERSION file not found: $VersionFile"
+}
+$ReleaseVersion = (Get-Content -Path $VersionFile -Raw).Trim()
+if (-not $ReleaseVersion) {
+    throw "VERSION file is empty: $VersionFile"
+}
 
 # Используем установленный Python 3.14+, с fallback на latest Python 3
 $PyLauncherArgs = @("-3.14")

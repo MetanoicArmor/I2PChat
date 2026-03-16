@@ -4,7 +4,18 @@ set -euo pipefail
 APP_NAME="I2PChat"
 APPDIR="${APP_NAME}.AppDir"
 VENV_DIR=".venv314"
-RELEASE_VERSION="$(cat VERSION)"
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+VERSION_FILE="VERSION"
+if [ ! -f "${VERSION_FILE}" ]; then
+  echo "ERROR: VERSION file not found: ${VERSION_FILE}" >&2
+  exit 1
+fi
+RELEASE_VERSION="$(tr -d '\r\n' < "${VERSION_FILE}")"
+if [ -z "${RELEASE_VERSION}" ]; then
+  echo "ERROR: VERSION file is empty: ${VERSION_FILE}" >&2
+  exit 1
+fi
 
 # Определяем архитектуру
 ARCH=$(uname -m)
@@ -16,8 +27,6 @@ case "$ARCH" in
 esac
 
 echo "==> Building for architecture: ${ARCH_SUFFIX}"
-
-cd "$(dirname "${BASH_SOURCE[0]}")"
 
 if command -v python3.14 >/dev/null 2>&1; then
   PYTHON_BIN="python3.14"

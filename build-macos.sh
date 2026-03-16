@@ -3,7 +3,18 @@ set -euo pipefail
 
 APP_NAME="I2PChat"
 VENV_DIR=".venv314"
-RELEASE_VERSION="$(cat VERSION)"
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+VERSION_FILE="VERSION"
+if [ ! -f "${VERSION_FILE}" ]; then
+  echo "ERROR: VERSION file not found: ${VERSION_FILE}" >&2
+  exit 1
+fi
+RELEASE_VERSION="$(tr -d '\r\n' < "${VERSION_FILE}")"
+if [ -z "${RELEASE_VERSION}" ]; then
+  echo "ERROR: VERSION file is empty: ${VERSION_FILE}" >&2
+  exit 1
+fi
 
 # Определяем архитектуру
 ARCH=$(uname -m)
@@ -12,8 +23,6 @@ case "$ARCH" in
   arm64)  ARCH_SUFFIX="arm64" ;;
   *)      ARCH_SUFFIX="$ARCH" ;;
 esac
-
-cd "$(dirname "${BASH_SOURCE[0]}")"
 
 echo "==> Building for architecture: ${ARCH_SUFFIX}"
 echo "==> Активирую окружение ${VENV_DIR}"
