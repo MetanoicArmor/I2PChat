@@ -252,7 +252,7 @@ THEMES: dict[str, dict[str, object]] = {
             QMessageBox QPushButton:pressed { background-color: #edf1f8; }
             QMenu {
                 background: #f6f7fa;
-                border: none;
+                border: 1px solid #d4dbe7;
                 border-radius: 14px;
                 padding: 8px;
             }
@@ -477,7 +477,7 @@ THEMES: dict[str, dict[str, object]] = {
             QMessageBox QPushButton:pressed { background-color: #0a84ff; }
             QMenu {
                 background: rgba(34, 37, 45, 0.96);
-                border: none;
+                border: 1px solid #3a4150;
                 border-radius: 14px;
                 padding: 8px;
             }
