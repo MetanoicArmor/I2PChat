@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 import os
+import subprocess
 import shutil
 import sys
 import time
@@ -1867,15 +1868,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     5000,
                 )
 
-            # Звук: сначала пытаемся проиграть более мягкий системный звук,
-            # если он доступен, иначе падаем обратно на стандартный beep.
-            if self.notify_sound is not None:
-                try:
-                    self.notify_sound.play()
-                except Exception:
-                    QtWidgets.QApplication.beep()
-            else:
-                QtWidgets.QApplication.beep()
+            self._play_notification_sound()
 
         # Отдельный маркер в заголовке для непрочитанных больше не используем:
         # основным индикатором служит само уведомление и содержимое чата.
@@ -2162,6 +2155,49 @@ class ChatWindow(QtWidgets.QMainWindow):
         except Exception:
             self.notify_sound = None
             self.notify_sound_path = None
+
+    def _play_notification_sound(self) -> None:
+        """
+        Воспроизвести звук уведомления с Linux-fallback.
+
+        Порядок:
+        1) QSoundEffect (если доступен),
+        2) Linux system players (canberra-gtk-play / paplay / aplay),
+        3) QApplication.beep().
+        """
+        played = False
+
+        if self.notify_sound is not None:
+            try:
+                self.notify_sound.stop()
+                self.notify_sound.play()
+                played = True
+            except Exception:
+                played = False
+
+        if not played and sys.platform.startswith("linux"):
+            linux_cmds: list[list[str]] = []
+            if shutil.which("canberra-gtk-play"):
+                linux_cmds.append(["canberra-gtk-play", "-i", "message-new-instant"])
+            if self.notify_sound_path and os.path.isfile(self.notify_sound_path):
+                if shutil.which("paplay"):
+                    linux_cmds.append(["paplay", self.notify_sound_path])
+                if shutil.which("aplay"):
+                    linux_cmds.append(["aplay", self.notify_sound_path])
+            for cmd in linux_cmds:
+                try:
+                    subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    played = True
+                    break
+                except Exception:
+                    continue
+
+        if not played:
+            QtWidgets.QApplication.beep()
 
     def _update_theme_switch_label(self) -> None:
         next_theme = "night" if self.theme_id == "ligth" else "ligth"
