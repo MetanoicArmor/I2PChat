@@ -11,7 +11,12 @@ a = Analysis(
     ['main_qt.py'],
     pathex=[],
     binaries=[],
-    datas=[('VERSION', '.')],
+    datas=[
+        ('VERSION', '.'),
+        ('sun.max.png', '.'),
+        ('moon.png', '.'),
+        ('assets/sounds/notify.aiff', 'assets/sounds'),
+    ],
     hiddenimports=_local_modules + [
         'rich', 'textual', 'pyperclip',
         'cffi', '_cffi_backend',

@@ -36,9 +36,25 @@ def _read_version() -> str:
     return "0.0.0"
 
 APP_VERSION = _read_version()
+BUNDLED_NOTIFY_SOUND_REL = "assets/sounds/notify.aiff"
 
 
 def _resolve_local_asset(filename: str) -> Optional[str]:
+    # 1) Bundled path for PyInstaller/Nuitka-like frozen apps.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if isinstance(meipass, str) and meipass:
+        candidate = os.path.join(meipass, filename)
+        if os.path.isfile(candidate):
+            return candidate
+
+    # 2) Directory of executable (useful for packaged app layouts).
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        candidate = os.path.join(exe_dir, filename)
+        if os.path.isfile(candidate):
+            return candidate
+
+    # 3) Source/dev paths.
     candidates = [
         os.path.join(os.path.dirname(os.path.abspath(__file__)), filename),
         os.path.join(os.getcwd(), filename),
@@ -47,6 +63,10 @@ def _resolve_local_asset(filename: str) -> Optional[str]:
         if os.path.isfile(path):
             return path
     return None
+
+
+def _default_notify_sound_path() -> Optional[str]:
+    return _resolve_local_asset(BUNDLED_NOTIFY_SOUND_REL)
 
 
 THEME_DEFAULT = "ligth"
@@ -488,23 +508,21 @@ def _ui_prefs_path() -> str:
     return os.path.join(get_profiles_dir(), "ui_prefs.json")
 
 
-def load_saved_theme() -> str:
+def _load_ui_prefs() -> dict[str, object]:
     path = _ui_prefs_path()
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
-            return _resolve_theme(str(data.get("theme", THEME_DEFAULT)))
+            return dict(data)
     except Exception:
         pass
-    return THEME_DEFAULT
+    return {}
 
 
-def save_theme(theme_id: str) -> None:
-    theme_id = _resolve_theme(theme_id)
+def _save_ui_prefs(data: dict[str, object]) -> None:
     path = _ui_prefs_path()
     tmp = path + ".tmp"
-    data = {"theme": theme_id}
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=True, indent=2, sort_keys=True)
@@ -515,6 +533,37 @@ def save_theme(theme_id: str) -> None:
             pass
     except Exception:
         pass
+
+
+def load_saved_theme() -> str:
+    data = _load_ui_prefs()
+    return _resolve_theme(str(data.get("theme", THEME_DEFAULT)))
+
+
+def save_theme(theme_id: str) -> None:
+    theme_id = _resolve_theme(theme_id)
+    data = _load_ui_prefs()
+    data["theme"] = theme_id
+    _save_ui_prefs(data)
+
+
+def load_saved_notify_sound() -> Optional[str]:
+    data = _load_ui_prefs()
+    value = data.get("notify_sound")
+    if isinstance(value, str):
+        raw = value.strip()
+        return raw or None
+    return None
+
+
+def save_notify_sound(sound_path: Optional[str]) -> None:
+    data = _load_ui_prefs()
+    cleaned = (sound_path or "").strip()
+    if cleaned:
+        data["notify_sound"] = cleaned
+    else:
+        data.pop("notify_sound", None)
+    _save_ui_prefs(data)
 
 
 @dataclass
@@ -1706,19 +1755,15 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.tray_icon.setToolTip("I2PChat")
         self.tray_icon.show()
 
-        # Кастомный звук уведомления можно задать через I2PCHAT_NOTIFY_SOUND.
-        # Если не задан или недоступен, используем fallback на QApplication.beep().
+        # Звук уведомления: env (I2PCHAT_NOTIFY_SOUND) имеет приоритет над prefs.
+        # Если путь не задан или недоступен, используем fallback на QApplication.beep().
+        self.notify_sound_path: Optional[str] = None
         self.notify_sound: Optional["QSoundEffect"] = None
-        if QSoundEffect is not None:
-            try:
-                sound_path = os.environ.get("I2PCHAT_NOTIFY_SOUND", "").strip()
-                if sound_path and os.path.isfile(sound_path):
-                    effect = QSoundEffect(self)
-                    effect.setSource(QtCore.QUrl.fromLocalFile(sound_path))
-                    effect.setVolume(0.7)
-                    self.notify_sound = effect
-            except Exception:
-                self.notify_sound = None
+        env_sound_path = os.environ.get("I2PCHAT_NOTIFY_SOUND", "").strip()
+        saved_sound_path = load_saved_notify_sound() or ""
+        bundled_sound_path = _default_notify_sound_path() or ""
+        startup_sound_path = env_sound_path or saved_sound_path or bundled_sound_path
+        self._reload_notify_sound(startup_sound_path if startup_sound_path else None)
 
         # сигналы
         self.send_button.clicked.connect(self.on_send_clicked)
@@ -2098,6 +2143,25 @@ class ChatWindow(QtWidgets.QMainWindow):
         # чтобы не менять публичную сигнатуру конструктора ядра
         setattr(core, "on_notify", self.handle_notify)
         return core
+
+    def _reload_notify_sound(self, sound_path: Optional[str]) -> None:
+        """Перезагрузить кастомный звук уведомлений из файла."""
+        self.notify_sound = None
+        cleaned = (sound_path or "").strip()
+        self.notify_sound_path = cleaned or None
+        if QSoundEffect is None or not self.notify_sound_path:
+            return
+        if not os.path.isfile(self.notify_sound_path):
+            self.notify_sound_path = None
+            return
+        try:
+            effect = QSoundEffect(self)
+            effect.setSource(QtCore.QUrl.fromLocalFile(self.notify_sound_path))
+            effect.setVolume(0.7)
+            self.notify_sound = effect
+        except Exception:
+            self.notify_sound = None
+            self.notify_sound_path = None
 
     def _update_theme_switch_label(self) -> None:
         next_theme = "night" if self.theme_id == "ligth" else "ligth"
