@@ -1526,8 +1526,20 @@ class RoundedMenu(QtWidgets.QMenu):
             self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
             self.setWindowFlag(QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
             self.setWindowFlag(QtCore.Qt.WindowType.BypassWindowManagerHint, True)
-        elif sys.platform in {"darwin", "win32"}:
-            # На macOS/Windows тоже включаем прозрачный фон popup, иначе контур
+        elif sys.platform == "win32":
+            # На Windows часто рисуется прямоугольный контур/тень поверх popup.
+            # Переключаем меню на полностью кастомный Qt popup как на Linux.
+            self.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+            self.setAttribute(
+                QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True
+            )
+            self.setWindowFlag(QtCore.Qt.WindowType.Popup, True)
+            self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
+            self.setWindowFlag(QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
+            self.setWindowFlag(QtCore.Qt.WindowType.BypassWindowManagerHint, True)
+        elif sys.platform == "darwin":
+            # На macOS включаем прозрачный фон popup, иначе контур
             # может оставаться прямоугольным поверх QSS-скругления.
             self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
             self.setAttribute(
