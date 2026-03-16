@@ -1651,6 +1651,8 @@ class I2PChatCore:
                     self._emit_message(
                         "success", f"Connection accepted from {peer_addr[:12]}..."
                     )
+                    # Отдельное событие для системного уведомления о входящем подключении.
+                    self._emit_notify("connect", peer_addr)
                     self._emit_peer_changed(peer_addr)
                 except Exception:
                     peer_addr = "Unknown"  # noqa: F841

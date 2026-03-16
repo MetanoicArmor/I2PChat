@@ -1834,18 +1834,30 @@ class ChatWindow(QtWidgets.QMainWindow):
         """
         Колбэк уведомлений от ядра: системный тост + звук.
 
-        Используем только для входящих peer‑сообщений.
+        Используем для:
+        - входящих peer‑сообщений
+        - входящего подключения (kind="connect")
         """
-        if not isinstance(msg, ChatMessage) or msg.kind != "peer":
+        if not isinstance(msg, ChatMessage):
             return
 
-        preview = msg.text.replace("\n", " ")
-        title = "New message"
-        if self.core.current_peer_addr:
-            clean_peer = self.core.current_peer_addr.replace(".b32.i2p", "")
+        if msg.kind == "peer":
+            preview = msg.text.replace("\n", " ")
+            title = "New message"
+            if self.core.current_peer_addr:
+                clean_peer = self.core.current_peer_addr.replace(".b32.i2p", "")
+                if len(clean_peer) > 12:
+                    clean_peer = f"{clean_peer[:6]}..{clean_peer[-6:]}"
+                title = f"New message from {clean_peer}"
+        elif msg.kind == "connect":
+            peer = (msg.text or "").strip()
+            clean_peer = peer.replace(".b32.i2p", "") if peer else "peer"
             if len(clean_peer) > 12:
                 clean_peer = f"{clean_peer[:6]}..{clean_peer[-6:]}"
-            title = f"New message from {clean_peer}"
+            title = "Incoming connection"
+            preview = f"{clean_peer}.b32.i2p connected" if peer else "Peer connected"
+        else:
+            return
 
         # Системное уведомление и звук показываем только если окно/приложение
         # не активно (свернуто или в фоне). Если пользователь уже в окне,
