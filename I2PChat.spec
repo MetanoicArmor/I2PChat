@@ -15,7 +15,7 @@ a = Analysis(
         ('VERSION', '.'),
         ('sun.max.png', '.'),
         ('moon.png', '.'),
-        ('assets/sounds/notify.aiff', 'assets/sounds'),
+        ('assets/sounds/notify.wav', 'assets/sounds'),
     ],
     hiddenimports=_local_modules + [
         'rich', 'textual', 'pyperclip',

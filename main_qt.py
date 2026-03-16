@@ -36,7 +36,7 @@ def _read_version() -> str:
     return "0.0.0"
 
 APP_VERSION = _read_version()
-BUNDLED_NOTIFY_SOUND_REL = "assets/sounds/notify.aiff"
+BUNDLED_NOTIFY_SOUND_REL = "assets/sounds/notify.wav"
 
 
 def _resolve_local_asset(filename: str) -> Optional[str]:
