@@ -234,7 +234,8 @@ THEMES: dict[str, dict[str, object]] = {
                 background-color: rgba(255, 255, 255, 0.85);
                 border: none;
                 border-radius: 10px;
-                padding: 4px 10px;
+                padding: 0px 10px;
+                min-height: 30px;
                 color: #525966;
                 font-size: %(status_font_px)spx;
             }
@@ -460,7 +461,8 @@ THEMES: dict[str, dict[str, object]] = {
                 background-color: rgba(255, 255, 255, 0.06);
                 border: none;
                 border-radius: 10px;
-                padding: 4px 10px;
+                padding: 0px 10px;
+                min-height: 30px;
                 color: #9fa1b5;
                 font-size: %(status_font_px)spx;
             }
@@ -1781,8 +1783,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         # диагностическая строка статуса
         self.status_label = QtWidgets.QLabel("Status: initializing", self)
         self.status_label.setObjectName("StatusLabel")
-        self.status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
-        self.status_label.setWordWrap(True)
+        self.status_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.status_label.setWordWrap(False)
         self.status_label.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Minimum,
@@ -1798,6 +1802,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         status_row_layout.setSpacing(6)
         status_row_layout.addWidget(self.status_label, 1)
         status_row_layout.addWidget(self.theme_switch_button)
+        self._status_expanded_text: str = "Net: initializing"
+        self._status_compact_text: str = "Net: initializing"
         self._last_status: str = "initializing"
         self._transfer_row: Optional[int] = None
         self._transfer_is_image: bool = False
@@ -2458,6 +2464,21 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         return answer == QtWidgets.QMessageBox.StandardButton.Yes
 
+    def _set_status_text(self, expanded_text: str, compact_text: str) -> None:
+        """Поставить статус в compact/expanded режиме с безопасным elide."""
+        self._status_expanded_text = expanded_text
+        self._status_compact_text = compact_text
+        prefer_expanded = self.status_label.width() >= 760
+        text = expanded_text if prefer_expanded else compact_text
+        available = max(40, self.status_label.width() - 14)
+        elided = self.status_label.fontMetrics().elidedText(
+            text,
+            QtCore.Qt.TextElideMode.ElideRight,
+            available,
+        )
+        self.status_label.setText(elided)
+        self.status_label.setToolTip(expanded_text if elided != text else "")
+
     def refresh_status_label(self) -> None:
         """Обновить строку статуса с учётом профиля и persist-режима."""
         status = self._last_status
@@ -2468,23 +2489,43 @@ class ChatWindow(QtWidgets.QMainWindow):
             ack_drop_total = int(sum(int(v) for v in telemetry.values()))
         except Exception:
             ack_drop_total = 0
-        stored = self.core.stored_peer
-        if stored:
-            clean = stored.replace(".b32.i2p", "")
+        def _short_addr(addr: Optional[str]) -> str:
+            if not addr:
+                return "none"
+            clean = addr.replace(".b32.i2p", "")
             if len(clean) > 12:
                 clean = f"{clean[:6]}..{clean[-6:]}"
-            stored_disp = clean + ".b32.i2p"
-            # Если пользователь ещё не ввёл адрес вручную, подставляем сохранённый контакт.
-            if not self.addr_edit.text().strip():
-                # stored уже содержит полный адрес (с суффиксом), используем как есть.
-                self.addr_edit.setText(stored)
-        else:
-            stored_disp = "none"
+            return clean + ".b32.i2p"
 
-        ack_part = f" | ACKdrop: {ack_drop_total}" if ack_drop_total > 0 else ""
-        self.status_label.setText(
-            f"Status: {status} | Profile: {self.profile} ({mode}) | Stored peer: {stored_disp}{ack_part}"
+        stored = self.core.stored_peer
+        if stored and not self.addr_edit.text().strip():
+            # stored уже содержит полный адрес (с суффиксом), используем как есть.
+            self.addr_edit.setText(stored)
+
+        link_state = "online" if self.core.conn else "offline"
+        secure_state = (
+            "v2"
+            if self.core.handshake_complete
+            else ("negotiating" if self.core.use_encryption else "off")
         )
+        current_peer_disp = _short_addr(self.core.current_peer_addr)
+        stored_disp = _short_addr(stored)
+        ack_part = f"ACKdrop:{ack_drop_total}" if ack_drop_total > 0 else "ACKdrop:0"
+
+        expanded_status = (
+            f"Net: {status} | Profile: {self.profile} ({mode}) | Link: {link_state} | "
+            f"Peer: {current_peer_disp} | Stored: {stored_disp} | Secure: {secure_state} | "
+            f"{ack_part}"
+        )
+        compact_status = (
+            f"Net: {status} | {link_state} | Peer: {current_peer_disp} | "
+            f"Secure: {secure_state} | {ack_part}"
+        )
+        self._set_status_text(expanded_status, compact_status)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._set_status_text(self._status_expanded_text, self._status_compact_text)
 
     # ----- обработчики UI -----
 
