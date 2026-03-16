@@ -7,7 +7,7 @@ import shutil
 import sys
 import time
 from dataclasses import dataclass, field, replace
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
@@ -1508,67 +1508,122 @@ class _ClickableFolderLabel(QtWidgets.QLabel):
         super().mousePressEvent(event)
 
 
-class RoundedMenu(QtWidgets.QMenu):
-    """QMenu с реальной rounded-маской окна для платформенных WM."""
+class ActionsPopup(QtWidgets.QFrame):
+    """Кастомный popup вместо QMenu для одинаковой отрисовки на всех ОС."""
 
-    def __init__(self, radius: int = 14, parent: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
-        self._radius = max(0, int(radius))
-        if sys.platform.startswith("linux"):
-            # Агрессивный режим без декораций WM: иначе некоторые композиторы
-            # рисуют прямоугольную рамку поверх rounded popup.
-            self.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
-            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
-            self.setAttribute(
-                QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True
-            )
-            self.setWindowFlag(QtCore.Qt.WindowType.Popup, True)
-            self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
-            self.setWindowFlag(QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
-            self.setWindowFlag(QtCore.Qt.WindowType.BypassWindowManagerHint, True)
-        elif sys.platform == "win32":
-            # На Windows часто рисуется прямоугольный контур/тень поверх popup.
-            # Переключаем меню на полностью кастомный Qt popup как на Linux.
-            self.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
-            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
-            self.setAttribute(
-                QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True
-            )
-            self.setWindowFlag(QtCore.Qt.WindowType.Popup, True)
-            self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
-            self.setWindowFlag(QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
-            self.setWindowFlag(QtCore.Qt.WindowType.BypassWindowManagerHint, True)
-        elif sys.platform == "darwin":
-            # На macOS включаем прозрачный фон popup, иначе контур
-            # может оставаться прямоугольным поверх QSS-скругления.
-            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
-            self.setAttribute(
-                QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True
-            )
-            self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setObjectName("ActionsPopupWindow")
+        self.setMinimumWidth(236)
 
-    def _apply_round_mask(self) -> None:
-        rect = QtCore.QRectF(self.rect())
-        if rect.isEmpty():
-            return
-        path = QtGui.QPainterPath()
-        path.addRoundedRect(rect, float(self._radius), float(self._radius))
-        poly = path.toFillPolygon().toPolygon()
-        self.setMask(QtGui.QRegion(poly))
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
-        super().showEvent(event)
-        if sys.platform == "darwin":
-            # На macOS финальный размер popup иногда стабилизируется после showEvent.
-            # Применяем маску отложенно один раз, чтобы убрать визуальное "дёргание".
-            QtCore.QTimer.singleShot(0, self._apply_round_mask)
+        self.surface = QtWidgets.QFrame(self)
+        self.surface.setObjectName("ActionsPopupSurface")
+        root.addWidget(self.surface)
+
+        self.surface_layout = QtWidgets.QVBoxLayout(self.surface)
+        self.surface_layout.setContentsMargins(8, 8, 8, 8)
+        self.surface_layout.setSpacing(4)
+
+    def add_action(self, text: str, callback: Callable[[], None]) -> None:
+        btn = QtWidgets.QPushButton(text, self.surface)
+        btn.setObjectName("ActionsPopupItem")
+        btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(lambda: (self.hide(), callback()))
+        self.surface_layout.addWidget(btn)
+
+    def add_separator(self) -> None:
+        sep = QtWidgets.QFrame(self.surface)
+        sep.setObjectName("ActionsPopupSeparator")
+        sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        sep.setFrameShadow(QtWidgets.QFrame.Shadow.Plain)
+        self.surface_layout.addWidget(sep)
+
+    def show_below(self, anchor: QtWidgets.QWidget) -> None:
+        self.adjustSize()
+        x = max(0, anchor.width() - self.width())
+        global_pos = anchor.mapToGlobal(QtCore.QPoint(x, anchor.height() + 6))
+        self.move(global_pos)
+        self.show()
+
+    def apply_theme(self, theme_id: str) -> None:
+        if theme_id == "night":
+            self.setStyleSheet(
+                """
+                #ActionsPopupWindow {
+                    background: transparent;
+                }
+                #ActionsPopupSurface {
+                    background: rgba(34, 37, 45, 0.96);
+                    border: 1px solid #3a4150;
+                    border-radius: 14px;
+                }
+                QPushButton#ActionsPopupItem {
+                    background: transparent;
+                    color: #e3e8f1;
+                    border: none;
+                    border-radius: 10px;
+                    text-align: left;
+                    padding: 8px 12px;
+                    font-size: 13px;
+                }
+                QPushButton#ActionsPopupItem:hover {
+                    background: rgba(255, 255, 255, 0.10);
+                }
+                QPushButton#ActionsPopupItem:pressed {
+                    background: rgba(255, 255, 255, 0.16);
+                }
+                QFrame#ActionsPopupSeparator {
+                    background: #343a46;
+                    max-height: 1px;
+                    min-height: 1px;
+                    border: none;
+                    margin: 4px 8px;
+                }
+                """
+            )
         else:
-            self._apply_round_mask()
-
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
-        super().resizeEvent(event)
-        if sys.platform != "darwin":
-            self._apply_round_mask()
+            self.setStyleSheet(
+                """
+                #ActionsPopupWindow {
+                    background: transparent;
+                }
+                #ActionsPopupSurface {
+                    background: #f6f7fa;
+                    border: 1px solid #d4dbe7;
+                    border-radius: 14px;
+                }
+                QPushButton#ActionsPopupItem {
+                    background: transparent;
+                    color: #2c3442;
+                    border: none;
+                    border-radius: 10px;
+                    text-align: left;
+                    padding: 8px 12px;
+                    font-size: 13px;
+                }
+                QPushButton#ActionsPopupItem:hover {
+                    background: #e5eaf2;
+                }
+                QPushButton#ActionsPopupItem:pressed {
+                    background: #dfe6f0;
+                }
+                QFrame#ActionsPopupSeparator {
+                    background: #d6dce7;
+                    max-height: 1px;
+                    min-height: 1px;
+                    border: none;
+                    margin: 4px 8px;
+                }
+                """
+            )
 
 
 class ProfileSelectDialog(QtWidgets.QDialog):
@@ -1721,7 +1776,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         main_layout.setContentsMargins(14, 10, 14, 10)
         main_layout.setSpacing(10)
 
-        self.more_actions_menu = RoundedMenu(radius=14, parent=self)
+        self.more_actions_popup = ActionsPopup(self)
 
         # диагностическая строка статуса
         self.status_label = QtWidgets.QLabel("Status: initializing", self)
@@ -1823,10 +1878,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_toolbar_button = QtWidgets.QToolButton(self)
         self.more_toolbar_button.setObjectName("MoreActionsButton")
         self.more_toolbar_button.setText("⋯")
-        self.more_toolbar_button.setPopupMode(
-            QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.more_toolbar_button.setMenu(self.more_actions_menu)
+        self.more_toolbar_button.clicked.connect(self.on_more_actions_clicked)
 
         # Все элементы панели действий делаем одной высоты, чтобы ряд смотрелся ровно
         actions_fixed_height = 34 if sys.platform == "darwin" else 36
@@ -1874,17 +1926,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.input_edit.sendRequested.connect(self.on_send_clicked)
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
-        self.action_load_profile = self.more_actions_menu.addAction("Load profile (.dat)")
-        self.action_send_pic = self.more_actions_menu.addAction("Send picture")
-        self.action_send_file = self.more_actions_menu.addAction("Send file")
-        self.more_actions_menu.addSeparator()
-        self.action_lock_peer = self.more_actions_menu.addAction("Lock to peer")
-        self.action_copy_addr = self.more_actions_menu.addAction("Copy my address")
-        self.action_load_profile.triggered.connect(self.on_load_profile_clicked)
-        self.action_send_pic.triggered.connect(self.on_send_pic_clicked)
-        self.action_send_file.triggered.connect(self.on_send_file_clicked)
-        self.action_lock_peer.triggered.connect(self.on_lock_peer_clicked)
-        self.action_copy_addr.triggered.connect(self.on_copy_my_addr_clicked)
+        self.more_actions_popup.add_action("Load profile (.dat)", self.on_load_profile_clicked)
+        self.more_actions_popup.add_action("Send picture", self.on_send_pic_clicked)
+        self.more_actions_popup.add_action("Send file", self.on_send_file_clicked)
+        self.more_actions_popup.add_separator()
+        self.more_actions_popup.add_action("Lock to peer", self.on_lock_peer_clicked)
+        self.more_actions_popup.add_action("Copy my address", self.on_copy_my_addr_clicked)
         self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
         self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
 
@@ -2373,11 +2420,16 @@ class ChatWindow(QtWidgets.QMainWindow):
         if persist:
             save_theme(self.theme_id)
         self._update_theme_switch_label()
+        self.more_actions_popup.apply_theme(self.theme_id)
 
     @QtCore.pyqtSlot()
     def on_theme_switch_clicked(self) -> None:
         next_theme = "night" if self.theme_id == "ligth" else "ligth"
         self._apply_theme(next_theme, persist=True)
+
+    @QtCore.pyqtSlot()
+    def on_more_actions_clicked(self) -> None:
+        self.more_actions_popup.show_below(self.more_toolbar_button)
 
     def handle_trust_decision(self, peer_addr: str, fingerprint: str, signing_key_hex: str) -> bool:
         """
