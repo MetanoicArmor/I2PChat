@@ -250,6 +250,26 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QMessageBox QPushButton:hover { background-color: #f6f8fc; }
             QMessageBox QPushButton:pressed { background-color: #edf1f8; }
+            QMenu {
+                background: #f6f7fa;
+                border: none;
+                border-radius: 14px;
+                padding: 8px;
+            }
+            QMenu::item {
+                color: #2c3442;
+                padding: 9px 14px;
+                border-radius: 9px;
+                background: transparent;
+            }
+            QMenu::item:selected {
+                background: #e5eaf2;
+            }
+            QMenu::separator {
+                height: 1px;
+                margin: 6px 8px;
+                background: #d6dce7;
+            }
         """,
         "bubbles": {
             "me_bg": "#2f92f0",
@@ -455,6 +475,26 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QMessageBox QPushButton:hover { background-color: #3a3a40; }
             QMessageBox QPushButton:pressed { background-color: #0a84ff; }
+            QMenu {
+                background: rgba(34, 37, 45, 0.96);
+                border: none;
+                border-radius: 14px;
+                padding: 8px;
+            }
+            QMenu::item {
+                color: #e3e8f1;
+                padding: 9px 14px;
+                border-radius: 9px;
+                background: transparent;
+            }
+            QMenu::item:selected {
+                background: rgba(255, 255, 255, 0.10);
+            }
+            QMenu::separator {
+                height: 1px;
+                margin: 6px 8px;
+                background: #343a46;
+            }
         """,
         "bubbles": {
             "me_bg": "#2f92f0",
@@ -1468,6 +1508,57 @@ class _ClickableFolderLabel(QtWidgets.QLabel):
         super().mousePressEvent(event)
 
 
+class RoundedMenu(QtWidgets.QMenu):
+    """QMenu с реальной rounded-маской окна для платформенных WM."""
+
+    def __init__(self, radius: int = 14, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._radius = max(0, int(radius))
+        if sys.platform.startswith("linux"):
+            # Агрессивный режим без декораций WM: иначе некоторые композиторы
+            # рисуют прямоугольную рамку поверх rounded popup.
+            self.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+            self.setAttribute(
+                QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True
+            )
+            self.setWindowFlag(QtCore.Qt.WindowType.Popup, True)
+            self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
+            self.setWindowFlag(QtCore.Qt.WindowType.NoDropShadowWindowHint, True)
+            self.setWindowFlag(QtCore.Qt.WindowType.BypassWindowManagerHint, True)
+        elif sys.platform in {"darwin", "win32"}:
+            # На macOS/Windows тоже включаем прозрачный фон popup, иначе контур
+            # может оставаться прямоугольным поверх QSS-скругления.
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+            self.setAttribute(
+                QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True
+            )
+            self.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint, True)
+
+    def _apply_round_mask(self) -> None:
+        rect = QtCore.QRectF(self.rect())
+        if rect.isEmpty():
+            return
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(rect, float(self._radius), float(self._radius))
+        poly = path.toFillPolygon().toPolygon()
+        self.setMask(QtGui.QRegion(poly))
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        if sys.platform == "darwin":
+            # На macOS финальный размер popup иногда стабилизируется после showEvent.
+            # Применяем маску отложенно один раз, чтобы убрать визуальное "дёргание".
+            QtCore.QTimer.singleShot(0, self._apply_round_mask)
+        else:
+            self._apply_round_mask()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if sys.platform != "darwin":
+            self._apply_round_mask()
+
+
 class ProfileSelectDialog(QtWidgets.QDialog):
     """Начальное окно выбора профиля в стиле приложения."""
     
@@ -1618,7 +1709,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         main_layout.setContentsMargins(14, 10, 14, 10)
         main_layout.setSpacing(10)
 
-        self.more_actions_menu = QtWidgets.QMenu(self)
+        self.more_actions_menu = RoundedMenu(radius=14, parent=self)
 
         # диагностическая строка статуса
         self.status_label = QtWidgets.QLabel("Status: initializing", self)
