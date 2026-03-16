@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 import os
 import shutil
@@ -35,6 +36,485 @@ def _read_version() -> str:
     return "0.0.0"
 
 APP_VERSION = _read_version()
+
+
+def _resolve_local_asset(filename: str) -> Optional[str]:
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), filename),
+        os.path.join(os.getcwd(), filename),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+THEME_DEFAULT = "ligth"
+
+THEMES: dict[str, dict[str, object]] = {
+    "ligth": {
+        "label": "ligth",
+        "dialog_stylesheet": """
+            QDialog { background-color: #f5f5f7; }
+            QLabel { color: #1d1d1f; }
+            QComboBox {
+                background: #ffffff;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 12px;
+                color: #1d1d1f;
+                min-height: 20px;
+            }
+            QComboBox:hover { background: #f7f8fb; }
+            QComboBox:focus { background: #ffffff; border: 1px solid #0a84ff; }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 28px;
+                background: transparent;
+                border-left: none;
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }
+            QComboBox QAbstractItemView {
+                background: #ffffff;
+                color: #1d1d1f;
+                border: 1px solid #d7dbe4;
+                selection-background-color: #0a84ff;
+                selection-color: #ffffff;
+                outline: none;
+            }
+            QPushButton {
+                background-color: #f0f2f6;
+                border-radius: 8px;
+                padding: 10px 24px;
+                color: #1d1d1f;
+                min-width: 115px;
+            }
+            QPushButton:hover { background-color: #e8ecf4; }
+            QPushButton:pressed { background-color: #cfd0d8; }
+            QPushButton#SecondaryButton {
+                background-color: #e6ebf3;
+                color: #2d3442;
+            }
+            QPushButton#SecondaryButton:hover { background-color: #dfe6f0; }
+            QPushButton#SecondaryButton:pressed { background-color: #d5deeb; }
+            QPushButton#PrimaryButton { background-color: #0a84ff; color: #ffffff; }
+            QPushButton#PrimaryButton:hover { background-color: #409cff; }
+        """,
+        "window_stylesheet": """
+            QMainWindow { background-color: #eceff4; }
+            QWidget#ChatSurface {
+                background: rgba(255, 255, 255, 0.92);
+                border: 1px solid #d6dce7;
+                border-radius: 14px;
+            }
+            QListView {
+                background: #ffffff;
+                border: none;
+                border-radius: 12px;
+                padding: 10px;
+                color: #1d1d1f;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 8px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(60, 60, 67, 0.35);
+                min-height: 24px;
+                border-radius: 4px;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical { height: 0px; }
+            QLineEdit, QPlainTextEdit {
+                background: #ffffff;
+                border: none;
+                border-radius: 9px;
+                padding: 8px 10px;
+                color: #1d1d1f;
+            }
+            QLineEdit:focus, QPlainTextEdit:focus {
+                background: #ffffff;
+                border: 1px solid #0a84ff;
+            }
+            QWidget#ComposeBar, QWidget#ActionToolbar {
+                background: rgba(255, 255, 255, 0.92);
+                border: none;
+                border-radius: 10px;
+            }
+            QPushButton {
+                background-color: #ffffff;
+                border-radius: 9px;
+                padding: 8px 14px;
+                color: #20232b;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #f6f8fc;
+            }
+            QPushButton:pressed { background-color: #edf1f8; }
+            QPushButton#PrimaryActionButton {
+                background-color: #0a84ff;
+                color: #ffffff;
+            }
+            QPushButton#PrimaryActionButton:hover { background-color: #2d95ff; }
+            QPushButton#PrimaryActionButton:pressed { background-color: #0076e9; }
+            QPushButton#SecondaryActionButton {
+                background-color: #f3f5f9;
+                color: #3f4757;
+            }
+            QPushButton#SecondaryActionButton:hover { background-color: #eaedf4; }
+            QPushButton#SecondaryActionButton:pressed { background-color: #dbe5f5; }
+            QPushButton#DangerActionButton {
+                background-color: #e6ebf3;
+                color: #b94b45;
+            }
+            QPushButton#DangerActionButton:hover { background-color: #dfe6f0; }
+            QPushButton#DangerActionButton:pressed { background-color: #d5deeb; }
+            QPushButton#GhostActionButton {
+                background-color: #f8f9fc;
+                color: #4a5362;
+            }
+            QPushButton#GhostActionButton:hover { background-color: #eef2f8; }
+            QToolButton#MoreActionsButton {
+                background-color: #eef2f7;
+                border: none;
+                border-radius: 9px;
+                color: #333845;
+                padding: 4px 12px;
+                font-size: 18px;
+                min-width: 32px;
+            }
+            QToolButton#MoreActionsButton:hover {
+                background-color: #e1e7f0;
+            }
+            QToolButton#MoreActionsButton:pressed {
+                background-color: #d7e0ec;
+            }
+            QToolButton#ThemeSwitchButton {
+                background-color: #ffffff;
+                border: none;
+                border-radius: 9px;
+                color: #333845;
+                padding: 2px;
+                min-width: 30px;
+                min-height: 30px;
+            }
+            QToolButton#ThemeSwitchButton:hover {
+                background-color: #f6f8fc;
+            }
+            QToolButton#ThemeSwitchButton:pressed {
+                background-color: #edf1f8;
+            }
+            QLabel { color: #1d1d1f; }
+            QLabel#StatusLabel {
+                background-color: rgba(255, 255, 255, 0.85);
+                border: none;
+                border-radius: 10px;
+                padding: 4px 10px;
+                color: #525966;
+                font-size: %(status_font_px)spx;
+            }
+            QMessageBox { background-color: #f5f5f7; color: #1d1d1f; }
+            QMessageBox QLabel { color: #1d1d1f; }
+            QMessageBox QPushButton {
+                background-color: #ffffff;
+                border-radius: 6px;
+                padding: 6px 16px;
+                color: #1d1d1f;
+                min-width: 70px;
+                border: none;
+            }
+            QMessageBox QPushButton:hover { background-color: #f6f8fc; }
+            QMessageBox QPushButton:pressed { background-color: #edf1f8; }
+        """,
+        "bubbles": {
+            "me_bg": "#2f92f0",
+            "me_text": "#ffffff",
+            "peer_bg": "#eceef2",
+            "peer_text": "#1c1c1e",
+            "system_bg": "#f1f3f7",
+            "system_text": "#5f6673",
+            "error_bg": "#f2d8d7",
+            "error_text": "#7c302c",
+            "success_bg": "#d7ebdc",
+            "success_text": "#245039",
+            "file_bg": "#e4e8ef",
+            "file_text": "#1d1d1f",
+            "fallback_bg": "#e2e6ee",
+            "fallback_text": "#1d1d1f",
+            "transfer_send_bg": "#e5f0ff",
+            "transfer_recv_bg": "#f1ecff",
+            "transfer_send_grad_0": "#0a84ff",
+            "transfer_send_grad_1": "#6dbdff",
+            "transfer_recv_grad_0": "#7c3aed",
+            "transfer_recv_grad_1": "#b49bff",
+            "transfer_bar_bg": "#d6d7dd",
+            "transfer_label": "#1d1d1f",
+            "transfer_meta": "#5f6470",
+            "cancel_text": "#0a84ff",
+            "image_placeholder_bg": "#dadce4",
+            "image_placeholder_text": "#3a3a40",
+            "image_me_bg": "#2f92f0",
+            "image_peer_bg": "#e9e9ee",
+            "tick_success": "#124529",
+            "tick_image": "#ffffff",
+        },
+        "hint_secondary": "#626875",
+        "hint_muted": "#767d8b",
+        "label_primary": "#444b58",
+        "combo_arrow": "#8c8d94",
+    },
+    "night": {
+        "label": "night",
+        "dialog_stylesheet": """
+            QDialog { background-color: #141417; }
+            QLabel { color: #f5f5f7; }
+            QComboBox {
+                background: #1f1f23;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 12px;
+                color: #f5f5f7;
+                min-height: 20px;
+            }
+            QComboBox:hover { background: #242831; }
+            QComboBox:focus { background: #1f1f23; border: 1px solid #0a84ff; }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 28px;
+                background: transparent;
+                border-left: none;
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }
+            QComboBox QAbstractItemView {
+                background: #1a1d23;
+                color: #f5f5f7;
+                border: 1px solid #343a46;
+                selection-background-color: #0a84ff;
+                selection-color: #ffffff;
+                outline: none;
+            }
+            QPushButton {
+                background-color: #2b2b30;
+                border-radius: 8px;
+                padding: 10px 24px;
+                color: #f5f5f7;
+                min-width: 115px;
+            }
+            QPushButton:hover { background-color: #3a3a40; }
+            QPushButton:pressed { background-color: #0a84ff; }
+            QPushButton#SecondaryButton {
+                background-color: rgba(255, 255, 255, 0.12);
+                color: #e4e9f2;
+            }
+            QPushButton#SecondaryButton:hover { background-color: rgba(255, 255, 255, 0.18); }
+            QPushButton#SecondaryButton:pressed { background-color: rgba(255, 255, 255, 0.24); }
+            QPushButton#PrimaryButton { background-color: #0a84ff; }
+            QPushButton#PrimaryButton:hover { background-color: #409cff; }
+        """,
+        "window_stylesheet": """
+            QMainWindow { background-color: #101114; }
+            QWidget#ChatSurface {
+                background: rgba(34, 37, 45, 0.68);
+                border: 1px solid #2f3541;
+                border-radius: 14px;
+            }
+            QListView {
+                background: transparent;
+                border: none;
+                padding: 8px;
+                color: #f5f5f7;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 8px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(255, 255, 255, 0.20);
+                min-height: 24px;
+                border-radius: 4px;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical { height: 0px; }
+            QLineEdit, QPlainTextEdit {
+                background: rgba(255, 255, 255, 0.06);
+                border: none;
+                border-radius: 8px;
+                padding: 8px 10px;
+                color: #f5f5f7;
+            }
+            QLineEdit:focus, QPlainTextEdit:focus {
+                background: rgba(255, 255, 255, 0.09);
+                border: 1px solid rgba(10, 132, 255, 0.85);
+            }
+            QWidget#ComposeBar, QWidget#ActionToolbar {
+                background: rgba(40, 44, 54, 0.62);
+                border: 1px solid #383f4c;
+                border-radius: 10px;
+            }
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.08);
+                border-radius: 9px;
+                padding: 8px 14px;
+                color: #f5f5f7;
+                border: none;
+            }
+            QPushButton:hover { background-color: rgba(255, 255, 255, 0.14); }
+            QPushButton:pressed { background-color: rgba(255, 255, 255, 0.18); }
+            QPushButton#PrimaryActionButton {
+                background-color: #0a84ff;
+                color: #ffffff;
+            }
+            QPushButton#PrimaryActionButton:hover { background-color: #3a9eff; }
+            QPushButton#PrimaryActionButton:pressed { background-color: #0069d9; }
+            QPushButton#SecondaryActionButton {
+                background-color: rgba(255, 255, 255, 0.10);
+                color: #d4dbe6;
+            }
+            QPushButton#SecondaryActionButton:hover { background-color: rgba(255, 255, 255, 0.16); }
+            QPushButton#DangerActionButton {
+                background-color: rgba(255, 255, 255, 0.10);
+                color: #ff8f88;
+            }
+            QPushButton#DangerActionButton:hover { background-color: rgba(255, 255, 255, 0.16); }
+            QPushButton#GhostActionButton {
+                background-color: rgba(255, 255, 255, 0.06);
+                color: #b6becb;
+            }
+            QPushButton#GhostActionButton:hover { background-color: rgba(255, 255, 255, 0.12); }
+            QToolButton#MoreActionsButton {
+                background-color: rgba(255, 255, 255, 0.08);
+                border: none;
+                border-radius: 9px;
+                color: #c6cfdb;
+                padding: 4px 12px;
+                font-size: 18px;
+                min-width: 32px;
+            }
+            QToolButton#MoreActionsButton:hover { background-color: rgba(255, 255, 255, 0.14); }
+            QToolButton#MoreActionsButton:pressed { background-color: rgba(255, 255, 255, 0.18); }
+            QToolButton#ThemeSwitchButton {
+                background-color: rgba(255, 255, 255, 0.08);
+                border: none;
+                border-radius: 9px;
+                color: #c6cfdb;
+                padding: 2px;
+                min-width: 30px;
+                min-height: 30px;
+            }
+            QToolButton#ThemeSwitchButton:hover {
+                background-color: rgba(255, 255, 255, 0.14);
+            }
+            QToolButton#ThemeSwitchButton:pressed {
+                background-color: rgba(255, 255, 255, 0.18);
+            }
+            QLabel { color: #f5f5f7; }
+            QLabel#StatusLabel {
+                background-color: rgba(255, 255, 255, 0.06);
+                border: none;
+                border-radius: 10px;
+                padding: 4px 10px;
+                color: #9fa1b5;
+                font-size: %(status_font_px)spx;
+            }
+            QMessageBox { background-color: #1f1f23; color: #f5f5f7; }
+            QMessageBox QLabel { color: #f5f5f7; }
+            QMessageBox QPushButton {
+                background-color: #2b2b30;
+                border-radius: 6px;
+                padding: 6px 16px;
+                color: #f5f5f7;
+                min-width: 70px;
+            }
+            QMessageBox QPushButton:hover { background-color: #3a3a40; }
+            QMessageBox QPushButton:pressed { background-color: #0a84ff; }
+        """,
+        "bubbles": {
+            "me_bg": "#2f92f0",
+            "me_text": "#ffffff",
+            "peer_bg": "#343842",
+            "peer_text": "#f2f2f7",
+            "system_bg": "#2d333d",
+            "system_text": "#a3acbc",
+            "error_bg": "#5a3536",
+            "error_text": "#ffd9d6",
+            "success_bg": "#2f4d3f",
+            "success_text": "#d9f2e6",
+            "file_bg": "#404654",
+            "file_text": "#f2f2f7",
+            "fallback_bg": "#3a404c",
+            "fallback_text": "#f2f2f7",
+            "transfer_send_bg": "#2a415e",
+            "transfer_recv_bg": "#353b47",
+            "transfer_send_grad_0": "#0a84ff",
+            "transfer_send_grad_1": "#4fa9ff",
+            "transfer_recv_grad_0": "#636c7e",
+            "transfer_recv_grad_1": "#828ba0",
+            "transfer_bar_bg": "#252a33",
+            "transfer_label": "#f2f2f7",
+            "transfer_meta": "#a2aab7",
+            "cancel_text": "#7fb9ff",
+            "image_placeholder_bg": "#404654",
+            "image_placeholder_text": "#f2f2f7",
+            "image_me_bg": "#2f92f0",
+            "image_peer_bg": "#343842",
+            "tick_success": "#d5f4df",
+            "tick_image": "#ffffff",
+        },
+        "hint_secondary": "#8d95a6",
+        "hint_muted": "#a9b1c1",
+        "label_primary": "#c6cfdf",
+        "combo_arrow": "#9fa1b5",
+    },
+}
+
+
+def _resolve_theme(theme_id: Optional[str]) -> str:
+    raw = str(theme_id or "").strip().lower()
+    if raw in {"macos", "light"}:
+        raw = "ligth"
+    if raw in THEMES:
+        return raw
+    return THEME_DEFAULT
+
+
+def _ui_prefs_path() -> str:
+    return os.path.join(get_profiles_dir(), "ui_prefs.json")
+
+
+def load_saved_theme() -> str:
+    path = _ui_prefs_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return _resolve_theme(str(data.get("theme", THEME_DEFAULT)))
+    except Exception:
+        pass
+    return THEME_DEFAULT
+
+
+def save_theme(theme_id: str) -> None:
+    theme_id = _resolve_theme(theme_id)
+    path = _ui_prefs_path()
+    tmp = path + ".tmp"
+    data = {"theme": theme_id}
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=True, indent=2, sort_keys=True)
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except Exception:
+        pass
 
 
 @dataclass
@@ -272,6 +752,26 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     
     # Кэш для QPixmap (путь -> pixmap)
     _pixmap_cache: dict = {}
+
+    def __init__(
+        self,
+        parent: Optional[QtCore.QObject] = None,
+        bubble_palette: Optional[dict[str, str]] = None,
+    ) -> None:
+        super().__init__(parent)
+        palette = THEMES[THEME_DEFAULT]["bubbles"]
+        self._bubble_palette = dict(palette) if isinstance(palette, dict) else {}
+        if bubble_palette:
+            self._bubble_palette.update(bubble_palette)
+
+    def set_bubble_palette(self, bubble_palette: Optional[dict[str, str]]) -> None:
+        palette = THEMES[THEME_DEFAULT]["bubbles"]
+        self._bubble_palette = dict(palette) if isinstance(palette, dict) else {}
+        if bubble_palette:
+            self._bubble_palette.update(bubble_palette)
+
+    def _c(self, name: str, fallback: str) -> QtGui.QColor:
+        return QtGui.QColor(str(self._bubble_palette.get(name, fallback)))
     
     def _load_pixmap(self, path: str) -> Optional[QtGui.QPixmap]:
         """Загрузить изображение с кэшированием."""
@@ -352,26 +852,26 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             bubble_rect = QtCore.QRectF(rect.left(), rect.top(), bubble_width, rect.height())
 
         if item.kind in {"me", "image_braille", "image_bw"}:
-            bg_color = QtGui.QColor("#3a7afe")
-            text_color = QtGui.QColor("#ffffff")
+            bg_color = self._c("me_bg", "#3a7afe")
+            text_color = self._c("me_text", "#ffffff")
         elif item.kind == "peer":
-            bg_color = QtGui.QColor("#7c3aed")  # комплиментарный фиолетовый
-            text_color = QtGui.QColor("#f8f8f2")
+            bg_color = self._c("peer_bg", "#7c3aed")
+            text_color = self._c("peer_text", "#f8f8f2")
         elif item.kind in {"system", "info"}:
-            bg_color = QtGui.QColor("#282a36")
-            text_color = QtGui.QColor("#8be9fd")
+            bg_color = self._c("system_bg", "#282a36")
+            text_color = self._c("system_text", "#8be9fd")
         elif item.kind == "error" or item.kind == "disconnect":
-            bg_color = QtGui.QColor("#ff5555")
-            text_color = QtGui.QColor("#f8f8f2")
+            bg_color = self._c("error_bg", "#ff5555")
+            text_color = self._c("error_text", "#f8f8f2")
         elif item.kind == "success":
-            bg_color = QtGui.QColor("#50fa7b")
-            text_color = QtGui.QColor("#282a36")
+            bg_color = self._c("success_bg", "#50fa7b")
+            text_color = self._c("success_text", "#282a36")
         elif item.kind == "file":
-            bg_color = QtGui.QColor("#6272a4")
-            text_color = QtGui.QColor("#f8f8f2")
+            bg_color = self._c("file_bg", "#6272a4")
+            text_color = self._c("file_text", "#f8f8f2")
         else:
-            bg_color = QtGui.QColor("#44475a")
-            text_color = QtGui.QColor("#f8f8f2")
+            bg_color = self._c("fallback_bg", "#44475a")
+            text_color = self._c("fallback_text", "#f8f8f2")
 
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         painter.setBrush(bg_color)
@@ -428,7 +928,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
             # Цвет штампа делаем чуть темнее текста для контраста на ярком фоне
             if item.kind == "success":
-                ts_color = QtGui.QColor("#15542d")
+                ts_color = self._c("tick_success", "#15542d")
             elif item.kind in {"me", "image_braille", "image_bw"}:
                 ts_color = QtGui.QColor("#d0e2ff")
             else:
@@ -462,7 +962,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 18,
             )
             ticks = "✓✓" if getattr(item, "delivered", False) else "✓"
-            painter.setPen(QtGui.QColor("#282a36"))  # тёмно-серый, как текст в success-бабле
+            painter.setPen(self._c("tick_success", "#282a36"))
             painter.drawText(
                 tick_rect,
                 int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom),
@@ -499,7 +999,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         
-        bg_color = QtGui.QColor("#1e3a5f") if is_sending else QtGui.QColor("#2d1b4e")
+        bg_color = self._c("transfer_send_bg", "#1e3a5f") if is_sending else self._c("transfer_recv_bg", "#2d1b4e")
         painter.setBrush(bg_color)
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         bubble_rect = bubble_rect.adjusted(
@@ -522,7 +1022,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         else:
             action = "↑ Sending" if is_sending else "↓ Receiving"
         header_text = f"{action}: {item.text}"
-        painter.setPen(QtGui.QColor("#ffffff"))
+        painter.setPen(self._c("transfer_label", "#ffffff"))
         header_rect = QtCore.QRectF(
             inner_rect.left(),
             inner_rect.top(),
@@ -543,7 +1043,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             bar_height,
         )
         
-        painter.setBrush(QtGui.QColor("#0d1b2a"))
+        painter.setBrush(self._c("transfer_bar_bg", "#0d1b2a"))
         painter.drawRoundedRect(bar_rect, bar_height / 2, bar_height / 2)
         
         progress = max(0.0, min(1.0, item.progress))
@@ -553,13 +1053,13 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             
             gradient = QtGui.QLinearGradient(fill_rect.topLeft(), fill_rect.topRight())
             if is_sending:
-                gradient.setColorAt(0.0, QtGui.QColor("#0066cc"))
-                gradient.setColorAt(0.5, QtGui.QColor("#3399ff"))
-                gradient.setColorAt(1.0, QtGui.QColor("#0066cc"))
+                gradient.setColorAt(0.0, self._c("transfer_send_grad_0", "#0066cc"))
+                gradient.setColorAt(0.5, self._c("transfer_send_grad_1", "#3399ff"))
+                gradient.setColorAt(1.0, self._c("transfer_send_grad_0", "#0066cc"))
             else:
-                gradient.setColorAt(0.0, QtGui.QColor("#7c3aed"))
-                gradient.setColorAt(0.5, QtGui.QColor("#a78bfa"))
-                gradient.setColorAt(1.0, QtGui.QColor("#7c3aed"))
+                gradient.setColorAt(0.0, self._c("transfer_recv_grad_0", "#7c3aed"))
+                gradient.setColorAt(0.5, self._c("transfer_recv_grad_1", "#a78bfa"))
+                gradient.setColorAt(1.0, self._c("transfer_recv_grad_0", "#7c3aed"))
             
             painter.setBrush(gradient)
             painter.drawRoundedRect(fill_rect, bar_height / 2, bar_height / 2)
@@ -572,7 +1072,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         
         pct = int(progress * 100)
         pct_text = f"{pct}%"
-        painter.setPen(QtGui.QColor("#ffffff"))
+        painter.setPen(self._c("transfer_label", "#ffffff"))
         painter.drawText(
             bar_rect,
             int(QtCore.Qt.AlignmentFlag.AlignCenter),
@@ -591,7 +1091,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             small_font = QtGui.QFont(base_font)
             small_font.setPointSize(max(base_font.pointSize() - 2, 8))
             painter.setFont(small_font)
-            painter.setPen(QtGui.QColor("#a0a0a0"))
+            painter.setPen(self._c("transfer_meta", "#a0a0a0"))
             size_rect = QtCore.QRectF(
                 inner_rect.left(),
                 bar_rect.bottom() + 4,
@@ -615,7 +1115,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             inner_rect.width(),
             metrics.height(),
         )
-        painter.setPen(QtGui.QColor("#a78bfa"))
+        painter.setPen(self._c("cancel_text", "#a78bfa"))
         painter.drawText(
             cancel_rect,
             int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter),
@@ -655,11 +1155,11 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 )
             
             painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-            painter.setBrush(QtGui.QColor("#44475a"))
+            painter.setBrush(self._c("image_placeholder_bg", "#44475a"))
             painter.setPen(QtCore.Qt.PenStyle.NoPen)
             painter.drawRoundedRect(bubble_rect, self.BUBBLE_RADIUS, self.BUBBLE_RADIUS)
             
-            painter.setPen(QtGui.QColor("#f8f8f2"))
+            painter.setPen(self._c("image_placeholder_text", "#f8f8f2"))
             painter.drawText(
                 bubble_rect,
                 int(QtCore.Qt.AlignmentFlag.AlignCenter),
@@ -681,7 +1181,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 bubble_width,
                 bubble_height,
             )
-            bg_color = QtGui.QColor("#3a7afe")
+            bg_color = self._c("image_me_bg", "#3a7afe")
         else:
             bubble_rect = QtCore.QRectF(
                 rect.left() + self.PADDING_X,
@@ -689,7 +1189,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 bubble_width,
                 bubble_height,
             )
-            bg_color = QtGui.QColor("#7c3aed")
+            bg_color = self._c("image_peer_bg", "#7c3aed")
         
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         painter.setBrush(bg_color)
@@ -738,7 +1238,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom),
                 ticks,
             )
-            painter.setPen(QtGui.QColor("#ffffff"))
+            painter.setPen(self._c("tick_image", "#ffffff"))
             painter.drawText(
                 tick_rect,
                 int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignBottom),
@@ -885,9 +1385,14 @@ class ProfileComboWithArrow(QtWidgets.QWidget):
         self.combo = QtWidgets.QComboBox(self)
         layout.addWidget(self.combo)
         self._arrow = QtWidgets.QLabel("∨", self)
-        self._arrow.setStyleSheet("color: #9fa1b5; font-size: 10px; background: transparent;")
+        self.set_arrow_color("#9fa1b5")
         self._arrow.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self._arrow.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def set_arrow_color(self, color: str) -> None:
+        self._arrow.setStyleSheet(
+            f"color: {color}; font-size: 10px; background: transparent;"
+        )
     
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -919,63 +1424,14 @@ class ProfileSelectDialog(QtWidgets.QDialog):
     def __init__(
         self,
         profiles: List[str],
+        theme_id: str,
         parent: Optional[QtWidgets.QWidget] = None,
     ) -> None:
         super().__init__(parent)
+        self._theme_id = _resolve_theme(theme_id)
         self.setWindowTitle("I2PChat")
         self.setMinimumSize(420, 300)
         self.setMaximumWidth(480)
-        
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #141417;
-            }
-            QLabel {
-                color: #f5f5f7;
-            }
-            QComboBox {
-                background: #1f1f23;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 8px;
-                padding: 10px 12px;
-                color: #f5f5f7;
-                min-height: 20px;
-            }
-            QComboBox:hover {
-                border-color: rgba(255, 255, 255, 0.2);
-            }
-            QComboBox:focus {
-                border-color: #0a84ff;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: center right;
-                width: 28px;
-                background: rgba(255, 255, 255, 0.1);
-                border-left: 1px solid rgba(255, 255, 255, 0.15);
-                border-top-right-radius: 6px;
-                border-bottom-right-radius: 6px;
-            }
-            QPushButton {
-                background-color: #2b2b30;
-                border-radius: 8px;
-                padding: 10px 24px;
-                color: #f5f5f7;
-                min-width: 115px;
-            }
-            QPushButton:hover {
-                background-color: #3a3a40;
-            }
-            QPushButton:pressed {
-                background-color: #0a84ff;
-            }
-            QPushButton#PrimaryButton {
-                background-color: #0a84ff;
-            }
-            QPushButton#PrimaryButton:hover {
-                background-color: #409cff;
-            }
-        """)
         
         layout = QtWidgets.QVBoxLayout(self)
         layout.setSpacing(16)
@@ -990,7 +1446,7 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         layout.addWidget(title)
         
         subtitle = QtWidgets.QLabel("Choose profile")
-        subtitle.setStyleSheet("color: #9fa1b5;")
+        self.subtitle = subtitle
         subtitle.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle)
         
@@ -999,16 +1455,17 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         hint = QtWidgets.QLabel(
             "Use <b>default</b> for a one-time session, or enter a name to save your identity."
         )
+        self.hint = hint
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #9fa1b5; font-size: 12px;")
         hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(hint)
         
         profile_label = QtWidgets.QLabel("Profile:")
-        profile_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
+        self.profile_label = profile_label
         layout.addWidget(profile_label)
         
         combo_widget = ProfileComboWithArrow(self)
+        self.profile_combo_widget = combo_widget
         self.combo = combo_widget.combo
         self.combo.setEditable(True)
         self.combo.addItems(profiles)
@@ -1017,17 +1474,17 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         layout.addWidget(combo_widget)
         
         combo_hint = QtWidgets.QLabel("Click the list on the right to pick an existing profile, or type a new name above.")
+        self.combo_hint = combo_hint
         combo_hint.setWordWrap(True)
-        combo_hint.setStyleSheet("color: #6c6e7e; font-size: 11px;")
         layout.addWidget(combo_hint)
         
         profiles_path = get_profiles_dir()
         path_hint = _ClickableFolderLabel(f"Profiles folder: {profiles_path}", profiles_path)
+        self.path_hint = path_hint
         path_hint.setWordWrap(True)
-        path_hint.setStyleSheet("color: #6c6e7e; font-size: 11px;")
         path_hint.setToolTip("Click to open folder")
         layout.addWidget(path_hint)
-        
+
         layout.addSpacing(12)
         
         btn_layout = QtWidgets.QHBoxLayout()
@@ -1035,6 +1492,7 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         btn_layout.addStretch()
         cancel_btn = QtWidgets.QPushButton("Cancel")
         cancel_btn.setMinimumWidth(120)
+        cancel_btn.setObjectName("SecondaryButton")
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
         continue_btn = QtWidgets.QPushButton("Continue")
@@ -1047,7 +1505,22 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
         
+        self._apply_theme_style(self._theme_id)
         self.combo.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+
+    def _apply_theme_style(self, theme_id: str) -> None:
+        theme = THEMES[_resolve_theme(theme_id)]
+        self.setStyleSheet(str(theme["dialog_stylesheet"]))
+        muted = str(theme.get("hint_muted", "#9fa1b5"))
+        secondary = str(theme.get("hint_secondary", "#6c6e7e"))
+        label_primary = str(theme.get("label_primary", "#e0e0e0"))
+        arrow = str(theme.get("combo_arrow", "#9fa1b5"))
+        self.subtitle.setStyleSheet(f"color: {muted};")
+        self.hint.setStyleSheet(f"color: {muted}; font-size: 12px;")
+        self.profile_label.setStyleSheet(f"color: {label_primary}; font-size: 13px;")
+        self.combo_hint.setStyleSheet(f"color: {secondary}; font-size: 11px;")
+        self.path_hint.setStyleSheet(f"color: {secondary}; font-size: 11px;")
+        self.profile_combo_widget.set_arrow_color(arrow)
     
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if event.type() == QtCore.QEvent.Type.KeyPress and isinstance(event, QtGui.QKeyEvent):
@@ -1072,11 +1545,12 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         text = self.combo.currentText().strip() if self.combo.currentText() else ""
         return text or None
 
-
 class ChatWindow(QtWidgets.QMainWindow):
-    def __init__(self, profile: Optional[str] = None) -> None:
+    def __init__(self, profile: Optional[str] = None, theme_id: str = THEME_DEFAULT) -> None:
         super().__init__()
         self.profile = profile or "default"
+        self.theme_id = _resolve_theme(theme_id)
+        self.theme = THEMES[self.theme_id]
         # Показываем профиль через разделитель-точку;
         # если вдруг имя профиля уже содержит служебный маркер в конце (" •"),
         # аккуратно убираем его, чтобы заголовок не заканчивался кружком.
@@ -1084,98 +1558,19 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(f"I2PChat @ {clean_profile}")
         self.resize(900, 600)
 
-        # Тёмная макос‑подобная гамма (в духе Big Sur)
-        status_font_px = 9 if sys.platform == "win32" else 11
-        self.setStyleSheet(
-            """
-            QMainWindow {
-                background-color: #141417;
-            }
-            QListView {
-                background: #141417;
-                border: none;
-                padding: 8px;
-                color: #f5f5f7;
-            }
-            QScrollBar:vertical {
-                background: transparent;
-                width: 8px;
-                margin: 0px;
-            }
-            QScrollBar::handle:vertical {
-                background: rgba(255, 255, 255, 0.20);
-                min-height: 24px;
-                border-radius: 4px;
-            }
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-            QLineEdit, QPlainTextEdit {
-                background: #1f1f23;
-                border: 1px solid rgba(255, 255, 255, 0.10);
-                border-radius: 8px;
-                padding: 8px 10px;
-                color: #f5f5f7;
-            }
-            QLineEdit:focus, QPlainTextEdit:focus {
-                border-color: #0a84ff;
-            }
-            QPushButton {
-                background-color: #2b2b30;
-                border-radius: 8px;
-                padding: 8px 14px;
-                color: #f5f5f7;
-            }
-            QPushButton:hover {
-                background-color: #3a3a40;
-            }
-            QPushButton:pressed {
-                background-color: #0a84ff;
-            }
-            QLabel {
-                color: #f5f5f7;
-            }
-            QLabel#StatusLabel {
-                background-color: #1b1b1f;
-                border-radius: 10px;
-                padding: 4px 10px;
-                color: #9fa1b5;
-                font-size: %(status_font_px)spx;
-            }
-            QMessageBox {
-                background-color: #1f1f23;
-                color: #f5f5f7;
-            }
-            QMessageBox QLabel {
-                color: #f5f5f7;
-            }
-            QMessageBox QPushButton {
-                background-color: #2b2b30;
-                border-radius: 6px;
-                padding: 6px 16px;
-                color: #f5f5f7;
-                min-width: 70px;
-            }
-            QMessageBox QPushButton:hover {
-                background-color: #3a3a40;
-            }
-            QMessageBox QPushButton:pressed {
-                background-color: #0a84ff;
-            }
-            """
-            % {"status_font_px": status_font_px}
-        )
+        self._status_font_px = 9 if sys.platform == "win32" else 11
 
         # UI
         central = QtWidgets.QWidget(self)
         self.setCentralWidget(central)
 
         main_layout = QtWidgets.QVBoxLayout(central)
-        main_layout.setContentsMargins(16, 12, 16, 12)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(14, 10, 14, 10)
+        main_layout.setSpacing(10)
 
-        # статусная панель
+        self.more_actions_menu = QtWidgets.QMenu(self)
+
+        # диагностическая строка статуса
         self.status_label = QtWidgets.QLabel("Status: initializing", self)
         self.status_label.setObjectName("StatusLabel")
         self.status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
@@ -1184,6 +1579,17 @@ class ChatWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
+        self.theme_switch_button = QtWidgets.QToolButton(self)
+        self.theme_switch_button.setObjectName("ThemeSwitchButton")
+        self.theme_switch_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.theme_switch_button.setAutoRaise(False)
+        self.theme_switch_button.clicked.connect(self.on_theme_switch_clicked)
+        self.status_row = QtWidgets.QWidget(self)
+        status_row_layout = QtWidgets.QHBoxLayout(self.status_row)
+        status_row_layout.setContentsMargins(0, 0, 0, 0)
+        status_row_layout.setSpacing(6)
+        status_row_layout.addWidget(self.status_label, 1)
+        status_row_layout.addWidget(self.theme_switch_button)
         self._last_status: str = "initializing"
         self._transfer_row: Optional[int] = None
         self._transfer_is_image: bool = False
@@ -1203,34 +1609,50 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         self.chat_model = ChatListModel(self.chat_view)
         self.chat_view.setModel(self.chat_model)
-        self.chat_view.setItemDelegate(ChatItemDelegate(self.chat_view))
+        bubble_palette = self.theme.get("bubbles", {})
+        delegate_palette = (
+            dict(bubble_palette) if isinstance(bubble_palette, dict) else None
+        )
+        self.chat_view.setItemDelegate(
+            ChatItemDelegate(self.chat_view, bubble_palette=delegate_palette)
+        )
+        chat_surface = QtWidgets.QWidget(self)
+        chat_surface.setObjectName("ChatSurface")
+        chat_surface_layout = QtWidgets.QVBoxLayout(chat_surface)
+        chat_surface_layout.setContentsMargins(6, 6, 6, 6)
+        chat_surface_layout.setSpacing(0)
+        chat_surface_layout.addWidget(self.chat_view)
 
         # панель ввода
-        input_layout = QtWidgets.QHBoxLayout()
-        input_layout.setContentsMargins(0, 0, 0, 0)
-        input_layout.setSpacing(8)
+        input_container = QtWidgets.QWidget(self)
+        input_container.setObjectName("ComposeBar")
+        input_layout = QtWidgets.QHBoxLayout(input_container)
+        input_layout.setContentsMargins(8, 8, 8, 8)
+        input_layout.setSpacing(6)
         self.input_edit = MessageInputEdit(self)
         self.input_edit.setPlaceholderText("Type message. Enter to send, Shift+Enter for new line.")
-        self.input_edit.setMinimumHeight(56)
+        self.input_edit.setMinimumHeight(52)
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
         self.input_edit.setFont(font)
 
         self.send_button = QtWidgets.QPushButton("Send", self)
-        self.send_button.setMinimumHeight(56)
+        self.send_button.setObjectName("PrimaryActionButton")
+        self.send_button.setMinimumHeight(52)
 
-        fixed_height = 56
+        fixed_height = 52 if sys.platform == "darwin" else 56
         self.input_edit.setFixedHeight(fixed_height)
         self.send_button.setFixedHeight(fixed_height)
         input_layout.addWidget(self.input_edit)
         input_layout.addWidget(self.send_button)
 
-        # панель действий: простой горизонтальный ряд кнопок с полем адреса
-        actions_layout = QtWidgets.QHBoxLayout()
-        actions_layout.setContentsMargins(0, 0, 0, 0)
-        actions_layout.setSpacing(8)
+        # панель действий: сегментированные группы кнопок в стиле macOS toolbar
+        actions_container = QtWidgets.QWidget(self)
+        actions_container.setObjectName("ActionToolbar")
+        actions_layout = QtWidgets.QHBoxLayout(actions_container)
+        actions_layout.setContentsMargins(8, 8, 8, 8)
+        actions_layout.setSpacing(6)
 
-        self.load_profile_button = QtWidgets.QPushButton("Load .dat", self)
         self.addr_edit = QtWidgets.QLineEdit(self)
         self.addr_edit.setPlaceholderText("Peer .b32.i2p address")
         # Адрес — главный элемент панели действий
@@ -1241,40 +1663,37 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
 
         self.connect_button = QtWidgets.QPushButton("Connect", self)
+        self.connect_button.setObjectName("PrimaryActionButton")
         self.disconnect_button = QtWidgets.QPushButton("Disconnect", self)
+        self.disconnect_button.setObjectName("DangerActionButton")
 
-        self.send_file_button = QtWidgets.QPushButton("Send File", self)
-        self.send_pic_button = QtWidgets.QPushButton("Send Pic", self)
-        self.lock_peer_button = QtWidgets.QPushButton("Lock to peer", self)
-        self.copy_my_addr_button = QtWidgets.QPushButton("Copy My Addr", self)
+        self.more_toolbar_button = QtWidgets.QToolButton(self)
+        self.more_toolbar_button.setObjectName("MoreActionsButton")
+        self.more_toolbar_button.setText("⋯")
+        self.more_toolbar_button.setPopupMode(
+            QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.more_toolbar_button.setMenu(self.more_actions_menu)
 
         # Все элементы панели действий делаем одной высоты, чтобы ряд смотрелся ровно
-        actions_fixed_height = 36
+        actions_fixed_height = 34 if sys.platform == "darwin" else 36
         self.addr_edit.setFixedHeight(actions_fixed_height)
         for btn in [
-            self.load_profile_button,
             self.connect_button,
             self.disconnect_button,
-            self.send_pic_button,
-            self.send_file_button,
-            self.lock_peer_button,
-            self.copy_my_addr_button,
         ]:
             btn.setFixedHeight(actions_fixed_height)
+        self.more_toolbar_button.setFixedHeight(actions_fixed_height)
 
-        actions_layout.addWidget(self.load_profile_button)
-        actions_layout.addWidget(self.addr_edit)
+        actions_layout.addWidget(self.addr_edit, 1)
         actions_layout.addWidget(self.connect_button)
         actions_layout.addWidget(self.disconnect_button)
-        actions_layout.addWidget(self.send_pic_button)
-        actions_layout.addWidget(self.send_file_button)
-        actions_layout.addWidget(self.lock_peer_button)
-        actions_layout.addWidget(self.copy_my_addr_button)
+        actions_layout.addWidget(self.more_toolbar_button)
 
-        main_layout.addWidget(self.status_label)
-        main_layout.addWidget(self.chat_view, 1)
-        main_layout.addLayout(input_layout)
-        main_layout.addLayout(actions_layout)
+        main_layout.addWidget(self.status_row)
+        main_layout.addWidget(chat_surface, 1)
+        main_layout.addWidget(input_container)
+        main_layout.addWidget(actions_container)
 
         # системный трей/док‑иконка для показа нативных уведомлений от Qt
         self.tray_icon = QtWidgets.QSystemTrayIcon(self)
@@ -1306,16 +1725,24 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.input_edit.sendRequested.connect(self.on_send_clicked)
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
-        self.send_file_button.clicked.connect(self.on_send_file_clicked)
-        self.send_pic_button.clicked.connect(self.on_send_pic_clicked)
-        self.lock_peer_button.clicked.connect(self.on_lock_peer_clicked)
-        self.copy_my_addr_button.clicked.connect(self.on_copy_my_addr_clicked)
-        self.load_profile_button.clicked.connect(self.on_load_profile_clicked)
+        self.action_load_profile = self.more_actions_menu.addAction("Load profile (.dat)")
+        self.action_send_pic = self.more_actions_menu.addAction("Send picture")
+        self.action_send_file = self.more_actions_menu.addAction("Send file")
+        self.more_actions_menu.addSeparator()
+        self.action_lock_peer = self.more_actions_menu.addAction("Lock to peer")
+        self.action_copy_addr = self.more_actions_menu.addAction("Copy my address")
+        self.action_load_profile.triggered.connect(self.on_load_profile_clicked)
+        self.action_send_pic.triggered.connect(self.on_send_pic_clicked)
+        self.action_send_file.triggered.connect(self.on_send_file_clicked)
+        self.action_lock_peer.triggered.connect(self.on_lock_peer_clicked)
+        self.action_copy_addr.triggered.connect(self.on_copy_my_addr_clicked)
         self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
         self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
 
         # ядро
         self.core = self._create_core(self.profile)
+        self._apply_theme(self.theme_id, persist=False)
+        self.refresh_status_label()
 
     def _append_item(self, item: ChatItem) -> None:
         """Добавить элемент в модель и прокрутить к нему."""
@@ -1672,6 +2099,71 @@ class ChatWindow(QtWidgets.QMainWindow):
         setattr(core, "on_notify", self.handle_notify)
         return core
 
+    def _update_theme_switch_label(self) -> None:
+        next_theme = "night" if self.theme_id == "ligth" else "ligth"
+        # Показываем иконку текущей темы: ligth -> sun, night -> moon.
+        icon_name = "sun.max.png" if self.theme_id == "ligth" else "moon.png"
+        icon_path = _resolve_local_asset(icon_name)
+        tint = QtGui.QColor("#1f232b") if self.theme_id == "ligth" else QtGui.QColor("#f2f2f7")
+        if icon_path:
+            source = QtGui.QPixmap(icon_path)
+            if not source.isNull():
+                icon_px = 16 if icon_name == "moon.png" else 18
+                dpr = max(1.0, self.devicePixelRatioF())
+                target_w = max(1, int(icon_px * dpr))
+                target_h = max(1, int(icon_px * dpr))
+                source = source.scaled(
+                    target_w,
+                    target_h,
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+                tinted = QtGui.QPixmap(source.size())
+                tinted.fill(QtCore.Qt.GlobalColor.transparent)
+                painter = QtGui.QPainter(tinted)
+                painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, True)
+                painter.drawPixmap(0, 0, source)
+                painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_SourceIn)
+                painter.fillRect(tinted.rect(), tint)
+                painter.end()
+                tinted.setDevicePixelRatio(dpr)
+                self.theme_switch_button.setIcon(QtGui.QIcon(tinted))
+                self.theme_switch_button.setIconSize(QtCore.QSize(icon_px, icon_px))
+                self.theme_switch_button.setText("")
+            else:
+                self.theme_switch_button.setIcon(QtGui.QIcon())
+                self.theme_switch_button.setText("◐")
+        else:
+            self.theme_switch_button.setIcon(QtGui.QIcon())
+            self.theme_switch_button.setText("◐")
+        self.theme_switch_button.setToolTip(
+            f"Current: {self.theme_id}. Click to switch to {next_theme}"
+        )
+
+    def _apply_theme(self, theme_id: str, persist: bool = True) -> None:
+        resolved = _resolve_theme(theme_id)
+        self.theme_id = resolved
+        self.theme = THEMES[self.theme_id]
+        self.setStyleSheet(
+            str(self.theme["window_stylesheet"]) % {"status_font_px": self._status_font_px}
+        )
+        delegate = self.chat_view.itemDelegate()
+        if isinstance(delegate, ChatItemDelegate):
+            bubble_palette = self.theme.get("bubbles", {})
+            delegate_palette = (
+                dict(bubble_palette) if isinstance(bubble_palette, dict) else None
+            )
+            delegate.set_bubble_palette(delegate_palette)
+            self.chat_view.viewport().update()
+        if persist:
+            save_theme(self.theme_id)
+        self._update_theme_switch_label()
+
+    @QtCore.pyqtSlot()
+    def on_theme_switch_clicked(self) -> None:
+        next_theme = "night" if self.theme_id == "ligth" else "ligth"
+        self._apply_theme(next_theme, persist=True)
+
     def handle_trust_decision(self, peer_addr: str, fingerprint: str, signing_key_hex: str) -> bool:
         """
         TOFU-подтверждение: показать пользователю fingerprint нового ключа пира.
@@ -1962,13 +2454,24 @@ def main() -> None:
     app.setStyle("Fusion")
     # На Windows шрифты по умолчанию выглядят крупнее — задаём меньший размер
     font_pt = 10 if sys.platform == "win32" else 13
-    base_font = QtGui.QFont("Inter", font_pt)
+    if sys.platform == "darwin":
+        # На macOS используем системный шрифт, чтобы не вызывать fallback-алиасы.
+        base_font = app.font()
+        base_font.setPointSize(font_pt)
+    else:
+        base_font = QtGui.QFont("Inter", font_pt)
     base_font.setStyleHint(QtGui.QFont.StyleHint.SansSerif)
     app.setFont(base_font)
+
+    saved_theme = load_saved_theme()
+    selected_theme = saved_theme
 
     # 1) если профиль передан аргументом (CLI), используем его как есть
     if len(sys.argv) > 1:
         profile: Optional[str] = sys.argv[1]
+        if len(sys.argv) > 2:
+            selected_theme = _resolve_theme(sys.argv[2].strip().lower())
+            save_theme(selected_theme)
     else:
         # 2) для .app / обычного запуска без аргументов показываем диалог выбора профиля
         profiles = ["default"]
@@ -1981,7 +2484,7 @@ def main() -> None:
         except OSError:
             pass
 
-        dialog = ProfileSelectDialog(profiles)
+        dialog = ProfileSelectDialog(profiles, theme_id=saved_theme)
         app.installEventFilter(dialog)
         try:
             if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
@@ -1992,15 +2495,20 @@ def main() -> None:
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
 
-    window = ChatWindow(profile=profile)
+    window = ChatWindow(profile=profile, theme_id=selected_theme)
     window.show()
 
     # запускаем инициализацию ядра в Qt-совместимом event loop
-    asyncio.ensure_future(window.start_core())
+    loop.create_task(window.start_core())
 
     try:
         loop.run_forever()
     finally:
+        pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         loop.close()
 
 
