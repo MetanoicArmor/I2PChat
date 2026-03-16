@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_NAME="I2PChat"
 VENV_DIR=".venv314"
-RELEASE_VERSION="0.3.0"
+RELEASE_VERSION="$(cat VERSION)"
 
 # Определяем архитектуру
 ARCH=$(uname -m)
@@ -45,7 +45,7 @@ print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
 PY
 
 echo "==> Проверяю синтаксис ключевых модулей"
-python -m compileall i2p_chat_core.py crypto.py main_qt.py
+python -m compileall *.py
 
 echo "==> Собираю GUI (PyInstaller I2PChat.spec)"
 rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"

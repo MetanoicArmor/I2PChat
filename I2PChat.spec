@@ -1,15 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
+import glob, os
 
+_local_modules = [
+    os.path.splitext(f)[0]
+    for f in glob.glob('*.py')
+    if f != 'main_qt.py'
+]
 
 a = Analysis(
     ['main_qt.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    # pynacl (nacl.*) + cffi required for secure protocol / E2E encryption
-    hiddenimports=[
-        'rich', 'textual', 'pyperclip', 'crypto',
-        'cffi', '_cffi_backend',  # PyNaCl depends on cffi at runtime
+    datas=[('VERSION', '.')],
+    hiddenimports=_local_modules + [
+        'rich', 'textual', 'pyperclip',
+        'cffi', '_cffi_backend',
         'nacl', 'nacl.secret', 'nacl.public', 'nacl.signing', 'nacl.encoding', 'nacl.exceptions',
     ],
     hookspath=[],

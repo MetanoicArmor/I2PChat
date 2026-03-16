@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="I2PChat"
 APPDIR="${APP_NAME}.AppDir"
 VENV_DIR=".venv314"
-RELEASE_VERSION="0.3.0"
+RELEASE_VERSION="$(cat VERSION)"
 
 # Определяем архитектуру
 ARCH=$(uname -m)
@@ -49,7 +49,7 @@ print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
 PY
 
 # Быстрая проверка синтаксиса критичных модулей протокола
-python -m compileall i2p_chat_core.py crypto.py main_qt.py
+python -m compileall *.py
 
 # 1) сборка PyInstaller с использованием spec файла (включает crypto модули)
 rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"

@@ -26,7 +26,15 @@ try:
 except Exception:  # pragma: no cover - мультимедиа не везде доступно
     QSoundEffect = None  # type: ignore[assignment]
 
-APP_VERSION = "0.3.0"
+def _read_version() -> str:
+    for p in (__file__, "."):
+        vf = os.path.join(os.path.dirname(os.path.abspath(p)), "VERSION")
+        if os.path.isfile(vf):
+            with open(vf) as f:
+                return f.read().strip()
+    return "0.0.0"
+
+APP_VERSION = _read_version()
 
 
 @dataclass
