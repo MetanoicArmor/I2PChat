@@ -103,7 +103,8 @@ This script:
 
 - Uses `python3.14` (or default `python3`) and `.venv314`.
 - Builds a self‑contained GUI binary via PyInstaller.
-- Packs it into `I2PChat-x86_64.AppImage` using `appimagetool`.
+- Packs it into `I2PChat.AppImage` using `appimagetool`.
+- Creates release archive `I2PChat-linux-<arch>-v<version>.zip` (contains `I2PChat.AppImage`).
 
 #### 🍎 macOS (GUI .app bundle)
 
@@ -189,7 +190,7 @@ If you like this project and want to support development, you can send a small d
 |----------|----------|--------|
 | **Windows** | [I2PChat-windows-x64-v0.4.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v0.4.0.zip) | Unzip → `I2PChat.exe` |
 | **macOS** | [I2PChat-macOS-arm64-v0.4.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v0.4.0.zip) | Unzip → `I2PChat.app` |
-| **Linux** | [I2PChat-v0.4.0-x86_64.AppImage](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-v0.4.0-x86_64.AppImage) | `chmod +x` → run |
+| **Linux** | [I2PChat-linux-x86_64-v0.4.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v0.4.0.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
 
 > **Requirement:** [i2pd](https://i2pd.website) router must be running with SAM API enabled (default port 7656).
 

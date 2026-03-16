@@ -117,7 +117,21 @@ if [ ! -x "$APPIMAGETOOL" ]; then
   chmod +x "$APPIMAGETOOL"
 fi
 
-OUTPUT_FILE="${APP_NAME}-v${RELEASE_VERSION}-${ARCH_SUFFIX}.AppImage"
+OUTPUT_FILE="${APP_NAME}.AppImage"
 ./"$APPIMAGETOOL" "${APPDIR}" "$OUTPUT_FILE"
 echo "✔ Built ${OUTPUT_FILE}"
+
+# 4) архив для релиза: версия + архитектура в имени zip
+ZIP_FILE="${APP_NAME}-linux-${ARCH_SUFFIX}-v${RELEASE_VERSION}.zip"
+rm -f "${ZIP_FILE}"
+python - "${OUTPUT_FILE}" "${ZIP_FILE}" <<'PY'
+import os
+import sys
+import zipfile
+
+src, dst = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    zf.write(src, arcname=os.path.basename(src))
+PY
+echo "✔ Packed ${ZIP_FILE}"
 
