@@ -56,8 +56,7 @@
 ### 📸 Screenshots
 
 <p align="center">
-  <img src="screenshots/6.png" alt="I2PChat – light theme (macOS-style)" width="48%" />
-  <img src="screenshots/7.png" alt="I2PChat – dark theme (macOS-style)" width="48%" />
+  <img src="screenshots/6.png" alt="I2PChat – light and dark themes (macOS-style)" width="900" />
 </p>
 
 <p align="center">
