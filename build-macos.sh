@@ -37,12 +37,22 @@ if [ ! -d "${VENV_DIR}" ]; then
 fi
 source "${VENV_DIR}/bin/activate"
 
+if [ -x "${VENV_DIR}/bin/python" ]; then
+  PYTHON_CMD="${VENV_DIR}/bin/python"
+elif [ -x "${VENV_DIR}/bin/python3" ]; then
+  PYTHON_CMD="${VENV_DIR}/bin/python3"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON_CMD="$(command -v python3)"
+else
+  PYTHON_CMD="$(command -v python)"
+fi
+
 echo "==> Устанавливаю/обновляю зависимости"
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt pyinstaller
+"${PYTHON_CMD}" -m pip install --upgrade pip
+"${PYTHON_CMD}" -m pip install -r requirements.txt pyinstaller
 
 echo "==> Проверяю PyNaCl (обязателен для secure protocol)"
-python - <<'PY'
+"${PYTHON_CMD}" - <<'PY'
 import sys
 try:
     import nacl
@@ -54,11 +64,11 @@ print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
 PY
 
 echo "==> Проверяю синтаксис ключевых модулей"
-python -m compileall *.py
+"${PYTHON_CMD}" -m compileall *.py
 
 echo "==> Собираю GUI (PyInstaller I2PChat.spec)"
 rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"
-pyinstaller --clean -y I2PChat.spec
+"${PYTHON_CMD}" -m PyInstaller --clean -y I2PChat.spec
 
 echo "==> Собираю I2PChat.app"
 rm -rf "dist/${APP_NAME}.app"
@@ -67,8 +77,8 @@ cp -R "dist/${APP_NAME}" "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}"
 if [ -f "I2PChat.icns" ]; then
   cp "I2PChat.icns" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
 else
-  echo "WARNING: I2PChat.icns not found, fallback to icon-1024.png"
-  cp "icon-1024.png" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
+  echo "WARNING: I2PChat.icns not found, fallback to icon.png"
+  cp "icon.png" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
 fi
 printf '%s\n' '#!/bin/sh' "exec \"\$(dirname \"\$0\")/../Resources/${APP_NAME}/${APP_NAME}\" \"\$@\"" > "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
 chmod +x "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"

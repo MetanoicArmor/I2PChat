@@ -81,7 +81,7 @@ for CAND in /usr/lib/libcrypt.so.2 /lib64/libcrypt.so.2 /lib/libcrypt.so.2; do
     break
   fi
 done
-cp icon-1024.png "${APPDIR}/usr/share/icons/hicolor/512x512/apps/i2pchat.png"
+cp icon.png "${APPDIR}/usr/share/icons/hicolor/512x512/apps/i2pchat.png"
 
 cat > "${APPDIR}/usr/share/applications/i2pchat.desktop" <<EOF
 [Desktop Entry]
@@ -96,7 +96,7 @@ EOF
 
 # копия .desktop и иконки в корень AppDir, чтобы appimagetool их увидел
 cp "${APPDIR}/usr/share/applications/i2pchat.desktop" "${APPDIR}/i2pchat.desktop"
-cp icon-1024.png "${APPDIR}/i2pchat.png"
+cp icon.png "${APPDIR}/i2pchat.png"
 
 cat > "${APPDIR}/AppRun" <<'EOF'
 #!/bin/sh

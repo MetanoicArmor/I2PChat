@@ -7,7 +7,7 @@ _local_modules = [
     if f != 'main_qt.py'
 ]
 
-_icon_file = 'i2pchat.ico' if sys.platform == 'win32' else 'icon-1024.png'
+_icon_file = 'i2pchat.ico' if sys.platform == 'win32' else 'icon.png'
 
 a = Analysis(
     ['main_qt.py'],

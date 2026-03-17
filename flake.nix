@@ -40,7 +40,7 @@
             mkdir -p $out/lib/i2pchat $out/bin
             
             cp -r *.py i2plib $out/lib/i2pchat/
-            cp -r icon-1024.png $out/lib/i2pchat/ 2>/dev/null || true
+            cp -r icon.png $out/lib/i2pchat/ 2>/dev/null || true
             
             makeWrapper ${pythonEnv}/bin/python $out/bin/i2pchat \
               --add-flags "$out/lib/i2pchat/main_qt.py" \

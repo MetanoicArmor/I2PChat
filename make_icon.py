@@ -9,7 +9,7 @@ from PIL import Image
 def make_icon() -> None:
     root = Path(__file__).parent
     src = root / "image.png"
-    out_1024 = root / "icon-1024.png"
+    out_icon = root / "icon.png"
 
     if not src.exists():
         raise SystemExit(f"source image not found: {src}")
@@ -27,8 +27,8 @@ def make_icon() -> None:
 
     # ресайз до 1024×1024 и сохранение
     img = img.resize((1024, 1024), Image.LANCZOS)
-    img.save(out_1024)
-    print("saved", out_1024)
+    img.save(out_icon)
+    print("saved", out_icon)
 
     # Windows ICO
     out_ico = root / "i2pchat.ico"
