@@ -1,5 +1,12 @@
 # macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
 # Python
 __pycache__/
@@ -8,21 +15,53 @@ __pycache__/
 .Python
 *.so
 .venv/
+.venv*/
 venv/
 env/
 
 # Build / dist (PyInstaller etc.)
 build/
 dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Cache (tests, tools)
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
 
 # Release archives (host on GitHub Releases only; avoid >100MB)
 I2PChat-macOS-arm64*.zip
 I2PChat-windows*.zip
 I2PChat-*.AppImage
 
-# Profile data (keys) — never commit
+# Secrets / keys — never commit
 *.dat
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*_rsa
+*_ed25519
+secrets.json
+credentials.json
+*.keystore
+config.local.*
 
-# IDE / editor
+# IDE / editor (Cursor — не пушить)
 .cursor/
+.idea/
 *.log
+*.swp
+*.swo
+*~
+
+# Tests / coverage
+.coverage
+.coverage.*
+htmlcov/
