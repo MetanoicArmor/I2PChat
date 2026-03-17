@@ -41,7 +41,7 @@
 - **E2E encryption** — handshake, key signing and verification
 - **TOFU** — peer key pinning on first contact
 - **Lock to peer** — bind a profile to a single peer
-- **PyQt6 GUI** with light and dark themes
+- **PyQt6 GUI** with light and dark themes (macOS-style, consistent and predictable on all platforms)
 - **File transfer** and **image sending** (Send picture) between peers
 - **Profiles (.dat)** — multiple profiles, load and import
 - **System notifications** — tray toasts for new messages
