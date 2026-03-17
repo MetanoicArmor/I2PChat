@@ -1977,6 +1977,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._last_status: str = "initializing"
         self._transfer_row: Optional[int] = None
         self._transfer_is_image: bool = False
+        self._incoming_accept_prompts: set[str] = set()
 
         # Таймер для анимации прогресс-бара
         self._transfer_timer = QtCore.QTimer(self)
@@ -2237,42 +2238,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             is_image = getattr(info, "is_inline_image", False)
             # Для входящих файлов (не картинок) спрашиваем подтверждение
             if not info.is_sending and not is_image:
-                answer = QtWidgets.QMessageBox.question(
-                    self,
-                    "Incoming file",
-                    f"Accept incoming file?\n\n{info.filename} ({info.size} bytes)",
-                    QtWidgets.QMessageBox.StandardButton.Yes
-                    | QtWidgets.QMessageBox.StandardButton.No,
-                    QtWidgets.QMessageBox.StandardButton.Yes,
-                )
-                if answer == QtWidgets.QMessageBox.StandardButton.No:
-                    try:
-                        if self.core.incoming_file:  # type: ignore[attr-defined]
-                            try:
-                                self.core.incoming_file.close()  # type: ignore[attr-defined]
-                            except Exception:
-                                pass
-                        if info.filename and os.path.exists(info.filename):
-                            try:
-                                os.remove(info.filename)
-                            except Exception:
-                                pass
-                        self.core.incoming_file = None  # type: ignore[attr-defined]
-                        self.core.incoming_info = None  # type: ignore[attr-defined]
-                        # Уведомить отправителя, что файл отклонён
-                        asyncio.create_task(self.core.reject_incoming_file(info.filename))
-                    except Exception:
-                        pass
-
-                    self._append_item(
-                        ChatItem(
-                            kind="error",
-                            timestamp="",
-                            sender="FILE",
-                            text=f"Incoming file rejected: {info.filename}",
-                        )
-                    )
-                    return
+                prompt_key = f"{info.filename}|{info.size}"
+                if prompt_key not in self._incoming_accept_prompts:
+                    self._incoming_accept_prompts.add(prompt_key)
+                    self._ask_incoming_file_accept_async(info, prompt_key)
 
             # Создаём сообщение прогресса в чате (для картинок — "Uploading/Receiving image")
             self._transfer_is_image = is_image
@@ -2362,6 +2331,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     )
                     done_action = "sent" if info.is_sending else "received"
                     if done_action == "received":
+                        self._incoming_accept_prompts.discard(f"{info.filename}|{info.size}")
                         downloads_dir = get_downloads_dir()
                         self.chat_model.update_item(
                             self._transfer_row,
@@ -2386,6 +2356,53 @@ class ChatWindow(QtWidgets.QMainWindow):
                             ),
                         )
                     self._transfer_row = None
+
+    def _reject_incoming_file(self, filename: str) -> None:
+        try:
+            if self.core.incoming_file:  # type: ignore[attr-defined]
+                try:
+                    self.core.incoming_file.close()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            if filename and os.path.exists(filename):
+                try:
+                    os.remove(filename)
+                except Exception:
+                    pass
+            self.core.incoming_file = None  # type: ignore[attr-defined]
+            self.core.incoming_info = None  # type: ignore[attr-defined]
+            # Уведомить отправителя, что файл отклонён.
+            asyncio.create_task(self.core.reject_incoming_file(filename))
+        except Exception:
+            pass
+        self._append_item(
+            ChatItem(
+                kind="error",
+                timestamp="",
+                sender="FILE",
+                text=f"Incoming file rejected: {filename}",
+            )
+        )
+
+    def _ask_incoming_file_accept_async(self, info: FileTransferInfo, prompt_key: str) -> None:
+        """Неблокирующий prompt — безопаснее с Python 3.14 + qasync."""
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Incoming file")
+        box.setText(f"Accept incoming file?\n\n{info.filename} ({info.size} bytes)")
+        box.setStandardButtons(
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No
+        )
+        box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Yes)
+        box.setModal(True)
+
+        def _finished(result: int) -> None:
+            self._incoming_accept_prompts.discard(prompt_key)
+            if result == int(QtWidgets.QMessageBox.StandardButton.No):
+                self._reject_incoming_file(info.filename)
+
+        box.finished.connect(_finished)
+        box.open()
 
     @QtCore.pyqtSlot(str)
     def handle_image_received(self, art: str) -> None:
