@@ -111,8 +111,7 @@ secretstorage==3.5.0 ; sys_platform == "linux" \
     --hash=sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be
     # via keyring (linux backends)
 jeepney==0.9.0 ; sys_platform == "linux" \
-    --hash=sha256:2011e5b86c8533c0a5c634bfc0a180824a08952bcf660ff31c249c3104a29b87 \
-    --hash=sha256:fa9e232dfa0c498bd0b8a3a73b8d8a31978304dcef0515adc859d4e096f96f4f
+    --hash=sha256:97e5714520c16fc0a45695e5365a2e11b81ea79bba796e26f9f1d178cb182683
     # via keyring (SecretService on Linux)
 linkify-it-py==2.1.0 \
     --hash=sha256:0d252c1594ecba2ecedc444053db5d3a9b7ec1b0dd929c8f1d74dce89f86c05e \
