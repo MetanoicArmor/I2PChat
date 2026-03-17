@@ -1,38 +1,61 @@
-# I2PChat v0.5.0 — UI & Profile Lock Update
+# I2PChat v0.5.0 — UI refresh and lock-to-peer reliability
 
 ## RU
 
 ### Контекст
 
-Релиз фокусируется на двух направлениях:
+`v0.5.0` объединяет UI-обновление и исправления профильного persistence:
 
-- новый кроссплатформенный интерфейс в стиле macOS 26;
-- исправление логики профиля и `Lock to peer`.
+- единый macOS-inspired визуальный стиль для Linux/macOS/Windows;
+- стабилизация сценария `Lock to peer` без повторных действий пользователя.
 
-### Что вошло в релиз
+### Что реализовано
 
-#### 1) Новый UI в стиле macOS для всех платформ
+#### 1) Кроссплатформенный UI в стиле macOS 26
 
-- Переработан визуальный стиль приложения (Linux/macOS/Windows).
-- Добавлены две темы: `ligth` и `night`.
-- Переключатель темы перенесён в основное окно рядом со строкой статуса.
-- Обновлены ключевые элементы интерфейса: popup-меню, панели действий, статусная строка и карточки передачи файлов/изображений.
+- Добавлены и отбалансированы темы `ligth` и `night`.
+- Переключение темы перенесено в рабочее окно (рядом со статусом).
+- Унифицированы popup-элементы и карточки передачи файлов/изображений.
+- Статус-строка стала информативнее и адаптивнее по ширине.
 
-#### 2) Исправление `Lock to peer` и формата профиля
+#### 2) Исправление профилей и `Lock to peer`
 
-- Исправлен сценарий, где при первом `Lock to peer` в `.dat` мог попасть только адрес peer.
-- Нормализован формат профиля `.dat`:
+- Исправлен сценарий первого lock, при котором `.dat` мог сохраняться в некорректном формате.
+- Нормализован формат `.dat`:
   - строка 1 — приватный ключ профиля;
-  - строка 2 — закреплённый peer (`stored peer`), если lock включён.
-- Исправлена загрузка профилей с ранее некорректным содержимым `.dat`.
-- Убрано дублирование строк при повторном lock.
+  - строка 2 — закреплённый peer (`stored peer`).
+- Улучшена загрузка старых/повреждённых `.dat` без ручного восстановления.
+- Убраны дубли строк и зависимость от повторного lock/restart.
+
+#### 3) Иконки и сборка по платформам
+
+- Пересобраны иконки из нового исходника.
+- Поддержаны нативные форматы:
+  - macOS: `I2PChat.icns`;
+  - Windows: `i2pchat.ico`;
+  - base PNG: `icon.png`.
+- Обновлены build-скрипты и spec-файл для корректного выбора иконок.
 
 ### Итог
 
-`v0.5.0` стабилизирует UX и профильный persistence:
+Релиз `v0.5.0` делает приложение визуально цельным и устраняет практический баг profile lock:
 
-- современный единый UI с двумя темами на всех платформах;
-- корректный `Lock to peer` с первого раза и предсказуемое восстановление состояния профиля.
+- современный UI и темы, одинаково предсказуемые на всех ОС;
+- корректный `Lock to peer` с первого раза и стабильная загрузка профиля.
+
+### Таблицы (в конце)
+
+| Область | До | После |
+|---|---|---|
+| UI/Theme | Частично разнородный рендер | Единый macOS-style UI на всех ОС |
+| Profile lock | Возможен некорректный `.dat` и повторный lock | Каноничный формат `.dat`, корректная загрузка |
+| Icons/Build | Не всегда нативные форматы | `.icns`/`.ico` + обновлённые скрипты |
+
+| Артефакт | Формат | Назначение |
+|---|---|---|
+| `icon.png` | PNG | Базовый исходник иконки |
+| `I2PChat.icns` | ICNS | Иконка приложения для macOS |
+| `i2pchat.ico` | ICO | Иконка приложения для Windows |
 
 ---
 
@@ -40,33 +63,56 @@
 
 ### Context
 
-This release focuses on two major areas:
+`v0.5.0` combines a UI refresh with profile persistence hardening:
 
-- a new cross-platform macOS 26 inspired UI;
-- profile persistence and `Lock to peer` reliability fixes.
+- a unified macOS-inspired visual language across Linux/macOS/Windows;
+- reliable `Lock to peer` behavior without repeated user actions.
 
-### What’s included
+### Implemented
 
-#### 1) New macOS-style UI across all platforms
+#### 1) Cross-platform macOS 26 style UI
 
-- Updated visual language for Linux, macOS, and Windows.
-- Added two themes: `ligth` and `night`.
-- Moved theme switching to the main window (next to the status bar).
-- Refined key UI components: popup menus, action toolbars, status bar text, and file/image transfer cards.
+- Added and balanced `ligth` and `night` themes.
+- Moved theme switching to the main window (next to status text).
+- Unified popup behavior and file/image transfer cards.
+- Made status text more informative and width-adaptive.
 
-#### 2) `Lock to peer` and profile format fixes
+#### 2) Profile and `Lock to peer` fixes
 
-- Fixed the issue where first-time `Lock to peer` could write only peer address to `.dat`.
-- Standardized `.dat` profile format:
+- Fixed first-lock flow that could save malformed `.dat` state.
+- Standardized `.dat` format:
   - line 1 — profile private key;
-  - line 2 — pinned peer (`stored peer`) when lock is enabled.
-- Improved loading of previously malformed `.dat` files.
-- Removed duplicate lines on repeated lock actions.
+  - line 2 — pinned peer (`stored peer`).
+- Improved compatibility with previously malformed `.dat` files.
+- Removed duplicate writes and repeated lock/restart dependency.
+
+#### 3) Icons and build pipeline
+
+- Regenerated icons from the new source artwork.
+- Added native icon targets:
+  - macOS: `I2PChat.icns`;
+  - Windows: `i2pchat.ico`;
+  - base PNG: `icon.png`.
+- Updated build scripts and spec to pick proper icon formats per platform.
 
 ### Summary
 
-`v0.5.0` improves both UX and profile state consistency:
+`v0.5.0` delivers a cleaner cross-platform UX and fixes the practical profile-lock issue:
 
-- one modern UI with two themes across all platforms;
+- modern, consistent UI and themes on all target OSes;
 - deterministic `Lock to peer` behavior and reliable profile restore.
+
+### Tables (at the end)
+
+| Area | Before | After |
+|---|---|---|
+| UI/Theme | Partially inconsistent rendering | Unified macOS-style UI across platforms |
+| Profile lock | Possible malformed `.dat` and repeated lock | Canonical `.dat` format and stable load |
+| Icons/Build | Non-native icon usage in some flows | Native `.icns`/`.ico` with updated scripts |
+
+| Artifact | Format | Purpose |
+|---|---|---|
+| `icon.png` | PNG | Base icon source |
+| `I2PChat.icns` | ICNS | macOS app icon |
+| `i2pchat.ico` | ICO | Windows app icon |
 
