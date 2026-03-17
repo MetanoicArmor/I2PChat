@@ -50,4 +50,6 @@ Write-Host ""
 Write-Host "Done."
 Write-Host "GUI binary: dist\\I2PChat\\I2PChat.exe"
 Write-Host "Security profile: signed handshake + TOFU (release $ReleaseVersion)"
+Write-Host "For release upload, create zip:"
+Write-Host "  Compress-Archive -Path dist\\I2PChat -DestinationPath dist\\I2PChat-windows-x64-v$ReleaseVersion.zip -CompressionLevel Optimal"
 
