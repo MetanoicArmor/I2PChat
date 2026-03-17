@@ -1984,6 +1984,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             sender = "SYSTEM"
 
         self._append_item(ChatItem(kind=kind, timestamp=ts, sender=sender, text=text))
+        # Handshake-события приходят как system/success сообщения;
+        # обновляем статус сразу, чтобы Secure не "залипал" на off.
+        self.refresh_status_label()
 
     @QtCore.pyqtSlot(object)
     def handle_notify(self, msg: ChatMessage) -> None:
@@ -2503,11 +2506,14 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.addr_edit.setText(stored)
 
         link_state = "online" if self.core.conn else "offline"
-        secure_state = (
-            "v2"
-            if self.core.handshake_complete
-            else ("negotiating" if self.core.use_encryption else "off")
-        )
+        if self.core.handshake_complete:
+            secure_state = "v2"
+        elif self.core.conn and (
+            self.core.use_encryption or getattr(self.core, "_handshake_initiated", False)
+        ):
+            secure_state = "negotiating"
+        else:
+            secure_state = "off"
         current_peer_disp = _short_addr(self.core.current_peer_addr)
         stored_disp = _short_addr(stored)
         ack_part = f"ACKdrop:{ack_drop_total}" if ack_drop_total > 0 else "ACKdrop:0"
