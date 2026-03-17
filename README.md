@@ -144,24 +144,6 @@ nix run github:MetanoicArmor/I2PChat
 nix develop github:MetanoicArmor/I2PChat
 ```
 
-#### 🐡 BSD (OpenBSD, FreeBSD)
-
-Install dependencies and run from source:
-
-```bash
-# OpenBSD
-pkg_add python3 py3-pip libsodium
-pip3 install --user -r requirements.txt
-python3 main_qt.py
-
-# FreeBSD
-pkg install python311 py311-pip libsodium
-pip install --user -r requirements.txt
-python3.11 main_qt.py
-```
-
-> **Note:** PyQt6 may not be available in BSD package repositories.
-
 ### 📄 License
 
 See `LICENSE` for full license text.  
