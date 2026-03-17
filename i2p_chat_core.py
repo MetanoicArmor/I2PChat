@@ -592,6 +592,31 @@ class I2PChatCore:
             raw = raw[:-8]
         return bool(re.fullmatch(r"[a-z2-7]{40,80}", raw))
 
+    def _write_profile_dat(
+        self,
+        private_key_base64: Optional[str],
+        stored_peer: Optional[str],
+    ) -> None:
+        """Сохраняет .dat в каноничном формате: key на 1-й, peer на 2-й строке."""
+        if self.profile == "default":
+            return
+        lines: list[str] = []
+        key = (private_key_base64 or "").strip()
+        peer = self._normalize_peer_addr(stored_peer or "")
+        if key:
+            lines.append(key)
+        if peer:
+            lines.append(peer)
+        if not lines:
+            return
+        path = self._profile_path()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
     def save_stored_peer(self, peer_addr: str) -> None:
         """
         Сохраняет lock-пир в профиль без дублирования строк.
@@ -606,29 +631,21 @@ class I2PChatCore:
         if not normalized_peer:
             raise ValueError("Peer address is empty")
 
-        key_file = self._profile_path()
-        lines: list[str] = []
-        if os.path.exists(key_file):
-            with open(key_file, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f.readlines() if line.strip()]
+        private_key_base64: Optional[str] = None
+        if self.my_dest is not None:
+            try:
+                private_key_base64 = self.my_dest.private_key.base64
+            except Exception:
+                private_key_base64 = None
+        if not private_key_base64:
+            key_file = self._profile_path()
+            if os.path.exists(key_file):
+                with open(key_file, "r", encoding="utf-8") as f:
+                    lines = [line.strip() for line in f.readlines() if line.strip()]
+                if lines and not self._is_probable_peer_addr(lines[0]):
+                    private_key_base64 = lines[0]
 
-        if lines:
-            if self._is_probable_peer_addr(lines[0]):
-                # keyring-сценарий: файл хранит только pinned peer в первой строке
-                out_lines = [normalized_peer]
-            else:
-                # file-сценарий: private key в первой строке, peer — во второй
-                out_lines = [lines[0], normalized_peer]
-        else:
-            # keyring-сценарий без существующего файла
-            out_lines = [normalized_peer]
-
-        with open(key_file, "w", encoding="utf-8") as f:
-            f.write("\n".join(out_lines) + "\n")
-        try:
-            os.chmod(key_file, 0o600)
-        except OSError:
-            pass
+        self._write_profile_dat(private_key_base64, normalized_peer)
         self.stored_peer = normalized_peer
 
     async def _request_trust_decision(
@@ -793,10 +810,13 @@ class I2PChatCore:
                 with open(key_file, "r") as f:
                     lines = [line.strip() for line in f.readlines() if line.strip()]
 
-                if len(lines) > 0:
+                if len(lines) > 0 and not self._is_probable_peer_addr(lines[0]):
                     raw_private_key = lines[0]
-                    dest = i2plib.Destination(raw_private_key, has_private_key=True)
-                    self._emit_system(f"Loaded identity from {key_file}")
+                    try:
+                        dest = i2plib.Destination(raw_private_key, has_private_key=True)
+                        self._emit_system(f"Loaded identity from {key_file}")
+                    except Exception:
+                        dest = None
 
             if os.path.exists(key_file):
                 with open(key_file, "r") as f:
@@ -824,15 +844,11 @@ class I2PChatCore:
                 if _try_keyring_set(self.profile, dest.private_key.base64):
                     self._emit_message("success", "Identity saved to secure keyring")
                 else:
-                    with open(key_file, "w") as f:
-                        f.write(dest.private_key.base64 + "\n")
-                    try:
-                        os.chmod(key_file, 0o600)
-                    except OSError:
-                        pass
                     self._emit_message("success", f"Identity saved to {key_file}")
 
         self.my_dest = dest
+        if is_persistent:
+            self._write_profile_dat(self.my_dest.private_key.base64, self.stored_peer)
         self._load_trust_store()
         self._ensure_local_signing_key()
 
