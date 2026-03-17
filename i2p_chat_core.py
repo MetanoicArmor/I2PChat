@@ -57,6 +57,7 @@ PeerChangedCallback = Callable[[Optional[str]], Any]
 FileEventCallback = Callable[[FileTransferInfo], Any]
 SimpleCallback = Callable[[str], Any]
 TrustDecisionCallback = Callable[[str, str, str], bool]
+FileOfferCallback = Callable[[str, int], Any]
 
 
 def get_profiles_dir() -> str:
@@ -270,6 +271,7 @@ class I2PChatCore:
         on_system: Optional[SimpleCallback] = None,
         on_error: Optional[SimpleCallback] = None,
         on_file_event: Optional[FileEventCallback] = None,
+        on_file_offer: Optional[FileOfferCallback] = None,
         on_image_received: Optional[Callable[[str], Any]] = None,
         on_inline_image_received: Optional[Callable[..., Any]] = None,
         on_image_delivered: Optional[Callable[[str], Any]] = None,
@@ -286,6 +288,7 @@ class I2PChatCore:
         self.on_system = on_system
         self.on_error = on_error
         self.on_file_event = on_file_event
+        self.on_file_offer = on_file_offer
         self.on_image_received = on_image_received
         self.on_inline_image_received = on_inline_image_received
         self.on_image_delivered = on_image_delivered
@@ -418,6 +421,19 @@ class I2PChatCore:
     def _emit_file_event(self, info: FileTransferInfo) -> None:
         if self.on_file_event:
             self.on_file_event(info)
+
+    async def _request_file_offer_decision(self, filename: str, size: int) -> bool:
+        """Запросить у UI согласие на входящий файл до старта записи на диск."""
+        if self.on_file_offer is None:
+            return True
+        try:
+            result = self.on_file_offer(filename, size)
+            if asyncio.isfuture(result) or asyncio.iscoroutine(result):
+                return bool(await result)
+            return bool(result)
+        except Exception as e:
+            self._emit_error(f"Incoming file decision callback failed: {e}")
+            return False
 
     def _emit_inline_image(self, path: str, is_from_me: bool, sent_filename: Optional[str] = None) -> None:
         if self.on_inline_image_received:
@@ -2023,6 +2039,17 @@ class I2PChatCore:
                             continue
                         safe_name = os.path.basename(filename)
                         safe_path = os.path.join(get_downloads_dir(), safe_name)
+                        accepted = await self._request_file_offer_decision(
+                            safe_name, size
+                        )
+                        if not accepted:
+                            await self.reject_incoming_file(safe_name)
+                            self._emit_system(
+                                f"Incoming file rejected by user: {safe_name}"
+                            )
+                            self.incoming_file = None
+                            self.incoming_info = None
+                            continue
                         self.incoming_file = open(safe_path, "wb")
                         self._incoming_file_msg_id = msg_id or None
                         self.incoming_info = FileTransferInfo(

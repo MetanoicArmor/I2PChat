@@ -1717,6 +1717,7 @@ class _ClickableFolderLabel(QtWidgets.QLabel):
 
 class ActionsPopup(QtWidgets.QFrame):
     """Кастомный popup вместо QMenu для одинаковой отрисовки на всех ОС."""
+    closed = QtCore.pyqtSignal()
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -1759,6 +1760,10 @@ class ActionsPopup(QtWidgets.QFrame):
         global_pos = anchor.mapToGlobal(QtCore.QPoint(x, anchor.height() + 6))
         self.move(global_pos)
         self.show()
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
+        super().hideEvent(event)
+        self.closed.emit()
 
     def apply_theme(self, theme_id: str) -> None:
         if theme_id == "night":
@@ -1986,6 +1991,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         main_layout.setSpacing(10)
 
         self.more_actions_popup = ActionsPopup(self)
+        self._more_actions_suppress_until_ms = 0
+        self.more_actions_popup.closed.connect(self._on_more_actions_popup_closed)
 
         # диагностическая строка статуса
         self.status_label = QtWidgets.QLabel("Status: initializing", self)
@@ -2014,7 +2021,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._last_status: str = "initializing"
         self._transfer_row: Optional[int] = None
         self._transfer_is_image: bool = False
-        self._incoming_accept_prompts: set[str] = set()
+        self._active_file_offer_boxes: list[QtWidgets.QMessageBox] = []
 
         # Таймер для анимации прогресс-бара
         self._transfer_timer = QtCore.QTimer(self)
@@ -2273,12 +2280,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         if info.received == 0 and info.size > 0:
             # Только Send Pic (G) помечен как inline image; Send File (F/D) — обычный файл
             is_image = getattr(info, "is_inline_image", False)
-            # Для входящих файлов (не картинок) спрашиваем подтверждение
-            if not info.is_sending and not is_image:
-                prompt_key = f"{info.filename}|{info.size}"
-                if prompt_key not in self._incoming_accept_prompts:
-                    self._incoming_accept_prompts.add(prompt_key)
-                    self._ask_incoming_file_accept_async(info, prompt_key)
 
             # Создаём сообщение прогресса в чате (для картинок — "Uploading/Receiving image")
             self._transfer_is_image = is_image
@@ -2368,7 +2369,6 @@ class ChatWindow(QtWidgets.QMainWindow):
                     )
                     done_action = "sent" if info.is_sending else "received"
                     if done_action == "received":
-                        self._incoming_accept_prompts.discard(f"{info.filename}|{info.size}")
                         downloads_dir = get_downloads_dir()
                         self.chat_model.update_item(
                             self._transfer_row,
@@ -2394,52 +2394,36 @@ class ChatWindow(QtWidgets.QMainWindow):
                         )
                     self._transfer_row = None
 
-    def _reject_incoming_file(self, filename: str) -> None:
-        try:
-            if self.core.incoming_file:  # type: ignore[attr-defined]
-                try:
-                    self.core.incoming_file.close()  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-            if filename and os.path.exists(filename):
-                try:
-                    os.remove(filename)
-                except Exception:
-                    pass
-            self.core.incoming_file = None  # type: ignore[attr-defined]
-            self.core.incoming_info = None  # type: ignore[attr-defined]
-            # Уведомить отправителя, что файл отклонён.
-            asyncio.create_task(self.core.reject_incoming_file(filename))
-        except Exception:
-            pass
-        self._append_item(
-            ChatItem(
-                kind="error",
-                timestamp="",
-                sender="FILE",
-                text=f"Incoming file rejected: {filename}",
-            )
-        )
+    async def ask_incoming_file_accept(self, filename: str, size: int) -> bool:
+        """Асинхронный запрос подтверждения входящего файла для core."""
+        loop = asyncio.get_running_loop()
+        decision: asyncio.Future[bool] = loop.create_future()
 
-    def _ask_incoming_file_accept_async(self, info: FileTransferInfo, prompt_key: str) -> None:
-        """Неблокирующий prompt — безопаснее с Python 3.14 + qasync."""
         box = QtWidgets.QMessageBox(self)
         box.setWindowTitle("Incoming file")
-        box.setText(f"Accept incoming file?\n\n{info.filename} ({info.size} bytes)")
+        box.setText(f"Accept incoming file?\n\n{filename} ({size} bytes)")
         box.setStandardButtons(
             QtWidgets.QMessageBox.StandardButton.Yes
             | QtWidgets.QMessageBox.StandardButton.No
         )
         box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Yes)
         box.setModal(True)
+        self._active_file_offer_boxes.append(box)
 
         def _finished(result: int) -> None:
-            self._incoming_accept_prompts.discard(prompt_key)
-            if result == int(QtWidgets.QMessageBox.StandardButton.No):
-                self._reject_incoming_file(info.filename)
+            try:
+                self._active_file_offer_boxes.remove(box)
+            except ValueError:
+                pass
+            if not decision.done():
+                decision.set_result(
+                    result == int(QtWidgets.QMessageBox.StandardButton.Yes)
+                )
+            box.deleteLater()
 
         box.finished.connect(_finished)
         box.open()
+        return await decision
 
     @QtCore.pyqtSlot(str)
     def handle_image_received(self, art: str) -> None:
@@ -2520,6 +2504,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_system=self.handle_system,
             on_error=self.handle_error,
             on_file_event=self.handle_file_event,
+            on_file_offer=self.ask_incoming_file_accept,
             on_image_received=self.handle_image_received,
             on_inline_image_received=self.handle_inline_image_received,
             on_image_delivered=self.handle_image_delivered,
@@ -2661,7 +2646,21 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._apply_theme(next_theme, persist=True)
 
     @QtCore.pyqtSlot()
+    def _on_more_actions_popup_closed(self) -> None:
+        # На Windows клик, закрывающий popup, может тут же повторно открыть его.
+        # Небольшой "debounce" убирает ложный reopen тем же событием мыши.
+        self._more_actions_suppress_until_ms = (
+            int(QtCore.QDateTime.currentMSecsSinceEpoch()) + 180
+        )
+
+    @QtCore.pyqtSlot()
     def on_more_actions_clicked(self) -> None:
+        now_ms = int(QtCore.QDateTime.currentMSecsSinceEpoch())
+        if now_ms < self._more_actions_suppress_until_ms:
+            return
+        if self.more_actions_popup.isVisible():
+            self.more_actions_popup.hide()
+            return
         self.more_actions_popup.show_below(self.more_toolbar_button)
 
     def handle_trust_decision(self, peer_addr: str, fingerprint: str, signing_key_hex: str) -> bool:
