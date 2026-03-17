@@ -1467,6 +1467,145 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
         super().keyPressEvent(event)
 
 
+class ProfileComboBox(QtWidgets.QComboBox):
+    popupRequested = QtCore.pyqtSignal()
+
+    def showPopup(self) -> None:  # type: ignore[override]
+        self.popupRequested.emit()
+
+
+class ProfileComboPopup(QtWidgets.QFrame):
+    itemChosen = QtCore.pyqtSignal(str)
+
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setObjectName("ProfileComboPopupWindow")
+        self.setMinimumWidth(220)
+
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.surface = QtWidgets.QFrame(self)
+        self.surface.setObjectName("ProfileComboPopupSurface")
+        root.addWidget(self.surface)
+
+        inner = QtWidgets.QVBoxLayout(self.surface)
+        inner.setContentsMargins(6, 6, 6, 6)
+        inner.setSpacing(0)
+
+        self.list = QtWidgets.QListWidget(self.surface)
+        self.list.setObjectName("ProfileComboPopupList")
+        self.list.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.list.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.itemClicked.connect(self._on_item_clicked)
+        inner.addWidget(self.list)
+
+    def _on_item_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
+        self.itemChosen.emit(item.text())
+        self.hide()
+
+    def set_items(self, values: List[str], selected_text: str) -> None:
+        unique: List[str] = []
+        seen = set()
+        for v in values:
+            s = (v or "").strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            unique.append(s)
+        self.list.clear()
+        for v in unique:
+            self.list.addItem(v)
+        selected_row = -1
+        for i, v in enumerate(unique):
+            if v == selected_text:
+                selected_row = i
+                break
+        if selected_row >= 0:
+            self.list.setCurrentRow(selected_row)
+        elif unique:
+            self.list.setCurrentRow(0)
+
+    def show_below(self, anchor: QtWidgets.QWidget) -> None:
+        row_h = max(24, self.list.sizeHintForRow(0))
+        visible = min(max(1, self.list.count()), 8)
+        content_h = visible * row_h + 12
+        self.list.setMinimumHeight(content_h)
+        self.list.setMaximumHeight(content_h)
+        self.setFixedWidth(max(anchor.width(), self.minimumWidth()))
+        self.adjustSize()
+        pos = anchor.mapToGlobal(QtCore.QPoint(0, anchor.height() + 4))
+        self.move(pos)
+        self.show()
+
+    def apply_theme(self, theme_id: str) -> None:
+        if theme_id == "night":
+            self.setStyleSheet(
+                """
+                #ProfileComboPopupWindow { background: transparent; }
+                #ProfileComboPopupSurface {
+                    background: rgba(28, 31, 40, 0.98);
+                    border: 1px solid #3a4150;
+                    border-radius: 12px;
+                }
+                QListWidget#ProfileComboPopupList {
+                    background: transparent;
+                    border: none;
+                    outline: none;
+                    color: #d8deea;
+                    font-size: 13px;
+                }
+                QListWidget#ProfileComboPopupList::item {
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    margin: 1px 2px;
+                }
+                QListWidget#ProfileComboPopupList::item:selected {
+                    background: rgba(72, 138, 255, 0.35);
+                    color: #f4f7ff;
+                }
+                QListWidget#ProfileComboPopupList::item:hover {
+                    background: rgba(255, 255, 255, 0.10);
+                }
+                """
+            )
+        else:
+            self.setStyleSheet(
+                """
+                #ProfileComboPopupWindow { background: transparent; }
+                #ProfileComboPopupSurface {
+                    background: #f6f7fa;
+                    border: 1px solid #d4dbe7;
+                    border-radius: 12px;
+                }
+                QListWidget#ProfileComboPopupList {
+                    background: transparent;
+                    border: none;
+                    outline: none;
+                    color: #2f3644;
+                    font-size: 13px;
+                }
+                QListWidget#ProfileComboPopupList::item {
+                    border-radius: 8px;
+                    padding: 6px 10px;
+                    margin: 1px 2px;
+                }
+                QListWidget#ProfileComboPopupList::item:selected {
+                    background: #dbe9ff;
+                    color: #1b4f9f;
+                }
+                QListWidget#ProfileComboPopupList::item:hover {
+                    background: #e8eef8;
+                }
+                """
+            )
+
+
 class ProfileComboWithArrow(QtWidgets.QWidget):
     """QComboBox с видимой стрелкой ▼ поверх области выпадающего списка."""
     
@@ -1474,17 +1613,35 @@ class ProfileComboWithArrow(QtWidgets.QWidget):
         super().__init__(parent)
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.combo = QtWidgets.QComboBox(self)
+        self.combo = ProfileComboBox(self)
         layout.addWidget(self.combo)
         self._arrow = QtWidgets.QLabel("∨", self)
         self.set_arrow_color("#9fa1b5")
         self._arrow.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self._arrow.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.popup = ProfileComboPopup(self)
+        self.combo.popupRequested.connect(self._show_popup)
+        self.popup.itemChosen.connect(self._on_item_chosen)
+
+    def _show_popup(self) -> None:
+        values = [self.combo.itemText(i) for i in range(self.combo.count())]
+        self.popup.set_items(values, self.combo.currentText().strip())
+        self.popup.show_below(self.combo)
+
+    def _on_item_chosen(self, text: str) -> None:
+        idx = self.combo.findText(text)
+        if idx >= 0:
+            self.combo.setCurrentIndex(idx)
+        else:
+            self.combo.setCurrentText(text)
 
     def set_arrow_color(self, color: str) -> None:
         self._arrow.setStyleSheet(
             f"color: {color}; font-size: 10px; background: transparent;"
         )
+
+    def apply_popup_theme(self, theme_id: str) -> None:
+        self.popup.apply_theme(_resolve_theme(theme_id))
     
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -1731,6 +1888,7 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         self.combo_hint.setStyleSheet(f"color: {secondary}; font-size: 11px;")
         self.path_hint.setStyleSheet(f"color: {secondary}; font-size: 11px;")
         self.profile_combo_widget.set_arrow_color(arrow)
+        self.profile_combo_widget.apply_popup_theme(self._theme_id)
     
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if event.type() == QtCore.QEvent.Type.KeyPress and isinstance(event, QtGui.QKeyEvent):
