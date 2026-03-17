@@ -1,11 +1,9 @@
 import asyncio
 import json
-import math
 import os
 import subprocess
 import shutil
 import sys
-import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, List, Optional
 
@@ -1071,7 +1069,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     ) -> None:
         rect = option.rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
         cell_width = rect.width()
-        bubble_width = int(cell_width * 0.6)
+        bubble_width = int(cell_width * 0.58)
         
         is_sending = item.is_sending
         if is_sending:
@@ -1090,18 +1088,29 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             )
 
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-        
+
         bg_color = self._c("transfer_send_bg", "#1e3a5f") if is_sending else self._c("transfer_recv_bg", "#2d1b4e")
+        border_color = bg_color.darker(112)
+        gloss_color = QtGui.QColor(255, 255, 255, 22 if is_sending else 16)
         painter.setBrush(bg_color)
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setPen(QtGui.QPen(border_color, 1.0))
         bubble_rect = bubble_rect.adjusted(
             self.PADDING_X / 2,
             self.PADDING_Y / 2,
             -self.PADDING_X / 2,
             -self.PADDING_Y / 2,
         )
-        painter.drawRoundedRect(bubble_rect, self.BUBBLE_RADIUS, self.BUBBLE_RADIUS)
-        
+        painter.drawRoundedRect(bubble_rect, 14, 14)
+        gloss_rect = QtCore.QRectF(
+            bubble_rect.left() + 1,
+            bubble_rect.top() + 1,
+            bubble_rect.width() - 2,
+            max(8.0, bubble_rect.height() * 0.42),
+        )
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(gloss_color)
+        painter.drawRoundedRect(gloss_rect, 13, 13)
+
         inner_rect = bubble_rect.adjusted(
             self.PADDING_X, self.PADDING_Y, -self.PADDING_X, -self.PADDING_Y
         )
@@ -1110,11 +1119,15 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         metrics = QtGui.QFontMetrics(base_font)
         
         if item.sender == "IMAGE":
-            action = "↑ Uploading image" if is_sending else "↓ Receiving image"
+            action = "Uploading image" if is_sending else "Receiving image"
         else:
-            action = "↑ Sending" if is_sending else "↓ Receiving"
+            action = "Sending file" if is_sending else "Receiving file"
         header_text = f"{action}: {item.text}"
-        painter.setPen(self._c("transfer_label", "#ffffff"))
+        label_color = self._c("transfer_label", "#ffffff")
+        painter.setPen(label_color)
+        header_font = QtGui.QFont(base_font)
+        header_font.setWeight(QtGui.QFont.Weight.DemiBold)
+        painter.setFont(header_font)
         header_rect = QtCore.QRectF(
             inner_rect.left(),
             inner_rect.top(),
@@ -1127,22 +1140,34 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             metrics.elidedText(header_text, QtCore.Qt.TextElideMode.ElideMiddle, int(header_rect.width())),
         )
         
-        bar_height = 18
+        bar_height = 12
+        pct_w = 42
+        pct_gap = 8
+        bar_width = max(60.0, inner_rect.width() - pct_w - pct_gap)
         bar_rect = QtCore.QRectF(
             inner_rect.left(),
             inner_rect.top() + metrics.height() + 8,
-            inner_rect.width(),
+            bar_width,
             bar_height,
         )
-        
-        painter.setBrush(self._c("transfer_bar_bg", "#0d1b2a"))
-        painter.drawRoundedRect(bar_rect, bar_height / 2, bar_height / 2)
-        
+        pct_rect = QtCore.QRectF(
+            bar_rect.right() + pct_gap,
+            bar_rect.top() - 1,
+            pct_w,
+            bar_height + 2,
+        )
+
+        bar_bg = self._c("transfer_bar_bg", "#0d1b2a")
+        corner = bar_height / 2
+        painter.setPen(QtGui.QPen(bar_bg.darker(106), 1.0))
+        painter.setBrush(bar_bg)
+        painter.drawRoundedRect(bar_rect, corner, corner)
+
         progress = max(0.0, min(1.0, item.progress))
         if progress > 0:
-            fill_width = max(bar_height, bar_rect.width() * progress)
+            fill_width = max(2.0, bar_rect.width() * progress)
             fill_rect = QtCore.QRectF(bar_rect.left(), bar_rect.top(), fill_width, bar_height)
-            
+
             gradient = QtGui.QLinearGradient(fill_rect.topLeft(), fill_rect.topRight())
             if is_sending:
                 gradient.setColorAt(0.0, self._c("transfer_send_grad_0", "#0066cc"))
@@ -1153,21 +1178,26 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 gradient.setColorAt(0.5, self._c("transfer_recv_grad_1", "#a78bfa"))
                 gradient.setColorAt(1.0, self._c("transfer_recv_grad_0", "#7c3aed"))
             
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
             painter.setBrush(gradient)
-            painter.drawRoundedRect(fill_rect, bar_height / 2, bar_height / 2)
-            
-            pulse = (time.time() % 1.0)
-            glow_alpha = int(40 + 30 * math.sin(pulse * math.pi * 2))
-            glow_color = QtGui.QColor(255, 255, 255, glow_alpha)
-            painter.setBrush(glow_color)
-            painter.drawRoundedRect(fill_rect, bar_height / 2, bar_height / 2)
-        
+            painter.drawRoundedRect(fill_rect, corner, corner)
+            sheen = QtGui.QColor(255, 255, 255, 38)
+            painter.setBrush(sheen)
+            painter.drawRoundedRect(
+                QtCore.QRectF(fill_rect.left(), fill_rect.top(), fill_rect.width(), fill_rect.height() * 0.5),
+                corner,
+                corner,
+            )
+
         pct = int(progress * 100)
         pct_text = f"{pct}%"
-        painter.setPen(self._c("transfer_label", "#ffffff"))
+        pct_font = QtGui.QFont(base_font)
+        pct_font.setPointSize(max(base_font.pointSize() - 1, 8))
+        painter.setPen(self._c("transfer_meta", "#a0a0a0"))
+        painter.setFont(pct_font)
         painter.drawText(
-            bar_rect,
-            int(QtCore.Qt.AlignmentFlag.AlignCenter),
+            pct_rect,
+            int(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter),
             pct_text,
         )
         
@@ -1195,7 +1225,14 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 int(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop),
                 size_text,
             )
-        
+        else:
+            size_rect = QtCore.QRectF(
+                inner_rect.left(),
+                bar_rect.bottom() + 4,
+                inner_rect.width(),
+                metrics.height(),
+            )
+
         # Надпись Cancel снизу справа (не перекрывает имя файла)
         small_font = QtGui.QFont(base_font)
         small_font.setPointSize(max(base_font.pointSize() - 2, 8))
