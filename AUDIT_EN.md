@@ -23,7 +23,7 @@ Reviewed components:
 - GUI and local boundary handling: `main_qt.py`, `notifications.py`
 - Build and packaging: `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`, `I2PChat.spec`
 - Dependency and lock governance: `requirements.in`, `requirements.txt`, `requirements-build.txt`, `requirements-ci-audit.txt`
-- CI controls: `.github/workflows/security-audit.yml`, `.github/workflows/secret-scan.yml`, `.github/workflows/nix-check.yml`
+- CI controls: `.github/workflows/security-audit.yml`, `.github/workflows/secret-scan.yml`
 - Security regression tests: `tests/test_protocol_framing_vnext.py`, `tests/test_profile_import_overwrite.py`, `tests/test_audit_remediation.py`, `tests/test_asyncio_regression.py`
 
 Method:
@@ -33,7 +33,7 @@ Method:
 - Regression test execution
 
 Test verification:
-- `python3 -m unittest tests/test_asyncio_regression.py tests/test_protocol_framing_vnext.py tests/test_profile_import_overwrite.py tests/test_audit_remediation.py` -> OK (39 tests)
+- `python3 -m unittest tests/test_asyncio_regression.py tests/test_protocol_framing_vnext.py tests/test_profile_import_overwrite.py tests/test_audit_remediation.py` -> OK (46 tests)
 
 ## Architecture and Trust Boundaries
 
@@ -123,7 +123,7 @@ Recommendations:
 
 ---
 
-## [LOW] P-01: Handshake key derivation lacks explicit key separation (no HKDF)
+## [LOW] P-01: Handshake key derivation lacked explicit key separation (no HKDF) — FIXED
 
 Affected:
 - `i2p_chat_core.py` (`_compute_final_shared_key`)
@@ -131,22 +131,23 @@ Affected:
 
 Category: cryptographic robustness
 
-Observation:
-- Final session key is derived as `SHA256(DH_shared || nonce_init || nonce_resp)` and reused for encryption and MAC contexts.
+Remediation status:
+- `crypto.py` implements HKDF (`hkdf_extract`/`hkdf_expand`) and dedicated derivation via `derive_handshake_subkeys(...)`.
+- `i2p_chat_core.py` now derives separate session subkeys (`self.shared_key`, `self.shared_mac_key`).
+- Encryption uses `k_enc` while message authentication uses `k_mac`.
 
 Impact:
-- No known practical break in current construction, but weaker cryptographic hygiene versus explicit KDF key separation.
+- No known practical break was identified in the previous construction, but explicit key separation is stronger cryptographic hygiene.
 
 Exploitability:
 - Low. Primarily defense-in-depth.
 
-Recommendations:
-1. Introduce HKDF over DH shared secret + transcript salt.
-2. Derive separate subkeys (`k_enc`, `k_mac`) with context labels.
+Outcome:
+- Risk addressed as defense-in-depth hardening.
 
 ---
 
-## [LOW] P-02: Protocol metadata remains observable
+## [LOW] P-02: Protocol metadata remains observable — PARTIALLY MITIGATED
 
 Affected:
 - `protocol_codec.py`
@@ -154,23 +155,23 @@ Affected:
 
 Category: metadata privacy / traffic analysis
 
-Observation:
-- Frame header keeps `TYPE` and `LEN` visible.
-- A peer identity line is exchanged before encrypted handshake framing.
+Remediation status:
+- Threat-model/privacy notes were documented in `README.md`, `docs/MANUAL_EN.md`, and `docs/MANUAL_RU.md`.
+- Optional encrypted payload padding profile was added; default is `balanced` (128-byte buckets).
+- Runtime profile override exists via `I2PCHAT_PADDING_PROFILE` (`balanced`/`off`).
 
 Impact:
-- Observers may infer message patterns (kind/size) and linkage hints.
+- Header visibility still allows some traffic-shape inference (message kind/size patterns and linkage hints).
 
 Exploitability:
 - Low in protocol-integrity terms, relevant for privacy posture.
 
-Recommendations:
-1. Document metadata exposure explicitly in threat model/user docs.
-2. Evaluate optional padding or obfuscation profiles for high-risk users.
+Outcome:
+- Fully hiding `TYPE`/`LEN` is not feasible in current framing, but payload-length correlation is reduced.
 
 ---
 
-## [LOW] S-01: Vendored `i2plib` requires explicit security update governance
+## [LOW] S-01: Vendored `i2plib` required explicit security update governance — FIXED
 
 Affected:
 - `i2plib/` (vendored copy)
@@ -178,41 +179,42 @@ Affected:
 
 Category: supply-chain lifecycle
 
-Observation:
-- The project now intentionally relies on a vendored `i2plib` implementation.
-- This removes dependency ambiguity, but shifts patch responsibility entirely to project maintainers.
+Remediation status:
+- Machine-readable provenance file added: `i2plib/VENDORED_UPSTREAM.json`.
+- Governance policy added: `docs/VENDORED_I2PLIB_POLICY.md` (cadence, advisory sources, review workflow).
+- CI policy checks validate required provenance fields in `.github/workflows/security-audit.yml`.
 
 Impact:
-- Security fixes from upstream may lag without formal sync policy.
+- Without governance, upstream security fixes can lag in downstream adoption.
 
 Exploitability:
 - Low direct exploitability; medium operational risk over time.
 
-Recommendations:
-1. Establish periodic upstream diff and security advisory review cadence.
-2. Add CI policy check for declared vendored-version provenance.
+Outcome:
+- Governance process is formalized and machine-validated in CI.
 
 ---
 
-## [LOW] S-02: Nix build input tracks moving `nixos-unstable` branch
+## [LOW] S-02: Nix build input tracked moving `nixos-unstable` branch — FIXED FOR REPRODUCIBILITY
 
 Affected:
 - `flake.nix`
 
 Category: build reproducibility / supply-chain determinism
 
-Observation:
-- `nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable"` tracks a moving upstream channel.
+Remediation status:
+- `flake.lock` is present and pins immutable revisions for `nixpkgs` and `flake-utils`.
+- CI policy checks enforce `flake.lock` presence and `nixpkgs.locked.rev`.
+- `docs/VENDORED_I2PLIB_POLICY.md` documents lock update workflow for controlled refreshes.
 
 Impact:
-- Security posture and dependency graph can drift between builds.
+- Reproducibility and auditability degrade when builds drift with channel head updates.
 
 Exploitability:
 - Low direct exploitability; impacts reproducibility and auditability.
 
-Recommendations:
-1. Pin nixpkgs by immutable revision for release builds.
-2. Add periodic controlled update process and changelog for flake input bumps.
+Outcome:
+- Release/CI reproducibility now relies on lock-based pinning rather than moving-channel state.
 
 ## Verified Strengths
 
@@ -227,20 +229,20 @@ Recommendations:
 ## Residual Risks and Testing Gaps
 
 Residual risks:
-- Privacy metadata leakage is a known trade-off in current framing.
-- Release signing trust UX still depends on user verification discipline.
+- Privacy metadata leakage remains a known trade-off in current framing.
+- Release signing trust still depends on user verification discipline and lacks platform-native trust signing.
 
 Recommended additional tests:
 1. Negative tests for malformed handshake transcript fields and mixed-role replay attempts.
-2. Protocol-level tests for optional padding profiles (if introduced).
+2. Protocol-level tests for padding boundary behavior (small, near-bucket, and large payload sizes).
 3. CI policy tests validating platform signing/notarization requirements once implemented.
 
 ## Remediation Priority
 
-1. P1: A-01 (platform-native release trust + provenance)
-2. P2: P-01 (HKDF key separation hardening)
-3. P3: P-02, S-01, S-02 (privacy documentation/controls and governance hardening)
+1. P1: A-01 (platform-native release trust + provenance attestations)
+2. P2: P-02 (privacy hardening beyond current header visibility limits)
+3. P3: Continuous governance upkeep for S-01/S-02 controls (periodic review discipline)
 
 ## Conclusion
 
-I2PChat currently demonstrates strong protocol integrity controls and disciplined defensive checks in runtime paths. The most meaningful remaining work is not breaking protocol security but improving release authenticity guarantees and long-horizon supply-chain governance.
+I2PChat currently demonstrates strong protocol integrity controls and disciplined defensive checks in runtime paths. The most meaningful remaining gap is release authenticity trust at distribution time, while recently implemented HKDF key separation and supply-chain governance controls materially reduced prior low-severity risks.

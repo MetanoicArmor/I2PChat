@@ -23,7 +23,7 @@
 - GUI и локальные границы: `main_qt.py`, `notifications.py`
 - Сборка и упаковка: `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`, `I2PChat.spec`
 - Управление зависимостями и lock-файлами: `requirements.in`, `requirements.txt`, `requirements-build.txt`, `requirements-ci-audit.txt`
-- CI-контроли: `.github/workflows/security-audit.yml`, `.github/workflows/secret-scan.yml`, `.github/workflows/nix-check.yml`
+- CI-контроли: `.github/workflows/security-audit.yml`, `.github/workflows/secret-scan.yml`
 - Security-регрессии: `tests/test_protocol_framing_vnext.py`, `tests/test_profile_import_overwrite.py`, `tests/test_audit_remediation.py`, `tests/test_asyncio_regression.py`
 
 Метод:
@@ -33,7 +33,7 @@
 - Запуск регрессионных тестов
 
 Проверка тестами:
-- `python3 -m unittest tests/test_asyncio_regression.py tests/test_protocol_framing_vnext.py tests/test_profile_import_overwrite.py tests/test_audit_remediation.py` -> OK (39 tests)
+- `python3 -m unittest tests/test_asyncio_regression.py tests/test_protocol_framing_vnext.py tests/test_profile_import_overwrite.py tests/test_audit_remediation.py` -> OK (46 tests)
 
 ## Архитектура и границы доверия
 
@@ -137,7 +137,7 @@ flowchart LR
 - Шифрование использует `k_enc`, а MAC-проверка — `k_mac`.
 
 Влияние:
-- Практического взлома текущей схемы не выявлено, но криптографическая гигиена слабее, чем при явном разделении ключей через KDF.
+- Практического взлома прошлой схемы не выявлено, однако явное разделение ключей через KDF даёт более строгую криптографическую гигиену.
 
 Эксплуатируемость:
 - Low. В первую очередь defense-in-depth.
@@ -161,7 +161,7 @@ flowchart LR
 - Профиль может быть переключён через `I2PCHAT_PADDING_PROFILE` (`balanced`/`off`).
 
 Влияние:
-- Наблюдатель может делать выводы о паттернах сообщений (тип/длина) и корреляции.
+- Видимость заголовка по-прежнему позволяет выводы о паттернах трафика (тип/длина) и косвенной корреляции.
 
 Эксплуатируемость:
 - Low с точки зрения целостности протокола, но важно для privacy posture.
@@ -229,20 +229,20 @@ flowchart LR
 ## Остаточные риски и пробелы тестирования
 
 Остаточные риски:
-- Утечка privacy-метаданных является осознанным trade-off текущего framing.
-- Доверие к релизной подписи всё ещё существенно зависит от дисциплины верификации пользователя.
+- Утечка privacy-метаданных остаётся осознанным trade-off текущего framing.
+- Доверие к релизной подписи по-прежнему зависит от дисциплины верификации пользователя и не усилено platform-native trust signing.
 
 Рекомендуемые дополнительные тесты:
 1. Негативные тесты для malformed handshake transcript и mixed-role replay сценариев.
-2. Протокольные тесты для optional padding profiles (если будут добавлены).
+2. Протокольные тесты граничных случаев padding (малые, около границы bucket и большие payload-и).
 3. CI policy-тесты на обязательность platform signing/notarization после внедрения.
 
 ## Приоритет remediation
 
-1. P1: A-01 (platform-native release trust + provenance)
-2. P2: P-01 (усиление через HKDF key separation)
-3. P3: P-02, S-01, S-02 (privacy-документация/контроли и governance hardening)
+1. P1: A-01 (platform-native release trust + provenance attestations)
+2. P2: P-02 (дальнейшее privacy-усиление в рамках ограничений текущего header framing)
+3. P3: Непрерывная дисциплина сопровождения контролей S-01/S-02 (periodic governance reviews)
 
 ## Заключение
 
-Текущее состояние I2PChat показывает сильные контроли целостности протокола и дисциплинированные defensive checks в runtime-путях. Наиболее важный следующий шаг — не «чинить сломанный протокол», а усилить гарантии аутентичности релизов и долгосрочный governance цепочки поставки.
+Текущее состояние I2PChat показывает сильные контроли целостности протокола и дисциплинированные defensive checks в runtime-путях. Наиболее существенный оставшийся пробел — аутентичность релизов на этапе дистрибуции; при этом внедрённые HKDF key separation и governance-контроли цепочки поставки заметно снизили часть прежних низкоуровневых рисков.

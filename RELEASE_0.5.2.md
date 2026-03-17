@@ -95,7 +95,7 @@
   - в CI добавлен supply-chain policy-check, который валидирует provenance и наличие корректного `flake.lock`.
 - Улучшен Nix reproducibility:
   - добавлен `flake.lock` с pinned `nixpkgs`/`flake-utils`;
-  - workflow `nix-check` больше не переопределяет нестабильный канал напрямую, полагаясь на lock-файл.
+  - CI-проверки полагаются на lock-файл и не используют channel override `nixos-unstable`.
 - Подпись релизных артефактов стала более дружелюбной к локальной сборке:
   - скрипты по-прежнему генерируют `SHA256SUMS` и, при наличии GPG, `SHA256SUMS.asc`;
   - добавлены переключатели `I2PCHAT_SKIP_GPG_SIGN=1` / `I2PCHAT_REQUIRE_GPG=1` и `I2PCHAT_GPG_KEY_ID`, чтобы можно было собирать без обязательной настройки ключей.

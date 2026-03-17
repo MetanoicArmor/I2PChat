@@ -92,10 +92,6 @@ class AuditRemediationPolicyTests(unittest.TestCase):
             self.assertRegex(content, r"(?i)detach-sign", rel_path)
             self.assertRegex(content, r"(?i)SHA256(?:SUMS(?:\\.asc)?|_FILE)", rel_path)
 
-    def test_nix_workflow_does_not_override_unstable_channel(self) -> None:
-        content = _read(".github/workflows/nix-check.yml")
-        self.assertNotIn("nixpkgs=channel:nixos-unstable", content)
-
     def test_secret_scan_workflow_exists_and_is_hardened(self) -> None:
         content = _read(".github/workflows/secret-scan.yml")
         self.assertIn("actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5", content)
