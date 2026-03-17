@@ -2604,13 +2604,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             )
             return
 
-        # Всегда сохраняем .dat в общей папке профилей в домашней директории,
-        # чтобы это работало и из .app, и из dev‑окружения.
-        key_file = os.path.join(get_profiles_dir(), f"{self.profile}.dat")
         try:
-            with open(key_file, "a", encoding="utf-8") as f:
-                f.write(self.core.current_peer_addr + "\n")
-            self.core.stored_peer = self.core.current_peer_addr
+            self.core.save_stored_peer(self.core.current_peer_addr)
             self.handle_system(
                 f"Identity {self.profile} is now locked to this peer."
             )

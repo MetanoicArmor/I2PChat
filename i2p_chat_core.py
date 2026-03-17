@@ -584,6 +584,53 @@ class I2PChatCore:
             raw += ".b32.i2p"
         return raw
 
+    def _is_probable_peer_addr(self, value: str) -> bool:
+        raw = (value or "").strip().lower()
+        if not raw:
+            return False
+        if raw.endswith(".b32.i2p"):
+            raw = raw[:-8]
+        return bool(re.fullmatch(r"[a-z2-7]{40,80}", raw))
+
+    def save_stored_peer(self, peer_addr: str) -> None:
+        """
+        Сохраняет lock-пир в профиль без дублирования строк.
+
+        Форматы, которые поддерживаем:
+        - line1=private_key, line2=stored_peer
+        - line1=stored_peer (когда identity хранится в keyring)
+        """
+        if self.profile == "default":
+            raise ValueError("Cannot store peer for transient profile")
+        normalized_peer = self._normalize_peer_addr(peer_addr)
+        if not normalized_peer:
+            raise ValueError("Peer address is empty")
+
+        key_file = self._profile_path()
+        lines: list[str] = []
+        if os.path.exists(key_file):
+            with open(key_file, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+
+        if lines:
+            if self._is_probable_peer_addr(lines[0]):
+                # keyring-сценарий: файл хранит только pinned peer в первой строке
+                out_lines = [normalized_peer]
+            else:
+                # file-сценарий: private key в первой строке, peer — во второй
+                out_lines = [lines[0], normalized_peer]
+        else:
+            # keyring-сценарий без существующего файла
+            out_lines = [normalized_peer]
+
+        with open(key_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(out_lines) + "\n")
+        try:
+            os.chmod(key_file, 0o600)
+        except OSError:
+            pass
+        self.stored_peer = normalized_peer
+
     async def _request_trust_decision(
         self, peer_addr: str, fingerprint: str, signing_key_hex: str
     ) -> bool:
@@ -754,8 +801,14 @@ class I2PChatCore:
             if os.path.exists(key_file):
                 with open(key_file, "r") as f:
                     lines = [line.strip() for line in f.readlines() if line.strip()]
-                if len(lines) > 1:
-                    self.stored_peer = lines[1]
+                stored_line: Optional[str] = None
+                if len(lines) > 1 and self._is_probable_peer_addr(lines[1]):
+                    stored_line = lines[1]
+                elif len(lines) > 0 and self._is_probable_peer_addr(lines[0]):
+                    # keyring-сценарий: в .dat может быть только pinned peer
+                    stored_line = lines[0]
+                if stored_line:
+                    self.stored_peer = self._normalize_peer_addr(stored_line)
                     disp_peer = self.stored_peer
                     if not disp_peer.endswith(".b32.i2p"):
                         disp_peer = disp_peer + ".b32.i2p"
