@@ -119,6 +119,13 @@ MAX_IMAGE_DIMENSION = 4096  # max width/height in pixels
 MAX_IMAGES_CACHE_SIZE = 100 * 1024 * 1024  # 100 MB auto-cleanup threshold
 
 
+def max_base64_chars_for_bytes(byte_count: int) -> int:
+    """Maximum Base64 text length needed to encode up to byte_count bytes."""
+    if byte_count <= 0:
+        return 0
+    return ((byte_count + 2) // 3) * 4
+
+
 def validate_image(path: str) -> Tuple[bool, str, Optional[str]]:
     """
     Валидация изображения перед отправкой/отображением.
@@ -1267,7 +1274,7 @@ class I2PChatCore:
         # Копируем изображение в images/ для локального отображения
         import hashlib
         with open(path, 'rb') as f:
-            file_hash = hashlib.md5(f.read()).hexdigest()[:8]
+            file_hash = hashlib.sha256(f.read()).hexdigest()[:8]
         
         local_filename = f"img_{int(time.time())}_{file_hash}.{detected_ext}"
         local_path = os.path.join(get_images_dir(), local_filename)
@@ -1947,7 +1954,7 @@ class I2PChatCore:
                             
                             # Сохраняем изображение
                             import hashlib
-                            file_hash = hashlib.md5(self.inline_image_buffer).hexdigest()[:8]
+                            file_hash = hashlib.sha256(self.inline_image_buffer).hexdigest()[:8]
                             safe_filename = f"img_{int(time.time())}_{file_hash}.{detected_ext}"
                             safe_path = os.path.join(get_images_dir(), safe_filename)
                             
@@ -2007,10 +2014,17 @@ class I2PChatCore:
                     else:
                         # Данные изображения (base64)
                         try:
-                            chunk = base64.b64decode(body)
+                            fn, total = self.inline_image_info
+                            remaining = total - len(self.inline_image_buffer)
+                            if remaining <= 0:
+                                raise ValueError("Image chunk exceeds declared size")
+                            if len(body) > max_base64_chars_for_bytes(remaining):
+                                raise ValueError("Image chunk is too large for remaining size")
+                            chunk = base64.b64decode(body, validate=True)
+                            if len(chunk) > remaining:
+                                raise ValueError("Decoded image chunk exceeds remaining size")
                             self.inline_image_buffer.extend(chunk)
                             if self.inline_image_info:
-                                fn, total = self.inline_image_info
                                 received = len(self.inline_image_buffer)
                                 if received - getattr(self, "_inline_image_last_emit", 0) >= 65536 or received == total:
                                     self._inline_image_last_emit = received
@@ -2065,12 +2079,40 @@ class I2PChatCore:
                 elif msg_type == "D":
                     try:
                         if self.incoming_file and self.incoming_info:
-                            chunk = base64.b64decode(body)
+                            remaining = self.incoming_info.size - self.incoming_info.received
+                            if remaining <= 0:
+                                raise ValueError("File chunk exceeds declared size")
+                            if len(body) > max_base64_chars_for_bytes(remaining):
+                                raise ValueError("File chunk is too large for remaining size")
+                            chunk = base64.b64decode(body, validate=True)
+                            if len(chunk) > remaining:
+                                raise ValueError("Decoded file chunk exceeds remaining size")
                             self.incoming_file.write(chunk)
                             self.incoming_info.received += len(chunk)
                             self._emit_file_event(self.incoming_info)
                     except Exception as e:
                         self._emit_error(f"File chunk error: {e}")
+                        if self.incoming_file:
+                            try:
+                                self.incoming_file.close()
+                            except Exception:
+                                pass
+                        if self.incoming_info:
+                            self._emit_file_event(
+                                FileTransferInfo(
+                                    filename=self.incoming_info.filename,
+                                    size=self.incoming_info.size,
+                                    received=-1,
+                                    is_sending=False,
+                                )
+                            )
+                            try:
+                                os.remove(self.incoming_info.filename)
+                            except OSError:
+                                pass
+                        self.incoming_file = None
+                        self.incoming_info = None
+                        self._incoming_file_msg_id = None
 
                 elif msg_type == "E":
                     if self.incoming_file and self.incoming_info:

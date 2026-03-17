@@ -1,5 +1,8 @@
 import asyncio
+import base64
+import os
 import sys
+import tempfile
 import time
 import types
 import unittest
@@ -62,6 +65,32 @@ class _Writer:
 
 
 class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
+    def _patch_crypto_identity(self):
+        import i2p_chat_core as core_module
+
+        original_crypto = (
+            core_module.crypto.NACL_AVAILABLE,
+            core_module.crypto.encrypt_message,
+            core_module.crypto.decrypt_message,
+            core_module.crypto.compute_mac,
+            core_module.crypto.verify_mac,
+        )
+        core_module.crypto.NACL_AVAILABLE = True
+        core_module.crypto.encrypt_message = lambda _k, p: p  # type: ignore[assignment]
+        core_module.crypto.decrypt_message = lambda _k, c: c  # type: ignore[assignment]
+        core_module.crypto.compute_mac = lambda _k, _t, _b, seq=None: b"x" * 32  # type: ignore[assignment]
+        core_module.crypto.verify_mac = lambda _k, _t, _b, _m, seq=None: True  # type: ignore[assignment]
+        return core_module, original_crypto
+
+    def _restore_crypto_identity(self, core_module, original_crypto) -> None:
+        (
+            core_module.crypto.NACL_AVAILABLE,
+            core_module.crypto.encrypt_message,
+            core_module.crypto.decrypt_message,
+            core_module.crypto.compute_mac,
+            core_module.crypto.verify_mac,
+        ) = original_crypto
+
     async def test_vnext_encode_decode_roundtrip(self) -> None:
         codec = ProtocolCodec(
             allowed_types={"S", "U"},
@@ -319,6 +348,128 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
                 core_module.crypto.compute_mac,
                 core_module.crypto.verify_mac,
             ) = original_crypto
+
+    async def test_inline_image_chunk_invalid_base64_is_rejected(self) -> None:
+        errors: list[str] = []
+        core_module, original_crypto = self._patch_crypto_identity()
+        try:
+            core = I2PChatCore(on_error=errors.append)
+            core.handshake_complete = True
+            core.use_encryption = True
+            core.shared_key = b"x" * 32
+            core._reset_crypto_state = lambda: None  # type: ignore[assignment]
+            payload = (
+                core.frame_message("G", "img.png|4")
+                + core.frame_message("G", "%%%")
+            )
+            conn = (_Reader(payload), _Writer())
+            core.conn = conn
+
+            await core.receive_loop(conn)
+
+            self.assertTrue(any("Image data error" in e for e in errors))
+            self.assertIsNone(core.inline_image_info)
+            self.assertEqual(core.inline_image_buffer, bytearray())
+        finally:
+            self._restore_crypto_identity(core_module, original_crypto)
+
+    async def test_inline_image_chunk_oversize_is_rejected(self) -> None:
+        errors: list[str] = []
+        core_module, original_crypto = self._patch_crypto_identity()
+        try:
+            core = I2PChatCore(on_error=errors.append)
+            core.handshake_complete = True
+            core.use_encryption = True
+            core.shared_key = b"x" * 32
+            core._reset_crypto_state = lambda: None  # type: ignore[assignment]
+            oversize_chunk = base64.b64encode(b"\x00\x01").decode("ascii")
+            payload = (
+                core.frame_message("G", "img.png|1")
+                + core.frame_message("G", oversize_chunk)
+            )
+            conn = (_Reader(payload), _Writer())
+            core.conn = conn
+
+            await core.receive_loop(conn)
+
+            self.assertTrue(any("Image data error" in e for e in errors))
+            self.assertIsNone(core.inline_image_info)
+            self.assertEqual(core.inline_image_buffer, bytearray())
+        finally:
+            self._restore_crypto_identity(core_module, original_crypto)
+
+    async def test_file_chunk_invalid_base64_is_rejected(self) -> None:
+        import i2p_chat_core as core_module
+
+        errors: list[str] = []
+        original_get_downloads_dir = core_module.get_downloads_dir
+        patched_module, original_crypto = self._patch_crypto_identity()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                core_module.get_downloads_dir = lambda: tmp_dir  # type: ignore[assignment]
+                try:
+                    core = I2PChatCore(
+                        on_error=errors.append,
+                        on_file_offer=lambda _name, _size: True,
+                    )
+                    core.handshake_complete = True
+                    core.use_encryption = True
+                    core.shared_key = b"x" * 32
+                    core._reset_crypto_state = lambda: None  # type: ignore[assignment]
+                    payload = (
+                        core.frame_message("F", "safe.bin|4")
+                        + core.frame_message("D", "%%%")
+                    )
+                    conn = (_Reader(payload), _Writer())
+                    core.conn = conn
+
+                    await core.receive_loop(conn)
+                finally:
+                    core_module.get_downloads_dir = original_get_downloads_dir  # type: ignore[assignment]
+
+                self.assertTrue(any("File chunk error" in e for e in errors))
+                self.assertIsNone(core.incoming_file)
+                self.assertIsNone(core.incoming_info)
+                self.assertEqual(os.listdir(tmp_dir), [])
+        finally:
+            self._restore_crypto_identity(patched_module, original_crypto)
+
+    async def test_file_chunk_oversize_is_rejected(self) -> None:
+        import i2p_chat_core as core_module
+
+        errors: list[str] = []
+        original_get_downloads_dir = core_module.get_downloads_dir
+        patched_module, original_crypto = self._patch_crypto_identity()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                core_module.get_downloads_dir = lambda: tmp_dir  # type: ignore[assignment]
+                try:
+                    core = I2PChatCore(
+                        on_error=errors.append,
+                        on_file_offer=lambda _name, _size: True,
+                    )
+                    core.handshake_complete = True
+                    core.use_encryption = True
+                    core.shared_key = b"x" * 32
+                    core._reset_crypto_state = lambda: None  # type: ignore[assignment]
+                    oversize_chunk = base64.b64encode(b"\x00\x01").decode("ascii")
+                    payload = (
+                        core.frame_message("F", "safe.bin|1")
+                        + core.frame_message("D", oversize_chunk)
+                    )
+                    conn = (_Reader(payload), _Writer())
+                    core.conn = conn
+
+                    await core.receive_loop(conn)
+                finally:
+                    core_module.get_downloads_dir = original_get_downloads_dir  # type: ignore[assignment]
+
+                self.assertTrue(any("File chunk error" in e for e in errors))
+                self.assertIsNone(core.incoming_file)
+                self.assertIsNone(core.incoming_info)
+                self.assertEqual(os.listdir(tmp_dir), [])
+        finally:
+            self._restore_crypto_identity(patched_module, original_crypto)
 
 
 if __name__ == "__main__":
