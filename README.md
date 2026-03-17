@@ -238,7 +238,7 @@ PyQt6 GUI with light and dark themes.
 
 Originally derived from [`termchat-i2p-python`](http://git.community.i2p/stan/termchat-i2p-python) by Stanley (I2P community), substantially rewritten.
 
-### 🔍 Audit / Аудит
+### Audit / Аудит
 
 [![English audit](https://img.shields.io/badge/🔍%20Audit-EN-green.svg)](AUDIT_EN.md)
 [![Русский аудит](https://img.shields.io/badge/🔍%20Аудит-RU-orange.svg)](AUDIT_RU.md)
