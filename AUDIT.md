@@ -1,22 +1,28 @@
 # Security Audit Report: I2PChat
 
 Дата аудита: 2026-03-17  
-Область: исходный код репозитория (application code only), без инфраструктуры/деплоя.
+Область: исходный код репозитория, локальная сборка/CI, без аудита внешней инфраструктуры.
 
 ## Executive Summary
 
-Проведен аудит безопасности ключевых компонентов `I2PChat`:
-- транспортный протокол и handshake (`i2p_chat_core.py`, `crypto.py`, `protocol_codec.py`);
-- хранение идентичности/доверия (profile `.dat`, keyring fallback, TOFU trust store);
-- обработка входящих файлов/изображений и управляющих сигналов;
-- тестовое покрытие security-инвариантов.
+Проведен полный статический аудит безопасности `I2PChat` по направлениям:
+- протокол и криптография (`i2p_chat_core.py`, `crypto.py`, `protocol_codec.py`);
+- локальное хранение профилей/ключей, файловый ввод-вывод (`main_qt.py`, `i2p_chat_core.py`);
+- dependency hygiene и supply-chain контур (`requirements*`, GitHub Actions, build-скрипты);
+- релевантные security-регрессии в тестах.
 
-Итог:
-- **High**: 1
-- **Medium**: 2
-- **Low**: 1
+Итог по подтвержденным находкам:
+- **Critical:** 0
+- **High:** 0
+- **Medium:** 3
+- **Low:** 2
 
-Ключевой риск: в текущем протоколе адрес пира (`.b32.i2p`) принимается из данных, присланных самим пиром, и не криптографически привязан к signing key handshake. Это создает окно для spoofing/identity misbinding на первом контакте.
+Ключевые риски:
+1. целостность `MSG_ID` не защищена MAC (возможна подмена ACK-контекста);
+2. импорт `.dat` профиля в GUI может молча перезаписать существующий профиль;
+3. Linux build pipeline тянет `appimagetool` по `latest` без проверки checksum/signature.
+
+Важно: ряд ранее типичных проблем уже закрыт в текущем коде (identity binding через SAM lookup, path confinement профилей, безопасная уникализация входящих файлов, strict vNext по умолчанию).
 
 ---
 
@@ -28,208 +34,199 @@
 - `protocol_codec.py`
 - `main_qt.py`
 - `notifications.py`
+- `requirements.in`
+- `requirements.txt`
+- `.github/workflows/security-audit.yml`
+- `.github/workflows/nix-check.yml`
+- `build-linux.sh`
 - `tests/test_protocol_framing_vnext.py`
 - `tests/test_asyncio_regression.py`
-- `requirements.txt`
 
 Метод:
-- статический анализ по категориям: аутентичность, целостность, конфиденциальность, downgrade/replay, DoS, безопасность файлового ввода;
-- верификация кода на соответствие заявленным инвариантам;
-- подготовка PoC для подтвержденных рисков.
+- threat-model ревизия: активы, границы доверия, модель атакующего;
+- статический анализ по классам уязвимостей: spoofing/tampering/replay/downgrade/DoS/file safety/supply chain;
+- верификация потенциальных рисков по актуальным инвариантам кода и тестам;
+- формирование remediation-плана с приоритизацией.
 
 ---
 
 ## Threat Model (кратко)
 
 Активы:
-- приватные ключи I2P destination (профили);
-- signing seed для handshake;
-- целостность peer identity binding (`peer_addr <-> signing key`);
-- пользовательские файлы/изображения в локальном хранилище.
+- приватный ключ destination (профиль `.dat` / keyring);
+- локальный Ed25519 signing seed для handshake;
+- привязка peer identity (`.b32.i2p` ↔ destination/signing key);
+- целостность входящих файлов и локального профиля;
+- доверенность зависимостей и build-инструментов.
 
 Границы доверия:
-- все входящие сетевые кадры считаются недоверенными;
-- локальная файловая система пользователя частично доверена, но может содержать вредоносные/подмененные файлы;
-- keyring может быть недоступен (fallback в файл).
+- все входящие сетевые кадры и signaling считаются недоверенными;
+- локальная ФС частично доверена, но может содержать подмененные файлы;
+- внешние источники артефактов (PyPI/GitHub releases/actions) недоверены по умолчанию.
 
 Модель атакующего:
-- удаленный пир в сети I2P, который может отправлять произвольные протокольные кадры;
-- локальный пользователь/процесс с возможностью запускать приложение с произвольным profile name.
+- удаленный пир I2P, отправляющий произвольные кадры/порядок кадров;
+- атакующий с возможностью модификации трафика между endpoint'ами (tampering);
+- локальный пользователь, импортирующий/подменяющий profile-файлы;
+- supply-chain атакующий, влияющий на внешние build/runtime зависимости.
 
 ---
 
 ## Findings
 
-## [HIGH] F-01: Identity misbinding в handshake (spoofing peer address)
+## [MEDIUM] F-01: `MSG_ID` не аутентифицируется MAC (tampering ACK semantics)
 
-**Затронуто:** `i2p_chat_core.py`  
-**Категория:** Spoofing / Authentication flaw
-
-### Что происходит
-
-На принимающей стороне адрес пира берется из строки, которую присылает сам удаленный узел:
-- `accept_loop()` читает `peer_identity_line` и выставляет `current_peer_addr`.
-- позже этот же `current_peer_addr` используется для построения/проверки handshake payload в `_build_init_sig_payload()` / `_build_resp_sig_payload()`.
-
-Подпись проверяется на валидность относительно `peer_sign_pub`, но **не доказывает**, что этот signing key принадлежит именно заявленному `.b32.i2p` адресу.
-
-### Почему это уязвимость
-
-На первом контакте злоумышленник может:
-1. заявить любой `peer_addr` (включая адрес «ожидаемого» собеседника);
-2. подписать handshake своим ключом;
-3. пройти TOFU как «новый ключ для этого адреса», если ключ еще не пинован.
-
-Это classic identity misbinding: криптография валидна, но привязка "кто именно" не гарантирована.
-
-### PoC (сценарий эксплуатации)
-
-1. Жертва запускает новый профиль без ранее закрепленного signing key для адреса `Alice.b32.i2p`.
-2. Атакующий устанавливает соединение и в preface/`S`-кадре объявляет себя как `Alice.b32.i2p`.
-3. Атакующий отправляет корректно подписанный `INIT` своим signing key.
-4. Жертва видит TOFU-диалог для `Alice...` и при подтверждении пинует ключ атакующего.
-5. Дальше атаки типа impersonation/MITM становятся возможны в рамках этого trust binding.
-
-### Влияние
-
-- подмена личности собеседника на первом контакте;
-- компрометация смысла `Lock to peer` до момента надежного OOB-подтверждения fingerprint;
-- риск закрепления неверного ключа в trust store.
-
-### Рекомендации
-
-1. Убрать доверие к self-asserted identity line/`S`-identity для security-binding.
-2. Привязать адрес пира к криптографическому доказательству владения I2P destination private key (или эквивалентной challenge-response схеме через SAM).
-3. В TOFU UI явно показывать предупреждение, что без OOB verification identity не подтверждена.
-4. Для `Lock to peer` требовать уже верифицированный binding, а не только строковое совпадение адреса.
-
----
-
-## [MEDIUM] F-02: Path traversal через имя профиля (локальная arbitrary file path write/read)
-
-**Затронуто:** `main_qt.py`, `i2p_chat_core.py`  
-**Категория:** Local file integrity / path injection
+**Затронуто:** `i2p_chat_core.py`, `crypto.py`, `protocol_codec.py`  
+**Категория:** Integrity / Protocol metadata tampering
+**Статус:** FIXED (2026-03-17) — `MSG_ID/FLAGS` включены в MAC-вход, добавлены tamper-тесты.
 
 ### Что происходит
 
-Имя профиля принимается из:
-- CLI (`sys.argv[1]`) в `main_qt.py`;
-- editable combo в `ProfileSelectDialog.selected_profile()`.
+В vNext-фрейме `MSG_ID` расположен в заголовке (`MAGIC|VER|TYPE|FLAGS|MSG_ID|LEN`), но MAC считается только по `msg_type + seq + encrypted_body`.  
+Следствие: изменение `MSG_ID` в заголовке не ломает криптопроверку payload.
 
-Далее без нормализации используется в:
-- `_profile_path() -> os.path.join(get_profiles_dir(), f"{self.profile}.dat")`;
-- `_trust_store_path()`, `.signing` path.
+### Почему это важно
 
-Символы `../` или абсолютные компоненты не блокируются.
-
-### PoC (подтверждено)
-
-Проверка резолва пути:
-
-```bash
-python3 - <<'PY'
-import os
-base=os.path.join(os.path.expanduser('~'),'.i2pchat')
-profile='../../tmp/poc_profile'
-print(os.path.join(base,f'{profile}.dat'))
-print(os.path.abspath(os.path.join(base,f'{profile}.dat')))
-PY
-```
-
-Результат показал выход за пределы профилей (`/Users/tmp/poc_profile.dat` в текущей среде).
-
-### Влияние
-
-- локальная запись/перезапись файлов вне `profiles` директории от имени пользователя;
-- потенциальная порча данных или несанкционированное хранение ключей в непредусмотренном месте.
-
-### Рекомендации
-
-1. Ввести строгий whitelist для profile name (например: `[a-zA-Z0-9._-]{1,64}`).
-2. После построения пути проверять, что `abspath(target).startswith(abspath(get_profiles_dir()) + os.sep)`.
-3. При невалидном имени профиля - fail closed с явной ошибкой.
-
----
-
-## [MEDIUM] F-03: Тихая перезапись входящих файлов с одинаковым именем
-
-**Затронуто:** `i2p_chat_core.py` (ветка `msg_type == "F"`)  
-**Категория:** File integrity / unsafe overwrite
-
-### Что происходит
-
-При приеме файла:
-- имя санитизируется (`sanitize_filename`);
-- путь строится как `downloads/<safe_name>`;
-- файл открывается через `open(safe_path, "wb")`.
-
-Если файл уже существует, он будет перезаписан без подтверждения.
+`MSG_ID` используется для корреляции ACK (`MSG_ACK`, `FILE_ACK`, `IMG_ACK`) и отображения доставки. Подмена `MSG_ID` может нарушать состояние pending ACK (ложные/потерянные подтверждения, неконсистентность UI/telemetry), даже при валидном MAC.
 
 ### PoC (сценарий)
 
-1. У жертвы уже есть `downloads/report.pdf`.
-2. Злоумышленник отправляет файл с именем `report.pdf`.
-3. После accept запись идет в `wb`, старый файл заменяется новым содержимым.
-
-### Влияние
-
-- потеря локальной целостности данных в sandbox downloads;
-- возможная подмена ожидаемого файла.
+1. Перехватить зашифрованный кадр `U` с валидным payload (`seq|ciphertext|mac`).
+2. Изменить только `MSG_ID` в заголовке vNext.
+3. Получатель примет кадр (MAC валиден), но ACK-контекст будет искажен.
 
 ### Рекомендации
 
-1. Перед записью проверять существование файла.
-2. Использовать стратегию уникализации (`name (1).ext` / UUID suffix).
-3. Опционально спрашивать подтверждение overwrite в UI.
+1. Включить `msg_id` (и желательно `flags`) в MAC-вход.
+2. Либо перейти на AEAD для всего заголовка как AAD (authenticated associated data).
+3. Добавить негативные тесты на tamper заголовка при неизменном payload.
 
 ---
 
-## [LOW] F-04: Непинованные зависимости в `requirements.txt` (supply-chain риск)
+## [MEDIUM] F-02: Импорт `.dat` профиля может перезаписать существующий профиль без подтверждения
 
-**Затронуто:** `requirements.txt`  
-**Категория:** Dependency hygiene
+**Затронуто:** `main_qt.py` (`on_load_profile_clicked`)  
+**Категория:** Local integrity / unsafe overwrite
+**Статус:** FIXED (2026-03-17) — импорт по коллизии выполняется в новый профиль (`name_1`, `name_2`, ...), без silent overwrite.
 
 ### Что происходит
 
-Зависимости указаны без фиксированных версий (`textual`, `rich`, `i2plib`, `PyQt6`, `pynacl`, ...).
+При импорте профиля выполняется `shutil.copy2(path, dest_path)`, где `dest_path` уже может существовать.  
+Подтверждение overwrite отсутствует, стратегия безопасного merge/rename не применяется.
 
-### Риск
+### Влияние
 
-- непредсказуемый набор версий при новой установке;
-- шанс незаметного подтягивания несовместимых/уязвимых релизов.
+- тихая потеря/подмена локальной profile identity;
+- риск случайной утраты рабочего профиля пользователем при загрузке одноименного `.dat`.
 
 ### Рекомендации
 
-1. Перейти на lock-файл (`pip-tools`, `poetry.lock`, или pinned constraints).
-2. Добавить регулярный dependency audit в CI (`pip-audit`/эквивалент).
+1. Перед копированием проверять `os.path.exists(dest_path)`.
+2. В GUI запрашивать явное подтверждение overwrite.
+3. Безопасный вариант по умолчанию: импортировать как новый профиль (`name (1).dat`).
+
+---
+
+## [MEDIUM] F-03: Непроверенная загрузка `appimagetool` по `latest` в Linux build script
+
+**Затронуто:** `build-linux.sh`  
+**Категория:** Supply-chain / Build integrity
+
+### Что происходит
+
+Скрипт скачивает `appimagetool` с GitHub по URL `releases/latest/...` и сразу делает исполняемым. Проверка digest/signature отсутствует.
+
+### Влияние
+
+- риск выполнения подмененного или компрометированного build-инструмента;
+- потенциальная компрометация release-артефактов.
+
+### Рекомендации
+
+1. Пиновать конкретную версию `appimagetool`.
+2. Проверять SHA256 (минимум) перед запуском.
+3. По возможности использовать подписи релиза или доверенный источник из package manager.
+
+---
+
+## [LOW] F-04: GitHub Actions не пинованы по commit SHA и не заданы минимальные `permissions`
+
+**Затронуто:** `.github/workflows/security-audit.yml`, `.github/workflows/nix-check.yml`  
+**Категория:** CI hardening
+
+### Что происходит
+
+Используются floating major tags (`actions/checkout@v4`, `actions/setup-python@v5`, `cachix/install-nix-action@v27`) и не задан явный блок `permissions`.
+
+### Влияние
+
+- расширенная поверхность supply-chain риска через upstream action updates;
+- потенциально избыточные права `GITHUB_TOKEN` относительно принципа least privilege.
+
+### Рекомендации
+
+1. Пиновать actions по полному commit SHA.
+2. Добавить минимальные `permissions` на workflow/job уровне.
+
+---
+
+## [LOW] F-05: Нет hash pinning для Python-пакетов
+
+**Затронуто:** `requirements.txt`  
+**Категория:** Dependency integrity
+
+### Что происходит
+
+Версии пакетов зафиксированы (pip-compile), но отсутствуют хеши артефактов (`--generate-hashes` / `--require-hashes`).
+
+### Влияние
+
+- сниженная защита от подмены wheel/sdist при скачивании;
+- зависимость от TLS/индекса без дополнительной integrity-валидации.
+
+### Рекомендации
+
+1. Перейти на `pip-compile --generate-hashes`.
+2. В CI/сборке устанавливать зависимости с `pip install --require-hashes -r requirements.txt`.
 
 ---
 
 ## Что уже реализовано хорошо
 
-- Принудительное шифрование пользовательских данных после handshake (downgrade detection при plaintext кадрах).
-- HMAC + sequence number для целостности и anti-replay.
-- Ограничения размеров фрейма/изображений, валидация base64 и image magic bytes.
-- TOFU pinning signing key с отдельным trust store и диалогом подтверждения.
-- ACK-контекст (peer/session/kind) и защита от spoofing ACK сигналов.
+- Проверка identity binding через SAM lookup перед фиксацией peer identity (`_set_verified_peer_identity`).
+- Профильная path-безопасность: whitelist имени профиля + confinement в profiles dir (`_profile_scoped_path`).
+- Входящие файлы: санитизация имени + уникализация + открытие в `"xb"` (без silent overwrite).
+- Защита канала: обязательное шифрование после handshake, detection downgrade на plaintext кадрах.
+- Целостность/anti-replay: `HMAC + seq` и строгий порядок кадров.
+- TOFU mismatch-check для peer signing key; lock-to-peer завязан на verified binding.
+- Безопасные subprocess-вызовы нотификаций (`shell=False`).
 
 ---
 
 ## Пробелы тестирования
 
-Рекомендуется добавить security-тесты:
+Рекомендуемые дополнительные security-тесты:
 
-1. **Identity binding tests**: негативные кейсы, где peer заявляет один адрес, но использует несвязанный signing key.
-2. **Profile name sanitization tests**: отклонение `../`, абсолютных путей, спецсимволов.
-3. **File overwrite policy tests**: поведение при конфликте имен в `downloads`.
-4. **TOFU UX safety tests**: явный флаг/статус "not OOB-verified yet".
+1. **Header tampering tests**: негативные кейсы изменения `MSG_ID/FLAGS` при валидном payload MAC.
+2. **Profile import overwrite tests**: GUI-поведение при коллизии `<name>.dat`.
+3. **Supply-chain policy tests/checks**: валидация pinned action SHAs и checksum build-tools.
+4. **TOFU policy tests**: сценарии first-contact в headless/без callback (явное policy-решение).
 
 ---
 
 ## Приоритет remediation
 
-1. **Срочно (High):** исправить identity binding в handshake (F-01).
-2. **Далее (Medium):** валидация имени профиля и path confinement (F-02).
-3. **Далее (Medium):** безопасная политика именования входящих файлов (F-03).
-4. **Планово (Low):** lock/pin dependency versions (F-04).
+1. **P1 (сразу):** закрыть F-03 (pin + checksum для `appimagetool`) и F-04 (SHA-pinned actions + permissions).
+2. **P1/P2:** закрыть F-01 (аутентификация `MSG_ID`/header через MAC/AAD).
+3. **P2:** закрыть F-02 (безопасный импорт профиля без тихого overwrite).
+4. **P3:** закрыть F-05 (hash-pinned Python dependencies).
+
+---
+
+## Статус ранее типичных рисков
+
+Проверено и **не подтверждено** в текущей версии:
+- identity misbinding "по строке peer address" без проверки: mitigated через SAM binding verification;
+- path traversal через имя профиля: mitigated через `ensure_valid_profile_name` и `_profile_scoped_path`;
+- тихая перезапись входящих файлов от пира: mitigated через `allocate_unique_filename` + `"xb"`.
 

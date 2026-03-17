@@ -11,6 +11,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
 from i2p_chat_core import (
+    allocate_unique_profile_name,
     ChatMessage,
     FileTransferInfo,
     I2PChatCore,
@@ -100,7 +101,8 @@ THEMES: dict[str, dict[str, object]] = {
             QComboBox QAbstractItemView {
                 background: #ffffff;
                 color: #1d1d1f;
-                border: 1px solid #d7dbe4;
+                border: none;
+                border-radius: 10px;
                 selection-background-color: #0a84ff;
                 selection-color: #ffffff;
                 outline: none;
@@ -253,7 +255,7 @@ THEMES: dict[str, dict[str, object]] = {
             QMessageBox QPushButton:pressed { background-color: #edf1f8; }
             QMenu {
                 background: #f6f7fa;
-                border: 1px solid #d4dbe7;
+                border: none;
                 border-radius: 14px;
                 padding: 8px;
             }
@@ -336,7 +338,8 @@ THEMES: dict[str, dict[str, object]] = {
             QComboBox QAbstractItemView {
                 background: #1a1d23;
                 color: #f5f5f7;
-                border: 1px solid #343a46;
+                border: none;
+                border-radius: 10px;
                 selection-background-color: #0a84ff;
                 selection-color: #ffffff;
                 outline: none;
@@ -479,7 +482,7 @@ THEMES: dict[str, dict[str, object]] = {
             QMessageBox QPushButton:pressed { background-color: #0a84ff; }
             QMenu {
                 background: rgba(34, 37, 45, 0.96);
-                border: 1px solid #3a4150;
+                border: none;
                 border-radius: 14px;
                 padding: 8px;
             }
@@ -674,6 +677,9 @@ class ChatListView(QtWidgets.QListView):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.DefaultContextMenu)
+        self._theme_id = THEME_DEFAULT
+        self._context_popup: Optional["ActionsPopup"] = None
+        self._context_popup_suppress_until_ms = 0
         self.setSelectionMode(
             QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -696,6 +702,9 @@ class ChatListView(QtWidgets.QListView):
             text = item.text
         QtWidgets.QApplication.clipboard().setText(text)
 
+    def set_theme(self, theme_id: str) -> None:
+        self._theme_id = _resolve_theme(theme_id)
+
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:  # type: ignore[override]
         index = self.indexAt(event.pos())
         if not index.isValid():
@@ -704,14 +713,31 @@ class ChatListView(QtWidgets.QListView):
         if not isinstance(item, ChatItem):
             return
 
-        menu = QtWidgets.QMenu(self)
-        act_copy = menu.addAction("Copy text")
-        act_copy_meta = menu.addAction("Copy with timestamp")
-        chosen = menu.exec(event.globalPos())
-        if chosen == act_copy:
-            self._copy_index_text(index, with_meta=False)
-        elif chosen == act_copy_meta:
-            self._copy_index_text(index, with_meta=True)
+        now_ms = int(QtCore.QDateTime.currentMSecsSinceEpoch())
+        if now_ms < self._context_popup_suppress_until_ms:
+            return
+        if self._context_popup is None:
+            popup_parent = self.window() if isinstance(self.window(), QtWidgets.QWidget) else self
+            self._context_popup = ActionsPopup(popup_parent)
+            self._context_popup.closed.connect(self._on_context_popup_closed)
+        elif self._context_popup.isVisible():
+            self._context_popup.hide()
+            return
+        self._context_popup.clear_actions()
+        self._context_popup.apply_theme(self._theme_id)
+        self._context_popup.add_action(
+            "Copy text", lambda i=index: self._copy_index_text(i, with_meta=False)
+        )
+        self._context_popup.add_action(
+            "Copy with timestamp", lambda i=index: self._copy_index_text(i, with_meta=True)
+        )
+        self._context_popup.show_at_global(event.globalPos())
+
+    @QtCore.pyqtSlot()
+    def _on_context_popup_closed(self) -> None:
+        self._context_popup_suppress_until_ms = (
+            int(QtCore.QDateTime.currentMSecsSinceEpoch()) + 180
+        )
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # type: ignore[override]
         if event.matches(QtGui.QKeySequence.StandardKey.Copy):
@@ -1494,6 +1520,52 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
     """Многострочное поле ввода: Enter — отправить, Shift+Enter — новая строка."""
     sendRequested = QtCore.pyqtSignal()
 
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._theme_id = THEME_DEFAULT
+        self._context_popup: Optional["ActionsPopup"] = None
+        self._context_popup_suppress_until_ms = 0
+
+    def set_theme(self, theme_id: str) -> None:
+        self._theme_id = _resolve_theme(theme_id)
+
+    def _delete_selection(self) -> None:
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            cursor.removeSelectedText()
+            self.setTextCursor(cursor)
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:  # type: ignore[override]
+        now_ms = int(QtCore.QDateTime.currentMSecsSinceEpoch())
+        if now_ms < self._context_popup_suppress_until_ms:
+            return
+        if self._context_popup is None:
+            popup_parent = self.window() if isinstance(self.window(), QtWidgets.QWidget) else self
+            self._context_popup = ActionsPopup(popup_parent)
+            self._context_popup.closed.connect(self._on_context_popup_closed)
+        elif self._context_popup.isVisible():
+            self._context_popup.hide()
+            return
+        self._context_popup.clear_actions()
+        self._context_popup.apply_theme(self._theme_id)
+        self._context_popup.add_action("Undo", self.undo, enabled=self.document().isUndoAvailable())
+        self._context_popup.add_action("Redo", self.redo, enabled=self.document().isRedoAvailable())
+        self._context_popup.add_separator()
+        has_selection = self.textCursor().hasSelection()
+        self._context_popup.add_action("Cut", self.cut, enabled=has_selection)
+        self._context_popup.add_action("Copy", self.copy, enabled=has_selection)
+        self._context_popup.add_action("Paste", self.paste, enabled=bool(self.canPaste()))
+        self._context_popup.add_action("Delete", self._delete_selection, enabled=has_selection)
+        self._context_popup.add_separator()
+        self._context_popup.add_action("Select All", self.selectAll, enabled=not self.document().isEmpty())
+        self._context_popup.show_at_global(event.globalPos())
+
+    @QtCore.pyqtSlot()
+    def _on_context_popup_closed(self) -> None:
+        self._context_popup_suppress_until_ms = (
+            int(QtCore.QDateTime.currentMSecsSinceEpoch()) + 180
+        )
+
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         key = event.key()
         if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
@@ -1504,6 +1576,58 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
             event.accept()
             return
         super().keyPressEvent(event)
+
+
+class AddressLineEdit(QtWidgets.QLineEdit):
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._theme_id = THEME_DEFAULT
+        self._context_popup: Optional["ActionsPopup"] = None
+        self._context_popup_suppress_until_ms = 0
+
+    def set_theme(self, theme_id: str) -> None:
+        self._theme_id = _resolve_theme(theme_id)
+
+    def _delete_selection(self) -> None:
+        if self.hasSelectedText():
+            self.del_()
+
+    def _can_paste(self) -> bool:
+        if self.isReadOnly() or not self.isEnabled():
+            return False
+        mime = QtWidgets.QApplication.clipboard().mimeData()
+        return bool(mime and mime.hasText())
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:  # type: ignore[override]
+        now_ms = int(QtCore.QDateTime.currentMSecsSinceEpoch())
+        if now_ms < self._context_popup_suppress_until_ms:
+            return
+        if self._context_popup is None:
+            popup_parent = self.window() if isinstance(self.window(), QtWidgets.QWidget) else self
+            self._context_popup = ActionsPopup(popup_parent)
+            self._context_popup.closed.connect(self._on_context_popup_closed)
+        elif self._context_popup.isVisible():
+            self._context_popup.hide()
+            return
+        self._context_popup.clear_actions()
+        self._context_popup.apply_theme(self._theme_id)
+        self._context_popup.add_action("Undo", self.undo, enabled=self.isUndoAvailable())
+        self._context_popup.add_action("Redo", self.redo, enabled=self.isRedoAvailable())
+        self._context_popup.add_separator()
+        has_selection = self.hasSelectedText()
+        self._context_popup.add_action("Cut", self.cut, enabled=has_selection)
+        self._context_popup.add_action("Copy", self.copy, enabled=has_selection)
+        self._context_popup.add_action("Paste", self.paste, enabled=self._can_paste())
+        self._context_popup.add_action("Delete", self._delete_selection, enabled=has_selection)
+        self._context_popup.add_separator()
+        self._context_popup.add_action("Select All", self.selectAll, enabled=bool(self.text()))
+        self._context_popup.show_at_global(event.globalPos())
+
+    @QtCore.pyqtSlot()
+    def _on_context_popup_closed(self) -> None:
+        self._context_popup_suppress_until_ms = (
+            int(QtCore.QDateTime.currentMSecsSinceEpoch()) + 180
+        )
 
 
 class ProfileComboBox(QtWidgets.QComboBox):
@@ -1591,7 +1715,7 @@ class ProfileComboPopup(QtWidgets.QFrame):
                 #ProfileComboPopupWindow { background: transparent; }
                 #ProfileComboPopupSurface {
                     background: rgba(28, 31, 40, 0.98);
-                    border: 1px solid #3a4150;
+                    border: none;
                     border-radius: 12px;
                 }
                 QListWidget#ProfileComboPopupList {
@@ -1621,7 +1745,7 @@ class ProfileComboPopup(QtWidgets.QFrame):
                 #ProfileComboPopupWindow { background: transparent; }
                 #ProfileComboPopupSurface {
                     background: #f6f7fa;
-                    border: 1px solid #d4dbe7;
+                    border: none;
                     border-radius: 12px;
                 }
                 QListWidget#ProfileComboPopupList {
@@ -1746,10 +1870,11 @@ class ActionsPopup(QtWidgets.QFrame):
         self.surface_layout.setContentsMargins(8, 8, 8, 8)
         self.surface_layout.setSpacing(4)
 
-    def add_action(self, text: str, callback: Callable[[], None]) -> None:
+    def add_action(self, text: str, callback: Callable[[], None], enabled: bool = True) -> None:
         btn = QtWidgets.QPushButton(text, self.surface)
         btn.setObjectName("ActionsPopupItem")
         btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        btn.setEnabled(enabled)
         btn.clicked.connect(lambda: (self.hide(), callback()))
         self.surface_layout.addWidget(btn)
 
@@ -1760,11 +1885,31 @@ class ActionsPopup(QtWidgets.QFrame):
         sep.setFrameShadow(QtWidgets.QFrame.Shadow.Plain)
         self.surface_layout.addWidget(sep)
 
+    def clear_actions(self) -> None:
+        while self.surface_layout.count():
+            item = self.surface_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
     def show_below(self, anchor: QtWidgets.QWidget) -> None:
         self.adjustSize()
         x = max(0, anchor.width() - self.width())
         global_pos = anchor.mapToGlobal(QtCore.QPoint(x, anchor.height() + 6))
         self.move(global_pos)
+        self.show()
+
+    def show_at_global(self, global_pos: QtCore.QPoint) -> None:
+        self.adjustSize()
+        pos = QtCore.QPoint(global_pos)
+        screen = QtGui.QGuiApplication.screenAt(global_pos)
+        if screen is None:
+            screen = QtGui.QGuiApplication.primaryScreen()
+        if screen is not None:
+            geom = screen.availableGeometry()
+            pos.setX(max(geom.left(), min(pos.x(), geom.right() - self.width() + 1)))
+            pos.setY(max(geom.top(), min(pos.y(), geom.bottom() - self.height() + 1)))
+        self.move(pos)
         self.show()
 
     def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
@@ -1780,7 +1925,7 @@ class ActionsPopup(QtWidgets.QFrame):
                 }
                 #ActionsPopupSurface {
                     background: rgba(34, 37, 45, 0.96);
-                    border: 1px solid #3a4150;
+                    border: none;
                     border-radius: 14px;
                 }
                 QPushButton#ActionsPopupItem {
@@ -1797,6 +1942,9 @@ class ActionsPopup(QtWidgets.QFrame):
                 }
                 QPushButton#ActionsPopupItem:pressed {
                     background: rgba(255, 255, 255, 0.16);
+                }
+                QPushButton#ActionsPopupItem:disabled {
+                    color: #7d8798;
                 }
                 QFrame#ActionsPopupSeparator {
                     background: #343a46;
@@ -1815,7 +1963,7 @@ class ActionsPopup(QtWidgets.QFrame):
                 }
                 #ActionsPopupSurface {
                     background: #f6f7fa;
-                    border: 1px solid #d4dbe7;
+                    border: none;
                     border-radius: 14px;
                 }
                 QPushButton#ActionsPopupItem {
@@ -1832,6 +1980,9 @@ class ActionsPopup(QtWidgets.QFrame):
                 }
                 QPushButton#ActionsPopupItem:pressed {
                     background: #dfe6f0;
+                }
+                QPushButton#ActionsPopupItem:disabled {
+                    color: #9da5b2;
                 }
                 QFrame#ActionsPopupSeparator {
                     background: #d6dce7;
@@ -2090,7 +2241,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         actions_layout.setContentsMargins(8, 8, 8, 8)
         actions_layout.setSpacing(6)
 
-        self.addr_edit = QtWidgets.QLineEdit(self)
+        self.addr_edit = AddressLineEdit(self)
         self.addr_edit.setPlaceholderText("Peer .b32.i2p address")
         # Адрес — главный элемент панели действий
         self.addr_edit.setMinimumWidth(220)
@@ -2647,6 +2798,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             save_theme(self.theme_id)
         self._update_theme_switch_label()
         self.more_actions_popup.apply_theme(self.theme_id)
+        self.chat_view.set_theme(self.theme_id)
+        self.input_edit.set_theme(self.theme_id)
+        self.addr_edit.set_theme(self.theme_id)
 
     @QtCore.pyqtSlot()
     def on_theme_switch_clicked(self) -> None:
@@ -2873,8 +3027,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         if not path:
             return
-        base = os.path.splitext(os.path.basename(path))[0]
-        if not is_valid_profile_name(base):
+        source_base = os.path.splitext(os.path.basename(path))[0]
+        if not is_valid_profile_name(source_base):
             QtWidgets.QMessageBox.warning(
                 self,
                 "Load .dat",
@@ -2884,9 +3038,20 @@ class ChatWindow(QtWidgets.QMainWindow):
             return
 
         # Копируем выбранный .dat в папку профилей, чтобы ядро его увидело
-        dest_path = os.path.join(get_profiles_dir(), f"{base}.dat")
+        profiles_dir = get_profiles_dir()
+        target_base = source_base
+        dest_path = os.path.join(profiles_dir, f"{target_base}.dat")
         if os.path.abspath(path) != os.path.abspath(dest_path):
             try:
+                if os.path.exists(dest_path):
+                    target_base = allocate_unique_profile_name(profiles_dir, source_base)
+                    dest_path = os.path.join(profiles_dir, f"{target_base}.dat")
+                    QtWidgets.QMessageBox.information(
+                        self,
+                        "Load .dat",
+                        f"Профиль '{source_base}' уже существует.\n"
+                        f"Импортирован как '{target_base}'.",
+                    )
                 shutil.copy2(path, dest_path)
             except Exception as e:  # pragma: no cover - GUI path
                 QtWidgets.QMessageBox.critical(
@@ -2896,7 +3061,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 )
                 return
 
-        asyncio.create_task(self.switch_profile(base))
+        asyncio.create_task(self.switch_profile(target_base))
 
     async def switch_profile(self, profile: str) -> None:
         """Переключиться на другой профиль (.dat)."""
@@ -2999,6 +3164,13 @@ def main() -> None:
     """Точка входа без qasync.run, чтобы избежать падений при завершении."""
     if hasattr(sip, "setdestroyonexit"):
         sip.setdestroyonexit(False)
+
+    # На macOS отключаем native menu windows, иначе вокруг QMenu может
+    # появляться системная прямоугольная рамка поверх наших скруглений.
+    if sys.platform == "darwin":
+        QtWidgets.QApplication.setAttribute(
+            QtCore.Qt.ApplicationAttribute.AA_DontUseNativeMenuWindows, True
+        )
 
     # Создаём единственный экземпляр QApplication
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)

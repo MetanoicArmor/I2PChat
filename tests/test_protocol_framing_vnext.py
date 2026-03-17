@@ -7,7 +7,7 @@ import time
 import types
 import unittest
 
-from protocol_codec import MAGIC, FLAG_ENCRYPTED, ProtocolCodec
+from protocol_codec import HEADER_STRUCT, MAGIC, FLAG_ENCRYPTED, ProtocolCodec
 
 # test environment may not have Pillow installed
 if "PIL" not in sys.modules:
@@ -78,8 +78,12 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         core_module.crypto.NACL_AVAILABLE = True
         core_module.crypto.encrypt_message = lambda _k, p: p  # type: ignore[assignment]
         core_module.crypto.decrypt_message = lambda _k, c: c  # type: ignore[assignment]
-        core_module.crypto.compute_mac = lambda _k, _t, _b, seq=None: b"x" * 32  # type: ignore[assignment]
-        core_module.crypto.verify_mac = lambda _k, _t, _b, _m, seq=None: True  # type: ignore[assignment]
+        core_module.crypto.compute_mac = (
+            lambda _k, _t, _b, seq=None, msg_id=None, flags=None: b"x" * 32
+        )  # type: ignore[assignment]
+        core_module.crypto.verify_mac = (
+            lambda _k, _t, _b, _m, seq=None, msg_id=None, flags=None: True
+        )  # type: ignore[assignment]
         return core_module, original_crypto
 
     def _restore_crypto_identity(self, core_module, original_crypto) -> None:
@@ -89,6 +93,26 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             core_module.crypto.decrypt_message,
             core_module.crypto.compute_mac,
             core_module.crypto.verify_mac,
+        ) = original_crypto
+
+    def _patch_crypto_identity_keep_mac(self):
+        import i2p_chat_core as core_module
+
+        original_crypto = (
+            core_module.crypto.NACL_AVAILABLE,
+            core_module.crypto.encrypt_message,
+            core_module.crypto.decrypt_message,
+        )
+        core_module.crypto.NACL_AVAILABLE = True
+        core_module.crypto.encrypt_message = lambda _k, p: p  # type: ignore[assignment]
+        core_module.crypto.decrypt_message = lambda _k, c: c  # type: ignore[assignment]
+        return core_module, original_crypto
+
+    def _restore_crypto_identity_keep_mac(self, core_module, original_crypto) -> None:
+        (
+            core_module.crypto.NACL_AVAILABLE,
+            core_module.crypto.encrypt_message,
+            core_module.crypto.decrypt_message,
         ) = original_crypto
 
     async def test_vnext_encode_decode_roundtrip(self) -> None:
@@ -166,8 +190,12 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         core_module.crypto.NACL_AVAILABLE = True
         core_module.crypto.encrypt_message = lambda _k, p: p  # type: ignore[assignment]
         core_module.crypto.decrypt_message = lambda _k, c: c  # type: ignore[assignment]
-        core_module.crypto.compute_mac = lambda _k, _t, _b, seq=None: b"x" * 32  # type: ignore[assignment]
-        core_module.crypto.verify_mac = lambda _k, _t, _b, _m, seq=None: True  # type: ignore[assignment]
+        core_module.crypto.compute_mac = (
+            lambda _k, _t, _b, seq=None, msg_id=None, flags=None: b"x" * 32
+        )  # type: ignore[assignment]
+        core_module.crypto.verify_mac = (
+            lambda _k, _t, _b, _m, seq=None, msg_id=None, flags=None: True
+        )  # type: ignore[assignment]
 
         core = I2PChatCore()
         writer = _Writer()
@@ -228,6 +256,78 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delivered, [])
         self.assertIn(123, core._pending_file_acks)
 
+    async def test_header_msg_id_tampering_is_rejected(self) -> None:
+        errors: list[str] = []
+        core_module, original_crypto = self._patch_crypto_identity_keep_mac()
+        try:
+            sender = I2PChatCore()
+            sender.handshake_complete = True
+            sender.use_encryption = True
+            sender.shared_key = b"x" * 32
+            frame = sender.frame_message("U", "hello")
+
+            magic, version, type_byte, flags, msg_id, msg_len = HEADER_STRUCT.unpack(
+                frame[:HEADER_STRUCT.size]
+            )
+            tampered_header = HEADER_STRUCT.pack(
+                magic,
+                version,
+                type_byte,
+                flags,
+                (msg_id + 1) & 0xFFFFFFFFFFFFFFFF,
+                msg_len,
+            )
+            tampered_frame = tampered_header + frame[HEADER_STRUCT.size :]
+
+            receiver = I2PChatCore(on_error=errors.append)
+            receiver.handshake_complete = True
+            receiver.use_encryption = True
+            receiver.shared_key = b"x" * 32
+            receiver._reset_crypto_state = lambda: None  # type: ignore[assignment]
+            conn = (_Reader(tampered_frame), _Writer())
+            receiver.conn = conn
+
+            await receiver.receive_loop(conn)
+            self.assertTrue(any("Message integrity check failed" in e for e in errors))
+        finally:
+            self._restore_crypto_identity_keep_mac(core_module, original_crypto)
+
+    async def test_header_flags_tampering_is_rejected(self) -> None:
+        errors: list[str] = []
+        core_module, original_crypto = self._patch_crypto_identity_keep_mac()
+        try:
+            sender = I2PChatCore()
+            sender.handshake_complete = True
+            sender.use_encryption = True
+            sender.shared_key = b"x" * 32
+            frame = sender.frame_message("U", "hello")
+
+            magic, version, type_byte, flags, msg_id, msg_len = HEADER_STRUCT.unpack(
+                frame[:HEADER_STRUCT.size]
+            )
+            tampered_header = HEADER_STRUCT.pack(
+                magic,
+                version,
+                type_byte,
+                flags | 0x02,
+                msg_id,
+                msg_len,
+            )
+            tampered_frame = tampered_header + frame[HEADER_STRUCT.size :]
+
+            receiver = I2PChatCore(on_error=errors.append)
+            receiver.handshake_complete = True
+            receiver.use_encryption = True
+            receiver.shared_key = b"x" * 32
+            receiver._reset_crypto_state = lambda: None  # type: ignore[assignment]
+            conn = (_Reader(tampered_frame), _Writer())
+            receiver.conn = conn
+
+            await receiver.receive_loop(conn)
+            self.assertTrue(any("Message integrity check failed" in e for e in errors))
+        finally:
+            self._restore_crypto_identity_keep_mac(core_module, original_crypto)
+
     async def test_pending_ack_ttl_and_limit_pruning(self) -> None:
         core = I2PChatCore()
         core.ACK_MAX_PENDING = 2
@@ -257,8 +357,12 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         core_module.crypto.NACL_AVAILABLE = True
         core_module.crypto.encrypt_message = lambda _k, p: p  # type: ignore[assignment]
         core_module.crypto.decrypt_message = lambda _k, c: c  # type: ignore[assignment]
-        core_module.crypto.compute_mac = lambda _k, _t, _b, seq=None: b"x" * 32  # type: ignore[assignment]
-        core_module.crypto.verify_mac = lambda _k, _t, _b, _m, seq=None: True  # type: ignore[assignment]
+        core_module.crypto.compute_mac = (
+            lambda _k, _t, _b, seq=None, msg_id=None, flags=None: b"x" * 32
+        )  # type: ignore[assignment]
+        core_module.crypto.verify_mac = (
+            lambda _k, _t, _b, _m, seq=None, msg_id=None, flags=None: True
+        )  # type: ignore[assignment]
 
         core = I2PChatCore()
         core.current_peer_addr = "peer.b32.i2p"
@@ -309,8 +413,12 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         core_module.crypto.NACL_AVAILABLE = True
         core_module.crypto.encrypt_message = lambda _k, p: p  # type: ignore[assignment]
         core_module.crypto.decrypt_message = lambda _k, c: c  # type: ignore[assignment]
-        core_module.crypto.compute_mac = lambda _k, _t, _b, seq=None: b"x" * 32  # type: ignore[assignment]
-        core_module.crypto.verify_mac = lambda _k, _t, _b, _m, seq=None: True  # type: ignore[assignment]
+        core_module.crypto.compute_mac = (
+            lambda _k, _t, _b, seq=None, msg_id=None, flags=None: b"x" * 32
+        )  # type: ignore[assignment]
+        core_module.crypto.verify_mac = (
+            lambda _k, _t, _b, _m, seq=None, msg_id=None, flags=None: True
+        )  # type: ignore[assignment]
 
         core = I2PChatCore()
         core.current_peer_addr = "peer-a.b32.i2p"

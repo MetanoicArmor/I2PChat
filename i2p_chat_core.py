@@ -136,6 +136,31 @@ def ensure_valid_profile_name(name: str) -> str:
     return candidate
 
 
+def allocate_unique_profile_name(
+    base_dir: str, profile_name: str, max_attempts: int = 1000
+) -> str:
+    """
+    Возвращает валидное уникальное имя профиля без расширения `.dat`.
+    Формат коллизий: `name_1`, `name_2`, ...
+    """
+    base_name = ensure_valid_profile_name(profile_name)
+    first_choice = os.path.join(base_dir, f"{base_name}.dat")
+    if not os.path.exists(first_choice):
+        return base_name
+    for idx in range(1, max_attempts + 1):
+        suffix = f"_{idx}"
+        max_base_len = 64 - len(suffix)
+        if max_base_len <= 0:
+            break
+        candidate = f"{base_name[:max_base_len]}{suffix}"
+        if not is_valid_profile_name(candidate):
+            continue
+        candidate_path = os.path.join(base_dir, f"{candidate}.dat")
+        if not os.path.exists(candidate_path):
+            return candidate
+    raise FileExistsError(f"Cannot allocate unique profile name for {base_name!r}")
+
+
 def max_base64_chars_for_bytes(byte_count: int) -> int:
     """Maximum Base64 text length needed to encode up to byte_count bytes."""
     if byte_count <= 0:
@@ -568,7 +593,14 @@ class I2PChatCore:
             self._send_seq += 1
             seq = self._send_seq
             encrypted_body = crypto.encrypt_message(self.shared_key, body)
-            mac = crypto.compute_mac(self.shared_key, msg_type, encrypted_body, seq=seq)
+            mac = crypto.compute_mac(
+                self.shared_key,
+                msg_type,
+                encrypted_body,
+                seq=seq,
+                msg_id=msg_id,
+                flags=FLAG_ENCRYPTED,
+            )
             payload = seq.to_bytes(8, "big", signed=False) + encrypted_body + mac
             return (
                 self._codec.encode(
@@ -1949,6 +1981,8 @@ class I2PChatCore:
                         encrypted_body,
                         received_mac,
                         seq=seq_num,
+                        msg_id=msg_id,
+                        flags=frame.flags,
                     ):
                         logger.warning(
                             "HMAC verification failed - message integrity compromised "

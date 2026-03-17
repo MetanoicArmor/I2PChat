@@ -90,4 +90,3 @@
 - deterministic `Lock to peer` behavior and reliable profile restore.
 - security hardening: profile-name whitelist, profile-path confinement, explicit TOFU warning for non-OOB identities, and collision-safe incoming file naming without overwrite.
 
-

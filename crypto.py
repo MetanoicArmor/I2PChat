@@ -30,7 +30,14 @@ def compute_shared_key(nonce_a: bytes, nonce_b: bytes) -> bytes:
     return hashlib.sha256(nonce_a + nonce_b).digest()
 
 
-def compute_mac(key: bytes, msg_type: str, body: bytes, seq: Optional[int] = None) -> bytes:
+def compute_mac(
+    key: bytes,
+    msg_type: str,
+    body: bytes,
+    seq: Optional[int] = None,
+    msg_id: Optional[int] = None,
+    flags: Optional[int] = None,
+) -> bytes:
     """
     Вычисляет HMAC-SHA256 для сообщения.
     
@@ -39,17 +46,25 @@ def compute_mac(key: bytes, msg_type: str, body: bytes, seq: Optional[int] = Non
         msg_type: тип сообщения (1 символ)
         body: тело сообщения
         seq: опциональный номер сообщения (anti-replay)
+        msg_id: опциональный ID сообщения из заголовка vNext
+        flags: опциональные флаги кадра из заголовка vNext
 
     Returns:
         32-байтный HMAC
     """
     # Явный UTF-8 для одинакового результата на всех платформах (Linux/Windows/macOS)
     type_bytes = msg_type.encode("utf-8") if isinstance(msg_type, str) else msg_type
-    if seq is None:
-        mac_input = type_bytes + body
-    else:
+    mac_input = type_bytes
+    if seq is not None:
         # Фиксированное 8-байтное представление номера кадра.
-        mac_input = type_bytes + int(seq).to_bytes(8, "big", signed=False) + body
+        mac_input += int(seq).to_bytes(8, "big", signed=False)
+    if flags is not None:
+        # Фиксированное 1-байтное представление флагов vNext-заголовка.
+        mac_input += int(flags & 0xFF).to_bytes(1, "big", signed=False)
+    if msg_id is not None:
+        # Фиксированное 8-байтное представление MSG_ID из заголовка.
+        mac_input += int(msg_id).to_bytes(8, "big", signed=False)
+    mac_input += body
     return hmac.new(key, mac_input, hashlib.sha256).digest()
 
 
@@ -59,6 +74,8 @@ def verify_mac(
     body: bytes,
     mac: bytes,
     seq: Optional[int] = None,
+    msg_id: Optional[int] = None,
+    flags: Optional[int] = None,
 ) -> bool:
     """
     Проверяет HMAC сообщения с защитой от timing attack.
@@ -66,7 +83,7 @@ def verify_mac(
     Returns:
         True если MAC валиден
     """
-    expected = compute_mac(key, msg_type, body, seq=seq)
+    expected = compute_mac(key, msg_type, body, seq=seq, msg_id=msg_id, flags=flags)
     return hmac.compare_digest(expected, mac)
 
 

@@ -70,7 +70,15 @@
 - Обновлена документация:
   - `docs/MANUAL_RU.md`;
   - `docs/MANUAL_EN.md`;
-  - `RELEASE_0.5.0.md` (дополнен блок про security-hardening).
+  - `RELEASE_0.5.2.md` (дополнен блоками remediation).
+
+#### 6) F-01/F-02 remediation (medium, 2026-03-17)
+
+- **F-01 fixed:** MAC в encrypted vNext-кадрах теперь включает `msg_type + seq + flags + msg_id + encrypted_body`.
+- **Breaking change:** старые клиенты с прежней MAC-семантикой несовместимы с обновлёнными узлами.
+- Добавлены негативные тесты tamper заголовка (`MSG_ID/FLAGS`) в `tests/test_protocol_framing_vnext.py`.
+- **F-02 fixed:** импорт `.dat` больше не делает silent overwrite существующего профиля; при коллизии используется безопасное имя (`name_1`, `name_2`, ...).
+- Добавлена уникализация имени профиля и тесты в `tests/test_profile_import_overwrite.py`.
 
 ### Проверка
 
@@ -157,7 +165,15 @@
 - Updated docs:
   - `docs/MANUAL_RU.md`;
   - `docs/MANUAL_EN.md`;
-  - `RELEASE_0.5.0.md` (security-hardening notes).
+  - `RELEASE_0.5.2.md` (remediation notes).
+
+#### 6) F-01/F-02 remediation (medium, 2026-03-17)
+
+- **F-01 fixed:** MAC for encrypted vNext frames now covers `msg_type + seq + flags + msg_id + encrypted_body`.
+- **Breaking change:** clients using the previous MAC semantics are not wire-compatible with updated peers.
+- Added negative header-tampering tests (`MSG_ID/FLAGS`) in `tests/test_protocol_framing_vnext.py`.
+- **F-02 fixed:** `.dat` import no longer silently overwrites an existing profile; collisions are imported as a new safe name (`name_1`, `name_2`, ...).
+- Added unique profile-name allocation and tests in `tests/test_profile_import_overwrite.py`.
 
 ### Verification
 
