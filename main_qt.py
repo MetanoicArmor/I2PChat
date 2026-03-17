@@ -1516,9 +1516,11 @@ class ProfileComboPopup(QtWidgets.QFrame):
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowFlags(
-            QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
-        )
+        popup_flags = QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
+        if sys.platform.startswith("win"):
+            # Avoid native DWM shadow/frame artifacts around translucent popup on Windows.
+            popup_flags |= QtCore.Qt.WindowType.NoDropShadowWindowHint
+        self.setWindowFlags(popup_flags)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setObjectName("ProfileComboPopupWindow")
         self.setMinimumWidth(220)
