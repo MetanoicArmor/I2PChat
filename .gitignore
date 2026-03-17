@@ -36,6 +36,7 @@ dist/
 I2PChat-macOS-arm64*.zip
 I2PChat-windows*.zip
 I2PChat-*.AppImage
+I2PChat.AppDir/
 
 # Secrets / keys — never commit
 *.dat
