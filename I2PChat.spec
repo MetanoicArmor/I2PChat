@@ -1,11 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
-import glob, os
+import glob, os, sys
 
 _local_modules = [
     os.path.splitext(f)[0]
     for f in glob.glob('*.py')
     if f != 'main_qt.py'
 ]
+
+_icon_file = 'i2pchat.ico' if sys.platform == 'win32' else 'icon-1024.png'
 
 a = Analysis(
     ['main_qt.py'],
@@ -47,7 +49,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon-1024.png'],
+    icon=[_icon_file],
 )
 coll = COLLECT(
     exe,

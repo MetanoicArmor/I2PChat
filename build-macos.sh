@@ -64,7 +64,12 @@ echo "==> Собираю I2PChat.app"
 rm -rf "dist/${APP_NAME}.app"
 mkdir -p "dist/${APP_NAME}.app/Contents/MacOS" "dist/${APP_NAME}.app/Contents/Resources"
 cp -R "dist/${APP_NAME}" "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}"
-cp icon-1024.png "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
+if [ -f "I2PChat.icns" ]; then
+  cp "I2PChat.icns" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
+else
+  echo "WARNING: I2PChat.icns not found, fallback to icon-1024.png"
+  cp "icon-1024.png" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
+fi
 printf '%s\n' '#!/bin/sh' "exec \"\$(dirname \"\$0\")/../Resources/${APP_NAME}/${APP_NAME}\" \"\$@\"" > "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
 chmod +x "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
 
