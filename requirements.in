@@ -6,3 +6,4 @@ qasync
 Pillow
 pynacl
 keyring
+pywin32-ctypes; sys_platform == "win32"

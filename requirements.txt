@@ -319,6 +319,9 @@ pyqt6-sip==13.11.1 \
     --hash=sha256:f532144c43f2fddcccf2e25df50cdb4a744edb4ce4ba5ed2d0f2cef825197f2f \
     --hash=sha256:fcadd68e09ee24cdda8f8bfcba52e59c9b297055d2c450f0eb89afa61a8dc31a
     # via pyqt6
+pywin32-ctypes==0.2.3 ; sys_platform == "win32" \
+    --hash=sha256:8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8
+    # via keyring (windows backends)
 qasync==0.28.0 \
     --hash=sha256:21faba8d047c717008378f5ac29ea58c32a8128528629e4afd57c59b768dba0f \
     --hash=sha256:6f7f1f18971f59cb259b107218269ba56e3ad475ec456e54714b426a6e30b71d

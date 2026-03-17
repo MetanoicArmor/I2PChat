@@ -4,6 +4,18 @@ Param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Invoke-NativeChecked {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter()][string[]]$Arguments = @()
+    )
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        $argsText = if ($Arguments.Count -gt 0) { " " + ($Arguments -join " ") } else { "" }
+        throw "Command failed with exit code ${LASTEXITCODE}: $FilePath$argsText"
+    }
+}
 $VersionFile = "VERSION"
 if (-not (Test-Path $VersionFile)) {
     throw "VERSION file not found: $VersionFile"
@@ -15,10 +27,8 @@ if (-not $ReleaseVersion) {
 
 # Используем установленный Python 3.14+, с fallback на latest Python 3
 $PyLauncherArgs = @("-3.14")
-try {
-    & py @PyLauncherArgs -c "import sys; print(sys.version)" | Out-Null
-}
-catch {
+& py @PyLauncherArgs -c "import sys; print(sys.version)" | Out-Null
+if ($LASTEXITCODE -ne 0) {
     $PyLauncherArgs = @("-3")
 }
 
@@ -30,22 +40,26 @@ if (Test-Path $VenvDir) {
 
 Write-Host "==> Activate virtual environment"
 & "$VenvDir\Scripts\Activate.ps1"
+$PythonExe = Join-Path $VenvDir "Scripts\python.exe"
+if (-not (Test-Path $PythonExe)) {
+    throw "Virtualenv python not found: $PythonExe"
+}
 
 Write-Host "==> Install dependencies from requirements.txt"
-python -m pip install --upgrade pip
-python -m pip install --require-hashes -r requirements.txt
-python -m pip install --require-hashes -r requirements-build.txt
+Invoke-NativeChecked $PythonExe @("-m", "pip", "install", "--upgrade", "pip")
+Invoke-NativeChecked $PythonExe @("-m", "pip", "install", "--require-hashes", "-r", "requirements.txt")
+Invoke-NativeChecked $PythonExe @("-m", "pip", "install", "--require-hashes", "-r", "requirements-build.txt")
 
 Write-Host "==> Check PyNaCl (required for secure protocol)"
-python -c "import nacl; from nacl.secret import SecretBox"
+Invoke-NativeChecked $PythonExe @("-c", "import nacl; from nacl.secret import SecretBox")
 
 Write-Host "==> Compile security-critical modules"
-python -m compileall i2p_chat_core.py crypto.py main_qt.py
+Invoke-NativeChecked $PythonExe @("-m", "compileall", "i2p_chat_core.py", "crypto.py", "main_qt.py")
 
 Write-Host "==> Build GUI I2PChat.exe using spec file"
 if (Test-Path "dist\I2PChat") { Remove-Item -Recurse -Force "dist\I2PChat" }
 if (Test-Path "build\I2PChat") { Remove-Item -Recurse -Force "build\I2PChat" }
-pyinstaller --clean -y I2PChat.spec
+Invoke-NativeChecked $PythonExe @("-m", "PyInstaller", "--clean", "-y", "I2PChat.spec")
 
 Write-Host ""
 Write-Host "Done."

@@ -1,1 +1,2 @@
 pyinstaller
+pefile; sys_platform == "win32"
