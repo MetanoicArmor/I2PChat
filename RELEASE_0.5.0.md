@@ -43,20 +43,6 @@
 - современный UI и темы, одинаково предсказуемые на всех ОС;
 - корректный `Lock to peer` с первого раза и стабильная загрузка профиля.
 
-### Таблицы (в конце)
-
-| Область | До | После |
-|---|---|---|
-| UI/Theme | Частично разнородный рендер | Единый macOS-style UI на всех ОС |
-| Profile lock | Возможен некорректный `.dat` и повторный lock | Каноничный формат `.dat`, корректная загрузка |
-| Icons/Build | Не всегда нативные форматы | `.icns`/`.ico` + обновлённые скрипты |
-
-| Артефакт | Формат | Назначение |
-|---|---|---|
-| `icon.png` | PNG | Базовый исходник иконки |
-| `I2PChat.icns` | ICNS | Иконка приложения для macOS |
-| `i2pchat.ico` | ICO | Иконка приложения для Windows |
-
 ---
 
 ## EN
@@ -102,17 +88,4 @@
 - modern, consistent UI and themes on all target OSes;
 - deterministic `Lock to peer` behavior and reliable profile restore.
 
-### Tables (at the end)
-
-| Area | Before | After |
-|---|---|---|
-| UI/Theme | Partially inconsistent rendering | Unified macOS-style UI across platforms |
-| Profile lock | Possible malformed `.dat` and repeated lock | Canonical `.dat` format and stable load |
-| Icons/Build | Non-native icon usage in some flows | Native `.icns`/`.ico` with updated scripts |
-
-| Artifact | Format | Purpose |
-|---|---|---|
-| `icon.png` | PNG | Base icon source |
-| `I2PChat.icns` | ICNS | macOS app icon |
-| `i2pchat.ico` | ICO | Windows app icon |
 
