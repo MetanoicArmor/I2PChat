@@ -44,7 +44,7 @@ After choosing or typing a name, press **OK** to continue or **Cancel** to close
 
 After you choose a profile, the main chat window opens:
 
-<img src="../screenshots/4.png" alt="I2PChat main window: chat area, input, actions bar" width="900" />
+<img src="../screenshots/1.png" alt="I2PChat main window: chat area, input, actions bar" width="900" />
 
 - **Window title** — `I2PChat • <profile_name>` (e.g. `I2PChat • alice`).
 - **Chat area** — at the top: your and peer messages, system notices, and file transfer progress. You can select and copy message text (right‑click or context menu).
@@ -128,7 +128,7 @@ After pressing it:
 
 The **`Copy My Addr`** button copies your own I2P destination to the clipboard.
 
-<img src="../screenshots/1.png" alt="Getting your own address via Copy My Addr" width="900" />
+<img src="../screenshots/4.png" alt="Getting your own address via Copy My Addr" width="900" />
 
 Logic:
 
