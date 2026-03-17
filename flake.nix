@@ -12,9 +12,12 @@
         pkgs = nixpkgs.legacyPackages.${system};
         
         python = pkgs.python312;
+        textualNoChecks = pkgs.python312Packages.textual.overridePythonAttrs (_old: {
+          doCheck = false;
+        });
         
         pythonEnv = python.withPackages (ps: with ps; [
-          textual
+          textualNoChecks
           rich
           pyperclip
           pyqt6
