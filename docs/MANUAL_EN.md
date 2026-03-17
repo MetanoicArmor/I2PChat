@@ -40,6 +40,20 @@ On Windows you can paste `%APPDATA%\I2PChat` into the address bar of File Explor
 
 After choosing or typing a name, press **OK** to continue or **Cancel** to close the dialog and abort starting the chat.
 
+### 3. Main window (chat interface)
+
+After you choose a profile, the main chat window opens:
+
+<img src="../screenshots/4.png" alt="I2PChat main window: chat area, input, actions bar" width="900" />
+
+- **Window title** — `I2PChat • <profile_name>` (e.g. `I2PChat • alice`).
+- **Chat area** — at the top: your and peer messages, system notices, and file transfer progress. You can select and copy message text (right‑click or context menu).
+- **Message input** — below the chat: type your text and press **Enter** (or the send button) to send a message to the connected peer.
+- **Status line** — below the input shows connection state (e.g. «Connected» or «Disconnected»).
+- **Actions bar** — at the bottom: peer address, connection buttons, and the **`⋯`** menu (see section 4).
+
+Connect to a peer first (enter address in the actions bar → **Connect**), then type in the input field to send messages.
+
 ### 4. Actions bar (connection and profiles)
 
 The actions bar is located **at the bottom of the window**, below the message input area, and contains:
