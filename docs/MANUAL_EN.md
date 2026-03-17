@@ -22,6 +22,7 @@ How to use it:
   - open the drop‑down on the right and select an existing profile (a `.dat` file from the profiles directory);
 - **enter a new name**:
   - type your own profile name (for example, `alice`);
+  - allowed characters are `a-z`, `A-Z`, `0-9`, `.`, `_`, `-` (length 1..64);
   - the profile `.dat` is created immediately: keys are stored in `<name>.dat` (or the keyring), and **Lock to peer** appends the peer address and makes the profile one‑to‑one.
 
 **Profiles directory** is OS-dependent: on **macOS** — `~/Library/Application Support/I2PChat`, on **Windows** — `%APPDATA%\I2PChat`, on **Linux** and others — `~/.i2pchat`. On Unix, the directory is restricted to the owner (0700).
@@ -126,6 +127,7 @@ After a successful connection:
 On first contact with a new peer signing key, a **Trust on First Use (TOFU)** dialog appears:
 
 - it shows the peer address, a short fingerprint, and a public key prefix;
+- the dialog explicitly warns that TOFU without OOB verification does not confirm identity;
 - choose **Yes** to trust and pin the key, or **No** to abort the connection;
 - for higher security, verify the fingerprint with your peer out‑of‑band.
 
@@ -193,6 +195,7 @@ On the receiving side:
   ```text
   Incoming file rejected: <filename>
   ```
+- if a file with the same name already exists in `downloads`, the new file is saved as `<name> (1).<ext>`, `<name> (2).<ext>`, etc. without overwriting.
 
 The **`Send picture`** item works the same way but is intended for images (PNG/JPEG) and is shown inline in the chat.
 
@@ -231,6 +234,7 @@ Rules and behaviour:
    ```
 
 4. In all other cases:
+   - `Lock to peer` is allowed only after cryptographic peer-address binding verification;
    - the file `<profile>.dat` in the profiles directory is created or updated (canonical format, no duplicate lines);
    - a system message appears in the chat:
 

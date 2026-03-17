@@ -42,6 +42,7 @@
 
 - современный UI и темы, одинаково предсказуемые на всех ОС;
 - корректный `Lock to peer` с первого раза и стабильная загрузка профиля.
+- security-hardening: проверка profile name по whitelist, path confinement для профильных файлов, TOFU-предупреждение об отсутствии OOB-верификации, и безопасное сохранение входящих файлов без overwrite.
 
 ---
 
@@ -87,5 +88,6 @@
 
 - modern, consistent UI and themes on all target OSes;
 - deterministic `Lock to peer` behavior and reliable profile restore.
+- security hardening: profile-name whitelist, profile-path confinement, explicit TOFU warning for non-OOB identities, and collision-safe incoming file naming without overwrite.
 
 

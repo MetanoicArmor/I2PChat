@@ -14,9 +14,11 @@ from i2p_chat_core import (
     ChatMessage,
     FileTransferInfo,
     I2PChatCore,
+    ensure_valid_profile_name,
     get_downloads_dir,
     get_profiles_dir,
     get_images_dir,
+    is_valid_profile_name,
     render_braille,
     render_bw,
 )
@@ -1969,7 +1971,9 @@ class ProfileSelectDialog(QtWidgets.QDialog):
     
     def selected_profile(self) -> Optional[str]:
         text = self.combo.currentText().strip() if self.combo.currentText() else ""
-        return text or None
+        if not text:
+            return None
+        return ensure_valid_profile_name(text)
 
 class ChatWindow(QtWidgets.QMainWindow):
     def __init__(self, profile: Optional[str] = None, theme_id: str = THEME_DEFAULT) -> None:
@@ -2682,6 +2686,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             f"Peer: {short_addr}\n"
             f"Fingerprint (SHA-256, short): {fingerprint}\n"
             f"PubKey (hex, prefix): {short_key}...\n\n"
+            "Warning: TOFU pins only the signing key.\n"
+            "Identity is NOT OOB-verified yet.\n"
+            "Verify fingerprint over an independent channel before trusting this peer.\n\n"
             "Trust and pin this key (TOFU)?"
         )
         answer = QtWidgets.QMessageBox.question(
@@ -2823,6 +2830,14 @@ class ChatWindow(QtWidgets.QMainWindow):
                 "Peer address not yet verified.\nEstablish a connection first.",
             )
             return
+        if not self.core.is_current_peer_verified_for_lock():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Lock to peer",
+                "Identity binding is not cryptographically verified yet.\n"
+                "Complete secure handshake and verify peer fingerprint out-of-band first.",
+            )
+            return
 
         try:
             self.core.save_stored_peer(self.core.current_peer_addr)
@@ -2859,6 +2874,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         if not path:
             return
         base = os.path.splitext(os.path.basename(path))[0]
+        if not is_valid_profile_name(base):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Load .dat",
+                "Invalid profile name in selected file.\n"
+                "Allowed: a-z A-Z 0-9 . _ - (1..64 chars).",
+            )
+            return
 
         # Копируем выбранный .dat в папку профилей, чтобы ядро его увидело
         dest_path = os.path.join(get_profiles_dir(), f"{base}.dat")
@@ -2877,6 +2900,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     async def switch_profile(self, profile: str) -> None:
         """Переключиться на другой профиль (.dat)."""
+        profile = ensure_valid_profile_name(profile)
         await self.core.shutdown()
         self.profile = profile
         clean_profile = self.profile.rstrip(" •")
@@ -2997,7 +3021,16 @@ def main() -> None:
 
     # 1) если профиль передан аргументом (CLI), используем его как есть
     if len(sys.argv) > 1:
-        profile: Optional[str] = sys.argv[1]
+        raw_profile = sys.argv[1]
+        if not is_valid_profile_name(raw_profile):
+            QtWidgets.QMessageBox.critical(
+                None,
+                "Invalid profile",
+                "Invalid profile name from CLI.\n"
+                "Allowed: a-z A-Z 0-9 . _ - (1..64 chars).",
+            )
+            return
+        profile: Optional[str] = ensure_valid_profile_name(raw_profile)
         if len(sys.argv) > 2:
             selected_theme = _resolve_theme(sys.argv[2].strip().lower())
             save_theme(selected_theme)
@@ -3018,7 +3051,15 @@ def main() -> None:
         try:
             if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
                 return
-            profile = dialog.selected_profile()
+            try:
+                profile = dialog.selected_profile()
+            except ValueError as e:
+                QtWidgets.QMessageBox.warning(
+                    None,
+                    "Invalid profile",
+                    str(e),
+                )
+                return
         finally:
             app.removeEventFilter(dialog)
     loop = qasync.QEventLoop(app)

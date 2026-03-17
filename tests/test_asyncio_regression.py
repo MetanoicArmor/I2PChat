@@ -1,5 +1,7 @@
 import asyncio
+import os
 import sys
+import tempfile
 import types
 import unittest
 from types import SimpleNamespace
@@ -64,6 +66,34 @@ class _FakeWriter:
 
 
 class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
+    def test_invalid_profile_name_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            I2PChatCore(profile="../../escape")
+
+    def test_profile_paths_stay_within_profiles_dir(self) -> None:
+        import i2p_chat_core as core_module
+
+        original_get_profiles_dir = core_module.get_profiles_dir
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                core_module.get_profiles_dir = lambda: tmp_dir  # type: ignore[assignment]
+                core = I2PChatCore(profile="alice")
+                allowed_prefix = os.path.abspath(tmp_dir) + os.sep
+                self.assertTrue(core._profile_path().startswith(allowed_prefix))
+                self.assertTrue(core._trust_store_path().startswith(allowed_prefix))
+                self.assertTrue(core._signing_seed_path().startswith(allowed_prefix))
+        finally:
+            core_module.get_profiles_dir = original_get_profiles_dir  # type: ignore[assignment]
+
+    def test_lock_requires_verified_identity_binding(self) -> None:
+        core = I2PChatCore(profile="alice")
+        core.current_peer_addr = "peer.b32.i2p"
+        core.handshake_complete = True
+        core.peer_identity_binding_verified = False
+        self.assertFalse(core.is_current_peer_verified_for_lock())
+        core.peer_identity_binding_verified = True
+        self.assertTrue(core.is_current_peer_verified_for_lock())
+
     async def test_connect_sends_identity_line_before_framed_identity(self) -> None:
         core = I2PChatCore()
         core.my_dest = SimpleNamespace(base64="DEST_B64")

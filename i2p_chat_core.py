@@ -108,6 +108,7 @@ def get_images_dir() -> str:
 
 
 UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 # Безопасные форматы изображений (magic bytes -> extension)
 ALLOWED_IMAGE_FORMATS = {
@@ -117,6 +118,22 @@ ALLOWED_IMAGE_FORMATS = {
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB
 MAX_IMAGE_DIMENSION = 4096  # max width/height in pixels
 MAX_IMAGES_CACHE_SIZE = 100 * 1024 * 1024  # 100 MB auto-cleanup threshold
+
+
+def is_valid_profile_name(name: str) -> bool:
+    candidate = (name or "").strip()
+    if candidate == "default":
+        return True
+    return bool(PROFILE_NAME_RE.fullmatch(candidate))
+
+
+def ensure_valid_profile_name(name: str) -> str:
+    candidate = (name or "").strip()
+    if not is_valid_profile_name(candidate):
+        raise ValueError(
+            "Invalid profile name. Allowed characters: a-z A-Z 0-9 . _ - (1..64 chars)."
+        )
+    return candidate
 
 
 def max_base64_chars_for_bytes(byte_count: int) -> int:
@@ -226,6 +243,24 @@ def sanitize_filename(name: str) -> str:
     return name
 
 
+def allocate_unique_filename(base_dir: str, filename: str, max_attempts: int = 1000) -> str:
+    """
+    Возвращает уникальный путь в base_dir без перезаписи существующего файла.
+    Формат коллизий: "name (N).ext".
+    """
+    safe_name = sanitize_filename(filename)
+    name_part, ext = os.path.splitext(safe_name)
+    first_choice = os.path.join(base_dir, safe_name)
+    if not os.path.exists(first_choice):
+        return first_choice
+    for idx in range(1, max_attempts + 1):
+        candidate_name = f"{name_part} ({idx}){ext}"
+        candidate = os.path.join(base_dir, candidate_name)
+        if not os.path.exists(candidate):
+            return candidate
+    raise FileExistsError(f"Cannot allocate unique filename for {safe_name!r}")
+
+
 KEYRING_SERVICE = "i2pchat"
 SIGNING_KEYRING_SUFFIX = "__signing_seed__"
 
@@ -287,7 +322,7 @@ class I2PChatCore:
         legacy_compat: bool = False,
     ) -> None:
         self.sam_address = sam_address
-        self.profile = profile or "default"
+        self.profile = ensure_valid_profile_name(profile or "default")
 
         self.on_status = on_status
         self.on_message = on_message
@@ -310,6 +345,8 @@ class I2PChatCore:
         self.my_dest: Optional[i2plib.Destination] = None
         self.stored_peer: Optional[str] = None
         self.current_peer_addr: Optional[str] = None
+        self.current_peer_dest_b64: Optional[str] = None
+        self.peer_identity_binding_verified: bool = False
         self.conn: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
         self.proven: bool = False
 
@@ -553,13 +590,24 @@ class I2PChatCore:
 
     # ---------- инициализация сессии ----------
 
+    def _profile_scoped_path(self, filename: str) -> str:
+        base_dir = os.path.abspath(get_profiles_dir())
+        target = os.path.abspath(os.path.join(base_dir, filename))
+        if not target.startswith(base_dir + os.sep):
+            raise ValueError(f"Refusing profile path outside profiles dir: {filename!r}")
+        return target
+
     def _profile_path(self) -> str:
         """Полный путь к .dat файлу профиля (общая директория профилей)."""
-        return os.path.join(get_profiles_dir(), f"{self.profile}.dat")
+        return self._profile_scoped_path(f"{self.profile}.dat")
 
     def _trust_store_path(self) -> str:
         """Файл TOFU pinning для handshake signing keys."""
-        return os.path.join(get_profiles_dir(), f"{self.profile}.trust.json")
+        return self._profile_scoped_path(f"{self.profile}.trust.json")
+
+    def _signing_seed_path(self) -> str:
+        """Файл seed локального signing-key (fallback при недоступном keyring)."""
+        return self._profile_scoped_path(f"{self.profile}.signing")
 
     def _load_trust_store(self) -> None:
         """Загружает pinning-таблицу peer_addr -> signing_pub_hex."""
@@ -606,6 +654,48 @@ class I2PChatCore:
         if raw and not raw.endswith(".b32.i2p"):
             raw += ".b32.i2p"
         return raw
+
+    def _canonical_dest_base64(self, raw_dest: str) -> str:
+        dest = i2plib.Destination((raw_dest or "").strip())
+        return dest.base64
+
+    async def _verify_address_binding_via_sam(
+        self, peer_addr: str, dest_base64: str
+    ) -> bool:
+        """Проверяет, что peer_addr в SAM резолвится именно в этот destination."""
+        normalized_addr = self._normalize_peer_addr(peer_addr)
+        if not normalized_addr:
+            return False
+        try:
+            looked_up = await asyncio.wait_for(
+                i2plib.dest_lookup(normalized_addr, sam_address=self.sam_address),
+                timeout=12.0,
+            )
+            looked_up_base64: str
+            if isinstance(looked_up, i2plib.Destination):
+                looked_up_base64 = looked_up.base64
+            else:
+                looked_up_base64 = i2plib.Destination(str(looked_up)).base64
+            return looked_up_base64 == dest_base64
+        except Exception as e:
+            logger.warning("SAM binding verification failed for %s: %s", normalized_addr, e)
+            return False
+
+    async def _set_verified_peer_identity(
+        self, peer_addr: str, raw_dest: str, *, source: str
+    ) -> bool:
+        """Фиксирует peer identity только после SAM-проверки binding."""
+        normalized_addr = self._normalize_peer_addr(peer_addr)
+        canonical_dest = self._canonical_dest_base64(raw_dest)
+        if not await self._verify_address_binding_via_sam(normalized_addr, canonical_dest):
+            self._emit_error(
+                f"Rejected {source} identity: SAM lookup does not confirm {normalized_addr[:24]}..."
+            )
+            return False
+        self.current_peer_addr = normalized_addr
+        self.current_peer_dest_b64 = canonical_dest
+        self.peer_identity_binding_verified = True
+        return True
 
     def _is_probable_peer_addr(self, value: str) -> bool:
         raw = (value or "").strip().lower()
@@ -670,6 +760,13 @@ class I2PChatCore:
 
         self._write_profile_dat(private_key_base64, normalized_peer)
         self.stored_peer = normalized_peer
+
+    def is_current_peer_verified_for_lock(self) -> bool:
+        return bool(
+            self.current_peer_addr
+            and self.handshake_complete
+            and self.peer_identity_binding_verified
+        )
 
     async def _request_trust_decision(
         self, peer_addr: str, fingerprint: str, signing_key_hex: str
@@ -753,7 +850,7 @@ class I2PChatCore:
             except Exception:
                 logger.warning("Invalid signing seed in keyring for profile %s", self.profile)
 
-        path = os.path.join(get_profiles_dir(), f"{self.profile}.signing")
+        path = self._signing_seed_path()
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -1034,8 +1131,9 @@ class I2PChatCore:
             self._emit_error(f"Secure protocol requires PyNaCl. Install: pip install pynacl. ({detail})")
             return
         try:
-            self.current_peer_addr = target_address
+            self.current_peer_addr = self._normalize_peer_addr(target_address)
             self._reset_crypto_state()
+            self.current_peer_addr = self._normalize_peer_addr(target_address)
             self._emit_system(
                 f"Connecting to {target_address[:24]}... "
                 "(may take 1–2 min while I2P builds tunnels)"
@@ -1433,6 +1531,8 @@ class I2PChatCore:
         self._incoming_file_msg_id = None
         self._incoming_image_msg_id = None
         self._ack_session_epoch = 0
+        self.peer_identity_binding_verified = False
+        self.current_peer_dest_b64 = None
 
     async def initiate_secure_handshake(self) -> bool:
         """
@@ -1738,7 +1838,12 @@ class I2PChatCore:
                         writer.close()
                         continue
 
-                    self.current_peer_addr = peer_addr
+                    verified = await self._set_verified_peer_identity(
+                        peer_addr, raw_dest, source="preface"
+                    )
+                    if not verified:
+                        writer.close()
+                        continue
                     self.peer_b32 = peer_addr
                     self._emit_message(
                         "success", f"Connection accepted from {peer_addr[:12]}..."
@@ -1746,8 +1851,10 @@ class I2PChatCore:
                     # Отдельное событие для системного уведомления о входящем подключении.
                     self._emit_notify("connect", peer_addr)
                     self._emit_peer_changed(peer_addr)
-                except Exception:
-                    peer_addr = "Unknown"  # noqa: F841
+                except Exception as e:
+                    self._emit_error(f"Rejected incoming connection: invalid identity preface ({e})")
+                    writer.close()
+                    continue
 
                 if self.my_dest is not None:
                     writer.write(self.frame_message("S", self.my_dest.base64))
@@ -2052,19 +2159,24 @@ class I2PChatCore:
                             self.incoming_info = None
                             continue
                         safe_name = os.path.basename(filename)
-                        safe_path = os.path.join(get_downloads_dir(), safe_name)
+                        safe_path = allocate_unique_filename(get_downloads_dir(), safe_name)
+                        final_name = os.path.basename(safe_path)
                         accepted = await self._request_file_offer_decision(
-                            safe_name, size
+                            final_name, size
                         )
                         if not accepted:
-                            await self.reject_incoming_file(safe_name)
+                            await self.reject_incoming_file(final_name)
                             self._emit_system(
-                                f"Incoming file rejected by user: {safe_name}"
+                                f"Incoming file rejected by user: {final_name}"
                             )
                             self.incoming_file = None
                             self.incoming_info = None
                             continue
-                        self.incoming_file = open(safe_path, "wb")
+                        if final_name != safe_name:
+                            self._emit_system(
+                                f"Filename collision detected: saved as {final_name}"
+                            )
+                        self.incoming_file = open(safe_path, "xb")
                         self._incoming_file_msg_id = msg_id or None
                         self.incoming_info = FileTransferInfo(
                             filename=safe_path, size=size, received=0
@@ -2277,13 +2389,21 @@ class I2PChatCore:
                         try:
                             dest_obj = i2plib.Destination(body)
                             new_peer = dest_obj.base32 + ".b32.i2p"
+                            if self.current_peer_addr and new_peer != self.current_peer_addr:
+                                self._emit_error(
+                                    f"Blocked identity mismatch: expected {self.current_peer_addr[:16]}..., got {new_peer[:16]}..."
+                                )
+                                break
                             if self.stored_peer and new_peer != self.stored_peer:
                                 self._emit_error(
                                     f"Blocked identity spoof: {new_peer[:16]}..."
                                 )
                                 break
+                            if not await self._set_verified_peer_identity(
+                                new_peer, body, source="framed"
+                            ):
+                                break
                             self.peer_b32 = new_peer
-                            self.current_peer_addr = self.peer_b32
                             self._emit_message(
                                 "info", f"Peer Identity: {self.peer_b32}"
                             )
