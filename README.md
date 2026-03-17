@@ -55,16 +55,10 @@
 
 ### 📸 Screenshots
 
-<table border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
-  <tr>
-    <td align="center" style="border: none;">
-      <img src="screenshots/6.png" alt="I2PChat – light theme (macOS-style)" width="420" />
-    </td>
-    <td align="center" style="border: none;">
-      <img src="screenshots/7.png" alt="I2PChat – dark theme (macOS-style)" width="420" />
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="screenshots/6.png" alt="I2PChat – light theme (macOS-style)" width="420" style="max-width: 48%; display: inline-block;" />
+  <img src="screenshots/7.png" alt="I2PChat – dark theme (macOS-style)" width="420" style="max-width: 48%; display: inline-block;" />
+</p>
 
 <p align="center">
   <img src="screenshots/5.png" alt="I2PChat – received image and chat" width="900" /><br>
