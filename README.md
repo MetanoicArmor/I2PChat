@@ -38,8 +38,14 @@
 ### ✨ Features
 
 - **End‑to‑end communication over I2P SAM** (via `i2plib`)
+- **E2E encryption** — handshake, key signing and verification
+- **TOFU** — peer key pinning on first contact
+- **Lock to peer** — bind a profile to a single peer
 - **PyQt6 GUI** with light and dark themes
-- **File transfer** between peers
+- **File transfer** and **image sending** (Send picture) between peers
+- **Profiles (.dat)** — multiple profiles, load and import
+- **System notifications** — tray toasts for new messages
+- **Sound notifications** for incoming messages
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
 #### 📖 Manuals
