@@ -44,18 +44,30 @@ After choosing or typing a name, press **OK** to continue or **Cancel** to close
 
 The actions bar is located **at the bottom of the window**, below the message input area, and contains:
 
-- the **`Load .dat`** button;
 - the **peer address** input field;
-- the following buttons:
-  - **`Connect`**;
-  - **`Disconnect`**;
-  - **`Send File`**;
-  - **`Lock to peer`**;
-  - **`Copy My Addr`**.
+- **`Connect`** and **`Disconnect`** buttons;
+- a **`⋯` (More actions)** button that opens a menu with:
+  - **Load profile (.dat)**;
+  - **Send picture**;
+  - **Send file**;
+  - **Lock to peer**;
+  - **Copy my address**.
 
 All controls in the bar have the same height and are laid out in a single row.
 
-#### 4.1. Peer address field
+#### 4.1. `⋯` (More actions) menu
+
+Clicking the **`⋯`** button opens a popup menu with profile and connection actions:
+
+<img src="../screenshots/2.png" alt="More actions menu (⋯): Load profile, Send picture/file, Lock to peer, Copy my address" width="320" />
+
+- **Load profile (.dat)** — open a file dialog to load a profile from a `.dat` file.
+- **Send picture** — send an image file to the connected peer.
+- **Send file** — send any file to the connected peer.
+- **Lock to peer** — bind the current profile to the connected peer (see section 4.7).
+- **Copy my address** — copy your I2P destination to the clipboard (same as the old “Copy My Addr” action).
+
+#### 4.2. Peer address field
 
 The `Peer .b32.i2p address` field is for the full destination of your peer:
 
@@ -66,7 +78,7 @@ The `Peer .b32.i2p address` field is for the full destination of your peer:
 - You can type or paste the address manually.
 - If the current profile is already locked to a peer and the field is empty, the address is filled from the stored value automatically.
 
-#### 4.2. `Connect` button
+#### 4.3. `Connect` button
 
 The **`Connect`** button starts a connection to the address currently present in the peer field.
 
@@ -88,7 +100,7 @@ After a successful connection:
 - incoming messages appear in the chat area;
 - other events (file transfers, system/info messages) may start flowing over the network.
 
-#### 4.3. `Disconnect` button
+#### 4.4. `Disconnect` button
 
 The **`Disconnect`** button terminates the current connection to the peer.
 
@@ -98,7 +110,7 @@ After pressing it:
 - a system message about the disconnection may appear in the chat;
 - the status label is updated accordingly.
 
-#### 4.4. `Copy My Addr` button
+#### 4.5. `Copy My Addr` button
 
 The **`Copy My Addr`** button copies your own I2P destination to the clipboard.
 
@@ -123,7 +135,7 @@ Logic:
 
 This is convenient when you need to quickly share your address with the other side using an external channel.
 
-#### 4.5. `Send File` button
+#### 4.6. `Send File` button
 
 The **`Send File`** button sends a file to the currently connected peer.
 
@@ -153,7 +165,7 @@ On the receiving side:
   Incoming file rejected: <filename>
   ```
 
-#### 4.6. `Lock to peer` button
+#### 4.7. `Lock to peer` button
 
 The **`Lock to peer`** button is **optional** – you can safely use I2PChat without it.  
 By default, if you never lock, the profile works like an **email address**:
@@ -195,7 +207,7 @@ Rules and behaviour:
    Identity <profile> is now locked to this peer.
    ```
 
-#### 4.7. `Load .dat` button
+#### 4.8. `Load .dat` button
 
 The **`Load .dat`** button lets you switch to another profile by picking an existing `.dat` file.
 
