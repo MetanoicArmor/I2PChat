@@ -1614,6 +1614,7 @@ class ProfileComboWithArrow(QtWidgets.QWidget):
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.combo = ProfileComboBox(self)
+        self._completer: Optional[QtWidgets.QCompleter] = None
         layout.addWidget(self.combo)
         self._arrow = QtWidgets.QLabel("∨", self)
         self.set_arrow_color("#9fa1b5")
@@ -1634,6 +1635,16 @@ class ProfileComboWithArrow(QtWidgets.QWidget):
             self.combo.setCurrentIndex(idx)
         else:
             self.combo.setCurrentText(text)
+
+    def enable_autocomplete(self) -> None:
+        # Позволяет подбирать существующие профили по мере набора текста.
+        self._completer = QtWidgets.QCompleter(self.combo.model(), self.combo)
+        self._completer.setCaseSensitivity(QtCore.Qt.CaseSensitivity.CaseInsensitive)
+        self._completer.setCompletionMode(
+            QtWidgets.QCompleter.CompletionMode.PopupCompletion
+        )
+        self._completer.setFilterMode(QtCore.Qt.MatchFlag.MatchContains)
+        self.combo.setCompleter(self._completer)
 
     def set_arrow_color(self, color: str) -> None:
         self._arrow.setStyleSheet(
@@ -1838,6 +1849,7 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         self.combo.addItems(profiles)
         self.combo.setCurrentIndex(0)
         self.combo.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
+        self.profile_combo_widget.enable_autocomplete()
         layout.addWidget(combo_widget)
         
         combo_hint = QtWidgets.QLabel("Click the list on the right to pick an existing profile, or type a new name above.")
