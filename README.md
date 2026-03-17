@@ -78,7 +78,7 @@ Other platforms are available — see the table below or check [Releases](https:
 
 Requirements:
 
-- Python **3.14+** (recommended; this is what the bundled `i2plib` copy and current builds are tested with)
+- Python **3.14+** (recommended; this is what the vendored local `i2plib` copy and current builds are tested with)
 - [i2pd](https://i2pd.website) router with **SAM** enabled (default port `7656`)
 
 Create and activate a virtual environment, then install dependencies:
@@ -98,7 +98,7 @@ python main_qt.py
 ### 🔧 Cross‑platform builds
 
 The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  
-Everywhere, the recommended/runtime version is **Python 3.14+** (the repo includes an updated copy of `i2plib` compatible with modern asyncio).
+Everywhere, the recommended/runtime version is **Python 3.14+** (the repo includes a vendored local `i2plib` copy compatible with modern asyncio; PyPI `i2plib` is not used).
 
 #### 🐧 Linux (GUI AppImage)
 
@@ -130,15 +130,65 @@ For reproducible Windows builds there is a PowerShell script:
 powershell -ExecutionPolicy Bypass -File .\build-windows.ps1
 ```
 
+For a safer one-off session, prefer:
+
+```powershell
+powershell -NoProfile -Command "Set-ExecutionPolicy -Scope Process RemoteSigned; .\build-windows.ps1"
+```
+
+This limits policy relaxation to the current process and does not change machine/user policy permanently.
+
 It will:
 
 1. Create a fresh virtual environment `.venv314` using **Python 3.14** via `py -3.14 -m venv`.
-2. Install all dependencies from `requirements.txt` plus `pyinstaller`.
+2. Install all dependencies from `requirements.txt` and `requirements-build.txt` (both hash-locked).
 3. Build a GUI‑only PyQt6 binary:
    - Output folder: `dist\I2PChat\`
    - Main executable: `dist\I2PChat\I2PChat.exe`
 
 The resulting `I2PChat.exe` is self‑contained and can be distributed to machines without Python installed.
+
+### Verify release artifacts
+
+Release build scripts generate:
+
+- `SHA256SUMS` file for produced release archive(s);
+- detached armored GPG signature `SHA256SUMS.asc` (best-effort by default).
+
+Build-time controls:
+
+- `I2PCHAT_SKIP_GPG_SIGN=1` — always skip detached signature creation;
+- `I2PCHAT_REQUIRE_GPG=1` — fail build if GPG signing is unavailable or fails;
+- `I2PCHAT_GPG_KEY_ID=<keyid>` — select a specific key for detached signature.
+
+Verification example:
+
+```bash
+gpg --verify SHA256SUMS.asc SHA256SUMS
+sha256sum -c SHA256SUMS
+```
+
+### Protocol metadata and padding profile
+
+The transport is encrypted after handshake, but some protocol metadata remains
+observable on the wire:
+
+- frame type (`TYPE`);
+- frame length (`LEN`);
+- pre-handshake peer identity preface exchange.
+
+To reduce traffic-shape leakage, encrypted payloads use a padding profile:
+
+- default: `balanced` (pads encrypted plaintext to 128-byte buckets);
+- optional: `off` (disable padding).
+
+You can override the profile with:
+
+```bash
+I2PCHAT_PADDING_PROFILE=off python main_qt.py
+```
+
+Trade-off: stronger padding reduces length correlation but increases bandwidth.
 
 #### ❄️ NixOS
 
@@ -175,9 +225,9 @@ If you like this project and want to support development, you can send a small d
 
 | Platform | Download | Launch |
 |----------|----------|--------|
-| **Windows** | [I2PChat-windows-x64-v0.5.1.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v0.5.1.zip) | Unzip → run `I2PChat.exe` |
-| **macOS** | [I2PChat-macOS-arm64-v0.5.1.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v0.5.1.zip) | Unzip → open `I2PChat.app` |
-| **Linux** | [I2PChat-linux-x86_64-v0.5.1.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v0.5.1.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
+| **Windows** | [I2PChat-windows-x64-v0.5.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v0.5.2.zip) | Unzip → run `I2PChat.exe` |
+| **macOS** | [I2PChat-macOS-arm64-v0.5.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v0.5.2.zip) | Unzip → open `I2PChat.app` |
+| **Linux** | [I2PChat-linux-x86_64-v0.5.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v0.5.2.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
 
 > **Requirement:** [i2pd](https://i2pd.website) router must be running with SAM API enabled (default port 7656).
 

@@ -80,6 +80,26 @@
 - **F-02 fixed:** импорт `.dat` больше не делает silent overwrite существующего профиля; при коллизии используется безопасное имя (`name_1`, `name_2`, ...).
 - Добавлена уникализация имени профиля и тесты в `tests/test_profile_import_overwrite.py`.
 
+### Дополнительные изменения после последующих аудитов
+
+- Усилен handshake-ключ:
+  - введён HKDF поверх DH shared secret и nonce-ов;
+  - ключ разделён на `k_enc` (шифрование) и `k_mac` (MAC), MAC больше не использует тот же материал, что и шифрование.
+- Добавлен padding-профиль для зашифрованных payload:
+  - по умолчанию `balanced` (выравнивание до 128-байтных блоков);
+  - опция `off` через `I2PCHAT_PADDING_PROFILE=off` для минимизации накладных расходов;
+  - в MANUAL/README задокументированы остаточные утечки метаданных (`TYPE/LEN` и preface) и trade-off padding.
+- Формализован governance для vendored `i2plib`:
+  - добавлен machine-readable provenance-файл `i2plib/VENDORED_UPSTREAM.json`;
+  - добавлен документ `docs/VENDORED_I2PLIB_POLICY.md` с политикой ревизий и источниками security-advisories;
+  - в CI добавлен supply-chain policy-check, который валидирует provenance и наличие корректного `flake.lock`.
+- Улучшен Nix reproducibility:
+  - добавлен `flake.lock` с pinned `nixpkgs`/`flake-utils`;
+  - workflow `nix-check` больше не переопределяет нестабильный канал напрямую, полагаясь на lock-файл.
+- Подпись релизных артефактов стала более дружелюбной к локальной сборке:
+  - скрипты по-прежнему генерируют `SHA256SUMS` и, при наличии GPG, `SHA256SUMS.asc`;
+  - добавлены переключатели `I2PCHAT_SKIP_GPG_SIGN=1` / `I2PCHAT_REQUIRE_GPG=1` и `I2PCHAT_GPG_KEY_ID`, чтобы можно было собирать без обязательной настройки ключей.
+
 ### Проверка
 
 - `python3 -m unittest tests/test_asyncio_regression.py tests/test_protocol_framing_vnext.py` — `OK`
@@ -174,6 +194,26 @@
 - Added negative header-tampering tests (`MSG_ID/FLAGS`) in `tests/test_protocol_framing_vnext.py`.
 - **F-02 fixed:** `.dat` import no longer silently overwrites an existing profile; collisions are imported as a new safe name (`name_1`, `name_2`, ...).
 - Added unique profile-name allocation and tests in `tests/test_profile_import_overwrite.py`.
+
+#### 7) Post-audit hardening (HKDF, padding, governance)
+
+- Strengthened handshake key derivation:
+  - introduced HKDF over the DH shared secret and both nonces;
+  - split session material into `k_enc` (encryption) and `k_mac` (MAC), removing the single-key pattern.
+- Added an encrypted payload padding profile:
+  - default `balanced` (padding to 128-byte buckets);
+  - optional `off` via `I2PCHAT_PADDING_PROFILE=off` for reduced overhead;
+  - threat model and metadata leakage (TYPE/LEN + identity preface) are explicitly documented in README and manuals.
+- Formalised vendored `i2plib` governance:
+  - added machine-readable provenance file `i2plib/VENDORED_UPSTREAM.json`;
+  - added `docs/VENDORED_I2PLIB_POLICY.md` describing review cadence and advisory sources;
+  - wired supply-chain policy checks into `.github/workflows/security-audit.yml` (provenance + `flake.lock` sanity).
+- Improved Nix-based reproducibility:
+  - added `flake.lock` pinning `nixpkgs` and `flake-utils`;
+  - relied on the lockfile instead of a drifting `nixos-unstable` channel override in CI.
+- Made release signing friendlier for local builds:
+  - build scripts still produce `SHA256SUMS` and, when GPG is available, `SHA256SUMS.asc`;
+  - added environment flags `I2PCHAT_SKIP_GPG_SIGN` / `I2PCHAT_REQUIRE_GPG` and `I2PCHAT_GPG_KEY_ID` to control signer and strictness.
 
 ### Verification
 

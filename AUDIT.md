@@ -1,232 +1,181 @@
 # Security Audit Report: I2PChat
 
 Дата аудита: 2026-03-17  
-Область: исходный код репозитория, локальная сборка/CI, без аудита внешней инфраструктуры.
+Режим: полный аудит (код + тесты + CI/build + dependency/supply-chain)  
+Область: текущее состояние репозитория `I2PChat` (локальный код и конфигурация; без внешней прод-инфраструктуры).
 
 ## Executive Summary
 
-Проведен полный статический аудит безопасности `I2PChat` по направлениям:
-- протокол и криптография (`i2p_chat_core.py`, `crypto.py`, `protocol_codec.py`);
-- локальное хранение профилей/ключей, файловый ввод-вывод (`main_qt.py`, `i2p_chat_core.py`);
-- dependency hygiene и supply-chain контур (`requirements*`, GitHub Actions, build-скрипты);
-- релевантные security-регрессии в тестах.
+Проведен повторный полный аудит с перепроверкой всех пунктов из предыдущего отчета.
 
-Итог по подтвержденным находкам:
+Подтвержденные находки:
 - **Critical:** 0
 - **High:** 0
-- **Medium:** 3
-- **Low:** 2
+- **Medium:** 1
+- **Low:** 4
 
-Ключевые риски:
-1. целостность `MSG_ID` не защищена MAC (возможна подмена ACK-контекста);
-2. импорт `.dat` профиля в GUI может молча перезаписать существующий профиль;
-3. Linux build pipeline тянет `appimagetool` по `latest` без проверки checksum/signature.
-
-Важно: ряд ранее типичных проблем уже закрыт в текущем коде (identity binding через SAM lookup, path confinement профилей, безопасная уникализация входящих файлов, strict vNext по умолчанию).
-
----
+Главный вывод: в протоколе и CI уже закрыта значимая часть ранее найденных рисков (MAC/ACK/downgrade, pinning actions, минимальные permissions), но остаются supply-chain и hardening-вопросы в build-процессе и GUI path-safety.
 
 ## Scope и методика
 
-Проверенные файлы:
-- `i2p_chat_core.py`
-- `crypto.py`
-- `protocol_codec.py`
-- `main_qt.py`
-- `notifications.py`
-- `requirements.in`
-- `requirements.txt`
-- `.github/workflows/security-audit.yml`
-- `.github/workflows/nix-check.yml`
-- `build-linux.sh`
-- `tests/test_protocol_framing_vnext.py`
-- `tests/test_asyncio_regression.py`
+Проверенные компоненты:
+- протокол и криптография: `i2p_chat_core.py`, `crypto.py`, `protocol_codec.py`;
+- GUI и локальные файловые операции: `main_qt.py`;
+- зависимости и сборка: `requirements.in`, `requirements.txt`, `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`;
+- CI: `.github/workflows/security-audit.yml`, `.github/workflows/nix-check.yml`;
+- security-регрессии: `tests/test_asyncio_regression.py`, `tests/test_protocol_framing_vnext.py`, `tests/test_profile_import_overwrite.py`.
 
 Метод:
-- threat-model ревизия: активы, границы доверия, модель атакующего;
-- статический анализ по классам уязвимостей: spoofing/tampering/replay/downgrade/DoS/file safety/supply chain;
-- верификация потенциальных рисков по актуальным инвариантам кода и тестам;
-- формирование remediation-плана с приоритизацией.
+- threat-model ревизия (remote peer, локальный process adversary, supply-chain);
+- статический анализ trust boundaries и sensitive paths;
+- сверка security-claims отчета с фактическим кодом/конфигами;
+- запуск security-регрессий.
 
----
-
-## Threat Model (кратко)
-
-Активы:
-- приватный ключ destination (профиль `.dat` / keyring);
-- локальный Ed25519 signing seed для handshake;
-- привязка peer identity (`.b32.i2p` ↔ destination/signing key);
-- целостность входящих файлов и локального профиля;
-- доверенность зависимостей и build-инструментов.
-
-Границы доверия:
-- все входящие сетевые кадры и signaling считаются недоверенными;
-- локальная ФС частично доверена, но может содержать подмененные файлы;
-- внешние источники артефактов (PyPI/GitHub releases/actions) недоверены по умолчанию.
-
-Модель атакующего:
-- удаленный пир I2P, отправляющий произвольные кадры/порядок кадров;
-- атакующий с возможностью модификации трафика между endpoint'ами (tampering);
-- локальный пользователь, импортирующий/подменяющий profile-файлы;
-- supply-chain атакующий, влияющий на внешние build/runtime зависимости.
+Фактическая проверка тестов:
+- `python3 -m unittest tests/test_asyncio_regression.py tests/test_protocol_framing_vnext.py tests/test_profile_import_overwrite.py` -> **OK (28 tests)**.
 
 ---
 
 ## Findings
 
-## [MEDIUM] F-01: `MSG_ID` не аутентифицируется MAC (tampering ACK semantics)
+## [MEDIUM] F-01: Build tooling устанавливает `pyinstaller` вне hash-pinned lock-потока
 
-**Затронуто:** `i2p_chat_core.py`, `crypto.py`, `protocol_codec.py`  
-**Категория:** Integrity / Protocol metadata tampering
-**Статус:** FIXED (2026-03-17) — `MSG_ID/FLAGS` включены в MAC-вход, добавлены tamper-тесты.
-
-### Что происходит
-
-В vNext-фрейме `MSG_ID` расположен в заголовке (`MAGIC|VER|TYPE|FLAGS|MSG_ID|LEN`), но MAC считается только по `msg_type + seq + encrypted_body`.  
-Следствие: изменение `MSG_ID` в заголовке не ломает криптопроверку payload.
-
-### Почему это важно
-
-`MSG_ID` используется для корреляции ACK (`MSG_ACK`, `FILE_ACK`, `IMG_ACK`) и отображения доставки. Подмена `MSG_ID` может нарушать состояние pending ACK (ложные/потерянные подтверждения, неконсистентность UI/telemetry), даже при валидном MAC.
-
-### PoC (сценарий)
-
-1. Перехватить зашифрованный кадр `U` с валидным payload (`seq|ciphertext|mac`).
-2. Изменить только `MSG_ID` в заголовке vNext.
-3. Получатель примет кадр (MAC валиден), но ACK-контекст будет искажен.
-
-### Рекомендации
-
-1. Включить `msg_id` (и желательно `flags`) в MAC-вход.
-2. Либо перейти на AEAD для всего заголовка как AAD (authenticated associated data).
-3. Добавить негативные тесты на tamper заголовка при неизменном payload.
-
----
-
-## [MEDIUM] F-02: Импорт `.dat` профиля может перезаписать существующий профиль без подтверждения
-
-**Затронуто:** `main_qt.py` (`on_load_profile_clicked`)  
-**Категория:** Local integrity / unsafe overwrite
-**Статус:** FIXED (2026-03-17) — импорт по коллизии выполняется в новый профиль (`name_1`, `name_2`, ...), без silent overwrite.
-
-### Что происходит
-
-При импорте профиля выполняется `shutil.copy2(path, dest_path)`, где `dest_path` уже может существовать.  
-Подтверждение overwrite отсутствует, стратегия безопасного merge/rename не применяется.
-
-### Влияние
-
-- тихая потеря/подмена локальной profile identity;
-- риск случайной утраты рабочего профиля пользователем при загрузке одноименного `.dat`.
-
-### Рекомендации
-
-1. Перед копированием проверять `os.path.exists(dest_path)`.
-2. В GUI запрашивать явное подтверждение overwrite.
-3. Безопасный вариант по умолчанию: импортировать как новый профиль (`name (1).dat`).
-
----
-
-## [MEDIUM] F-03: Непроверенная загрузка `appimagetool` по `latest` в Linux build script
-
-**Затронуто:** `build-linux.sh`  
+**Затронуто:** `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`  
 **Категория:** Supply-chain / Build integrity
 
-### Что происходит
+### Наблюдение
 
-Скрипт скачивает `appimagetool` с GitHub по URL `releases/latest/...` и сразу делает исполняемым. Проверка digest/signature отсутствует.
-
-### Влияние
-
-- риск выполнения подмененного или компрометированного build-инструмента;
-- потенциальная компрометация release-артефактов.
-
-### Рекомендации
-
-1. Пиновать конкретную версию `appimagetool`.
-2. Проверять SHA256 (минимум) перед запуском.
-3. По возможности использовать подписи релиза или доверенный источник из package manager.
-
----
-
-## [LOW] F-04: GitHub Actions не пинованы по commit SHA и не заданы минимальные `permissions`
-
-**Затронуто:** `.github/workflows/security-audit.yml`, `.github/workflows/nix-check.yml`  
-**Категория:** CI hardening
-
-### Что происходит
-
-Используются floating major tags (`actions/checkout@v4`, `actions/setup-python@v5`, `cachix/install-nix-action@v27`) и не задан явный блок `permissions`.
+Во всех build-скриптах выполняется:
+- установка runtime-зависимостей через `--require-hashes -r requirements.txt` (корректно),
+- затем отдельная установка `pyinstaller` без фиксации версии и без hash verification.
 
 ### Влияние
 
-- расширенная поверхность supply-chain риска через upstream action updates;
-- потенциально избыточные права `GITHUB_TOKEN` относительно принципа least privilege.
+- зависимость, влияющая на финальный release-бинарь, подтягивается по floating latest;
+- повышенный риск компрометации сборки при инциденте в цепочке поставки.
 
 ### Рекомендации
 
-1. Пиновать actions по полному commit SHA.
-2. Добавить минимальные `permissions` на workflow/job уровне.
+1. Добавить `pyinstaller` в lock-файл с hashes (например, отдельный `requirements-build.txt`).
+2. Ставить build-зависимости только через `--require-hashes`.
+3. Для release-сборки использовать отдельный reproducible build profile.
 
 ---
 
-## [LOW] F-05: Нет hash pinning для Python-пакетов
+## [LOW] F-02: В CI `pip-audit` устанавливается непинованно
 
-**Затронуто:** `requirements.txt`  
-**Категория:** Dependency integrity
+**Затронуто:** `.github/workflows/security-audit.yml`  
+**Категория:** CI tooling integrity
 
-### Что происходит
+### Наблюдение
 
-Версии пакетов зафиксированы (pip-compile), но отсутствуют хеши артефактов (`--generate-hashes` / `--require-hashes`).
+`pip-audit` устанавливается в workflow без version pin/hash pin.
 
 ### Влияние
 
-- сниженная защита от подмены wheel/sdist при скачивании;
-- зависимость от TLS/индекса без дополнительной integrity-валидации.
+Это не напрямую компрометирует runtime приложения, но снижает надежность security-gate в CI.
 
 ### Рекомендации
 
-1. Перейти на `pip-compile --generate-hashes`.
-2. В CI/сборке устанавливать зависимости с `pip install --require-hashes -r requirements.txt`.
+1. Пиновать версию `pip-audit`.
+2. По возможности использовать hash-pinned requirements для CI tooling.
 
 ---
 
-## Что уже реализовано хорошо
+## [LOW] F-03: `nix_path` указывает на `nixos-unstable` в workflow
 
-- Проверка identity binding через SAM lookup перед фиксацией peer identity (`_set_verified_peer_identity`).
-- Профильная path-безопасность: whitelist имени профиля + confinement в profiles dir (`_profile_scoped_path`).
-- Входящие файлы: санитизация имени + уникализация + открытие в `"xb"` (без silent overwrite).
-- Защита канала: обязательное шифрование после handshake, detection downgrade на plaintext кадрах.
-- Целостность/anti-replay: `HMAC + seq` и строгий порядок кадров.
-- TOFU mismatch-check для peer signing key; lock-to-peer завязан на verified binding.
-- Безопасные subprocess-вызовы нотификаций (`shell=False`).
+**Затронуто:** `.github/workflows/nix-check.yml`  
+**Категория:** Reproducibility hardening
+
+### Наблюдение
+
+В workflow задано `nix_path: nixpkgs=channel:nixos-unstable`.
+
+### Влияние
+
+Потенциальная недетерминированность окружения CI (в зависимости от разрешения каналов), даже при наличии flake-check.
+
+### Рекомендации
+
+1. По возможности полагаться только на `flake.lock`.
+2. Убрать/минимизировать channel override, если он не нужен.
 
 ---
+
+## [LOW] F-04: Нет явного path confinement перед открытием изображения из GUI
+
+**Затронуто:** `main_qt.py` (`on_image_open_requested`)  
+**Категория:** Local file safety / defense in depth
+
+### Наблюдение
+
+Перед `QDesktopServices.openUrl()` проверяется только существование пути, но нет явной проверки, что путь остается внутри ожидаемого каталога image-cache.
+
+### Влияние
+
+В текущем потоке путь контролируется приложением, поэтому риск низкий; однако при будущих изменениях логики это может стать точкой открытия произвольного локального файла.
+
+### Рекомендации
+
+1. Проверять `realpath(path)` относительно `realpath(get_images_dir())`.
+2. Отказывать в открытии файлов вне разрешенной директории.
+
+---
+
+## [LOW] F-05: `_load_pixmap` содержит TOCTOU-шаблон `exists -> open`
+
+**Затронуто:** `main_qt.py` (`_load_pixmap`)  
+**Категория:** Local race hardening
+
+### Наблюдение
+
+Сначала проверяется `os.path.exists(path)`, затем выполняется загрузка `QPixmap(path)`.
+
+### Влияние
+
+При наличии локального атакующего процесса и конкурентной подмены файла возможен race с непредсказуемым поведением загрузки ресурса.
+
+### Рекомендации
+
+1. Убрать предварительный `exists` и обрабатывать только результат фактической загрузки.
+2. Опционально добавить realpath confinement для image-cache.
+
+---
+
+## Что закрыто по сравнению с прошлым отчетом
+
+Подтверждено как **исправленное/устаревшее**:
+- прежний риск TOCTOU при импорте профиля в GUI: импорт выполняется через `import_profile_dat_atomic(...)` и покрыт тестом конкурентного импорта;
+- прежний риск скачивания `appimagetool` по `latest` без проверки: в Linux build есть pin версии и SHA256 verification;
+- прежний риск непинованных GitHub Actions: actions закреплены по commit SHA;
+- прежний риск отсутствия `permissions` в workflows: задано `permissions: contents: read`;
+- прежнее утверждение про отсутствие hash pinning зависимостей: `requirements.txt` уже hash-pinned.
+
+## Подтвержденные сильные стороны
+
+- MAC-проверка включает контекст `seq/msg_id/flags`; tampering режется до обработки payload.
+- Защита от downgrade после handshake реализована и подтверждена тестами.
+- Replay/out-of-order защита по ожидаемому sequence включена.
+- ACK-подтверждения валидируются по контексту (peer/session/kind/state).
+- Binding peer identity верифицируется через SAM lookup перед фиксацией identity.
+- Импорт `.dat` профиля реализован атомарно и race-safe.
+- CI-workflows уже harden-ы по action SHA pinning и минимальным permissions.
 
 ## Пробелы тестирования
 
-Рекомендуемые дополнительные security-тесты:
+Рекомендуемые дополнения:
 
-1. **Header tampering tests**: негативные кейсы изменения `MSG_ID/FLAGS` при валидном payload MAC.
-2. **Profile import overwrite tests**: GUI-поведение при коллизии `<name>.dat`.
-3. **Supply-chain policy tests/checks**: валидация pinned action SHAs и checksum build-tools.
-4. **TOFU policy tests**: сценарии first-contact в headless/без callback (явное policy-решение).
-
----
+1. GUI test для path confinement в `on_image_open_requested`.
+2. GUI/unit test для сценария конкурентной подмены файла при `_load_pixmap`.
+3. CI policy test на наличие pinned tooling (например, `pyinstaller`, `pip-audit`).
+4. Проверка воспроизводимости release-сборки (artifact diff / build metadata).
 
 ## Приоритет remediation
 
-1. **P1 (сразу):** закрыть F-03 (pin + checksum для `appimagetool`) и F-04 (SHA-pinned actions + permissions).
-2. **P1/P2:** закрыть F-01 (аутентификация `MSG_ID`/header через MAC/AAD).
-3. **P2:** закрыть F-02 (безопасный импорт профиля без тихого overwrite).
-4. **P3:** закрыть F-05 (hash-pinned Python dependencies).
+1. **P1:** закрыть F-01 (hash-pinned build toolchain, включая `pyinstaller`).
+2. **P2:** закрыть F-02 и F-03 (пинning CI tooling и hardening nix workflow reproducibility).
+3. **P3:** закрыть F-04 и F-05 (GUI path/race hardening как defense in depth).
 
----
+## Заключение
 
-## Статус ранее типичных рисков
-
-Проверено и **не подтверждено** в текущей версии:
-- identity misbinding "по строке peer address" без проверки: mitigated через SAM binding verification;
-- path traversal через имя профиля: mitigated через `ensure_valid_profile_name` и `_profile_scoped_path`;
-- тихая перезапись входящих файлов от пира: mitigated через `allocate_unique_filename` + `"xb"`.
-
+Безопасность протокольного ядра и CI-базиса на текущем состоянии проекта оценивается как заметно усиленная по сравнению с предыдущей ревизией. Оставшиеся риски носят преимущественно supply-chain и hardening-характер, без подтвержденных критических/высоких эксплуатационных уязвимостей в runtime-пути обмена сообщениями.

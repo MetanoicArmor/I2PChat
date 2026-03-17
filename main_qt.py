@@ -11,7 +11,6 @@ from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
 from i2p_chat_core import (
-    allocate_unique_profile_name,
     ChatMessage,
     FileTransferInfo,
     I2PChatCore,
@@ -19,6 +18,7 @@ from i2p_chat_core import (
     get_downloads_dir,
     get_profiles_dir,
     get_images_dir,
+    import_profile_dat_atomic,
     is_valid_profile_name,
     render_braille,
     render_bw,
@@ -69,6 +69,16 @@ def _resolve_local_asset(filename: str) -> Optional[str]:
 
 def _default_notify_sound_path() -> Optional[str]:
     return _resolve_local_asset(BUNDLED_NOTIFY_SOUND_REL)
+
+
+def _is_path_within_directory(path: str, directory: str) -> bool:
+    """Проверить, что путь после realpath остается внутри directory."""
+    try:
+        real_path = os.path.realpath(path)
+        real_dir = os.path.realpath(directory)
+        return os.path.commonpath([real_path, real_dir]) == real_dir
+    except (OSError, ValueError):
+        return False
 
 
 THEME_DEFAULT = "ligth"
@@ -893,13 +903,14 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     
     def _load_pixmap(self, path: str) -> Optional[QtGui.QPixmap]:
         """Загрузить изображение с кэшированием."""
-        if path in self._pixmap_cache:
-            return self._pixmap_cache[path]
-        
-        if not os.path.exists(path):
+        real_path = os.path.realpath(path)
+        if real_path in self._pixmap_cache:
+            return self._pixmap_cache[real_path]
+
+        if not _is_path_within_directory(real_path, get_images_dir()):
             return None
-        
-        pixmap = QtGui.QPixmap(path)
+
+        pixmap = QtGui.QPixmap(real_path)
         if pixmap.isNull():
             return None
         
@@ -912,7 +923,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 QtCore.Qt.TransformationMode.SmoothTransformation,
             )
         
-        self._pixmap_cache[path] = pixmap
+        self._pixmap_cache[real_path] = pixmap
         return pixmap
 
     def _bubble_width(self, cell_width: int, text: str, font: QtGui.QFont) -> int:
@@ -2716,13 +2727,16 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         if not played and sys.platform.startswith("linux"):
             linux_cmds: list[list[str]] = []
-            if shutil.which("canberra-gtk-play"):
-                linux_cmds.append(["canberra-gtk-play", "-i", "message-new-instant"])
+            canberra_path = shutil.which("canberra-gtk-play")
+            if canberra_path:
+                linux_cmds.append([canberra_path, "-i", "message-new-instant"])
             if self.notify_sound_path and os.path.isfile(self.notify_sound_path):
-                if shutil.which("paplay"):
-                    linux_cmds.append(["paplay", self.notify_sound_path])
-                if shutil.which("aplay"):
-                    linux_cmds.append(["aplay", self.notify_sound_path])
+                paplay_path = shutil.which("paplay")
+                if paplay_path:
+                    linux_cmds.append([paplay_path, self.notify_sound_path])
+                aplay_path = shutil.which("aplay")
+                if aplay_path:
+                    linux_cmds.append([aplay_path, self.notify_sound_path])
             for cmd in linux_cmds:
                 try:
                     subprocess.Popen(
@@ -3043,16 +3057,15 @@ class ChatWindow(QtWidgets.QMainWindow):
         dest_path = os.path.join(profiles_dir, f"{target_base}.dat")
         if os.path.abspath(path) != os.path.abspath(dest_path):
             try:
-                if os.path.exists(dest_path):
-                    target_base = allocate_unique_profile_name(profiles_dir, source_base)
-                    dest_path = os.path.join(profiles_dir, f"{target_base}.dat")
+                target_base = import_profile_dat_atomic(path, profiles_dir, source_base)
+                dest_path = os.path.join(profiles_dir, f"{target_base}.dat")
+                if target_base != source_base:
                     QtWidgets.QMessageBox.information(
                         self,
                         "Load .dat",
                         f"Профиль '{source_base}' уже существует.\n"
                         f"Импортирован как '{target_base}'.",
                     )
-                shutil.copy2(path, dest_path)
             except Exception as e:  # pragma: no cover - GUI path
                 QtWidgets.QMessageBox.critical(
                     self,
@@ -3098,11 +3111,16 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def on_image_open_requested(self, path: str) -> None:
         """Открыть изображение в системном просмотрщике."""
-        if not os.path.exists(path):
+        if not _is_path_within_directory(path, get_images_dir()):
+            self.handle_error(f"Refusing to open file outside images directory: {path}")
+            return
+
+        real_path = os.path.realpath(path)
+        if not os.path.isfile(real_path):
             self.handle_error(f"Image not found: {path}")
             return
-        
-        url = QtCore.QUrl.fromLocalFile(path)
+
+        url = QtCore.QUrl.fromLocalFile(real_path)
         QtGui.QDesktopServices.openUrl(url)
 
     @QtCore.pyqtSlot()

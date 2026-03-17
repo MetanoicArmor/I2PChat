@@ -1,8 +1,10 @@
 import os
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
-from i2p_chat_core import allocate_unique_profile_name
+from i2p_chat_core import allocate_unique_profile_name, import_profile_dat_atomic
 
 
 class ProfileImportSafetyTests(unittest.TestCase):
@@ -28,6 +30,26 @@ class ProfileImportSafetyTests(unittest.TestCase):
             candidate = allocate_unique_profile_name(profiles_dir, base)
             self.assertEqual(len(candidate), 64)
             self.assertTrue(candidate.endswith("_1"))
+
+    def test_atomic_import_is_race_safe_for_same_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as profiles_dir:
+            source = os.path.join(profiles_dir, "incoming.dat")
+            with open(source, "wb") as f:
+                f.write(b"secret-profile-bytes")
+
+            start = threading.Barrier(2)
+
+            def do_import() -> str:
+                start.wait()
+                return import_profile_dat_atomic(source, profiles_dir, "alice")
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                names = list(pool.map(lambda _: do_import(), range(2)))
+
+            self.assertEqual(sorted(names), ["alice", "alice_1"])
+            for name in names:
+                with open(os.path.join(profiles_dir, f"{name}.dat"), "rb") as f:
+                    self.assertEqual(f.read(), b"secret-profile-bytes")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,55 @@ def compute_shared_key(nonce_a: bytes, nonce_b: bytes) -> bytes:
     return hashlib.sha256(nonce_a + nonce_b).digest()
 
 
+def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
+    """
+    HKDF-Extract (RFC 5869) with HMAC-SHA256.
+    """
+    effective_salt = salt if salt else b"\x00" * 32
+    return hmac.new(effective_salt, ikm, hashlib.sha256).digest()
+
+
+def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
+    """
+    HKDF-Expand (RFC 5869) with HMAC-SHA256.
+    """
+    if length <= 0:
+        raise ValueError("HKDF output length must be positive")
+    okm = b""
+    previous = b""
+    counter = 1
+    while len(okm) < length:
+        previous = hmac.new(
+            prk,
+            previous + info + bytes([counter]),
+            hashlib.sha256,
+        ).digest()
+        okm += previous
+        counter += 1
+        if counter > 255:
+            raise ValueError("HKDF output too large")
+    return okm[:length]
+
+
+def derive_handshake_subkeys(
+    dh_shared: bytes,
+    nonce_init: bytes,
+    nonce_resp: bytes,
+) -> Tuple[bytes, bytes]:
+    """
+    Деривация session subkeys для шифрования и MAC:
+    - k_enc (32)
+    - k_mac (32)
+    """
+    salt = hashlib.sha256(
+        b"I2PCHAT-HS3-SALT|" + nonce_init + nonce_resp
+    ).digest()
+    prk = hkdf_extract(salt, dh_shared)
+    k_enc = hkdf_expand(prk, b"I2PCHAT-HS3|key|enc", 32)
+    k_mac = hkdf_expand(prk, b"I2PCHAT-HS3|key|mac", 32)
+    return k_enc, k_mac
+
+
 def compute_mac(
     key: bytes,
     msg_type: str,

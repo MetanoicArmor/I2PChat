@@ -410,7 +410,28 @@ Check:
   - `Cmd+C` on macOS;
 - you can also use the context menu (`Copy text` / `Copy with timestamp`).
 
-### 8. Summary
+### 8. Protocol metadata and padding
+
+Even with post-handshake encryption, some transport metadata remains observable:
+
+- frame type (`TYPE`);
+- frame length (`LEN`);
+- pre-handshake identity preface exchange.
+
+To reduce length-based traffic analysis, encrypted mode uses a padding profile:
+
+- default: `balanced` (pads to 128-byte buckets);
+- optional: `off` (no padding).
+
+Override via environment variable:
+
+```bash
+I2PCHAT_PADDING_PROFILE=off python main_qt.py
+```
+
+Trade-off: more padding lowers metadata correlation but increases bandwidth use.
+
+### 9. Summary
 
 The I2PChat GUI provides:
 

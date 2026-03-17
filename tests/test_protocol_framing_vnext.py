@@ -143,6 +143,41 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decoded.payload, b"ok")
         self.assertEqual(decoded.msg_id, 7)
 
+    async def test_balanced_padding_roundtrip_for_encrypted_text(self) -> None:
+        errors: list[str] = []
+        messages: list[str] = []
+        core_module, original_crypto = self._patch_crypto_identity_keep_mac()
+        try:
+            sender = I2PChatCore()
+            sender.handshake_complete = True
+            sender.use_encryption = True
+            sender.shared_key = b"k" * 32
+            sender.shared_mac_key = b"m" * 32
+            sender.padding_profile = "balanced"
+
+            receiver = I2PChatCore(on_error=errors.append, on_message=lambda m: messages.append(m.text))
+            receiver.handshake_complete = True
+            receiver.use_encryption = True
+            receiver.shared_key = b"k" * 32
+            receiver.shared_mac_key = b"m" * 32
+            receiver._reset_crypto_state = lambda: None  # type: ignore[assignment]
+
+            frame = sender.frame_message("U", "hello")
+            conn = (_Reader(frame), _Writer())
+            receiver.conn = conn
+            await receiver.receive_loop(conn)
+
+            self.assertIn("hello", messages)
+            self.assertEqual(errors, [])
+        finally:
+            self._restore_crypto_identity_keep_mac(core_module, original_crypto)
+
+    async def test_off_padding_keeps_plaintext_payload_compat_path(self) -> None:
+        core = I2PChatCore()
+        core.padding_profile = "off"
+        self.assertEqual(core._apply_padding_profile(b"abc"), b"abc")
+        self.assertEqual(core._remove_padding_profile(b"abc"), b"abc")
+
     async def test_reject_oversized_frame(self) -> None:
         codec = ProtocolCodec(
             allowed_types={"S"},

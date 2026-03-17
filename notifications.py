@@ -1,4 +1,5 @@
 import platform
+import shutil
 import subprocess
 import sys
 from typing import Optional
@@ -67,13 +68,15 @@ def show_notification(title: str, message: str) -> None:
                 except Exception:
                     pass
 
-            # Linux: пробуем notify-send, если оно есть в PATH.
-            subprocess.run(
-                ["notify-send", title, message],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            # Linux: вызываем helper только по абсолютному пути.
+            notify_send_path = shutil.which("notify-send")
+            if notify_send_path:
+                subprocess.run(
+                    [notify_send_path, title, message],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
         elif system == "windows":
             # 1) Если есть plyer, используем его.
             if _plyer_notification is not None:  # pragma: no cover

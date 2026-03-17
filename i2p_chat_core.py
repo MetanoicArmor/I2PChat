@@ -4,7 +4,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -118,6 +120,11 @@ ALLOWED_IMAGE_FORMATS = {
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB
 MAX_IMAGE_DIMENSION = 4096  # max width/height in pixels
 MAX_IMAGES_CACHE_SIZE = 100 * 1024 * 1024  # 100 MB auto-cleanup threshold
+PADDING_PROFILE_OFF = "off"
+PADDING_PROFILE_BALANCED = "balanced"
+SUPPORTED_PADDING_PROFILES = {PADDING_PROFILE_OFF, PADDING_PROFILE_BALANCED}
+PADDING_ENVELOPE_MAGIC = b"I2PPAD1"
+PADDING_BALANCED_BLOCK = 128
 
 
 def is_valid_profile_name(name: str) -> bool:
@@ -159,6 +166,79 @@ def allocate_unique_profile_name(
         if not os.path.exists(candidate_path):
             return candidate
     raise FileExistsError(f"Cannot allocate unique profile name for {base_name!r}")
+
+
+def import_profile_dat_atomic(
+    source_path: str,
+    profiles_dir: str,
+    profile_name: str,
+    max_attempts: int = 1000,
+) -> str:
+    """
+    Атомарно импортирует .dat профиль в profiles_dir и возвращает итоговое имя профиля.
+    Коллизии обрабатываются форматом name_1, name_2, ... без TOCTOU между check/use.
+    """
+    base_name = ensure_valid_profile_name(profile_name)
+    src_abs = os.path.abspath(source_path)
+    profiles_abs = os.path.abspath(profiles_dir)
+    os.makedirs(profiles_abs, exist_ok=True)
+    reserved_path = ""
+    tmp_path = ""
+    candidate = base_name
+    try:
+        for idx in range(0, max_attempts + 1):
+            if idx == 0:
+                candidate = base_name
+            else:
+                suffix = f"_{idx}"
+                max_base_len = 64 - len(suffix)
+                if max_base_len <= 0:
+                    break
+                candidate = f"{base_name[:max_base_len]}{suffix}"
+                if not is_valid_profile_name(candidate):
+                    continue
+            reserved_path = os.path.join(profiles_abs, f"{candidate}.dat")
+            if os.path.abspath(reserved_path) == src_abs:
+                return candidate
+            try:
+                fd = os.open(
+                    reserved_path,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o600,
+                )
+            except FileExistsError:
+                continue
+            os.close(fd)
+            break
+        else:
+            raise FileExistsError(f"Cannot allocate unique profile name for {base_name!r}")
+
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=profiles_abs,
+            prefix=f".{candidate}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tf:
+            tmp_path = tf.name
+            with open(src_abs, "rb") as src:
+                shutil.copyfileobj(src, tf)
+
+        os.replace(tmp_path, reserved_path)
+        tmp_path = ""
+        return candidate
+    except Exception:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        if reserved_path and os.path.exists(reserved_path):
+            try:
+                os.unlink(reserved_path)
+            except OSError:
+                pass
+        raise
 
 
 def max_base64_chars_for_bytes(byte_count: int) -> int:
@@ -388,6 +468,7 @@ class I2PChatCore:
 
         # криптография (устанавливается при handshake v2)
         self.shared_key: Optional[bytes] = None
+        self.shared_mac_key: Optional[bytes] = None
         self.my_nonce: Optional[bytes] = None
         self.peer_nonce: Optional[bytes] = None
         self.my_ephemeral_private: Optional[bytes] = None
@@ -399,6 +480,14 @@ class I2PChatCore:
         self.peer_trusted_signing_keys: dict[str, str] = {}
         self.use_encryption: bool = False
         self.handshake_complete: bool = False
+        raw_padding_profile = os.environ.get(
+            "I2PCHAT_PADDING_PROFILE", PADDING_PROFILE_BALANCED
+        ).strip().lower()
+        self.padding_profile = (
+            raw_padding_profile
+            if raw_padding_profile in SUPPORTED_PADDING_PROFILES
+            else PADDING_PROFILE_BALANCED
+        )
         self._handshake_initiated: bool = False
         self._send_seq: int = 0
         self._recv_seq: int = 0
@@ -592,9 +681,11 @@ class I2PChatCore:
                 raise RuntimeError("NaCl is required for secure protocol mode")
             self._send_seq += 1
             seq = self._send_seq
-            encrypted_body = crypto.encrypt_message(self.shared_key, body)
+            mac_key = self.shared_mac_key or self.shared_key
+            padded_body = self._apply_padding_profile(body)
+            encrypted_body = crypto.encrypt_message(self.shared_key, padded_body)
             mac = crypto.compute_mac(
-                self.shared_key,
+                mac_key,
                 msg_type,
                 encrypted_body,
                 seq=seq,
@@ -610,6 +701,32 @@ class I2PChatCore:
             )
 
         return self._codec.encode(msg_type, body, msg_id=msg_id, flags=0), msg_id
+
+    def _apply_padding_profile(self, body: bytes) -> bytes:
+        if self.padding_profile == PADDING_PROFILE_OFF:
+            return body
+        wrapped = PADDING_ENVELOPE_MAGIC + len(body).to_bytes(4, "big", signed=False) + body
+        target_len = (
+            (len(wrapped) + PADDING_BALANCED_BLOCK - 1) // PADDING_BALANCED_BLOCK
+        ) * PADDING_BALANCED_BLOCK
+        pad_len = target_len - len(wrapped)
+        if pad_len <= 0:
+            return wrapped
+        return wrapped + os.urandom(pad_len)
+
+    def _remove_padding_profile(self, decrypted: bytes) -> bytes:
+        if not decrypted.startswith(PADDING_ENVELOPE_MAGIC):
+            return decrypted
+        header_len = len(PADDING_ENVELOPE_MAGIC) + 4
+        if len(decrypted) < header_len:
+            raise ValueError("Malformed padded payload header")
+        original_len = int.from_bytes(
+            decrypted[len(PADDING_ENVELOPE_MAGIC):header_len], "big", signed=False
+        )
+        payload = decrypted[header_len:]
+        if original_len > len(payload):
+            raise ValueError("Malformed padded payload length")
+        return payload[:original_len]
 
     def frame_message(self, msg_type: str, content: str) -> bytes:
         frame, _ = self.frame_message_with_id(msg_type, content)
@@ -1546,6 +1663,7 @@ class I2PChatCore:
     def _reset_crypto_state(self) -> None:
         """Сбрасывает криптографическое состояние при отключении."""
         self.shared_key = None
+        self.shared_mac_key = None
         self.my_nonce = None
         self.peer_nonce = None
         self.my_ephemeral_private = None
@@ -1620,13 +1738,13 @@ class I2PChatCore:
             logger.error(f"Handshake initiation failed: {e}")
             return False
 
-    def _compute_final_shared_key(self, is_initiator: bool) -> bytes:
+    def _compute_session_subkeys(self, is_initiator: bool) -> Tuple[bytes, bytes]:
         """
-        Вычисляет финальный shared_key.
-        
-        С PFS: SHA256(DH_shared || nonce_init || nonce_resp)
+        Вычисляет финальные subkeys для сессии.
+
+        С PFS + key separation:
+        HKDF(dh_shared, nonce_init, nonce_resp) -> (k_enc, k_mac)
         """
-        import hashlib
         if not crypto.NACL_AVAILABLE:
             raise RuntimeError("PyNaCl is required for secure protocol")
         if not self.my_ephemeral_private or not self.peer_ephemeral_public:
@@ -1638,12 +1756,12 @@ class I2PChatCore:
             self.my_ephemeral_private, self.peer_ephemeral_public
         )
         if is_initiator:
-            return hashlib.sha256(
-                dh_shared + self.my_nonce + self.peer_nonce
-            ).digest()
-        return hashlib.sha256(
-            dh_shared + self.peer_nonce + self.my_nonce
-        ).digest()
+            nonce_init = self.my_nonce
+            nonce_resp = self.peer_nonce
+        else:
+            nonce_init = self.peer_nonce
+            nonce_resp = self.my_nonce
+        return crypto.derive_handshake_subkeys(dh_shared, nonce_init, nonce_resp)
 
     async def _handle_handshake_message(
         self, body: str, writer: asyncio.StreamWriter
@@ -1730,7 +1848,9 @@ class I2PChatCore:
                 writer.write(self.frame_message_plain("H", response))
                 await writer.drain()
 
-                self.shared_key = self._compute_final_shared_key(is_initiator=False)
+                self.shared_key, self.shared_mac_key = self._compute_session_subkeys(
+                    is_initiator=False
+                )
                 self.use_encryption = True
                 self.handshake_complete = True
                 self._handshake_initiated = False
@@ -1782,7 +1902,9 @@ class I2PChatCore:
                 if not await self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
                     raise ValueError("Peer signing key does not match pinned key")
                 self.peer_signing_public = peer_sign_pub
-                self.shared_key = self._compute_final_shared_key(is_initiator=True)
+                self.shared_key, self.shared_mac_key = self._compute_session_subkeys(
+                    is_initiator=True
+                )
                 self.use_encryption = True
                 self.handshake_complete = True
                 self._handshake_initiated = False
@@ -1975,8 +2097,9 @@ class I2PChatCore:
                     if len(encrypted_body) == 0:
                         logger.warning("Encrypted body is empty")
                         break
+                    mac_key = self.shared_mac_key or self.shared_key
                     if not crypto.verify_mac(
-                        self.shared_key,
+                        mac_key,
                         msg_type,
                         encrypted_body,
                         received_mac,
@@ -2007,7 +2130,13 @@ class I2PChatCore:
                         logger.warning("Decryption failed")
                         self._emit_error("Failed to decrypt message")
                         break
-                    body_data = decrypted
+                    try:
+                        body_data = self._remove_padding_profile(decrypted)
+                    except ValueError as e:
+                        logger.warning("Padded payload parse failed: %s", e)
+                        self._emit_error("Protocol error: malformed padded payload")
+                        self._schedule_disconnect()
+                        break
                     self._recv_seq = seq_num
                 elif self.handshake_complete:
                     logger.warning(

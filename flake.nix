@@ -2,6 +2,7 @@
   description = "I2PChat - Secure peer-to-peer chat over I2P";
 
   inputs = {
+    # Keep branch reference here; reproducibility is enforced via flake.lock.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };

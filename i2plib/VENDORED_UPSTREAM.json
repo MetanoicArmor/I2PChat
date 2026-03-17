@@ -1,0 +1,22 @@
+{
+  "component": "i2plib",
+  "strategy": "vendored",
+  "upstream": {
+    "repository": "https://github.com/l-n-s/i2plib",
+    "baseline_version": "0.0.14",
+    "local_variant": "0.0.14-modern-asyncio"
+  },
+  "review_policy": {
+    "cadence": "monthly",
+    "security_advisory_sources": [
+      "https://github.com/l-n-s/i2plib/security/advisories",
+      "https://github.com/l-n-s/i2plib/releases"
+    ],
+    "required_checks": [
+      "upstream_diff_review",
+      "advisory_review",
+      "local_patch_revalidation"
+    ]
+  },
+  "last_reviewed_utc": "2026-03-17T00:00:00Z"
+}

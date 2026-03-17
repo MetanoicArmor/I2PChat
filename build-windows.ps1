@@ -33,7 +33,8 @@ Write-Host "==> Activate virtual environment"
 
 Write-Host "==> Install dependencies from requirements.txt"
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt pyinstaller
+python -m pip install --require-hashes -r requirements.txt
+python -m pip install --require-hashes -r requirements-build.txt
 
 Write-Host "==> Check PyNaCl (required for secure protocol)"
 python -c "import nacl; from nacl.secret import SecretBox"
@@ -50,6 +51,42 @@ Write-Host ""
 Write-Host "Done."
 Write-Host "GUI binary: dist\\I2PChat\\I2PChat.exe"
 Write-Host "Security profile: signed handshake + TOFU (release $ReleaseVersion)"
-Write-Host "For release upload, create zip:"
-Write-Host "  Compress-Archive -Path dist\\I2PChat -DestinationPath dist\\I2PChat-windows-x64-v$ReleaseVersion.zip -CompressionLevel Optimal"
+
+$ZipFile = "dist\\I2PChat-windows-x64-v$ReleaseVersion.zip"
+if (Test-Path $ZipFile) {
+    Remove-Item -Force $ZipFile
+}
+Compress-Archive -Path "dist\\I2PChat" -DestinationPath $ZipFile -CompressionLevel Optimal
+Write-Host "Packed: $ZipFile"
+
+$HashLine = "{0}  {1}" -f (Get-FileHash -Path $ZipFile -Algorithm SHA256).Hash.ToLowerInvariant(), (Split-Path -Path $ZipFile -Leaf)
+Set-Content -Path "SHA256SUMS" -Value $HashLine -NoNewline -Encoding utf8
+Write-Host "Generated: SHA256SUMS"
+
+if ($env:I2PCHAT_SKIP_GPG_SIGN -eq "1") {
+    Write-Warning "Skipping GPG detached signature (I2PCHAT_SKIP_GPG_SIGN=1)"
+}
+elseif (-not (Get-Command gpg -ErrorAction SilentlyContinue)) {
+    if ($env:I2PCHAT_REQUIRE_GPG -eq "1") {
+        throw "gpg is required to create detached release signature"
+    }
+    Write-Warning "gpg not found; skipping detached signature (set I2PCHAT_REQUIRE_GPG=1 to enforce)"
+}
+else {
+    $GpgArgs = @("--batch", "--yes", "--armor", "--detach-sign", "--output", "SHA256SUMS.asc")
+    if ($env:I2PCHAT_GPG_KEY_ID) {
+        $GpgArgs += @("--local-user", $env:I2PCHAT_GPG_KEY_ID)
+    }
+    $GpgArgs += "SHA256SUMS"
+    & gpg @GpgArgs
+    if ($LASTEXITCODE -ne 0) {
+        if ($env:I2PCHAT_REQUIRE_GPG -eq "1") {
+            throw "gpg failed with exit code $LASTEXITCODE in required mode"
+        }
+        Write-Warning "gpg signing failed; continuing without detached signature"
+    }
+    else {
+        Write-Host "Generated: SHA256SUMS.asc"
+    }
+}
 

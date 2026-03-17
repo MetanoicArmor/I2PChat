@@ -49,7 +49,8 @@ fi
 
 echo "==> Устанавливаю/обновляю зависимости"
 "${PYTHON_CMD}" -m pip install --upgrade pip
-"${PYTHON_CMD}" -m pip install -r requirements.txt pyinstaller
+"${PYTHON_CMD}" -m pip install --require-hashes -r requirements.txt
+"${PYTHON_CMD}" -m pip install --require-hashes -r requirements-build.txt
 
 echo "==> Проверяю PyNaCl (обязателен для secure protocol)"
 "${PYTHON_CMD}" - <<'PY'
@@ -109,5 +110,49 @@ PLIST
 
 echo
 echo "✔ GUI собран: dist/${APP_NAME}.app (${ARCH_SUFFIX})"
-echo "  Для релиза: zip -r I2PChat-macOS-${ARCH_SUFFIX}-v${RELEASE_VERSION}.zip dist/${APP_NAME}.app"
-echo "  Можно перенести в /Applications и запускать двойным кликом."
+
+ZIP_FILE="I2PChat-macOS-${ARCH_SUFFIX}-v${RELEASE_VERSION}.zip"
+rm -f "${ZIP_FILE}"
+ditto -c -k --sequesterRsrc --keepParent "dist/${APP_NAME}.app" "${ZIP_FILE}"
+echo "✔ Packed ${ZIP_FILE}"
+
+SHA256_FILE="SHA256SUMS"
+"${PYTHON_CMD}" - "${ZIP_FILE}" "${SHA256_FILE}" <<'PY'
+import hashlib
+import os
+import sys
+
+artifact, checksums = sys.argv[1], sys.argv[2]
+h = hashlib.sha256()
+with open(artifact, "rb") as f:
+    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+        h.update(chunk)
+with open(checksums, "w", encoding="utf-8") as out:
+    out.write(f"{h.hexdigest()}  {os.path.basename(artifact)}\n")
+PY
+echo "✔ Generated ${SHA256_FILE}"
+
+if [ "${I2PCHAT_SKIP_GPG_SIGN:-0}" = "1" ]; then
+  echo "⚠ Skipping GPG detached signature (I2PCHAT_SKIP_GPG_SIGN=1)"
+elif ! command -v gpg >/dev/null 2>&1; then
+  if [ "${I2PCHAT_REQUIRE_GPG:-0}" = "1" ]; then
+    echo "ERROR: gpg is required to create detached release signature" >&2
+    exit 1
+  fi
+  echo "⚠ gpg not found; skipping detached signature (set I2PCHAT_REQUIRE_GPG=1 to enforce)"
+else
+  GPG_ARGS=(--batch --yes --armor --detach-sign --output "${SHA256_FILE}.asc")
+  if [ -n "${I2PCHAT_GPG_KEY_ID:-}" ]; then
+    GPG_ARGS+=(--local-user "${I2PCHAT_GPG_KEY_ID}")
+  fi
+  if gpg "${GPG_ARGS[@]}" "${SHA256_FILE}"; then
+    echo "✔ Generated ${SHA256_FILE}.asc"
+  else
+    if [ "${I2PCHAT_REQUIRE_GPG:-0}" = "1" ]; then
+      echo "ERROR: gpg signing failed in required mode" >&2
+      exit 1
+    fi
+    echo "⚠ gpg signing failed; continuing without detached signature"
+  fi
+fi
+echo "  Можно перенести dist/${APP_NAME}.app в /Applications и запускать двойным кликом."

@@ -4,6 +4,7 @@ set -euo pipefail
 APP_NAME="I2PChat"
 APPDIR="${APP_NAME}.AppDir"
 VENV_DIR=".venv314"
+APPIMAGETOOL_VERSION="1.9.1"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 VERSION_FILE="VERSION"
@@ -43,7 +44,8 @@ source "${VENV_DIR}/bin/activate"
 
 # гарантируем, что в окружении есть нужные зависимости
 pip install --upgrade pip
-pip install -r requirements.txt pillow pyinstaller
+pip install --require-hashes -r requirements.txt
+pip install --require-hashes -r requirements-build.txt
 
 # Security gate: secure protocol requires PyNaCl
 python - <<'PY'
@@ -109,13 +111,40 @@ EOF
 
 chmod +x "${APPDIR}/AppRun" "${APPDIR}/usr/bin/${APP_NAME}"
 
-# 3) appimagetool (скачиваем для текущей архитектуры)
+# 3) appimagetool (pinned release + SHA256 verification)
 APPIMAGETOOL="appimagetool-${ARCH}.AppImage"
-if [ ! -x "$APPIMAGETOOL" ]; then
+case "${ARCH}" in
+  x86_64) APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0" ;;
+  aarch64) APPIMAGETOOL_SHA256="f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158" ;;
+  armv7l) APPIMAGETOOL_SHA256="42b61cba5495d8aaf418a5c9a015a49b85ad92efabcbd3c341f1540440e4e23d" ;;
+  *)
+    echo "ERROR: Unsupported architecture for pinned appimagetool: ${ARCH}" >&2
+    exit 1
+    ;;
+esac
+
+if [ ! -f "$APPIMAGETOOL" ]; then
   echo "==> Downloading appimagetool for ${ARCH}..."
-  wget "https://github.com/AppImage/appimagetool/releases/latest/download/${APPIMAGETOOL}"
-  chmod +x "$APPIMAGETOOL"
+  wget "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/${APPIMAGETOOL}"
 fi
+ACTUAL_SHA256="$(python - "$APPIMAGETOOL" <<'PY'
+import hashlib
+import sys
+path = sys.argv[1]
+h = hashlib.sha256()
+with open(path, "rb") as f:
+    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+        h.update(chunk)
+print(h.hexdigest())
+PY
+)"
+if [ "${ACTUAL_SHA256}" != "${APPIMAGETOOL_SHA256}" ]; then
+  echo "ERROR: SHA256 mismatch for ${APPIMAGETOOL}" >&2
+  echo "Expected: ${APPIMAGETOOL_SHA256}" >&2
+  echo "Actual:   ${ACTUAL_SHA256}" >&2
+  exit 1
+fi
+chmod +x "$APPIMAGETOOL"
 
 OUTPUT_FILE="${APP_NAME}.AppImage"
 ./"$APPIMAGETOOL" "${APPDIR}" "$OUTPUT_FILE"
@@ -134,4 +163,45 @@ with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     zf.write(src, arcname=os.path.basename(src))
 PY
 echo "✔ Packed ${ZIP_FILE}"
+
+# 5) release integrity artifacts: SHA256SUMS + detached GPG signature
+SHA256_FILE="SHA256SUMS"
+python - "${ZIP_FILE}" "${SHA256_FILE}" <<'PY'
+import hashlib
+import os
+import sys
+
+artifact, checksums = sys.argv[1], sys.argv[2]
+h = hashlib.sha256()
+with open(artifact, "rb") as f:
+    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+        h.update(chunk)
+with open(checksums, "w", encoding="utf-8") as out:
+    out.write(f"{h.hexdigest()}  {os.path.basename(artifact)}\n")
+PY
+echo "✔ Generated ${SHA256_FILE}"
+
+if [ "${I2PCHAT_SKIP_GPG_SIGN:-0}" = "1" ]; then
+  echo "⚠ Skipping GPG detached signature (I2PCHAT_SKIP_GPG_SIGN=1)"
+elif ! command -v gpg >/dev/null 2>&1; then
+  if [ "${I2PCHAT_REQUIRE_GPG:-0}" = "1" ]; then
+    echo "ERROR: gpg is required to create detached release signature" >&2
+    exit 1
+  fi
+  echo "⚠ gpg not found; skipping detached signature (set I2PCHAT_REQUIRE_GPG=1 to enforce)"
+else
+  GPG_ARGS=(--batch --yes --armor --detach-sign --output "${SHA256_FILE}.asc")
+  if [ -n "${I2PCHAT_GPG_KEY_ID:-}" ]; then
+    GPG_ARGS+=(--local-user "${I2PCHAT_GPG_KEY_ID}")
+  fi
+  if gpg "${GPG_ARGS[@]}" "${SHA256_FILE}"; then
+    echo "✔ Generated ${SHA256_FILE}.asc"
+  else
+    if [ "${I2PCHAT_REQUIRE_GPG:-0}" = "1" ]; then
+      echo "ERROR: gpg signing failed in required mode" >&2
+      exit 1
+    fi
+    echo "⚠ gpg signing failed; continuing without detached signature"
+  fi
+fi
 
