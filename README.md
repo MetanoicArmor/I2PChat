@@ -55,12 +55,12 @@
 
 ### 📸 Screenshots
 
-<table>
+<table border="0" cellspacing="0" cellpadding="0" style="border-collapse: collapse;">
   <tr>
-    <td align="center">
+    <td align="center" style="border: none;">
       <img src="screenshots/6.png" alt="I2PChat – light theme (macOS-style)" width="420" />
     </td>
-    <td align="center">
+    <td align="center" style="border: none;">
       <img src="screenshots/7.png" alt="I2PChat – dark theme (macOS-style)" width="420" />
     </td>
   </tr>
