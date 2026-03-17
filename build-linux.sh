@@ -164,7 +164,7 @@ with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
 PY
 echo "✔ Packed ${ZIP_FILE}"
 
-# 5) release integrity artifacts: SHA256SUMS + detached GPG signature
+# 5) release integrity artifacts: SHA256SUMS + detached GPG signature (SHA256SUMS.asc)
 SHA256_FILE="SHA256SUMS"
 python - "${ZIP_FILE}" "${SHA256_FILE}" <<'PY'
 import hashlib

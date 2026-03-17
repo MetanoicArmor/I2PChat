@@ -116,6 +116,7 @@ rm -f "${ZIP_FILE}"
 ditto -c -k --sequesterRsrc --keepParent "dist/${APP_NAME}.app" "${ZIP_FILE}"
 echo "✔ Packed ${ZIP_FILE}"
 
+# Release integrity artifacts: SHA256SUMS + detached GPG signature (SHA256SUMS.asc)
 SHA256_FILE="SHA256SUMS"
 "${PYTHON_CMD}" - "${ZIP_FILE}" "${SHA256_FILE}" <<'PY'
 import hashlib
