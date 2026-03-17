@@ -195,27 +195,6 @@ Outcome:
 
 ---
 
-## [LOW] S-02: Nix build input tracked moving `nixos-unstable` branch — FIXED FOR REPRODUCIBILITY
-
-Affected:
-- `flake.nix`
-
-Category: build reproducibility / supply-chain determinism
-
-Remediation status:
-- `flake.lock` is present and pins immutable revisions for `nixpkgs` and `flake-utils`.
-- CI policy checks enforce `flake.lock` presence and `nixpkgs.locked.rev`.
-- `docs/VENDORED_I2PLIB_POLICY.md` documents lock update workflow for controlled refreshes.
-
-Impact:
-- Reproducibility and auditability degrade when builds drift with channel head updates.
-
-Exploitability:
-- Low direct exploitability; impacts reproducibility and auditability.
-
-Outcome:
-- Release/CI reproducibility now relies on lock-based pinning rather than moving-channel state.
-
 ## Verified Strengths
 
 - Hash-pinned lockfiles and `--require-hashes` usage in build/audit dependency installs.

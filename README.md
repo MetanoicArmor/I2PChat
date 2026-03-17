@@ -238,11 +238,10 @@ PyQt6 GUI with light and dark themes.
 
 Originally derived from [`termchat-i2p-python`](http://git.community.i2p/stan/termchat-i2p-python) by Stanley (I2P community), substantially rewritten.
 
-### ✨ Features
+### 🔍 Audit / Аудит
 
-- Messaging over I2P SAM (via `i2plib`)
-- Cross‑platform GUI (Windows, macOS, Linux)
-- File transfer between peers
+[![English audit](https://img.shields.io/badge/🔍%20Audit-EN-green.svg)](AUDIT_EN.md)
+[![Русский аудит](https://img.shields.io/badge/🔍%20Аудит-RU-orange.svg)](AUDIT_RU.md)
 
 ---
 

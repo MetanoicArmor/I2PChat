@@ -195,27 +195,6 @@ flowchart LR
 
 ---
 
-## [LOW] S-02: Nix input привязан к движущейся ветке `nixos-unstable` — ИСПРАВЛЕНО ДЛЯ REPRODUCIBILITY
-
-Затронуто:
-- `flake.nix`
-
-Категория: build reproducibility / supply-chain determinism
-
-Статус remediation:
-- Добавлен `flake.lock` с pinned revision для `nixpkgs` и `flake-utils`.
-- Добавлена policy-проверка наличия `flake.lock` и `nixpkgs.locked.rev` в CI.
-- Процесс обновления lock задокументирован в `docs/VENDORED_I2PLIB_POLICY.md`.
-
-Влияние:
-- Security posture и dependency graph могут дрейфовать между сборками.
-
-Эксплуатируемость:
-- Низкая прямая эксплуатируемость; влияет на воспроизводимость и аудируемость.
-
-Итог:
-- Для сборок используется lock-based pinning вместо дрейфа по channel head.
-
 ## Подтверждённые сильные стороны
 
 - Hash-pinned lockfiles и использование `--require-hashes` для build/audit зависимостей.
