@@ -2,27 +2,27 @@
 
 ### Profile selection dialog
 
-When you start the GUI **without** passing a profile name, the **Select profile** dialog appears:
+When you start the GUI **without** passing a profile name, the profile chooser appears:
 
-<img src="../screenshots/3.png" alt="Select profile dialog" width="420" />
+<img src="../screenshots/3.png" alt="Choose profile dialog" width="420" />
 
-- window title: **Select profile**;
-- main text:
-  - `Profile name (default = TRANSIENT).`
-  - `Pick from the list,`
-  - `or type a new name to save keys:`
-- below the text there is a combo box / editable field with the current value `default`;
-- at the bottom there are two buttons: **Cancel** and **OK**.
+- window title: **I2PChat**;
+- subtitle: **Choose profile**;
+- hint: `Use default for a one-time session, or enter a name to save your identity.`
+- **Profile:** field with a combo box (list + editable), current value `default`;
+- helper text: `Click the list on the right to pick an existing profile, or type a new name above.`
+- **Profiles folder: <path>** line (clickable, opens the folder);
+- two buttons: **Cancel** and **OK**.
 
 How to use it:
 
 - **`default`**:
-  - leave this value if you want a temporary (TRANSIENT) profile without locking to a single peer;
+  - leave this value if you want a one‑time (TRANSIENT) profile without locking to a single peer;
 - **pick from the list**:
   - open the drop‑down on the right and select an existing profile (a `.dat` file from the profiles directory);
 - **enter a new name**:
   - type your own profile name (for example, `alice`);
-  - when you later use the **Lock to peer** function, keys and metadata will be saved in the profiles directory (see below) as `<name>.dat`.
+  - the profile `.dat` is created immediately: keys are stored in `<name>.dat` (or the keyring), and **Lock to peer** appends the peer address and makes the profile one‑to‑one.
 
 **Profiles directory** is OS-dependent: on **macOS** — `~/Library/Application Support/I2PChat`, on **Windows** — `%APPDATA%\I2PChat`, on **Linux** and others — `~/.i2pchat`. On Unix, the directory is restricted to the owner (0700).
 
@@ -36,7 +36,14 @@ All profile files (e.g. `alice.dat`) are stored in a single folder that the app 
 | macOS   | `~/Library/Application Support/I2PChat` |
 | Linux   | `~/.i2pchat` |
 
-On Windows you can paste `%APPDATA%\I2PChat` into the address bar of File Explorer to open the folder.
+You can open the folder directly from the profile chooser dialog — the **Profiles folder:** line is clickable on all OSes.
+
+Current `.dat` format:
+
+- line 1 — profile private key (if not stored in the system keyring);
+- line 2 — pinned peer (`stored peer`) when you use `Lock to peer`.
+
+If identity is stored in the keyring, the `.dat` file may contain only the pinned peer address.
 
 After choosing or typing a name, press **OK** to continue or **Cancel** to close the dialog and abort starting the chat.
 
@@ -46,10 +53,12 @@ After you choose a profile, the main chat window opens:
 
 <img src="../screenshots/1.png" alt="I2PChat main window: chat area, input, actions bar" width="900" />
 
-- **Window title** — `I2PChat • <profile_name>` (e.g. `I2PChat • alice`).
-- **Chat area** — at the top: your and peer messages, system notices, and file transfer progress. You can select and copy message text (right‑click or context menu).
+- **Window title** — `I2PChat @ <profile_name>` (e.g. `I2PChat @ alice`).
+- **Status row** — at the top, above the chat: `Net`, `Profile`, `Link`, `Peer`, `Stored`, `Secure`, `ACKdrop`.  
+  On narrow windows it collapses to `Net`, `Link`, `Peer`, `Secure`, `ACKdrop`; hover for the full text.
+- **Theme switch** — to the right of the status row (sun/moon icon). Toggles `ligth` and `night`.
+- **Chat area** — shows your and peer messages, system notices, and file transfer progress. You can select and copy message text (right‑click or context menu).
 - **Message input** — below the chat: type your text and press **Enter** (or the send button) to send a message to the connected peer.
-- **Status line** — below the input shows connection state (e.g. «Connected» or «Disconnected»).
 - **Actions bar** — at the bottom: peer address, connection buttons, and the **`⋯`** menu (see section 4).
 
 Connect to a peer first (enter address in the actions bar → **Connect**), then type in the input field to send messages.
@@ -79,7 +88,7 @@ Clicking the **`⋯`** button opens a popup menu with profile and connection act
 - **Send picture** — send an image file to the connected peer.
 - **Send file** — send any file to the connected peer.
 - **Lock to peer** — bind the current profile to the connected peer (see section 4.7).
-- **Copy my address** — copy your I2P destination to the clipboard (same as the old “Copy My Addr” action).
+- **Copy my address** — copy your I2P destination to the clipboard.
 
 #### 4.2. Peer address field
 
@@ -114,6 +123,12 @@ After a successful connection:
 - incoming messages appear in the chat area;
 - other events (file transfers, system/info messages) may start flowing over the network.
 
+On first contact with a new peer signing key, a **Trust on First Use (TOFU)** dialog appears:
+
+- it shows the peer address, a short fingerprint, and a public key prefix;
+- choose **Yes** to trust and pin the key, or **No** to abort the connection;
+- for higher security, verify the fingerprint with your peer out‑of‑band.
+
 #### 4.4. `Disconnect` button
 
 The **`Disconnect`** button terminates the current connection to the peer.
@@ -124,16 +139,16 @@ After pressing it:
 - a system message about the disconnection may appear in the chat;
 - the status label is updated accordingly.
 
-#### 4.5. `Copy My Addr` button
+#### 4.5. `Copy my address` action (`⋯` menu)
 
-The **`Copy My Addr`** button copies your own I2P destination to the clipboard.
+The **`Copy my address`** item in the **`⋯`** menu copies your own I2P destination to the clipboard.
 
-<img src="../screenshots/4.png" alt="Getting your own address via Copy My Addr" width="900" />
+<img src="../screenshots/4.png" alt="Getting your own address via Copy my address" width="900" />
 
 Logic:
 
 1. If the local destination is not yet initialised:
-   - a dialog is shown:
+   - a dialog is shown (title **Copy My Addr**):
 
    ```text
    Local destination is not initialized yet.
@@ -149,11 +164,11 @@ Logic:
 
 This is convenient when you need to quickly share your address with the other side using an external channel.
 
-#### 4.6. `Send File` button
+#### 4.6. `Send file` action (`⋯` menu)
 
-The **`Send File`** button sends a file to the currently connected peer.
+The **`Send file`** item in the **`⋯`** menu sends a file to the currently connected peer.
 
-After pressing it:
+After selecting it:
 
 1. A file chooser dialog opens (`Select file to send`).
 2. If no path is selected, sending is cancelled.
@@ -179,6 +194,8 @@ On the receiving side:
   Incoming file rejected: <filename>
   ```
 
+The **`Send picture`** item works the same way but is intended for images (PNG/JPEG) and is shown inline in the chat.
+
 #### 4.7. `Lock to peer` button
 
 The **`Lock to peer`** button is **optional** – you can safely use I2PChat without it.  
@@ -189,7 +206,7 @@ By default, if you never lock, the profile works like an **email address**:
 
 When you do press **`Lock to peer`**, the profile becomes **bound to a single peer**:
 
-- the peer address is stored in the profile `.dat` file;
+- the peer address is stored in the profile `.dat` file in canonical form (line 1 — key, line 2 — peer; keyring setups may store only the peer);
 - on subsequent runs with this profile, the stored peer will be reused automatically;
 - connections from other addresses can be rejected by the core as “unauthorised”.
 
@@ -214,7 +231,7 @@ Rules and behaviour:
    ```
 
 4. In all other cases:
-   - the file `<profile>.dat` in the profiles directory is created or updated and the peer address is appended there;
+   - the file `<profile>.dat` in the profiles directory is created or updated (canonical format, no duplicate lines);
    - a system message appears in the chat:
 
    ```text
@@ -236,7 +253,7 @@ After pressing it:
    - the `.dat` file is copied into the profiles directory as `<base>.dat` (if not already there);
    - the profile is switched asynchronously:
      - the current core is cleanly shut down (`shutdown`);
-     - the window title is updated to `I2PChat • <profile_name>`;
+     - the window title is updated to `I2PChat @ <profile_name>`;
      - a new core is created for this profile;
      - a new I2P session is initialised.
 
@@ -259,6 +276,7 @@ sound notifications (`QSoundEffect`) for incoming messages.
     - if the peer address is known, it becomes `New message from <peer>`.
   - a native system notification (toast) is shown via `QSystemTrayIcon` for about 5 seconds.
 - If the window is active, the GUI relies on the visual chat updates without extra pop‑ups.
+- For incoming connections, a notification **Incoming connection** is shown with the peer address (when available).
 
 #### 5.2. Sound notifications
 
@@ -281,11 +299,11 @@ sound notifications (`QSoundEffect`) for incoming messages.
    - **Linux**: make the AppImage executable (`chmod +x I2PChat-x86_64.AppImage`) and run `./I2PChat-x86_64.AppImage`.
    - **macOS**: move `I2PChat.app` to `/Applications` (or any convenient folder) and open it as a normal app.
 
-3. In the `Select profile` dialog:
+3. In the `Choose profile` dialog:
    - keep `default` or type your own profile name (for example, `alice`).
 4. In the main window:
-   - wait until the status label shows a working state;
-   - if needed, copy your address using `Copy My Addr` and send it to your peer via another channel.
+   - wait until the status row shows a working state;
+   - if needed, copy your address via `⋯` → `Copy my address` and send it to your peer via another channel.
 5. Once you have the peer address:
    - paste it into `Peer .b32.i2p address`;
    - press `Connect`.
@@ -297,7 +315,7 @@ sound notifications (`QSoundEffect`) for incoming messages.
 #### 6.2. Sending a file to a peer
 
 1. Ensure you are connected to the peer (you pressed `Connect` and see no errors).
-2. Click **`Send File`**.
+2. Open the **`⋯`** menu and choose **`Send file`**.
 3. Pick the desired file in the dialog.
 4. Watch progress messages in the chat:
 
@@ -329,7 +347,7 @@ On the receiving side:
    ```
 
 5. On subsequent runs with the `myprofile` profile:
-   - the status label will show `Stored peer` with the address;
+   - the status row will show `Stored: <address>`;
    - if the peer field is empty, the stored address will be auto‑filled;
    - connections from other peers will no longer be accepted for this profile.
 
@@ -365,7 +383,7 @@ Make sure that:
 
 - your I2P router is running and the SAM port is reachable;
 - the peer address is complete (including `.b32.i2p`);
-- the peer is online and using a compatible client.
+- the peer is online and using a compatible client (legacy clients below `0.3.x`/`0.4.x` are not supported).
 
 In this case the GUI will show the relevant system/error messages in the chat area.
 
@@ -393,8 +411,10 @@ Check:
 The I2PChat GUI provides:
 
 - a clear chat view with coloured bubbles;
+- `ligth`/`night` themes and a unified cross‑platform look;
+- an informative status row (Net/Link/Peer/Secure/ACKdrop);
 - a convenient bar for managing profiles and connections;
-- file and text‑image sending;
+- file and image sending;
 - system and sound notifications for incoming messages.
 
 For everyday use you typically only need to:
@@ -403,4 +423,3 @@ For everyday use you typically only need to:
 2. Paste the peer address and press `Connect`.
 3. Chat using the input field and `Send` button.
 4. When needed, send files/images and use profile locking for a long‑term peer.
-
