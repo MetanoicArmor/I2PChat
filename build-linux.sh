@@ -139,10 +139,28 @@ print(h.hexdigest())
 PY
 )"
 if [ "${ACTUAL_SHA256}" != "${APPIMAGETOOL_SHA256}" ]; then
-  echo "ERROR: SHA256 mismatch for ${APPIMAGETOOL}" >&2
+  echo "⚠ SHA256 mismatch for existing ${APPIMAGETOOL}, re-downloading pinned version..." >&2
   echo "Expected: ${APPIMAGETOOL_SHA256}" >&2
   echo "Actual:   ${ACTUAL_SHA256}" >&2
-  exit 1
+  rm -f "${APPIMAGETOOL}"
+  wget "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/${APPIMAGETOOL}"
+  ACTUAL_SHA256="$(python - "$APPIMAGETOOL" <<'PY'
+import hashlib
+import sys
+path = sys.argv[1]
+h = hashlib.sha256()
+with open(path, "rb") as f:
+    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+        h.update(chunk)
+print(h.hexdigest())
+PY
+)"
+  if [ "${ACTUAL_SHA256}" != "${APPIMAGETOOL_SHA256}" ]; then
+    echo "ERROR: SHA256 mismatch for downloaded ${APPIMAGETOOL}" >&2
+    echo "Expected: ${APPIMAGETOOL_SHA256}" >&2
+    echo "Actual:   ${ACTUAL_SHA256}" >&2
+    exit 1
+  fi
 fi
 chmod +x "$APPIMAGETOOL"
 
