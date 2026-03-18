@@ -6,4 +6,5 @@ qasync
 Pillow
 pynacl
 keyring
+cryptography==46.0.5; sys_platform == "linux"
 pywin32-ctypes; sys_platform == "win32"
