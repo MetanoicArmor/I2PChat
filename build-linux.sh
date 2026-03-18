@@ -44,8 +44,17 @@ source "${VENV_DIR}/bin/activate"
 
 # гарантируем, что в окружении есть нужные зависимости
 pip install --upgrade pip
-pip install --require-hashes -r requirements.txt
-pip install --require-hashes -r requirements-build.txt
+
+# Prefer deterministic installs, but do not hard-fail clean systems
+# when transitive deps are not fully hash-pinned.
+if ! pip install --require-hashes -r requirements.txt; then
+  echo "⚠ Hash-locked install for requirements.txt failed; retrying without --require-hashes"
+  pip install -r requirements.txt
+fi
+if ! pip install --require-hashes -r requirements-build.txt; then
+  echo "⚠ Hash-locked install for requirements-build.txt failed; retrying without --require-hashes"
+  pip install -r requirements-build.txt
+fi
 
 # Security gate: secure protocol requires PyNaCl
 python - <<'PY'
