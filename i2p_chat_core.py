@@ -1,9 +1,11 @@
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import sys
 import tempfile
@@ -16,6 +18,7 @@ import i2plib
 from PIL import Image
 
 import crypto
+import drop_i2p_client
 from protocol_codec import (
     ENCRYPTED_TRAILER_SIZE,
     FLAG_ENCRYPTED,
@@ -24,6 +27,20 @@ from protocol_codec import (
 
 logger = logging.getLogger("i2pchat")
 PROTOCOL_VERSION = 4
+
+# Offline delivery marker inside normal vNext text frames (msg_type="U").
+# Receiver treats such messages as pointers to encrypted payload stored on drop.i2p,
+# and acks them only after successful download+decrypt.
+DROP_POINTER_MARKER = "__DROP_PTR__"
+DROP_KEY_CACHE_TTL_SECONDS = 30 * 24 * 3600  # 30 days
+DROP_OUTBOX_STATE_PENDING = "pending"
+DROP_OUTBOX_STATE_AWAITING_ACK = "awaiting_ack"
+
+# Receiver-side deduplication to make drop.i2p `max_downloads=1` workable.
+# If sender retries the same pointer (e.g., ACK lost) we don't want the
+# receiver to re-download the payload and consume the only allowed download.
+# We keep it aligned with our default 30-day expiry.
+DROP_POINTER_PROCESSED_TTL_SECONDS = DROP_KEY_CACHE_TTL_SECONDS  # 30 days
 
 
 @dataclass
@@ -51,6 +68,25 @@ class PendingAckEntry:
     peer_addr: str
     ack_session_epoch: int
     state: str = "awaiting_ack"
+
+
+@dataclass
+class DropSessionKeyCacheEntry:
+    key_id: str
+    created_at: float
+    shared_key_b64: str
+
+
+@dataclass
+class DropOutboxEntry:
+    id: str
+    created_at: float
+    drop_url_path: str
+    delete_token: Optional[str]
+    key_id: str
+    state: str = DROP_OUTBOX_STATE_PENDING
+    last_pointer_sent_at: Optional[float] = None
+    attempts: int = 0
 
 
 StatusCallback = Callable[[str], Any]
@@ -534,6 +570,21 @@ class I2PChatCore:
             allow_legacy=False,
         )
 
+        # --- Offline delivery via drop.i2p ---
+        # Кэш симметричного shared_key из последнего live-handshake с каждым peer.
+        # Используется для E2E шифрования payload'ов, которые отправляются на drop,
+        # пока peer оффлайн.
+        self._drop_session_key_cache: dict[str, list[DropSessionKeyCacheEntry]] = {}
+        # Outbox: список payload'ов, которые уже загружены на drop, но ещё не
+        # переданы получателю как "pointer" через I2PChat.
+        self._drop_outbox: dict[str, list[DropOutboxEntry]] = {}
+        self._drop_flush_task: Optional[asyncio.Task[Any]] = None
+        # Для max_downloads=1: не повторяем download, если тот же outbox_id уже
+        # успешно обработан (в этой сессии/TTL-окне).
+        self._drop_processed_pointers: dict[str, float] = {}
+        self._load_drop_session_keys()
+        self._load_drop_outbox()
+
     # ---------- вспомогательные уведомления ----------
 
     def _emit_status(self, status: str) -> None:
@@ -791,6 +842,408 @@ class I2PChatCore:
                 pass
         except Exception as e:
             logger.warning("Failed to save trust store %s: %s", path, e)
+
+    def _drop_session_key_cache_path(self) -> str:
+        return self._profile_scoped_path(f"{self.profile}.drop_keys.json")
+
+    def _drop_outbox_path(self) -> str:
+        return self._profile_scoped_path(f"{self.profile}.drop_outbox.json")
+
+    def _load_drop_session_keys(self) -> None:
+        self._drop_session_key_cache = {}
+        if self.profile == "default":
+            # Транзиентный профиль не должен хранить оффлайн ключи.
+            return
+
+        path = self._drop_session_key_cache_path()
+        if not os.path.exists(path):
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return
+
+            now = time.time()
+            for peer_addr, entries in data.items():
+                if not isinstance(peer_addr, str) or not isinstance(entries, list):
+                    continue
+                key_entries: list[DropSessionKeyCacheEntry] = []
+                for e in entries:
+                    if not isinstance(e, dict):
+                        continue
+                    key_id = e.get("key_id")
+                    created_at = e.get("created_at")
+                    shared_key_b64 = e.get("shared_key_b64")
+                    if (
+                        isinstance(key_id, str)
+                        and isinstance(created_at, (int, float))
+                        and isinstance(shared_key_b64, str)
+                    ):
+                        if now - float(created_at) <= DROP_KEY_CACHE_TTL_SECONDS:
+                            key_entries.append(
+                                DropSessionKeyCacheEntry(
+                                    key_id=key_id,
+                                    created_at=float(created_at),
+                                    shared_key_b64=shared_key_b64,
+                                )
+                            )
+                if key_entries:
+                    # Newest first
+                    key_entries.sort(key=lambda x: x.created_at, reverse=True)
+                    self._drop_session_key_cache[peer_addr] = key_entries[:3]
+        except Exception as e:
+            logger.warning("Failed to load drop key cache %s: %s", path, e)
+
+    def _save_drop_session_keys(self) -> None:
+        if self.profile == "default":
+            return
+
+        path = self._drop_session_key_cache_path()
+        tmp_path = path + ".tmp"
+        try:
+            serializable: dict[str, list[dict[str, Any]]] = {}
+            for peer_addr, entries in self._drop_session_key_cache.items():
+                serializable[peer_addr] = [
+                    {
+                        "key_id": e.key_id,
+                        "created_at": e.created_at,
+                        "shared_key_b64": e.shared_key_b64,
+                    }
+                    for e in entries
+                ]
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(serializable, f, ensure_ascii=True, indent=2, sort_keys=True)
+            os.replace(tmp_path, path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        except Exception as e:
+            logger.warning("Failed to save drop key cache %s: %s", path, e)
+
+    def _load_drop_outbox(self) -> None:
+        self._drop_outbox = {}
+        if self.profile == "default":
+            return
+
+        path = self._drop_outbox_path()
+        if not os.path.exists(path):
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return
+
+            now = time.time()
+            for peer_addr, entries in data.items():
+                if not isinstance(peer_addr, str) or not isinstance(entries, list):
+                    continue
+                out_entries: list[DropOutboxEntry] = []
+                for e in entries:
+                    if not isinstance(e, dict):
+                        continue
+                    outbox_id = e.get("id")
+                    created_at = e.get("created_at")
+                    drop_url_path = e.get("drop_url_path")
+                    delete_token = e.get("delete_token")
+                    key_id = e.get("key_id")
+                    state = e.get("state", DROP_OUTBOX_STATE_PENDING)
+                    last_pointer_sent_at = e.get("last_pointer_sent_at")
+                    attempts = e.get("attempts", 0)
+                    if (
+                        isinstance(outbox_id, str)
+                        and isinstance(created_at, (int, float))
+                        and isinstance(drop_url_path, str)
+                        and isinstance(key_id, str)
+                        and state in (DROP_OUTBOX_STATE_PENDING, DROP_OUTBOX_STATE_AWAITING_ACK)
+                    ):
+                        if now - float(created_at) <= DROP_KEY_CACHE_TTL_SECONDS:
+                            out_entries.append(
+                                DropOutboxEntry(
+                                    id=outbox_id,
+                                    created_at=float(created_at),
+                                    drop_url_path=drop_url_path,
+                                    delete_token=delete_token if isinstance(delete_token, str) else None,
+                                    key_id=key_id,
+                                    state=str(state),
+                                    last_pointer_sent_at=float(last_pointer_sent_at)
+                                    if isinstance(last_pointer_sent_at, (int, float))
+                                    else None,
+                                    attempts=int(attempts) if isinstance(attempts, int) else 0,
+                                )
+                            )
+                if out_entries:
+                    out_entries.sort(key=lambda x: x.created_at)
+                    self._drop_outbox[peer_addr] = out_entries
+        except Exception as e:
+            logger.warning("Failed to load drop outbox %s: %s", path, e)
+
+    def _save_drop_outbox(self) -> None:
+        if self.profile == "default":
+            return
+
+        path = self._drop_outbox_path()
+        tmp_path = path + ".tmp"
+        try:
+            serializable: dict[str, list[dict[str, Any]]] = {}
+            for peer_addr, entries in self._drop_outbox.items():
+                serializable[peer_addr] = [
+                    {
+                        "id": e.id,
+                        "created_at": e.created_at,
+                        "drop_url_path": e.drop_url_path,
+                        "delete_token": e.delete_token,
+                        "key_id": e.key_id,
+                        "state": e.state,
+                        "last_pointer_sent_at": e.last_pointer_sent_at,
+                        "attempts": e.attempts,
+                    }
+                    for e in entries
+                ]
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(serializable, f, ensure_ascii=True, indent=2, sort_keys=True)
+            os.replace(tmp_path, path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        except Exception as e:
+            logger.warning("Failed to save drop outbox %s: %s", path, e)
+
+    def _mark_drop_outbox_delivered(self, outbox_id: str) -> None:
+        """
+        Called on MSG_ACK for a drop pointer (ack_kind="drop_ptr").
+
+        Удаляет соответствующую запись из outbox-файла, чтобы не пытаться
+        переслать pointer повторно.
+        """
+        if self.profile == "default":
+            return
+        peer_addr = self._current_ack_peer() if hasattr(self, "_current_ack_peer") else None
+        if not peer_addr:
+            return
+        entries = self._drop_outbox.get(peer_addr) or []
+        new_entries = [e for e in entries if e.id != outbox_id]
+        if len(new_entries) != len(entries):
+            self._drop_outbox[peer_addr] = new_entries
+            self._save_drop_outbox()
+
+    def _cache_drop_session_key(self) -> None:
+        """
+        Кэшируем derived shared_key из последнего handshake для данного peer.
+
+        Это необходимо, чтобы в период, когда peer оффлайн, отправитель мог
+        зашифровать payload на drop.i2p.
+        """
+        if self.profile == "default":
+            return
+        if not self.current_peer_addr or not self.shared_key:
+            return
+        peer_addr = self._normalize_peer_addr(self.current_peer_addr)
+
+        key_id = hashlib.sha256(self.shared_key).hexdigest()[:16]
+        shared_key_b64 = base64.b64encode(self.shared_key).decode("ascii")
+        now = time.time()
+
+        entries = self._drop_session_key_cache.get(peer_addr, [])
+        # Remove duplicates by key_id and insert as newest.
+        entries = [e for e in entries if e.key_id != key_id]
+        entries.insert(
+            0,
+            DropSessionKeyCacheEntry(
+                key_id=key_id,
+                created_at=now,
+                shared_key_b64=shared_key_b64,
+            ),
+        )
+        # Prune by TTL
+        entries = [e for e in entries if now - e.created_at <= DROP_KEY_CACHE_TTL_SECONDS]
+        self._drop_session_key_cache[peer_addr] = entries[:3]
+        self._save_drop_session_keys()
+
+    def _get_cached_drop_key_by_id(
+        self, *, peer_addr: str, key_id: str
+    ) -> Optional[bytes]:
+        peer_addr = self._normalize_peer_addr(peer_addr)
+        entries = self._drop_session_key_cache.get(peer_addr, [])
+        for e in entries:
+            if e.key_id == key_id:
+                try:
+                    return base64.b64decode(e.shared_key_b64)
+                except Exception:
+                    return None
+        return None
+
+    @staticmethod
+    def _encode_drop_pointer(payload: dict[str, Any]) -> str:
+        raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        b64 = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        return DROP_POINTER_MARKER + b64
+
+    @staticmethod
+    def _decode_drop_pointer(pointer_text: str) -> dict[str, Any]:
+        if not pointer_text.startswith(DROP_POINTER_MARKER):
+            raise ValueError("Not a drop pointer")
+        b64 = pointer_text[len(DROP_POINTER_MARKER) :]
+        if not b64:
+            raise ValueError("Drop pointer payload is empty")
+        # add back removed padding
+        pad = (-len(b64)) % 4
+        b64 = b64 + ("=" * pad)
+        raw = base64.urlsafe_b64decode(b64.encode("ascii"))
+        parsed = json.loads(raw.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            raise ValueError("Drop pointer payload is not a JSON object")
+        return parsed
+
+    async def _flush_drop_outbox_for_current_peer(self) -> None:
+        if self._drop_flush_task is not None and not self._drop_flush_task.done():
+            return
+        self._drop_flush_task = asyncio.current_task()
+        try:
+            await self._flush_drop_outbox_impl()
+        finally:
+            # Avoid clearing if this task got replaced by a newer one.
+            if self._drop_flush_task is asyncio.current_task():
+                self._drop_flush_task = None
+
+    async def _flush_drop_outbox_impl(self) -> None:
+        if not self.conn or not self.current_peer_addr:
+            return
+
+        peer_addr = self._normalize_peer_addr(self.current_peer_addr)
+        outbox_entries = self._drop_outbox.get(peer_addr) or []
+        if not outbox_entries:
+            return
+
+        _, writer = self.conn
+        now = time.time()
+        changed = False
+
+        for entry in list(outbox_entries):
+            if entry.state == DROP_OUTBOX_STATE_AWAITING_ACK:
+                # Don't spam identical pointers: if we already sent it recently,
+                # wait for the ACK (or for pending TTL).
+                if (
+                    entry.last_pointer_sent_at is not None
+                    and now - entry.last_pointer_sent_at < self.ACK_TTL_SECONDS
+                ):
+                    continue
+
+            pointer_payload = {
+                "v": 1,
+                "outbox_id": entry.id,
+                "drop_url_path": entry.drop_url_path,
+                "key_id": entry.key_id,
+            }
+            pointer_text = self._encode_drop_pointer(pointer_payload)
+
+            frame, msg_id = self.frame_message_with_id("U", pointer_text)
+            writer.write(frame)
+            await writer.drain()
+
+            self._register_pending_ack(
+                self._pending_text_acks,
+                msg_id,
+                token=entry.id,
+                ack_kind="drop_ptr",
+            )
+
+            entry.state = DROP_OUTBOX_STATE_AWAITING_ACK
+            entry.last_pointer_sent_at = now
+            entry.attempts += 1
+            changed = True
+
+        if changed:
+            self._save_drop_outbox()
+
+    async def _handle_drop_pointer_message(
+        self,
+        pointer_text: str,
+        *,
+        writer: asyncio.StreamWriter,
+        msg_id: int,
+    ) -> None:
+        """
+        Process drop pointer (msg_type="U") and ack only after successful download+decrypt.
+        """
+        try:
+            now = time.time()
+            payload = self._decode_drop_pointer(pointer_text)
+            drop_url_path = payload.get("drop_url_path")
+            key_id = payload.get("key_id")
+            outbox_id = payload.get("outbox_id")
+            if (
+                not isinstance(drop_url_path, str)
+                or not isinstance(key_id, str)
+                or not isinstance(outbox_id, str)
+            ):
+                raise ValueError("Invalid pointer payload fields")
+
+            # Dedup: если sender повторно шлёт тот же pointer (например, ACK
+            # потерялся), то при `max_downloads=1` повторная попытка скачать
+            # уничтожит payload. Поэтому при успешной первичной обработке
+            # повторно ACK'аем без загрузки.
+            peer_addr = self.current_peer_addr or ""
+            dedup_key = f"{peer_addr}:{outbox_id}"
+
+            stale_ids = [
+                k
+                for k, ts in self._drop_processed_pointers.items()
+                if now - ts > DROP_POINTER_PROCESSED_TTL_SECONDS
+            ]
+            for k in stale_ids:
+                self._drop_processed_pointers.pop(k, None)
+
+            if dedup_key in self._drop_processed_pointers:
+                writer.write(
+                    self.frame_message("S", f"__SIGNAL__:MSG_ACK|{msg_id}")
+                )
+                await writer.drain()
+                return
+
+            downloaded = await drop_i2p_client.download_bytes_from_path(drop_url_path)
+            blob = json.loads(downloaded.decode("utf-8", errors="strict"))
+            if not isinstance(blob, dict):
+                raise ValueError("Invalid drop payload JSON")
+
+            blob_key_id = blob.get("key_id")
+            cipher_b64 = blob.get("m")
+            if blob_key_id != key_id or not isinstance(cipher_b64, str):
+                raise ValueError("Drop payload key_id mismatch")
+
+            peer_addr = self.current_peer_addr or ""
+            shared_key = self._get_cached_drop_key_by_id(
+                peer_addr=peer_addr, key_id=key_id
+            )
+            if not shared_key:
+                raise ValueError("Cached shared key missing for this key_id")
+
+            cipher_bytes = base64.b64decode(cipher_b64.encode("ascii"))
+            plaintext_bytes = crypto.decrypt_message(shared_key, cipher_bytes)
+            if plaintext_bytes is None:
+                raise ValueError("Failed to decrypt drop payload")
+
+            plaintext = plaintext_bytes.decode("utf-8", errors="replace")
+            self._emit_message("peer", plaintext)
+
+            # ACK to sender only after successful handling.
+            # Mark processed before ACK so subsequent retries won't re-download.
+            self._drop_processed_pointers[dedup_key] = now
+            writer.write(
+                self.frame_message("S", f"__SIGNAL__:MSG_ACK|{msg_id}")
+            )
+            await writer.drain()
+        except Exception as e:
+            self._emit_error(f"Drop pointer failed: {e}")
+            # Intentionally do NOT ACK, so sender keeps outbox entry for retry.
+            return
 
     @staticmethod
     def _fingerprint_pubkey(pubkey: bytes) -> str:
@@ -1287,12 +1740,35 @@ class I2PChatCore:
                 f"Connecting to {target_address[:24]}... "
                 "(may take 1–2 min while I2P builds tunnels)"
             )
-            reader, writer = await asyncio.wait_for(
-                i2plib.stream_connect(
-                    self.session_id, target_address, sam_address=self.sam_address
-                ),
-                timeout=self.CONNECT_TIMEOUT,
-            )
+            # stream_connect may transiently fail right after a peer restart:
+            # SAM returns CANT_REACH_PEER (often \"LeaseSet not found\") while the
+            # peer is already name-resolvable but not yet fully published/accepting.
+            # Retry briefly to improve UX in GUI reconnect flows.
+            last_err: Optional[BaseException] = None
+            reader: Optional[asyncio.StreamReader] = None
+            writer: Optional[asyncio.StreamWriter] = None
+            for attempt in range(1, 7):
+                try:
+                    reader, writer = await asyncio.wait_for(
+                        i2plib.stream_connect(
+                            self.session_id,
+                            target_address,
+                            sam_address=self.sam_address,
+                        ),
+                        timeout=self.CONNECT_TIMEOUT,
+                    )
+                    last_err = None
+                    break
+                except (i2plib.CantReachPeer, i2plib.PeerNotFound, i2plib.Timeout) as e:
+                    last_err = e
+                    if attempt < 7:
+                        await asyncio.sleep(5.0)
+                        continue
+                except Exception as e:
+                    last_err = e
+                    break
+            if reader is None or writer is None:
+                raise last_err or ConnectionError("Failed to connect to peer")
 
             if self.my_dest is not None:
                 # Backward-safe identity preface for accept_loop(reader.readline()).
@@ -1319,28 +1795,130 @@ class I2PChatCore:
             self.conn = None
             self._emit_system("Waiting for incoming connections...")
         except Exception as e:
-            self._emit_error(f"Connection failed: {e}")
+            # Some SAM exceptions stringify to an empty message; include the type.
+            msg = str(e).strip()
+            if not msg:
+                msg = type(e).__name__
+            self._emit_error(f"Connection failed: {msg}")
             self.conn = None
             self._emit_system("Waiting for incoming connections...")
 
     async def send_text(self, text: str) -> None:
-        if not self._require_secure_channel():
-            return
+        in_band = False
         try:
-            _, writer = self.conn
-            frame, msg_id = self.frame_message_with_id("U", text)
-            writer.write(frame)
-            await writer.drain()
-            self._register_pending_ack(
-                self._pending_text_acks,
-                msg_id,
-                token=text[:128],
-                ack_kind="msg",
-            )
-            self._emit_message("me", text)
+            # If we have an active secure channel: send in-band via I2PChat.
+            if self.conn and self.handshake_complete:
+                in_band = True
+                _, writer = self.conn
+                frame, msg_id = self.frame_message_with_id("U", text)
+                writer.write(frame)
+                await writer.drain()
+                self._register_pending_ack(
+                    self._pending_text_acks,
+                    msg_id,
+                    token=text[:128],
+                    ack_kind="msg",
+                )
+                self._emit_message("me", text)
+                return
+
+            # Otherwise: upload an encrypted offline payload to drop.i2p.
+            await self._send_text_via_drop(text)
         except Exception as e:
             self._emit_error(f"Failed to send message: {e}")
-            self.conn = None
+            if in_band:
+                self.conn = None
+
+    async def _send_text_via_drop(self, text: str) -> None:
+        """
+        Отправка текста без активного secure-channel:
+        - шифруем payload симметрическим shared_key из последнего live-handshake
+        - грузим payload на drop.i2p через multipart upload
+        - сохраняем outbox, чтобы при следующем connect отправить peer "pointer"
+        """
+        if not crypto.NACL_AVAILABLE:
+            raise RuntimeError("Secure offline delivery requires PyNaCl")
+
+        peer_addr = self.current_peer_addr or self.stored_peer
+        peer_addr = self._normalize_peer_addr(peer_addr or "")
+        if not peer_addr:
+            raise ValueError("Peer address is not set (connect to a peer first or use Lock to peer)")
+
+        # Берём самый свежий кэшированный shared_key для этого peer.
+        key_entries = self._drop_session_key_cache.get(peer_addr) or []
+        if not key_entries:
+            raise ValueError(
+                "No cached offline encryption key for this peer. "
+                "Connect once to establish a secure channel first."
+            )
+        key_entry = key_entries[0]
+        shared_key = self._get_cached_drop_key_by_id(peer_addr=peer_addr, key_id=key_entry.key_id)
+        if not shared_key:
+            raise ValueError("Cached offline encryption key is missing/invalid")
+
+        # Encrypt plaintext for drop payload.
+        plaintext = text.encode("utf-8")
+        cipher_bytes = crypto.encrypt_message(shared_key, plaintext)
+
+        payload_obj = {
+            "v": 1,
+            "key_id": key_entry.key_id,
+            "t": int(time.time()),
+            "m": base64.b64encode(cipher_bytes).decode("ascii"),
+        }
+        file_bytes = drop_i2p_client.payload_to_json_bytes(payload_obj)
+
+        # drop.i2p defaults (expire and delete-after-download):
+        # - expiry: 30 days
+        # - max_downloads: 1 (download once, then drop auto-deletes)
+        expiry = os.environ.get("I2PCHAT_DROP_EXPIRY", "720h").strip() or "720h"
+
+        max_downloads_env = os.environ.get("I2PCHAT_DROP_MAX_DOWNLOADS", "1").strip()
+        try:
+            max_downloads = int(max_downloads_env)
+        except ValueError:
+            max_downloads = 1
+
+        # keep_metadata="0" чтобы не сохранять EXIF/GPS.
+        resp = await drop_i2p_client.upload_file_bytes(
+            file_bytes,
+            filename="i2pchat_msg.json",
+            expiry=expiry,
+            max_downloads=max_downloads,
+            keep_metadata="0",
+        )
+
+        drop_url_path = resp.get("url")
+        delete_token = resp.get("delete_token")
+        if not isinstance(drop_url_path, str) or not drop_url_path.startswith("/"):
+            raise RuntimeError("drop.i2p upload response missing url path")
+        if delete_token is not None and not isinstance(delete_token, str):
+            delete_token = None
+
+        outbox_id = secrets.token_hex(8)
+        entry = DropOutboxEntry(
+            id=outbox_id,
+            created_at=time.time(),
+            drop_url_path=drop_url_path,
+            delete_token=delete_token,
+            key_id=key_entry.key_id,
+            state=DROP_OUTBOX_STATE_PENDING,
+            attempts=0,
+        )
+        self._drop_outbox.setdefault(peer_addr, []).append(entry)
+
+        # Prune outbox by age.
+        now = time.time()
+        self._drop_outbox[peer_addr] = [
+            e
+            for e in self._drop_outbox[peer_addr]
+            if now - e.created_at <= DROP_KEY_CACHE_TTL_SECONDS
+        ]
+
+        self._save_drop_outbox()
+        self._emit_system(
+            f"Offline delivery: uploaded to drop.i2p (will send pointer when peer reconnects)."
+        )
 
     async def _send_abort_file(self) -> None:
         """Отправить пиру сигнал отмены передачи файла (получатель отменил или отправитель)."""
@@ -1859,6 +2437,12 @@ class I2PChatCore:
                 self._cancel_handshake_watchdog()
                 self._emit_message("success", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
+                # Cache the derived symmetric key so we can encrypt payloads for
+                # offline delivery on drop.i2p, then flush any pending outbox.
+                self._cache_drop_session_key()
+                asyncio.get_running_loop().create_task(
+                    self._flush_drop_outbox_for_current_peer()
+                )
                 logger.info("Handshake completed (responder)")
 
             elif body.startswith("RESP:"):
@@ -1913,6 +2497,12 @@ class I2PChatCore:
                 self._cancel_handshake_watchdog()
                 self._emit_message("success", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
+                # Cache the derived symmetric key so we can encrypt payloads for
+                # offline delivery on drop.i2p, then flush any pending outbox.
+                self._cache_drop_session_key()
+                asyncio.get_running_loop().create_task(
+                    self._flush_drop_outbox_for_current_peer()
+                )
                 logger.info("Handshake completed (initiator)")
 
             else:
@@ -2151,32 +2741,42 @@ class I2PChatCore:
                 body = body_data.decode("utf-8")
 
                 if msg_type == "U":
-                    self._emit_message("peer", body)
-                    # Дополнительное уведомление UI о входящем сообщении от собеседника.
-                    notify_cb = getattr(self, "on_notify", None)
-                    if notify_cb is not None:
-                        try:
-                            notify_cb(
-                                ChatMessage(
-                                    kind="peer",
-                                    text=body,
-                                    timestamp=datetime.now(timezone.utc),
-                                )
+                    # Offline delivery pointer for encrypted drop.i2p payload.
+                    if body.startswith(DROP_POINTER_MARKER) and msg_id:
+                        asyncio.create_task(
+                            self._handle_drop_pointer_message(
+                                body,
+                                writer=writer,
+                                msg_id=msg_id,
                             )
-                        except Exception:
-                            # Ошибка в уведомлении не должна рвать сетевой цикл.
-                            pass
-                    # Подтверждение доставки по MSG_ID (vNext)
-                    if msg_id:
-                        try:
-                            writer.write(
-                                self.frame_message(
-                                    "S", f"__SIGNAL__:MSG_ACK|{msg_id}"
+                        )
+                    else:
+                        self._emit_message("peer", body)
+                        # Дополнительное уведомление UI о входящем сообщении от собеседника.
+                        notify_cb = getattr(self, "on_notify", None)
+                        if notify_cb is not None:
+                            try:
+                                notify_cb(
+                                    ChatMessage(
+                                        kind="peer",
+                                        text=body,
+                                        timestamp=datetime.now(timezone.utc),
+                                    )
                                 )
-                            )
-                            await writer.drain()
-                        except Exception:
-                            pass
+                            except Exception:
+                                # Ошибка в уведомлении не должна рвать сетевой цикл.
+                                pass
+                        # Подтверждение доставки по MSG_ID (vNext)
+                        if msg_id:
+                            try:
+                                writer.write(
+                                    self.frame_message(
+                                        "S", f"__SIGNAL__:MSG_ACK|{msg_id}"
+                                    )
+                                )
+                                await writer.drain()
+                            except Exception:
+                                pass
 
                 elif msg_type == "I":
                     if body == "__END__":
@@ -2430,7 +3030,7 @@ class I2PChatCore:
                                         f"MSG_ACK id={ack_id} state={entry.state}",
                                     )
                                 elif (
-                                    entry.ack_kind != "msg"
+                                    entry.ack_kind not in ("msg", "drop_ptr")
                                     or entry.peer_addr != self._current_ack_peer()
                                     or entry.ack_session_epoch != self._ack_session_epoch
                                 ):
@@ -2440,6 +3040,8 @@ class I2PChatCore:
                                     )
                                 else:
                                     self._pending_text_acks.pop(ack_id, None)
+                                    if entry.ack_kind == "drop_ptr":
+                                        self._mark_drop_outbox_delivered(entry.token)
                             except Exception:
                                 self._record_ack_drop("invalid_format", "MSG_ACK parse failed")
                         if "IMG_ACK|" in body:

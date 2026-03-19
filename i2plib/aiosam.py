@@ -5,6 +5,8 @@ import i2plib.exceptions
 import i2plib.utils
 from i2plib.log import logger
 
+_TCP_NODELAY_ERRNO_22_IGNORED = False
+
 def parse_reply(data):
     if not data:
         raise ConnectionAbortedError("Empty response: SAM API went offline")
@@ -25,6 +27,31 @@ async def get_sam_socket(sam_address=i2plib.sam.DEFAULT_ADDRESS, loop=None):
     :param loop: (optional) event loop instance (ignored in modern Python, kept for backward compatibility)
     :return: A (reader, writer) pair
     """
+    # qasync + asyncio/open_connection на macOS/в Python 3.14 может падать на
+    # sock.setsockopt(TCP_NODELAY) с errno=22 до попытки соединения.
+    # Этот костыль позволяет приложениям не падать на инициализации SAM
+    # и вместо этого получать обычные connect/refused/timeout ошибки.
+    global _TCP_NODELAY_ERRNO_22_IGNORED
+    if not _TCP_NODELAY_ERRNO_22_IGNORED:
+        try:
+            import asyncio.base_events as base_events
+
+            orig_set_nodelay = getattr(base_events, "_set_nodelay", None)
+            if orig_set_nodelay is not None:
+                def _patched_set_nodelay(sock) -> None:  # type: ignore[no-redef]
+                    try:
+                        orig_set_nodelay(sock)
+                    except OSError as e:
+                        if getattr(e, "errno", None) == 22:
+                            return
+                        raise
+
+                base_events._set_nodelay = _patched_set_nodelay  # type: ignore[assignment]
+                _TCP_NODELAY_ERRNO_22_IGNORED = True
+        except Exception:
+            # Если костыль не применился — пробуем как есть.
+            pass
+
     reader, writer = await asyncio.open_connection(*sam_address)
     writer.write(i2plib.sam.hello("3.1", "3.1"))
     reply = parse_reply(await reader.readline())
