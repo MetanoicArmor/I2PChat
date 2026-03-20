@@ -59,7 +59,9 @@ After you choose a profile, the main chat window opens:
   On narrow windows it collapses to `Net`, `Link`, `Peer`, `Secure`, `ACKdrop`; hover for the full text.
 - **Theme switch** — to the right of the status row (sun/moon icon). Toggles `ligth` and `night`.
 - **Chat area** — shows your and peer messages, system notices, and file transfer progress. You can select and copy message text (right‑click or context menu).
-- **Message input** — below the chat: type your text and press **Enter** (or the send button) to send a message to the connected peer.
+- **Message input** — below the chat:
+  - **Enter** inserts a new line;
+  - **Shift+Enter** or **Ctrl+Enter** sends the message (or click `Send`).
 - **Actions bar** — at the bottom: peer address, connection buttons, and the **`⋯`** menu (see section 4).
 
 Connect to a peer first (enter address in the actions bar → **Connect**), then type in the input field to send messages.
@@ -313,7 +315,7 @@ sound notifications (`QSoundEffect`) for incoming messages.
    - press `Connect`.
 6. After the connection is established:
    - type your message in the bottom input field;
-   - press `Enter` or click `Send`.
+   - press `Shift+Enter`, `Ctrl+Enter`, or click `Send` to send.
 7. The new message will appear on the right side of the chat area as your outgoing message.
 
 #### 6.2. Sending a file to a peer

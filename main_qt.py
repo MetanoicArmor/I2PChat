@@ -1528,7 +1528,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
 
 class MessageInputEdit(QtWidgets.QPlainTextEdit):
-    """Многострочное поле ввода: Enter — отправить, Shift+Enter — новая строка."""
+    """Многострочное поле ввода: Enter — новая строка, Shift/Ctrl+Enter — отправить."""
     sendRequested = QtCore.pyqtSignal()
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
@@ -1580,10 +1580,15 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         key = event.key()
         if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
-            if event.modifiers() & QtCore.Qt.KeyboardModifier.ShiftModifier:
-                self.insertPlainText("\n")
+            mods = event.modifiers()
+            if mods & (
+                QtCore.Qt.KeyboardModifier.ShiftModifier
+                | QtCore.Qt.KeyboardModifier.ControlModifier
+            ):
+                self.sendRequested.emit()
+                event.accept()
                 return
-            self.sendRequested.emit()
+            self.insertPlainText("\n")
             event.accept()
             return
         super().keyPressEvent(event)
@@ -1736,6 +1741,23 @@ class ProfileComboPopup(QtWidgets.QFrame):
                     color: #d8deea;
                     font-size: 13px;
                 }
+                QListWidget#ProfileComboPopupList QScrollBar:vertical {
+                    background: transparent;
+                    width: 10px;
+                    margin: 0px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::handle:vertical {
+                    background: rgba(160, 160, 160, 0.35);
+                    border-radius: 5px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::add-line:vertical,
+                QListWidget#ProfileComboPopupList QScrollBar::sub-line:vertical,
+                QListWidget#ProfileComboPopupList QScrollBar::up-arrow:vertical,
+                QListWidget#ProfileComboPopupList QScrollBar::down-arrow:vertical {
+                    background: none;
+                    border: none;
+                    height: 0px;
+                }
                 QListWidget#ProfileComboPopupList::item {
                     border-radius: 8px;
                     padding: 6px 10px;
@@ -1765,6 +1787,23 @@ class ProfileComboPopup(QtWidgets.QFrame):
                     outline: none;
                     color: #2f3644;
                     font-size: 13px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar:vertical {
+                    background: transparent;
+                    width: 10px;
+                    margin: 0px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::handle:vertical {
+                    background: rgba(70, 90, 120, 0.28);
+                    border-radius: 5px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::add-line:vertical,
+                QListWidget#ProfileComboPopupList QScrollBar::sub-line:vertical,
+                QListWidget#ProfileComboPopupList QScrollBar::up-arrow:vertical,
+                QListWidget#ProfileComboPopupList QScrollBar::down-arrow:vertical {
+                    background: none;
+                    border: none;
+                    height: 0px;
                 }
                 QListWidget#ProfileComboPopupList::item {
                     border-radius: 8px;
@@ -2229,7 +2268,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         input_layout.setContentsMargins(8, 8, 8, 8)
         input_layout.setSpacing(6)
         self.input_edit = MessageInputEdit(self)
-        self.input_edit.setPlaceholderText("Type message. Enter to send, Shift+Enter for new line.")
+        self.input_edit.setPlaceholderText("Type message. Enter for new line, Shift+Enter or Ctrl+Enter to send.")
         self.input_edit.setMinimumHeight(52)
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
