@@ -1528,7 +1528,10 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
 
 class MessageInputEdit(QtWidgets.QPlainTextEdit):
-    """Многострочное поле ввода: Enter — новая строка, Shift/Ctrl+Enter — отправить."""
+    """Многострочное поле ввода: Enter — новая строка.
+
+    Отправка: Shift+Enter (везде), а также Ctrl+Enter (Windows/Linux) или ⌘+Enter (macOS).
+    """
     sendRequested = QtCore.pyqtSignal()
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
@@ -1580,17 +1583,34 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         key = event.key()
         if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
-            mods = event.modifiers()
-            if mods & (
-                QtCore.Qt.KeyboardModifier.ShiftModifier
-                | QtCore.Qt.KeyboardModifier.ControlModifier
-            ):
+            modifiers = event.modifiers()
+            shift_down = bool(modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier)
+
+            # На macOS Command = MetaModifier.
+            if sys.platform == "darwin":
+                # На части macOS-конфигураций ⌘+Enter приходит как ControlModifier.
+                # Поэтому для отправки учитываем и Meta, и Control.
+                command_like = bool(
+                    modifiers
+                    & (
+                        QtCore.Qt.KeyboardModifier.MetaModifier
+                        | QtCore.Qt.KeyboardModifier.ControlModifier
+                    )
+                )
+                command_down = command_like
+                wants_send = shift_down or command_down
+            else:
+                ctrl_down = bool(modifiers & QtCore.Qt.KeyboardModifier.ControlModifier)
+                wants_send = shift_down or ctrl_down
+
+            if wants_send:
                 self.sendRequested.emit()
                 event.accept()
-                return
-            self.insertPlainText("\n")
-            event.accept()
+            else:
+                # Пусть стандартный обработчик QPlainTextEdit вставит перевод строки.
+                super().keyPressEvent(event)
             return
+
         super().keyPressEvent(event)
 
 
@@ -1653,6 +1673,150 @@ class ProfileComboBox(QtWidgets.QComboBox):
         self.popupRequested.emit()
 
 
+class RoundedVerticalScrollbar(QtWidgets.QWidget):
+    """Кастомный скроллбар для popup-списка профилей (точные “пилюльные” концы)."""
+
+    def __init__(
+        self,
+        linked_scrollbar: QtWidgets.QScrollBar,
+        parent: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._sb = linked_scrollbar
+
+        # Цвета будут проставлены в apply_theme().
+        self._thumb_color = QtGui.QColor(60, 60, 67, 160)
+        self._track_color = QtGui.QColor(0, 0, 0, 0)
+
+        self._dragging = False
+        self._drag_offset_y = 0
+
+        self.setFixedWidth(6)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+
+        self._sb.valueChanged.connect(self.update)
+        # rangeChanged есть у QScrollBar, но типизация может отличаться в разных сборках.
+        self._sb.rangeChanged.connect(self.update)  # type: ignore[attr-defined]
+        # У QScrollBar/Qt не везде есть сигнал pageStepChanged.
+        # В вычислении thumb используем pageStep() (если доступен) при перерисовке.
+
+    def set_colors(self, thumb: QtGui.QColor, track: QtGui.QColor) -> None:
+        self._thumb_color = thumb
+        self._track_color = track
+        self.update()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self.update()
+
+    def _compute_thumb(self) -> QtCore.QRectF:
+        track_h = max(0, self.height())
+        if track_h <= 0:
+            return QtCore.QRectF(0, 0, float(self.width()), 0)
+
+        sb_min = self._sb.minimum()
+        sb_max = self._sb.maximum()
+        sb_range = max(0, sb_max - sb_min)
+        value = self._sb.value()
+
+        # pageStep влияет на “размер” видимой области.
+        try:
+            page = int(self._sb.pageStep())  # type: ignore[attr-defined]
+        except Exception:
+            page = 0
+        total = sb_range + max(0, page)
+        visible_ratio = (max(0, page) / total) if total > 0 else 1.0
+        visible_ratio = max(0.05, min(1.0, float(visible_ratio)))
+
+        thumb_h = max(16.0, min(float(track_h), float(track_h) * visible_ratio))
+
+        if sb_range <= 0:
+            progress = 0.0
+        else:
+            progress = float(value - sb_min) / float(sb_range)
+            progress = max(0.0, min(1.0, progress))
+
+        travel = max(0.0, float(track_h) - thumb_h)
+        thumb_y = travel * progress
+
+        return QtCore.QRectF(0.0, thumb_y, float(self.width()), thumb_h)
+
+    def _set_value_from_thumb_y(self, thumb_y: float, thumb_h: float) -> None:
+        sb_min = self._sb.minimum()
+        sb_max = self._sb.maximum()
+        sb_range = max(0, sb_max - sb_min)
+        if sb_range <= 0:
+            return
+
+        track_h = max(1, self.height())
+        travel = max(0.0, float(track_h) - float(thumb_h))
+        if travel <= 0.0:
+            self._sb.setValue(int(sb_min))
+            return
+
+        progress = max(0.0, min(1.0, float(thumb_y) / travel))
+        new_value = sb_min + progress * float(sb_range)
+        self._sb.setValue(int(round(new_value)))
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+
+        if self._track_color.alpha() > 0:
+            track_rect = QtCore.QRectF(0.0, 0.0, float(self.width()), float(self.height()))
+            radius = float(self.width()) / 2.0
+            painter.setPen(QtGui.QPen(QtCore.Qt.PenStyle.NoPen))  # type: ignore[arg-type]
+            painter.setBrush(QtGui.QBrush(self._track_color))
+            painter.drawRoundedRect(track_rect, radius, radius)
+
+        thumb = self._compute_thumb()
+        radius = float(self.width()) / 2.0
+        painter.setPen(QtGui.QPen(QtCore.Qt.PenStyle.NoPen))  # type: ignore[arg-type]
+        painter.setBrush(QtGui.QBrush(self._thumb_color))
+        painter.drawRoundedRect(thumb, radius, radius)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        thumb = self._compute_thumb()
+        if thumb.height() <= 0:
+            return
+
+        self._dragging = True
+        if thumb.contains(event.pos()):
+            self._drag_offset_y = int(event.pos().y() - thumb.y())
+        else:
+            self._drag_offset_y = int(thumb.height() / 2.0)
+
+        target_thumb_y = float(event.pos().y() - self._drag_offset_y)
+        target_thumb_y = max(0.0, min(float(self.height()) - float(thumb.height()), target_thumb_y))
+        self._set_value_from_thumb_y(target_thumb_y, float(thumb.height()))
+
+        event.accept()
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if not self._dragging:
+            return
+
+        thumb = self._compute_thumb()
+        if thumb.height() <= 0:
+            return
+
+        target_thumb_y = float(event.pos().y() - self._drag_offset_y)
+        target_thumb_y = max(0.0, min(float(self.height()) - float(thumb.height()), target_thumb_y))
+        self._set_value_from_thumb_y(target_thumb_y, float(thumb.height()))
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        self._dragging = False
+        event.accept()
+
+
 class ProfileComboPopup(QtWidgets.QFrame):
     itemChosen = QtCore.pyqtSignal(str)
 
@@ -1675,7 +1839,7 @@ class ProfileComboPopup(QtWidgets.QFrame):
         self.surface.setObjectName("ProfileComboPopupSurface")
         root.addWidget(self.surface)
 
-        inner = QtWidgets.QVBoxLayout(self.surface)
+        inner = QtWidgets.QHBoxLayout(self.surface)
         inner.setContentsMargins(6, 6, 6, 6)
         inner.setSpacing(0)
 
@@ -1683,8 +1847,13 @@ class ProfileComboPopup(QtWidgets.QFrame):
         self.list.setObjectName("ProfileComboPopupList")
         self.list.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         self.list.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Нативный вертикальный скроллбар скрываем: рисуем кастомный справа.
+        self.list.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.itemClicked.connect(self._on_item_clicked)
-        inner.addWidget(self.list)
+        inner.addWidget(self.list, 1)
+
+        self._custom_scrollbar = RoundedVerticalScrollbar(self.list.verticalScrollBar(), self.surface)
+        inner.addWidget(self._custom_scrollbar, 0)
 
     def _on_item_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
         self.itemChosen.emit(item.text())
@@ -1723,6 +1892,7 @@ class ProfileComboPopup(QtWidgets.QFrame):
         pos = anchor.mapToGlobal(QtCore.QPoint(0, anchor.height() + 4))
         self.move(pos)
         self.show()
+        self._custom_scrollbar.update()
 
     def apply_theme(self, theme_id: str) -> None:
         if theme_id == "night":
@@ -1734,6 +1904,29 @@ class ProfileComboPopup(QtWidgets.QFrame):
                     border: none;
                     border-radius: 12px;
                 }
+                /* Скроллбар внутри dropdown-попапа должен выглядеть как macOS-пилюля */
+                QListWidget#ProfileComboPopupList QScrollBar:vertical {
+                    background: transparent;
+                    width: 6px;
+                    margin: 0px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::handle:vertical {
+                    background-color: rgba(255, 255, 255, 0.20);
+                    min-height: 24px;
+                    border-radius: 999px;
+                    border: none;
+                    margin: 0px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::groove:vertical {
+                    background: transparent;
+                    border-radius: 999px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::add-page:vertical,
+                QListWidget#ProfileComboPopupList QScrollBar::sub-page:vertical {
+                    background: transparent;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::add-line:vertical,
+                QListWidget#ProfileComboPopupList QScrollBar::sub-line:vertical { height: 0px; }
                 QListWidget#ProfileComboPopupList {
                     background: transparent;
                     border: none;
@@ -1772,6 +1965,10 @@ class ProfileComboPopup(QtWidgets.QFrame):
                 }
                 """
             )
+            self._custom_scrollbar.set_colors(
+                thumb=QtGui.QColor(255, 255, 255, 51),  # 0.20 alpha
+                track=QtGui.QColor(0, 0, 0, 0),
+            )
         else:
             self.setStyleSheet(
                 """
@@ -1781,6 +1978,29 @@ class ProfileComboPopup(QtWidgets.QFrame):
                     border: none;
                     border-radius: 12px;
                 }
+                /* Скроллбар внутри dropdown-попапа должен выглядеть как macOS-пилюля */
+                QListWidget#ProfileComboPopupList QScrollBar:vertical {
+                    background: transparent;
+                    width: 6px;
+                    margin: 0px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::handle:vertical {
+                    background-color: rgba(60, 60, 67, 0.28);
+                    min-height: 24px;
+                    border-radius: 999px;
+                    border: none;
+                    margin: 0px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::groove:vertical {
+                    background: transparent;
+                    border-radius: 999px;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::add-page:vertical,
+                QListWidget#ProfileComboPopupList QScrollBar::sub-page:vertical {
+                    background: transparent;
+                }
+                QListWidget#ProfileComboPopupList QScrollBar::add-line:vertical,
+                QListWidget#ProfileComboPopupList QScrollBar::sub-line:vertical { height: 0px; }
                 QListWidget#ProfileComboPopupList {
                     background: transparent;
                     border: none;
@@ -1818,6 +2038,10 @@ class ProfileComboPopup(QtWidgets.QFrame):
                     background: #e8eef8;
                 }
                 """
+            )
+            self._custom_scrollbar.set_colors(
+                thumb=QtGui.QColor(60, 60, 67, 72),  # ~0.28 alpha
+                track=QtGui.QColor(0, 0, 0, 0),
             )
 
 
@@ -2268,7 +2492,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         input_layout.setContentsMargins(8, 8, 8, 8)
         input_layout.setSpacing(6)
         self.input_edit = MessageInputEdit(self)
-        self.input_edit.setPlaceholderText("Type message. Enter for new line, Shift+Enter or Ctrl+Enter to send.")
+        if sys.platform == "darwin":
+            self.input_edit.setPlaceholderText(
+                "Type message. Enter for new line, Shift+Enter or ⌘+Enter to send."
+            )
+        else:
+            self.input_edit.setPlaceholderText(
+                "Type message. Enter for new line, Shift+Enter or Ctrl+Enter to send."
+            )
         self.input_edit.setMinimumHeight(52)
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
