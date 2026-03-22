@@ -8,7 +8,7 @@
 
 - BlindBox для именованных (`persistent`) профилей работает **по умолчанию**;
 - `Send` стал маршрутизатором: live-сессия при наличии, иначе офлайн-очередь BlindBox;
-- добавлен опциональный локальный fallback реплики для dev/same-host тестов;
+- добавлен опциональный локальный Blind Box (fallback) для dev/same-host тестов;
 - уменьшен UI-шум: служебные BlindBox-уведомления о queued/received в чат не выводятся;
 - улучшена строка статуса и кнопки действий (динамика, компактность в узком окне, выравнивание).
 
@@ -32,10 +32,10 @@
 
 #### 3) Blind Box-серверы для межхостовой доставки и локальный fallback
 
-- Для межхостовой офлайн-доставки задаются общие **Blind Box**-серверы через `I2PCHAT_BLINDBOX_REPLICAS`.
-- Для дефолта на весь деплой добавлен `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`.
-- Для прод-настроек поддержан `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`.
-- Приоритет: `I2PCHAT_BLINDBOX_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE` → **релизный набор** `DEFAULT_RELEASE_BLINDBOX_ENDPOINTS` в `i2p_chat_core.py` (два адреса: `tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444`, `dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p:19444`). Отключить встроенный набор: `I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`.
+- Для межхостовой офлайн-доставки список **Blind Box**-серверов задаётся через `I2PCHAT_BLINDBOX_REPLICAS`.
+- Список серверов по умолчанию для деплоя: `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`.
+- Для прод-настроек: файл со списком серверов — `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`.
+- Приоритет чтения: `I2PCHAT_BLINDBOX_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE` → **релизный набор** `DEFAULT_RELEASE_BLINDBOX_ENDPOINTS` в `i2p_chat_core.py` (два адреса: `tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444`, `dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p:19444`). Отключить встроенный набор: `I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`.
 - Локальный fallback (`127.0.0.1:19444`) оставлен как явный opt-in для dev/same-host сценариев (`I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1`).
 - Локальный Blind Box переиспользуется, если уже запущен на порту.
 
@@ -74,7 +74,7 @@
 
 - `i2p_chat_core.py`
 - `main_qt.py`
-- `blindbox_local_replica.py`
+- локальный сервис Blind Box: `blindbox_local_replica.py`
 - `blindbox_client.py`
 - `I2PChat.spec`
 - `README.md`
@@ -105,7 +105,7 @@
   - debug-лог SAM-ответов теперь проходит redaction чувствительных полей (`PRIV`, `DESTINATION` и др.).
 
 - **BlindBox local hardening (M-02/M-03):**
-  - в локальной реплике добавлен опциональный auth token для `PUT/GET`;
+  - в локальном Blind Box (`blindbox_local_replica.py`) добавлен опциональный auth token для `PUT/GET`;
   - добавлен лимит записей (`max_entries`) с ответом `FULL`;
   - добавлен strict режим `I2PCHAT_BLINDBOX_REQUIRE_SAM=1` (запрет direct `host:port`);
   - добавлено явное предупреждение при активном non-SAM транспорте.
