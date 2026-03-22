@@ -2714,7 +2714,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             0,
             QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
         )
-        # Строка статус-бара (средняя детализация); что такое BlindBox — в toolTip.
+        # Строка статус-бара (средняя детализация); подсказка при наведении отключена.
         self._status_line_text: str = (
             "Net:starting | Prof:default (T) | Link:offline | Peer:none | St:none | Sec:off | "
             "BlindBox: off | ACKdrop:0"
@@ -2722,7 +2722,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._status_line_compact_text: str = (
             "Net:starting | offline | none | Sec:off | BB:off | ACKdrop:0"
         )
-        self._status_tooltip_text: str = self._status_line_text
         self._last_status: str = "initializing"
         self._status_focus_signature: Optional[tuple[str, str, str, str]] = None
         self._status_force_expand_until_mono: float = 0.0
@@ -3493,13 +3492,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         return answer == QtWidgets.QMessageBox.StandardButton.Yes
 
-    def _set_status_text(
-        self, line_text_full: str, line_text_compact: str, tooltip_text: str
-    ) -> None:
-        """Полная и компактная строка; в лейбле — по ширине окна; toolTip — полная диагностика."""
+    def _set_status_text(self, line_text_full: str, line_text_compact: str) -> None:
+        """Полная и компактная строка; в лейбле — по ширине окна (без всплывающей подсказки)."""
         self._status_line_text = line_text_full
         self._status_line_compact_text = line_text_compact
-        self._status_tooltip_text = tooltip_text
         self._update_status_label_visible_text()
 
     def _on_status_focus_timeout(self) -> None:
@@ -3529,13 +3525,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             available,
         )
         self.status_label.setText(elided)
-        tip = self._status_tooltip_text.strip() if self._status_tooltip_text else ""
-        self.status_label.setToolTip(tip)
+        self.status_label.setToolTip("")
 
     def refresh_status_label(self) -> None:
         """Обновить строку статуса с учётом профиля и persist-режима."""
         status = _network_status_display(self._last_status)
-        mode = "PERSISTENT" if self.profile != "default" else "TRANSIENT"
         ack_drop_total = 0
         try:
             telemetry = self.core.get_ack_telemetry()
@@ -3618,7 +3612,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             blindbox_hint = "BlindBox telemetry unavailable"
             bb_profile = "high"
             blindbox_epoch = "0"
-        blindbox_bar, blindbox_tooltip = _blindbox_status_bar_and_tooltip(
+        blindbox_bar, _ = _blindbox_status_bar_and_tooltip(
             enabled=bb_enabled,
             state=blindbox_state,
             sync=blindbox_sync,
@@ -3630,19 +3624,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         delivery = self.core.get_delivery_telemetry()
         delivery_state = str(delivery.get("state", "unknown"))
-        delivery_bar, delivery_tooltip = _delivery_status_bar_and_tooltip(delivery_state)
+        delivery_bar, _ = _delivery_status_bar_and_tooltip(delivery_state)
         current_peer_disp = _short_addr(self.core.current_peer_addr)
         stored_disp = _short_addr(stored)
         ack_part = f"ACKdrop:{ack_drop_total}" if ack_drop_total > 0 else "ACKdrop:0"
 
-        header_tooltip = (
-            f"Net: {status} | Profile: {self.profile} ({mode}) | Link: {link_state}\n"
-            f"Peer: {current_peer_disp} | Stored: {stored_disp} | Secure: {secure_state}\n"
-            f"{ack_part}"
-        )
-        tooltip_text = f"{header_tooltip}\n\n{delivery_tooltip}\n\n{blindbox_tooltip}"
-
-        # Средняя строка в UI: BlindBox — короткая человекочитаемая фраза; детали в toolTip.
+        # Средняя строка в UI: BlindBox — короткая человекочитаемая фраза.
         mode_tag = "P" if self.profile != "default" else "T"
         status_line = (
             f"Net:{status} | Prof:{self.profile} ({mode_tag}) | Link:{link_state} | "
@@ -3656,7 +3643,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             f"Net:{status} | {link_state} | {current_peer_disp} | "
             f"Sec:{secure_state} | Tx:{delivery_state} | BB:{blindbox_state}{ack_compact}"
         )
-        self._set_status_text(status_line, status_line_compact, tooltip_text)
+        self._set_status_text(status_line, status_line_compact)
         current_signature = (status, link_state, secure_state, delivery_state)
         if (
             self._status_focus_signature is not None
