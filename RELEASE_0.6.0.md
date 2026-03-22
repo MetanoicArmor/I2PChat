@@ -13,7 +13,7 @@
 
 ### Security hardening (shipped with this line)
 
-Audit follow-ups (except deferred **M-05**): lockfile-first `pip-audit` in CI; SAM debug log redaction; local Blind Box hardening (optional auth token, `max_entries`/`FULL`, `I2PCHAT_BLINDBOX_REQUIRE_SAM`); basename-only paths in sensitive UI/logs; notification fallback without message body on Windows. See `AUDIT_EN.md`, `AUDIT_RU.md`, `REMEDIATION_PLAN.md`.
+Audit follow-ups (except deferred **M-05**): lockfile-first `pip-audit` in CI; SAM debug log redaction; local Blind Box hardening (optional auth token, `max_entries`/`FULL`, `I2PCHAT_BLINDBOX_REQUIRE_SAM`); basename-only paths in sensitive UI/logs; **Windows:** if toast notifications are unavailable, the console fallback prints only a generic line and does **not** echo incoming message text (avoids leaking chat into terminal logs). See `AUDIT_EN.md`, `AUDIT_RU.md`, `REMEDIATION_PLAN.md`.
 
 ### Compatibility
 
@@ -34,7 +34,7 @@ Live chat stays compatible with the current client line; very old BlindBox peers
 
 ### Усиление безопасности (в этой же ветке релиза)
 
-По аудиту (кроме отложенного **M-05**): CI с lockfile-first `pip-audit`; редакция SAM debug-логов; hardening локального Blind Box (`blindbox_local_replica.py`: опциональный auth token, `max_entries`/`FULL`, `I2PCHAT_BLINDBOX_REQUIRE_SAM`); в чувствительных местах в UI/логах только basename путей; Windows fallback уведомлений без текста сообщения. Подробности: `AUDIT_EN.md`, `AUDIT_RU.md`, `REMEDIATION_PLAN.md`.
+По аудиту (кроме отложенного **M-05**): CI с lockfile-first `pip-audit`; редакция SAM debug-логов; hardening локального Blind Box (`blindbox_local_replica.py`: опциональный auth token, `max_entries`/`FULL`, `I2PCHAT_BLINDBOX_REQUIRE_SAM`); в чувствительных местах в UI/логах только basename путей; **Windows:** если системное уведомление недоступно, в консоль выводится только нейтральная строка (`notifications.py`), **без текста входящего сообщения** — чтобы переписка не попадала в лог терминала. Подробности: `AUDIT_EN.md`, `AUDIT_RU.md`, `REMEDIATION_PLAN.md`.
 
 ### Совместимость
 
