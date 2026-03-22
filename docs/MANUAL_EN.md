@@ -55,14 +55,15 @@ After you choose a profile, the main chat window opens:
 <img src="../screenshots/1.png" alt="I2PChat main window: chat area, input, actions bar" width="900" />
 
 - **Window title** — `I2PChat @ <profile_name>` (e.g. `I2PChat @ alice`).
-- **Status row** — at the top, above the chat: `Net`, `Profile`, `Link`, `Peer`, `Stored`, `Secure`, `ACKdrop`.  
-  On narrow windows it collapses to `Net`, `Link`, `Peer`, `Secure`, `ACKdrop`; hover for the full text.
+- **Status row** — at the top, above the chat: full line includes `Net`, profile (`Prof`), `Link`, `Peer`, `Stored`, `Secure`, current send route (`Send:*`), **BlindBox** state (human‑readable), and `ACKdrop`.  
+  If you **narrow the window**, a shorter line is shown (including `Tx:<state>` and `BB:<state>`). **Hover** the status text for full diagnostics, current send route details, and BlindBox explanation.
+  On important network/security changes and errors, the status row is temporarily expanded for readability, then returns to normal compact behavior.
 - **Theme switch** — to the right of the status row (sun/moon icon). Toggles `ligth` and `night`.
 - **Chat area** — shows your and peer messages, system notices, and file transfer progress. You can select and copy message text (right‑click or context menu).
-- **Message input** — below the chat: type your text. **Enter** makes a new line, and sending a message uses **Shift+Enter** (also **Ctrl+Enter**, and on macOS **⌘+Enter**). Or use the send button.
+- **Message input** — below the chat: type your text. **Enter** makes a new line, and sending a message uses **Shift+Enter** (also **Ctrl+Enter**, and on macOS **⌘+Enter**). Or use the send button. You can **paste a raster image** from the clipboard (**Ctrl+V** / **⌘V** or **Paste** in the field’s menu); it is sent like **Send picture** (PNG/JPEG/WebP).
 - **Actions bar** — at the bottom: peer address, connection buttons, and the **`⋯`** menu (see section 4).
 
-Connect to a peer first (enter address in the actions bar → **Connect**), then type in the input field to send messages.
+Use **Connect** for live chat and the first BlindBox bootstrap session. If BlindBox is already ready, sending text can go straight to the offline queue even without an active live connection.
 
 ### 4. Actions bar (connection and profiles)
 
@@ -104,7 +105,7 @@ The `Peer .b32.i2p address` field is for the full destination of your peer:
 
 #### 4.3. `Connect` button
 
-The **`Connect`** button starts a connection to the address currently present in the peer field.
+The **`Connect`** button starts a live connection to the address currently present in the peer field.
 
 Logic:
 
@@ -124,6 +125,12 @@ After a successful connection:
 - incoming messages appear in the chat area;
 - other events (file transfers, system/info messages) may start flowing over the network.
 
+Why `Connect` still matters when peer is offline:
+
+- to start a **live chat** when peer is reachable;
+- to perform the **first BlindBox root bootstrap** (one successful secure live session with this peer);
+- to diagnose peer reachability.
+
 On first contact with a new peer signing key, a **Trust on First Use (TOFU)** dialog appears:
 
 - it shows the peer address, a short fingerprint, and a public key prefix;
@@ -131,9 +138,14 @@ On first contact with a new peer signing key, a **Trust on First Use (TOFU)** di
 - choose **Yes** to trust and pin the key, or **No** to abort the connection;
 - for higher security, verify the fingerprint with your peer out‑of‑band.
 
+**Button state:** **`Connect`** is **disabled** (dimmed) until the network status is **Pending** or **Visible** (I2P session ready), you have a peer address or a stored locked peer, and you are not already connected or already dialling out. While a connection attempt is in progress, **`Connect`** stays disabled; a second click is ignored by the core. **Tooltips** on the button explain why it is disabled (e.g. wait for Pending/Visible, enter an address, already connected).  
+When BlindBox offline queue is already ready, the `Connect` tooltip explicitly marks live connect as **optional**.
+
 #### 4.4. `Disconnect` button
 
 The **`Disconnect`** button terminates the current connection to the peer.
+
+**Button state:** **`Disconnect`** is **disabled** until there is an active peer session (socket connected); hover shows a hint when it is inactive.
 
 After pressing it:
 
@@ -197,7 +209,7 @@ On the receiving side:
   ```
 - if a file with the same name already exists in `downloads`, the new file is saved as `<name> (1).<ext>`, `<name> (2).<ext>`, etc. without overwriting.
 
-The **`Send picture`** item works the same way but is intended for images (PNG/JPEG) and is shown inline in the chat.
+The **`Send picture`** item works the same way but is intended for images (PNG, JPEG, or WebP) and is shown inline in the chat.
 
 #### 4.7. `Lock to peer` button
 
@@ -266,6 +278,22 @@ Using this button you can:
 - quickly import an existing profile;
 - switch between several profiles without restarting the application.
 
+#### 4.9. Optional: BlindBox (offline text)
+
+**BlindBox** is the offline text queue path for your locked peer when there is **no live secure session**. It is enabled by default for **named/persistent** profiles and disabled for `default`/transient mode.
+
+- You must use a **persistent profile** and **lock to peer**. For cross-host offline delivery, configure shared **Blind Box** servers via `I2PCHAT_BLINDBOX_REPLICAS`. For deployment-wide defaults, use `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`. For centrally managed production defaults, use `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`. **Release binaries** also ship a **built-in pair** in `DEFAULT_RELEASE_BLINDBOX_ENDPOINTS` inside `i2p_chat_core.py` (`tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444`, `dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p:19444`; override with env vars, disable with `I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`). See [**RELEASE_0.6.0.md**](../RELEASE_0.6.0.md) — no duplicate crypto detail here.
+  Optional local/dev-only fallback: set `I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1` to start a local Blind Box server (`127.0.0.1:19444`).
+  You can force-disable BlindBox with `I2PCHAT_BLINDBOX_ENABLED=0`.
+- `Send` in GUI works as a smart route:
+  - with a live secure session, text is sent online;
+  - with `Send: offline queue`, text is queued via BlindBox (without mandatory manual Connect);
+  - with `Send: need Connect once`, input text is kept and UI asks for one live Connect to bootstrap root.
+- In offline-ready mode, the send button label switches to `Send offline` (shown on two lines in the button).
+- BlindBox queue/receive debug lines are not shown in the chat feed; delivery details remain in status/tooltips.
+- Runtime state appears in the **status row** (`Send:*` and BlindBox fields); hover for hints if something is misconfigured.
+- **Compatibility:** peers on older builds may not support BlindBox traffic; live chat and file/image transfer work as before.
+
 ### 5. System notifications and sound
 
 The GUI uses a system tray icon (`QSystemTrayIcon`) and, where supported,  
@@ -306,7 +334,7 @@ sound notifications (`QSoundEffect`) for incoming messages.
 3. In the `Choose profile` dialog:
    - keep `default` or type your own profile name (for example, `alice`).
 4. In the main window:
-   - wait until the status row shows a working state;
+   - wait until the status row shows **Pending** or **Visible** (then **`Connect`** becomes available);
    - if needed, copy your address via `⋯` → `Copy my address` and send it to your peer via another channel.
 5. Once you have the peer address:
    - paste it into `Peer .b32.i2p address`;

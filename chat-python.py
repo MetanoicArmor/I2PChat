@@ -74,7 +74,7 @@ class I2PChat(App):
     def watch_peer_b32(self, new_val: str) -> None:
         status_map = {
             "initializing": ("[grey62]●[/]", "INITIALIZING", "grey62"),
-            "local_ok": ("[yellow]●[/]", "BUILDING TUNNELS", "yellow"),
+            "local_ok": ("[yellow]●[/]", "PENDING", "yellow"),
             "visible": ("[green]●[/]", "VISIBLE / READY", "green"),
         }
 
@@ -286,11 +286,9 @@ class I2PChat(App):
                 return
 
             if self.core.current_peer_addr:
-                key_file = os.path.join(get_profiles_dir(), f"{self.profile}.dat")
                 try:
-                    with open(key_file, "a") as f:
-                        f.write(self.core.current_peer_addr + "\n")
-                    self.core.stored_peer = self.core.current_peer_addr
+                    self.core.save_stored_peer(self.core.current_peer_addr)
+                    await self.core.ensure_blindbox_runtime_started()
                     self.post(
                         "success",
                         f"Identity [bold yellow]{self.profile}[/] "

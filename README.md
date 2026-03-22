@@ -28,6 +28,7 @@
 ### 📑 Table of contents
 
 - [✨ Features](#-features)
+- [📬 BlindBox in short](#-blindbox-in-short)
 - [📸 Screenshots](#-screenshots)
 - [📦 Prebuilt binaries](#-prebuilt-binaries)
 - [🛠 Running from source](#-running-from-source)
@@ -42,16 +43,43 @@
 - **TOFU** — peer key pinning on first contact
 - **Lock to peer** — bind a profile to a single peer
 - **PyQt6 GUI** with light and dark themes (macOS-style, consistent and predictable on all platforms)
-- **File transfer** and **image sending** (Send picture) between peers
+- **File transfer** and **image sending** (Send picture: PNG, JPEG, WebP) between peers
 - **Profiles (.dat)** — multiple profiles, load and import
 - **System notifications** — tray toasts for new messages
 - **Sound notifications** for incoming messages
+- **BlindBox (default-on for named profiles)** — offline message delivery
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
 #### 📖 Manuals
 
 - **English manual**: [**docs/MANUAL_EN.md**](docs/MANUAL_EN.md)
 - **Русский мануал**: [**docs/MANUAL_RU.md**](docs/MANUAL_RU.md)
+- BlindBox design notes: [**RELEASE_0.6.0.md**](RELEASE_0.6.0.md)
+
+### 📬 BlindBox
+
+BlindBox is your “send now, deliver later” mode for text messages.
+
+Why users like it:
+
+- You can message people even when they are temporarily offline.
+- Delivery happens automatically when they come back online.
+- The chat stays clean and readable: only real messages, no technical noise.
+- Works naturally with normal live chat — no extra routine in daily use.
+
+Simple flow:
+
+1. If the peer is online, the message is delivered live.
+2. If the peer is offline, the app keeps it in the offline queue.
+3. When the peer returns, the message appears automatically.
+
+Practical notes:
+
+- For named profiles BlindBox is enabled by default.
+- For `default` (transient) profile BlindBox is off.
+- Disable explicitly with `I2PCHAT_BLINDBOX_ENABLED=0`.
+- For team/server deployments, set **Blind Box** server addresses once in the environment (`I2PCHAT_BLINDBOX_REPLICAS`, `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`, or `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`) so users get offline delivery.
+- **Release build default:** two Blind Box endpoints are **hardcoded** in `i2p_chat_core.py` (`DEFAULT_RELEASE_BLINDBOX_ENDPOINTS`): `tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444`, `dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p:19444`. Override anytime with env vars above. Opt out: `I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`.
 
 ### 📸 Screenshots
 
@@ -87,6 +115,13 @@ Create and activate a virtual environment, then install dependencies:
 python3.14 -m venv .venv
 source .venv/bin/activate  # on Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+If `.venv/bin/pip` fails with **bad interpreter** / a path to another project, another virtualenv was probably first on `PATH`. Run `deactivate` (repeat until none is active), then recreate `.venv`. On **macOS + Homebrew** you can pin the interpreter without using a fixed `/opt/homebrew` path:
+
+```bash
+rm -rf .venv
+"$(brew --prefix python@3.14)/bin/python3.14" -m venv .venv
 ```
 
 Run the application:
@@ -148,48 +183,6 @@ It will:
 
 The resulting `I2PChat.exe` is self‑contained and can be distributed to machines without Python installed.
 
-### Verify release artifacts
-
-Release build scripts generate:
-
-- `SHA256SUMS` file for produced release archive(s);
-- detached armored GPG signature `SHA256SUMS.asc` (best-effort by default).
-
-Build-time controls:
-
-- `I2PCHAT_SKIP_GPG_SIGN=1` — always skip detached signature creation;
-- `I2PCHAT_REQUIRE_GPG=1` — fail build if GPG signing is unavailable or fails;
-- `I2PCHAT_GPG_KEY_ID=<keyid>` — select a specific key for detached signature.
-
-Verification example:
-
-```bash
-gpg --verify SHA256SUMS.asc SHA256SUMS
-sha256sum -c SHA256SUMS
-```
-
-### Protocol metadata and padding profile
-
-The transport is encrypted after handshake, but some protocol metadata remains
-observable on the wire:
-
-- frame type (`TYPE`);
-- frame length (`LEN`);
-- pre-handshake peer identity preface exchange.
-
-To reduce traffic-shape leakage, encrypted payloads use a padding profile:
-
-- default: `balanced` (pads encrypted plaintext to 128-byte buckets);
-- optional: `off` (disable padding).
-
-You can override the profile with:
-
-```bash
-I2PCHAT_PADDING_PROFILE=off python main_qt.py
-```
-
-Trade-off: stronger padding reduces length correlation but increases bandwidth.
-
 #### ❄️ NixOS
 
 ```bash
@@ -202,8 +195,7 @@ nix develop github:MetanoicArmor/I2PChat
 
 ### 📄 License
 
-See `LICENSE` for full license text.  
-Please also respect the original `termchat-i2p-python` licensing and attribution to **Stanley (I2P community)**.
+See `LICENSE` for full license text.
 
 ### ☕ Buy me a coffee
 

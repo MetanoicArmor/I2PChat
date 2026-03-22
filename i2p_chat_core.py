@@ -1,10 +1,13 @@
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
+import random
 import re
 import shutil
+import struct
 import sys
 import tempfile
 import time
@@ -16,14 +19,30 @@ import i2plib
 from PIL import Image
 
 import crypto
+from blindbox_blob import decrypt_blindbox_blob, encrypt_blindbox_blob
+from blindbox_client import BlindBoxClient
+from blindbox_key_schedule import derive_blindbox_message_keys
+from blindbox_local_replica import ensure_local_blindbox_replica
+from blindbox_state import BlindBoxState, load_blindbox_state, save_blindbox_state
 from protocol_codec import (
     ENCRYPTED_TRAILER_SIZE,
     FLAG_ENCRYPTED,
+    HEADER_STRUCT,
+    MAGIC,
     ProtocolCodec,
 )
 
 logger = logging.getLogger("i2pchat")
 PROTOCOL_VERSION = 4
+DEFAULT_LOCAL_BLINDBOX_REPLICA = "127.0.0.1:19444"
+TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+# Официальный набор из двух Blind Box для готовых релизов I2PChat.
+# Формат для удаленных I2P-узлов: <base32>.b32.i2p:19444 (порт сервера Blind Box).
+DEFAULT_RELEASE_BLINDBOX_ENDPOINTS: Tuple[str, ...] = (
+    "tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444",
+    "dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p:19444",
+)
 
 
 @dataclass
@@ -51,6 +70,65 @@ class PendingAckEntry:
     peer_addr: str
     ack_session_epoch: int
     state: str = "awaiting_ack"
+
+
+@dataclass
+class SendTextResult:
+    route: str
+    accepted: bool
+    reason: str = ""
+    hint: str = ""
+
+
+def _is_host_port_replica(value: str) -> bool:
+    if ":" not in value:
+        return False
+    host, port_raw = value.rsplit(":", 1)
+    if not host:
+        return False
+    # .i2p/.b32.i2p addresses (even with :port) should still go via SAM,
+    # not via direct TCP socket resolution.
+    if host.endswith(".i2p"):
+        return False
+    try:
+        port = int(port_raw)
+    except Exception:
+        return False
+    return 1 <= port <= 65535
+
+
+def _parse_replicas_list(raw: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in (raw or "").split(","):
+        candidate = item.strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        out.append(candidate)
+    return out
+
+
+def _load_replicas_file(path: str) -> list[str]:
+    if not path:
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return []
+    normalized: list[str] = []
+    for line in content.splitlines():
+        cleaned = line.split("#", 1)[0].strip()
+        if cleaned:
+            normalized.append(cleaned)
+    return _parse_replicas_list(",".join(normalized))
+
+
+def _is_cant_reach_peer_error(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    return "cantreachpeer" in name or "cant reach peer" in text or "cantreachpeer" in text
 
 
 StatusCallback = Callable[[str], Any]
@@ -112,11 +190,20 @@ def get_images_dir() -> str:
 UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
-# Безопасные форматы изображений (magic bytes -> extension)
-ALLOWED_IMAGE_FORMATS = {
-    b'\x89PNG\r\n\x1a\n': 'png',
-    b'\xff\xd8\xff': 'jpeg',
-}
+def detect_inline_image_format(header: bytes) -> Optional[str]:
+    """
+    Определить формат inline-изображения по сигнатуре (PNG / JPEG / WebP).
+    WebP: RIFF....WEBP (четыре байта размера chunk между RIFF и WEBP).
+    """
+    if not header:
+        return None
+    if len(header) >= 8 and header[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if len(header) >= 3 and header[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP":
+        return "webp"
+    return None
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB
 MAX_IMAGE_DIMENSION = 4096  # max width/height in pixels
 MAX_IMAGES_CACHE_SIZE = 100 * 1024 * 1024  # 100 MB auto-cleanup threshold
@@ -125,6 +212,48 @@ PADDING_PROFILE_BALANCED = "balanced"
 SUPPORTED_PADDING_PROFILES = {PADDING_PROFILE_OFF, PADDING_PROFILE_BALANCED}
 PADDING_ENVELOPE_MAGIC = b"I2PPAD1"
 PADDING_BALANCED_BLOCK = 128
+
+BLINDBOX_PRIVACY_LOW = "low"
+BLINDBOX_PRIVACY_MEDIUM = "medium"
+BLINDBOX_PRIVACY_HIGH = "high"
+BLINDBOX_SUPPORTED_PRIVACY_PROFILES = {
+    BLINDBOX_PRIVACY_LOW,
+    BLINDBOX_PRIVACY_MEDIUM,
+    BLINDBOX_PRIVACY_HIGH,
+}
+BLINDBOX_DEFAULT_PRIVACY_PROFILE = BLINDBOX_PRIVACY_HIGH
+BLINDBOX_PRIVACY_DEFAULTS: dict[str, dict[str, float | int]] = {
+    BLINDBOX_PRIVACY_LOW: {
+        "poll_min_sec": 2.0,
+        "poll_max_sec": 4.0,
+        "cover_gets": 0,
+        "padding_bucket": 256,
+        "root_rotate_messages": 1024,
+        "root_rotate_seconds": 24 * 60 * 60,
+        "root_previous_grace_seconds": 24 * 60 * 60,
+        "max_previous_roots": 1,
+    },
+    BLINDBOX_PRIVACY_MEDIUM: {
+        "poll_min_sec": 3.0,
+        "poll_max_sec": 7.0,
+        "cover_gets": 1,
+        "padding_bucket": 512,
+        "root_rotate_messages": 512,
+        "root_rotate_seconds": 12 * 60 * 60,
+        "root_previous_grace_seconds": 24 * 60 * 60,
+        "max_previous_roots": 2,
+    },
+    BLINDBOX_PRIVACY_HIGH: {
+        "poll_min_sec": 5.0,
+        "poll_max_sec": 12.0,
+        "cover_gets": 2,
+        "padding_bucket": 1024,
+        "root_rotate_messages": 256,
+        "root_rotate_seconds": 6 * 60 * 60,
+        "root_previous_grace_seconds": 24 * 60 * 60,
+        "max_previous_roots": 2,
+    },
+}
 
 
 def is_valid_profile_name(name: str) -> bool:
@@ -141,6 +270,13 @@ def ensure_valid_profile_name(name: str) -> str:
             "Invalid profile name. Allowed characters: a-z A-Z 0-9 . _ - (1..64 chars)."
         )
     return candidate
+
+
+def _resolve_blindbox_privacy_profile(raw: str) -> str:
+    candidate = (raw or "").strip().lower()
+    if candidate in BLINDBOX_SUPPORTED_PRIVACY_PROFILES:
+        return candidate
+    return BLINDBOX_DEFAULT_PRIVACY_PROFILE
 
 
 def allocate_unique_profile_name(
@@ -271,16 +407,9 @@ def validate_image(path: str) -> Tuple[bool, str, Optional[str]]:
     except IOError as e:
         return False, f"Cannot read file: {e}", None
     
-    detected_ext = None
-    
-    # Check PNG (8 bytes magic)
-    if header[:8] == b'\x89PNG\r\n\x1a\n':
-        detected_ext = 'png'
-    # Check JPEG (3 bytes magic)
-    elif header[:3] == b'\xff\xd8\xff':
-        detected_ext = 'jpeg'
+    detected_ext = detect_inline_image_format(header)
     if detected_ext is None:
-        return False, "Unsupported image format (only PNG and JPEG allowed)", None
+        return False, "Unsupported image format (PNG, JPEG, or WebP required)", None
     
     # Validate with PIL for extra safety
     try:
@@ -453,6 +582,7 @@ class I2PChatCore:
         self.current_peer_dest_b64: Optional[str] = None
         self.peer_identity_binding_verified: bool = False
         self.conn: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
+        self._outbound_connect_busy: bool = False
         self.proven: bool = False
 
         # файловый приём
@@ -532,6 +662,162 @@ class I2PChatCore:
             # Keep strict vNext by default; legacy mode should be explicit
             # and only re-enabled with full negotiation support.
             allow_legacy=False,
+        )
+        blindbox_enabled_raw = os.environ.get("I2PCHAT_BLINDBOX_ENABLED", "").strip().lower()
+        self._blindbox_enabled_source = "default"
+        if self.profile == "default":
+            self.blindbox_enabled = False
+            self._blindbox_enabled_source = "transient-disabled"
+        elif blindbox_enabled_raw in {"0", "false", "no", "off"}:
+            self.blindbox_enabled = False
+            self._blindbox_enabled_source = "env-disabled"
+        elif blindbox_enabled_raw in {"1", "true", "yes", "on"}:
+            self.blindbox_enabled = True
+            self._blindbox_enabled_source = "env-enabled"
+        else:
+            # Persistent profiles default to BlindBox-enabled mode.
+            self.blindbox_enabled = True
+        replicas_from_env = _parse_replicas_list(
+            os.environ.get("I2PCHAT_BLINDBOX_REPLICAS", "")
+        )
+        replicas_from_default_env = _parse_replicas_list(
+            os.environ.get("I2PCHAT_BLINDBOX_DEFAULT_REPLICAS", "")
+        )
+        replicas_file_path = os.environ.get(
+            "I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE", ""
+        ).strip()
+        replicas_from_file = _load_replicas_file(replicas_file_path)
+        no_release_builtin = (
+            os.environ.get("I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS", "").strip().lower()
+            in TRUTHY_ENV_VALUES
+        )
+        local_fallback_raw = os.environ.get(
+            "I2PCHAT_BLINDBOX_LOCAL_FALLBACK", ""
+        ).strip().lower()
+        local_fallback_enabled = local_fallback_raw in TRUTHY_ENV_VALUES
+        if replicas_from_env:
+            self._blindbox_replicas_source = "env"
+            replicas_resolved = replicas_from_env
+        elif replicas_from_default_env:
+            self._blindbox_replicas_source = "env-default"
+            replicas_resolved = replicas_from_default_env
+        elif replicas_from_file:
+            self._blindbox_replicas_source = "file-default"
+            replicas_resolved = replicas_from_file
+        elif not no_release_builtin and DEFAULT_RELEASE_BLINDBOX_ENDPOINTS:
+            self._blindbox_replicas_source = "release-builtin"
+            replicas_resolved = list(DEFAULT_RELEASE_BLINDBOX_ENDPOINTS)
+        else:
+            self._blindbox_replicas_source = "none"
+            replicas_resolved = []
+        if (
+            not replicas_resolved
+            and self.profile != "default"
+            and self.blindbox_enabled
+            and local_fallback_enabled
+        ):
+            replicas_resolved = [DEFAULT_LOCAL_BLINDBOX_REPLICA]
+            self._blindbox_replicas_source = "local-auto"
+        self.blindbox_replicas = replicas_resolved
+        self._blindbox_use_sam = not (
+            len(self.blindbox_replicas) > 0
+            and all(_is_host_port_replica(item) for item in self.blindbox_replicas)
+        )
+        self.blindbox_put_quorum = max(
+            1,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_PUT_QUORUM",
+                    "2" if len(self.blindbox_replicas) >= 2 else "1",
+                )
+            ),
+        )
+        self.blindbox_get_quorum = max(
+            1, int(os.environ.get("I2PCHAT_BLINDBOX_GET_QUORUM", "1"))
+        )
+        self._blindbox_client: Optional[BlindBoxClient] = None
+        self._blindbox_task: Optional[asyncio.Task[Any]] = None
+        self._blindbox_state = BlindBoxState()
+        self._blindbox_root_secret: Optional[bytes] = None
+        self._blindbox_root_epoch: int = 0
+        self._blindbox_root_created_at: int = 0
+        self._blindbox_root_send_index_base: int = 0
+        self._blindbox_prev_roots: list[dict[str, Any]] = []
+        self._blindbox_seen_hashes: set[str] = set()
+        self._blindbox_rng = random.SystemRandom()
+        self._blindbox_privacy_profile = _resolve_blindbox_privacy_profile(
+            os.environ.get(
+                "I2PCHAT_BLINDBOX_PRIVACY_PROFILE", BLINDBOX_DEFAULT_PRIVACY_PROFILE
+            )
+        )
+        defaults = BLINDBOX_PRIVACY_DEFAULTS[self._blindbox_privacy_profile]
+        poll_min_raw = float(
+            os.environ.get(
+                "I2PCHAT_BLINDBOX_POLL_MIN_SEC",
+                str(defaults["poll_min_sec"]),
+            )
+        )
+        poll_max_raw = float(
+            os.environ.get(
+                "I2PCHAT_BLINDBOX_POLL_MAX_SEC",
+                str(defaults["poll_max_sec"]),
+            )
+        )
+        self._blindbox_poll_min_sec = max(0.5, min(poll_min_raw, poll_max_raw))
+        self._blindbox_poll_max_sec = max(self._blindbox_poll_min_sec, poll_max_raw)
+        self._blindbox_cover_gets = max(
+            0,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_COVER_GETS",
+                    str(int(defaults["cover_gets"])),
+                )
+            ),
+        )
+        self._blindbox_padding_bucket = max(
+            64,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_PADDING_BUCKET",
+                    str(int(defaults["padding_bucket"])),
+                )
+            ),
+        )
+        self._blindbox_root_rotate_messages = max(
+            1,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_ROOT_ROTATE_MESSAGES",
+                    str(int(defaults["root_rotate_messages"])),
+                )
+            ),
+        )
+        self._blindbox_root_rotate_seconds = max(
+            60,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_ROOT_ROTATE_SECONDS",
+                    str(int(defaults["root_rotate_seconds"])),
+                )
+            ),
+        )
+        self._blindbox_previous_grace_seconds = max(
+            300,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_ROOT_PREVIOUS_GRACE_SECONDS",
+                    str(int(defaults["root_previous_grace_seconds"])),
+                )
+            ),
+        )
+        self._blindbox_max_previous_roots = max(
+            0,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_MAX_PREVIOUS_ROOTS",
+                    str(int(defaults["max_previous_roots"])),
+                )
+            ),
         )
 
     # ---------- вспомогательные уведомления ----------
@@ -758,6 +1044,209 @@ class I2PChatCore:
         """Файл seed локального signing-key (fallback при недоступном keyring)."""
         return self._profile_scoped_path(f"{self.profile}.signing")
 
+    def _blindbox_peer_id(self) -> Optional[str]:
+        peer = self._normalize_peer_addr(self.stored_peer or self.current_peer_addr or "")
+        if not peer:
+            return None
+        if peer.endswith(".b32.i2p"):
+            return peer[: -len(".b32.i2p")]
+        return peer
+
+    def _blindbox_state_path(self) -> str:
+        peer_id = self._blindbox_peer_id()
+        if not peer_id:
+            raise ValueError("BlindBox peer id is not available")
+        safe_peer = re.sub(r"[^a-z0-9._-]", "_", peer_id.lower())
+        return self._profile_scoped_path(f"{self.profile}.blindbox.{safe_peer}.json")
+
+    def _blindbox_local_wrap_key(self, peer_id: str) -> bytes:
+        if not self.my_signing_seed:
+            raise ValueError("Local signing seed is not initialized")
+        salt = crypto.hkdf_extract(
+            b"",
+            hashlib.sha256(
+                b"BLINDBOX-LOCAL-WRAP-SALT|"
+                + self.profile.encode("utf-8")
+                + b"|"
+                + peer_id.encode("utf-8")
+            ).digest(),
+        )
+        return crypto.hkdf_expand(salt, b"BLINDBOX-LOCAL-WRAP-KEY", 32)
+
+    def _blindbox_encrypt_root_secret(self, root_secret: bytes, peer_id: str) -> str:
+        wrap_key = self._blindbox_local_wrap_key(peer_id)
+        encrypted = crypto.encrypt_message(wrap_key, root_secret)
+        return encrypted.hex()
+
+    def _blindbox_decrypt_root_secret(self, encrypted_hex: str, peer_id: str) -> bytes:
+        wrap_key = self._blindbox_local_wrap_key(peer_id)
+        encrypted = bytes.fromhex(encrypted_hex)
+        decrypted = crypto.decrypt_message(wrap_key, encrypted)
+        if decrypted is None:
+            raise ValueError("Failed to decrypt BlindBox root secret")
+        return decrypted
+
+    def _blindbox_prune_previous_roots(self) -> None:
+        now_ts = int(time.time())
+        filtered = [
+            item
+            for item in self._blindbox_prev_roots
+            if int(item.get("expires_at", 0)) > now_ts
+        ]
+        filtered.sort(key=lambda item: int(item.get("epoch", 0)), reverse=True)
+        if self._blindbox_max_previous_roots >= 0:
+            filtered = filtered[: self._blindbox_max_previous_roots]
+        self._blindbox_prev_roots = filtered
+
+    def _blindbox_root_candidates(self) -> list[dict[str, Any]]:
+        self._blindbox_prune_previous_roots()
+        candidates: list[dict[str, Any]] = []
+        if self._blindbox_root_secret is not None:
+            candidates.append(
+                {
+                    "epoch": int(self._blindbox_root_epoch),
+                    "secret": self._blindbox_root_secret,
+                }
+            )
+        for item in self._blindbox_prev_roots:
+            secret = item.get("secret")
+            if isinstance(secret, (bytes, bytearray)) and len(secret) == 32:
+                candidates.append(
+                    {
+                        "epoch": int(item.get("epoch", 0)),
+                        "secret": bytes(secret),
+                    }
+                )
+        return candidates
+
+    def _load_blindbox_state(self) -> None:
+        if not self.blindbox_enabled:
+            return
+        peer_id = self._blindbox_peer_id()
+        if not peer_id:
+            return
+        try:
+            path = self._blindbox_state_path()
+            self._blindbox_state = load_blindbox_state(path)
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                enc_root = raw.get("blindbox_root_secret_enc")
+                if isinstance(enc_root, str) and enc_root:
+                    self._blindbox_root_secret = self._blindbox_decrypt_root_secret(
+                        enc_root, peer_id
+                    )
+                self._blindbox_root_epoch = int(raw.get("blindbox_root_epoch", 0))
+                self._blindbox_root_created_at = int(
+                    raw.get("blindbox_root_created_at", int(time.time()))
+                )
+                self._blindbox_root_send_index_base = int(
+                    raw.get(
+                        "blindbox_root_send_index_base",
+                        int(self._blindbox_state.send_index),
+                    )
+                )
+                prev_items = raw.get("blindbox_prev_roots", [])
+                self._blindbox_prev_roots = []
+                if isinstance(prev_items, list):
+                    for prev in prev_items:
+                        if not isinstance(prev, dict):
+                            continue
+                        enc_prev = prev.get("secret_enc")
+                        if not isinstance(enc_prev, str) or not enc_prev:
+                            continue
+                        try:
+                            dec_prev = self._blindbox_decrypt_root_secret(enc_prev, peer_id)
+                        except Exception:
+                            continue
+                        if len(dec_prev) != 32:
+                            continue
+                        self._blindbox_prev_roots.append(
+                            {
+                                "epoch": int(prev.get("epoch", 0)),
+                                "secret": dec_prev,
+                                "expires_at": int(prev.get("expires_at", 0)),
+                            }
+                        )
+                self._blindbox_prune_previous_roots()
+            else:
+                self._blindbox_root_secret = None
+                self._blindbox_root_epoch = 0
+                self._blindbox_root_created_at = 0
+                self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
+                self._blindbox_prev_roots = []
+        except Exception as e:
+            logger.warning("Failed to load BlindBox state: %s", e)
+            self._blindbox_state = BlindBoxState()
+            self._blindbox_root_secret = None
+            self._blindbox_root_epoch = 0
+            self._blindbox_root_created_at = 0
+            self._blindbox_root_send_index_base = 0
+            self._blindbox_prev_roots = []
+
+    def _save_blindbox_state(self) -> None:
+        if not self.blindbox_enabled:
+            return
+        peer_id = self._blindbox_peer_id()
+        if not peer_id:
+            return
+        if self._blindbox_root_secret is None:
+            return
+        try:
+            path = self._blindbox_state_path()
+            payload = self._blindbox_state.to_dict()
+            payload["blindbox_root_secret_enc"] = self._blindbox_encrypt_root_secret(
+                self._blindbox_root_secret, peer_id
+            )
+            payload["blindbox_root_epoch"] = int(self._blindbox_root_epoch)
+            payload["blindbox_root_created_at"] = int(self._blindbox_root_created_at)
+            payload["blindbox_root_send_index_base"] = int(
+                self._blindbox_root_send_index_base
+            )
+            self._blindbox_prune_previous_roots()
+            payload["blindbox_prev_roots"] = [
+                {
+                    "epoch": int(item.get("epoch", 0)),
+                    "expires_at": int(item.get("expires_at", 0)),
+                    "secret_enc": self._blindbox_encrypt_root_secret(
+                        bytes(item["secret"]), peer_id
+                    ),
+                }
+                for item in self._blindbox_prev_roots
+                if isinstance(item.get("secret"), (bytes, bytearray))
+                and len(bytes(item["secret"])) == 32
+            ]
+            temp_state = BlindBoxState.from_dict(payload)
+            save_blindbox_state(path, temp_state)
+            # Persist extra encrypted root secret in the same JSON object.
+            with open(path, "r", encoding="utf-8") as f:
+                current = json.load(f)
+            current["blindbox_root_secret_enc"] = payload["blindbox_root_secret_enc"]
+            current["blindbox_root_epoch"] = payload["blindbox_root_epoch"]
+            current["blindbox_root_created_at"] = payload["blindbox_root_created_at"]
+            current["blindbox_root_send_index_base"] = payload[
+                "blindbox_root_send_index_base"
+            ]
+            current["blindbox_prev_roots"] = payload["blindbox_prev_roots"]
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(current, f, ensure_ascii=True, indent=2, sort_keys=True)
+            os.replace(tmp_path, path)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+        except Exception as e:
+            logger.warning("Failed to save BlindBox state: %s", e)
+
+    def _blindbox_ready(self) -> bool:
+        return (
+            self.blindbox_enabled
+            and bool(self.stored_peer)
+            and bool(self.blindbox_replicas)
+            and self.my_dest is not None
+        )
+
     def _load_trust_store(self) -> None:
         """Загружает pinning-таблицу peer_addr -> signing_pub_hex."""
         self.peer_trusted_signing_keys = {}
@@ -909,6 +1398,7 @@ class I2PChatCore:
 
         self._write_profile_dat(private_key_base64, normalized_peer)
         self.stored_peer = normalized_peer
+        self._load_blindbox_state()
 
     def is_current_peer_verified_for_lock(self) -> bool:
         return bool(
@@ -1120,6 +1610,7 @@ class I2PChatCore:
             self._write_profile_dat(self.my_dest.private_key.base64, self.stored_peer)
         self._load_trust_store()
         self._ensure_local_signing_key()
+        self._load_blindbox_state()
 
         self._emit_system("Starting I2P session, please wait…")
 
@@ -1172,6 +1663,8 @@ class I2PChatCore:
         loop = asyncio.get_running_loop()
         self._accept_task = loop.create_task(self.accept_loop())
         self._tunnel_task = loop.create_task(self.tunnel_watcher())
+        if self._blindbox_ready():
+            await self._ensure_blindbox_runtime_started()
 
     # ---------- публичные операции ----------
 
@@ -1274,60 +1767,463 @@ class I2PChatCore:
         """Returns counters for dropped/invalid ACK signals."""
         return dict(self._ack_drop_counters)
 
+    def get_blindbox_telemetry(self) -> dict[str, Any]:
+        """Returns non-sensitive local BlindBox runtime telemetry."""
+        has_client = self._blindbox_client is not None
+        poller_running = (
+            self._blindbox_task is not None and not self._blindbox_task.done()
+        )
+        return {
+            "enabled": bool(self.blindbox_enabled),
+            "enabled_source": str(self._blindbox_enabled_source),
+            "blind_boxes": len(self.blindbox_replicas),
+            "blind_boxes_source": str(self._blindbox_replicas_source),
+            "use_sam_for_blind_boxes": bool(self._blindbox_use_sam),
+            "replicas_source": str(self._blindbox_replicas_source),
+            "use_sam_for_replicas": bool(self._blindbox_use_sam),
+            "ready": bool(self._blindbox_ready()),
+            "has_root_secret": self._blindbox_root_secret is not None,
+            "replicas": len(self.blindbox_replicas),
+            "put_quorum": int(self.blindbox_put_quorum),
+            "get_quorum": int(self.blindbox_get_quorum),
+            "client_initialized": has_client,
+            "poller_running": poller_running,
+            "send_index": int(self._blindbox_state.send_index),
+            "recv_base": int(self._blindbox_state.recv_base),
+            "recv_window": int(self._blindbox_state.recv_window),
+            "root_epoch": int(self._blindbox_root_epoch),
+            "privacy_profile": str(self._blindbox_privacy_profile),
+            "poll_min_sec": float(self._blindbox_poll_min_sec),
+            "poll_max_sec": float(self._blindbox_poll_max_sec),
+            "cover_gets": int(self._blindbox_cover_gets),
+            "padding_bucket": int(self._blindbox_padding_bucket),
+            "root_rotate_messages": int(self._blindbox_root_rotate_messages),
+            "root_rotate_seconds": int(self._blindbox_root_rotate_seconds),
+            "max_previous_roots": int(self._blindbox_max_previous_roots),
+            "previous_roots_loaded": int(len(self._blindbox_prev_roots)),
+        }
+
+    def get_delivery_telemetry(self) -> dict[str, Any]:
+        """Returns current delivery route hints for UI decisions."""
+        connected = self.conn is not None
+        secure_live = bool(connected and self.handshake_complete)
+        has_target = bool(self.current_peer_addr or self.stored_peer)
+        ready = bool(self._blindbox_ready())
+        has_root_secret = self._blindbox_root_secret is not None
+
+        if connected and not self.handshake_complete:
+            state = "connecting-handshake"
+        elif secure_live:
+            state = "online-live"
+        elif ready and has_root_secret:
+            state = "offline-ready"
+        elif ready and not has_root_secret:
+            state = "await-live-root"
+        elif self.blindbox_enabled and not self.stored_peer:
+            state = "blindbox-needs-locked-peer"
+        elif self.blindbox_enabled and len(self.blindbox_replicas) <= 0:
+            state = "blindbox-needs-boxes"
+        elif self.blindbox_enabled and self.my_dest is None:
+            state = "blindbox-starting-local-session"
+        elif self.blindbox_enabled:
+            state = "blindbox-initializing"
+        elif self.profile == "default":
+            state = "blindbox-disabled-transient"
+        else:
+            state = "blindbox-disabled"
+
+        return {
+            "state": state,
+            "connected": connected,
+            "secure_live": secure_live,
+            "has_target": has_target,
+            "blindbox_enabled": bool(self.blindbox_enabled),
+            "blindbox_enabled_source": str(self._blindbox_enabled_source),
+            "blindbox_replicas_source": str(self._blindbox_replicas_source),
+            "blind_boxes_source": str(self._blindbox_replicas_source),
+            "blindbox_use_sam_for_replicas": bool(self._blindbox_use_sam),
+            "blindbox_ready": ready,
+            "has_root_secret": has_root_secret,
+            "stored_peer": bool(self.stored_peer),
+            "blind_boxes": len(self.blindbox_replicas),
+            "replicas": len(self.blindbox_replicas),
+            "network_status": str(self.network_status),
+        }
+
+    def _offline_send_block_feedback(self) -> tuple[str, str]:
+        delivery = self.get_delivery_telemetry()
+        state = str(delivery.get("state", "unknown"))
+        if not delivery.get("has_target"):
+            return (
+                "no-target",
+                "No peer selected. Enter or lock a peer address, then send.",
+            )
+        if state == "blindbox-disabled-transient":
+            return (
+                "transient-profile",
+                "Offline delivery is unavailable in TRANSIENT mode. Use Connect for a live session.",
+            )
+        if state == "blindbox-disabled":
+            return (
+                "blindbox-disabled",
+                "No active secure session. Offline delivery is disabled by configuration. "
+                "Unset I2PCHAT_BLINDBOX_ENABLED=0 or Connect live.",
+            )
+        if state == "connecting-handshake":
+            return (
+                "handshake-in-progress",
+                "Secure channel handshake is in progress. Please wait a moment.",
+            )
+        if state == "blindbox-needs-locked-peer":
+            return (
+                "blindbox-needs-locked-peer",
+                "BlindBox requires a locked peer in the current profile.",
+            )
+        if state == "blindbox-needs-boxes":
+            return (
+                "blindbox-needs-boxes",
+                "Blind Box servers are not configured. Set I2PCHAT_BLINDBOX_REPLICAS, "
+                "I2PCHAT_BLINDBOX_DEFAULT_REPLICAS, or I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE "
+                "(or unset I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS to use release defaults).",
+            )
+        if state == "blindbox-starting-local-session":
+            return (
+                "blindbox-starting-local-session",
+                "BlindBox is initializing local I2P session. Wait for Pending/Visible and retry.",
+            )
+        if state == "await-live-root":
+            return (
+                "blindbox-await-root",
+                "BlindBox needs one successful live secure chat with this peer first. "
+                "Press Connect once to initialize offline delivery.",
+            )
+        return ("blocked", "No active secure session. Connect to peer or retry later.")
+
+    def _blindbox_poll_sleep_interval(self) -> float:
+        if self._blindbox_poll_max_sec <= self._blindbox_poll_min_sec:
+            return self._blindbox_poll_min_sec
+        return self._blindbox_rng.uniform(
+            self._blindbox_poll_min_sec, self._blindbox_poll_max_sec
+        )
+
+    def _blindbox_recv_candidates(self) -> list[int]:
+        recv_start = self._blindbox_state.recv_base
+        recv_end = recv_start + self._blindbox_state.recv_window
+        candidates = [
+            idx
+            for idx in range(recv_start, recv_end)
+            if idx not in self._blindbox_state.consumed_recv
+        ]
+        self._blindbox_rng.shuffle(candidates)
+        return candidates
+
+    async def _blindbox_emit_cover_gets(self, client: BlindBoxClient) -> None:
+        if self._blindbox_cover_gets <= 0:
+            return
+        for _ in range(self._blindbox_cover_gets):
+            fake_lookup_token = hashlib.sha256(os.urandom(32)).hexdigest()
+            try:
+                await client.get(fake_lookup_token, require_quorum=False)
+            except Exception:
+                # Cover traffic must never affect application flow.
+                pass
+
+    async def _ensure_blindbox_runtime_started(self) -> None:
+        if not self._blindbox_ready():
+            return
+        if self._blindbox_client is None:
+            if self._blindbox_replicas_source == "local-auto":
+                try:
+                    endpoint = await ensure_local_blindbox_replica()
+                    self.blindbox_replicas = [endpoint]
+                    self._blindbox_use_sam = False
+                except Exception as e:
+                    self._emit_error(f"Local BlindBox replica startup failed: {e}")
+                    return
+            self._blindbox_client = BlindBoxClient(
+                session_id=f"{self.session_id}_blindbox",
+                replicas=self.blindbox_replicas,
+                sam_host=self.sam_address[0],
+                sam_port=self.sam_address[1],
+                use_sam=self._blindbox_use_sam,
+                put_quorum=min(self.blindbox_put_quorum, len(self.blindbox_replicas)),
+                get_quorum=min(self.blindbox_get_quorum, len(self.blindbox_replicas)),
+            )
+        if self._blindbox_task is None or self._blindbox_task.done():
+            loop = asyncio.get_running_loop()
+            self._blindbox_task = loop.create_task(self._blindbox_poll_loop())
+
+    async def ensure_blindbox_runtime_started(self) -> None:
+        await self._ensure_blindbox_runtime_started()
+
+    async def _blindbox_poll_loop(self) -> None:
+        client = self._blindbox_client
+        if client is None:
+            return
+        try:
+            await client.start()
+            self._emit_system("BlindBox runtime started")
+        except Exception as e:
+            self._emit_error(f"BlindBox startup failed: {e}")
+            return
+        try:
+            while True:
+                if not self._blindbox_ready() or self.conn is not None:
+                    await asyncio.sleep(self._blindbox_poll_sleep_interval())
+                    continue
+                if self._blindbox_root_secret is None:
+                    await asyncio.sleep(self._blindbox_poll_sleep_interval())
+                    continue
+                peer_id = self._blindbox_peer_id()
+                if not peer_id or not self.my_dest:
+                    await asyncio.sleep(self._blindbox_poll_sleep_interval())
+                    continue
+                local_id = self.my_dest.base32
+                root_candidates = self._blindbox_root_candidates()
+                if not root_candidates:
+                    await asyncio.sleep(self._blindbox_poll_sleep_interval())
+                    continue
+                for recv_index in self._blindbox_recv_candidates():
+                    got_valid = False
+                    for root_item in root_candidates:
+                        keys = derive_blindbox_message_keys(
+                            bytes(root_item["secret"]),
+                            local_id,
+                            peer_id,
+                            "recv",
+                            recv_index,
+                            epoch=int(root_item["epoch"]),
+                        )
+                        try:
+                            blobs = await client.get(
+                                keys.lookup_token, require_quorum=False
+                            )
+                        except Exception:
+                            continue
+                        for blob in blobs:
+                            digest = hashlib.sha256(blob).hexdigest()
+                            if digest in self._blindbox_seen_hashes:
+                                continue
+                            try:
+                                frame = decrypt_blindbox_blob(
+                                    blob,
+                                    keys.blob_key,
+                                    # Blob direction is encoded by sender perspective.
+                                    # Receiver must expect "send" for inbound offline envelopes.
+                                    expected_direction="send",
+                                    expected_index=recv_index,
+                                    expected_state_tag=keys.state_tag,
+                                )
+                            except Exception:
+                                continue
+                            accepted = await self._process_blindbox_frame(frame)
+                            if accepted:
+                                got_valid = True
+                                self._blindbox_seen_hashes.add(digest)
+                                break
+                        if got_valid:
+                            break
+                    if got_valid:
+                        self._blindbox_state.mark_consumed(recv_index)
+                        self._save_blindbox_state()
+                await self._blindbox_emit_cover_gets(client)
+                await asyncio.sleep(self._blindbox_poll_sleep_interval())
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._emit_error(f"BlindBox poller stopped: {e}")
+
+    async def _process_blindbox_frame(self, frame: bytes) -> bool:
+        if len(frame) < HEADER_STRUCT.size:
+            return False
+        magic, version, msg_type_raw, flags, msg_id, msg_len = HEADER_STRUCT.unpack(
+            frame[: HEADER_STRUCT.size]
+        )
+        if magic != MAGIC or version != PROTOCOL_VERSION:
+            return False
+        if flags != 0:
+            # Offline envelope already provides confidentiality/integrity.
+            return False
+        payload = frame[HEADER_STRUCT.size :]
+        if len(payload) < msg_len:
+            return False
+        body = payload[:msg_len]
+        msg_type = chr(msg_type_raw)
+        if msg_type != "U":
+            return False
+        text = body.decode("utf-8", errors="strict")
+        self._emit_message("peer", text)
+        self._emit_notify("peer", text)
+        return True
+
+    async def _send_text_via_blindbox(self, text: str) -> bool:
+        if not self._blindbox_ready():
+            return False
+        if self._blindbox_root_secret is None:
+            return False
+        if not self.my_dest or self._blindbox_client is None:
+            return False
+        peer_id = self._blindbox_peer_id()
+        if not peer_id:
+            return False
+        try:
+            msg_id = self._allocate_msg_id()
+            frame = self._codec.encode("U", text.encode("utf-8"), msg_id=msg_id, flags=0)
+            keys = derive_blindbox_message_keys(
+                self._blindbox_root_secret,
+                self.my_dest.base32,
+                peer_id,
+                "send",
+                self._blindbox_state.send_index,
+                epoch=self._blindbox_root_epoch,
+            )
+            blob = encrypt_blindbox_blob(
+                frame,
+                keys.blob_key,
+                "send",
+                self._blindbox_state.send_index,
+                keys.state_tag,
+                padding_bucket=self._blindbox_padding_bucket,
+            )
+            await self._blindbox_client.put(keys.lookup_token, blob)
+            self._blindbox_state.send_index += 1
+            self._blindbox_state.updated_at = int(time.time())
+            self._save_blindbox_state()
+            self._emit_message("me", text)
+            return True
+        except Exception as e:
+            self._emit_error(f"BlindBox send failed: {e}")
+            return False
+
+    def is_outbound_connect_busy(self) -> bool:
+        """True, пока выполняется исходящий connect_to_peer (ожидание stream_connect)."""
+        return self._outbound_connect_busy
+
     async def connect_to_peer(self, target_address: str) -> None:
         if not crypto.NACL_AVAILABLE:
             detail = getattr(crypto, "NACL_IMPORT_ERROR", "") or "pynacl not installed"
             self._emit_error(f"Secure protocol requires PyNaCl. Install: pip install pynacl. ({detail})")
             return
-        try:
-            self.current_peer_addr = self._normalize_peer_addr(target_address)
-            self._reset_crypto_state()
-            self.current_peer_addr = self._normalize_peer_addr(target_address)
-            self._emit_system(
-                f"Connecting to {target_address[:24]}... "
-                "(may take 1–2 min while I2P builds tunnels)"
-            )
-            reader, writer = await asyncio.wait_for(
-                i2plib.stream_connect(
-                    self.session_id, target_address, sam_address=self.sam_address
-                ),
-                timeout=self.CONNECT_TIMEOUT,
-            )
-
-            if self.my_dest is not None:
-                # Backward-safe identity preface for accept_loop(reader.readline()).
-                writer.write(self.my_dest.base64.encode("utf-8") + b"\n")
-                writer.write(self.frame_message("S", self.my_dest.base64))
-                await writer.drain()
-
-                self.proven = True
-                self._emit_status("visible")
-
-            self.conn = (reader, writer)
-            self._activate_ack_session()
-            self._emit_message("success", "Handshake sent. Establishing secure channel... Wait")
-
-            loop = asyncio.get_running_loop()
-            loop.create_task(self.receive_loop(self.conn))
-            loop.create_task(self.initiate_secure_handshake())
-            self._start_handshake_watchdog(self.conn)
-            self._keepalive_task = loop.create_task(self._keepalive_loop())
-        except asyncio.TimeoutError:
-            self._emit_error(
-                "Connection timed out. Check: I2P router running, peer address correct, peer online."
-            )
-            self.conn = None
-            self._emit_system("Waiting for incoming connections...")
-        except Exception as e:
-            self._emit_error(f"Connection failed: {e}")
-            self.conn = None
-            self._emit_system("Waiting for incoming connections...")
-
-    async def send_text(self, text: str) -> None:
-        if not self._require_secure_channel():
+        if self.conn is not None:
+            self._emit_system("Already connected. Disconnect first.")
             return
+        if self._outbound_connect_busy:
+            self._emit_system("Connection attempt already in progress.")
+            return
+        self._outbound_connect_busy = True
+        deferred_error: Optional[str] = None
+        deferred_system: Optional[str] = None
+        try:
+            try:
+                self.current_peer_addr = self._normalize_peer_addr(target_address)
+                self._reset_crypto_state()
+                self.current_peer_addr = self._normalize_peer_addr(target_address)
+                self._emit_system(
+                    f"Connecting to {target_address[:24]}... "
+                    "(may take 1–2 min while I2P builds tunnels)"
+                )
+                reader: asyncio.StreamReader
+                writer: asyncio.StreamWriter
+                last_connect_exc: Optional[Exception] = None
+                for attempt in range(2):
+                    try:
+                        reader, writer = await asyncio.wait_for(
+                            i2plib.stream_connect(
+                                self.session_id, target_address, sam_address=self.sam_address
+                            ),
+                            timeout=self.CONNECT_TIMEOUT,
+                        )
+                        break
+                    except Exception as e:
+                        last_connect_exc = e
+                        is_first_attempt = attempt == 0
+                        if is_first_attempt and _is_cant_reach_peer_error(e):
+                            self._emit_system(
+                                "Peer not reachable yet (tunnels warming up). Retrying once..."
+                            )
+                            await asyncio.sleep(2.0)
+                            continue
+                        raise
+                else:
+                    assert last_connect_exc is not None
+                    raise last_connect_exc
+
+                if self.my_dest is not None:
+                    # Backward-safe identity preface для accept_loop(reader.readline()).
+                    writer.write(self.my_dest.base64.encode("utf-8") + b"\n")
+                    writer.write(self.frame_message("S", self.my_dest.base64))
+                    await writer.drain()
+
+                    self.proven = True
+                    self._emit_status("visible")
+
+                self.conn = (reader, writer)
+                self._activate_ack_session()
+                self._emit_message(
+                    "success", "Handshake sent. Establishing secure channel... Wait"
+                )
+
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.receive_loop(self.conn))
+                loop.create_task(self.initiate_secure_handshake())
+                self._start_handshake_watchdog(self.conn)
+                self._keepalive_task = loop.create_task(self._keepalive_loop())
+            except asyncio.TimeoutError:
+                self.conn = None
+                deferred_error = (
+                    "Connection timed out. Check: I2P router running, peer address correct, peer online."
+                )
+                deferred_system = "Waiting for incoming connections..."
+            except Exception as e:
+                self.conn = None
+                detail = str(e).strip() or f"{type(e).__name__}: {e!r}"
+                deferred_error = f"Connection failed: {detail}"
+                deferred_system = "Waiting for incoming connections..."
+        finally:
+            self._outbound_connect_busy = False
+
+        # После сброса busy — иначе UI обновится с is_outbound_connect_busy()==True и Connect останется серым.
+        if deferred_error:
+            self._emit_error(deferred_error)
+        if deferred_system:
+            self._emit_system(deferred_system)
+
+    async def send_text(self, text: str) -> SendTextResult:
+        if not text:
+            return SendTextResult(
+                route="blocked",
+                accepted=False,
+                reason="empty-text",
+                hint="Message is empty.",
+            )
+        if not self.conn or not self.handshake_complete:
+            sent_offline = await self._send_text_via_blindbox(text)
+            if not sent_offline:
+                reason, hint = self._offline_send_block_feedback()
+                self._emit_error(hint)
+                return SendTextResult(
+                    route="blocked",
+                    accepted=False,
+                    reason=reason,
+                    hint=hint,
+                )
+            return SendTextResult(
+                route="offline-queued",
+                accepted=True,
+                reason="blindbox-ready",
+                hint="Message queued for offline delivery.",
+            )
+        if not self._require_secure_channel():
+            return SendTextResult(
+                route="blocked",
+                accepted=False,
+                reason="secure-channel-not-ready",
+                hint="Secure channel is not ready.",
+            )
         try:
             _, writer = self.conn
+            if self._blindbox_ready():
+                await self._send_blindbox_root_if_needed(writer)
             frame, msg_id = self.frame_message_with_id("U", text)
             writer.write(frame)
             await writer.drain()
@@ -1338,9 +2234,21 @@ class I2PChatCore:
                 ack_kind="msg",
             )
             self._emit_message("me", text)
+            return SendTextResult(
+                route="online-live",
+                accepted=True,
+                reason="live-session",
+                hint="Message sent over live secure session.",
+            )
         except Exception as e:
             self._emit_error(f"Failed to send message: {e}")
-            self.conn = None
+            self._schedule_disconnect()
+            return SendTextResult(
+                route="blocked",
+                accepted=False,
+                reason="send-failed",
+                hint=str(e),
+            )
 
     async def _send_abort_file(self) -> None:
         """Отправить пиру сигнал отмены передачи файла (получатель отменил или отправитель)."""
@@ -1763,6 +2671,69 @@ class I2PChatCore:
             nonce_resp = self.my_nonce
         return crypto.derive_handshake_subkeys(dh_shared, nonce_init, nonce_resp)
 
+    def _should_initiate_blindbox_root_exchange(self) -> bool:
+        if not self._blindbox_ready() or not self.my_dest:
+            return False
+        peer_id = self._blindbox_peer_id()
+        if not peer_id:
+            return False
+        local_id = self.my_dest.base32.strip().lower()
+        return local_id < peer_id.strip().lower()
+
+    def _blindbox_should_rotate_root(self) -> bool:
+        if self._blindbox_root_secret is None:
+            return False
+        now_ts = int(time.time())
+        elapsed_sec = max(0, now_ts - int(self._blindbox_root_created_at or now_ts))
+        sent_since_epoch = max(
+            0, int(self._blindbox_state.send_index) - int(self._blindbox_root_send_index_base)
+        )
+        return (
+            elapsed_sec >= self._blindbox_root_rotate_seconds
+            or sent_since_epoch >= self._blindbox_root_rotate_messages
+        )
+
+    async def _send_blindbox_root_if_needed(
+        self, writer: asyncio.StreamWriter, *, force_rotate: bool = False
+    ) -> None:
+        if not self._blindbox_ready():
+            return
+        if not self._should_initiate_blindbox_root_exchange():
+            return
+        should_bootstrap = self._blindbox_root_secret is None
+        should_rotate = force_rotate or self._blindbox_should_rotate_root()
+        if not should_bootstrap and not should_rotate:
+            return
+        if self._blindbox_root_secret is not None:
+            expires_at = int(time.time()) + int(self._blindbox_previous_grace_seconds)
+            self._blindbox_prev_roots.append(
+                {
+                    "epoch": int(self._blindbox_root_epoch),
+                    "secret": self._blindbox_root_secret,
+                    "expires_at": expires_at,
+                }
+            )
+            self._blindbox_prune_previous_roots()
+        next_epoch = int(self._blindbox_root_epoch) + 1
+        root_secret = os.urandom(32)
+        self._blindbox_root_secret = root_secret
+        self._blindbox_root_epoch = next_epoch
+        self._blindbox_root_created_at = int(time.time())
+        self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
+        self._save_blindbox_state()
+        writer.write(
+            self.frame_message(
+                "S",
+                "__SIGNAL__:BLINDBOX_ROOT|"
+                + str(next_epoch)
+                + "|"
+                + root_secret.hex(),
+            )
+        )
+        await writer.drain()
+        reason = "rotated" if should_rotate and not should_bootstrap else "initialized"
+        self._emit_system(f"BlindBox root secret {reason} (epoch={next_epoch})")
+
     async def _handle_handshake_message(
         self, body: str, writer: asyncio.StreamWriter
     ) -> None:
@@ -1859,6 +2830,7 @@ class I2PChatCore:
                 self._cancel_handshake_watchdog()
                 self._emit_message("success", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
+                await self._send_blindbox_root_if_needed(writer)
                 logger.info("Handshake completed (responder)")
 
             elif body.startswith("RESP:"):
@@ -1913,6 +2885,7 @@ class I2PChatCore:
                 self._cancel_handshake_watchdog()
                 self._emit_message("success", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
+                await self._send_blindbox_root_if_needed(writer)
                 logger.info("Handshake completed (initiator)")
 
             else:
@@ -1926,6 +2899,7 @@ class I2PChatCore:
     async def shutdown(self) -> None:
         """Аккуратно остановить фоновые задачи и закрыть соединения."""
         self._handshake_watchdog_generation += 1
+        self._outbound_connect_busy = False
         if self.conn:
             await self.disconnect()
 
@@ -1936,6 +2910,7 @@ class I2PChatCore:
             "_keepalive_task",
             "_handshake_watchdog_task",
             "_disconnect_task",
+            "_blindbox_task",
         ):
             task = getattr(self, attr)
             if task is not None and not task.done():
@@ -1952,6 +2927,12 @@ class I2PChatCore:
             except Exception:
                 pass
             self._session_socket = None
+        if self._blindbox_client is not None:
+            try:
+                await self._blindbox_client.close()
+            except Exception:
+                pass
+            self._blindbox_client = None
 
     # ---------- фоновые циклы ----------
 
@@ -2036,6 +3017,7 @@ class I2PChatCore:
         
         reader, writer = connection
         current_type = initial_type
+        restart_after_timeout = False
 
         try:
             while True:
@@ -2194,7 +3176,7 @@ class I2PChatCore:
                             self._emit_error("Image too large, truncating")
 
                 elif msg_type == "G":
-                    # Inline image (binary PNG/JPEG/WebP)
+                    # Inline image (binary PNG / JPEG / WebP)
                     if body == "__IMG_END__":
                         # Завершение приёма изображения
                         if self.inline_image_info and self.inline_image_buffer:
@@ -2210,11 +3192,7 @@ class I2PChatCore:
                             
                             # Проверяем magic bytes
                             header = bytes(self.inline_image_buffer[:12])
-                            detected_ext = None
-                            if header[:8] == b'\x89PNG\r\n\x1a\n':
-                                detected_ext = 'png'
-                            elif header[:3] == b'\xff\xd8\xff':
-                                detected_ext = 'jpeg'
+                            detected_ext = detect_inline_image_format(header)
                             if detected_ext is None:
                                 self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                 self._emit_error("Received image has invalid format")
@@ -2417,7 +3395,65 @@ class I2PChatCore:
 
                 elif msg_type == "S":
                     if "__SIGNAL__:" in body:
-                        if "MSG_ACK|" in body:
+                        if "BLINDBOX_ROOT|" in body:
+                            try:
+                                raw_tail = body.split("BLINDBOX_ROOT|", 1)[1].strip()
+                                parts = raw_tail.split("|")
+                                if len(parts) >= 2 and parts[0].isdigit():
+                                    incoming_epoch = int(parts[0])
+                                    root_hex = parts[1].strip()
+                                else:
+                                    # Backward compatibility for old single-field signal.
+                                    incoming_epoch = 1
+                                    root_hex = parts[0].strip()
+                                root_secret = bytes.fromhex(root_hex)
+                                if len(root_secret) != 32:
+                                    raise ValueError("invalid root secret length")
+                                if not self._blindbox_ready():
+                                    self._emit_error(
+                                        "BlindBox root received outside persistent locked-peer mode."
+                                    )
+                                elif self._blindbox_root_secret is None:
+                                    self._blindbox_root_secret = root_secret
+                                    self._blindbox_root_epoch = incoming_epoch
+                                    self._blindbox_root_created_at = int(time.time())
+                                    self._blindbox_root_send_index_base = int(
+                                        self._blindbox_state.send_index
+                                    )
+                                    self._save_blindbox_state()
+                                    self._emit_system(
+                                        f"BlindBox root secret received (epoch={incoming_epoch})"
+                                    )
+                                else:
+                                    if incoming_epoch > int(self._blindbox_root_epoch):
+                                        expires_at = int(time.time()) + int(
+                                            self._blindbox_previous_grace_seconds
+                                        )
+                                        self._blindbox_prev_roots.append(
+                                            {
+                                                "epoch": int(self._blindbox_root_epoch),
+                                                "secret": self._blindbox_root_secret,
+                                                "expires_at": expires_at,
+                                            }
+                                        )
+                                        self._blindbox_root_secret = root_secret
+                                        self._blindbox_root_epoch = incoming_epoch
+                                        self._blindbox_root_created_at = int(time.time())
+                                        self._blindbox_root_send_index_base = int(
+                                            self._blindbox_state.send_index
+                                        )
+                                        self._blindbox_prune_previous_roots()
+                                        self._save_blindbox_state()
+                                        self._emit_system(
+                                            f"BlindBox root rotated (epoch={incoming_epoch})"
+                                        )
+                                    else:
+                                        self._emit_system(
+                                            "Ignoring stale BlindBox root signal."
+                                        )
+                            except Exception as e:
+                                self._emit_error(f"Invalid BlindBox root signal: {e}")
+                        elif "MSG_ACK|" in body:
                             try:
                                 ack_id_raw = body.split("MSG_ACK|", 1)[1].strip().split("|", 1)[0]
                                 ack_id = int(ack_id_raw)
@@ -2587,8 +3623,8 @@ class I2PChatCore:
             if self._file_transfer_active:
                 return
             if self.incoming_info is not None:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self.receive_loop(connection))
+                # Re-enter receive_loop after this task exits and releases _recv_loop_active.
+                restart_after_timeout = True
                 return
             if self.conn == connection:
                 self._emit_error("Connection timed out (no data received)")
@@ -2597,8 +3633,26 @@ class I2PChatCore:
                 self._emit_error(f"Protocol Error: {e}")
         finally:
             self._recv_loop_active = False
+            skip_cleanup = False
+            if (
+                restart_after_timeout
+                and self.conn == connection
+                and self.incoming_info is not None
+                and not self._file_transfer_active
+            ):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self.receive_loop(connection))
+                except RuntimeError:
+                    pass
+                skip_cleanup = True
             # Не сбрасываем соединение если идёт передача или приём файла
-            if self.conn == connection and not self._file_transfer_active and self.incoming_info is None:
+            if (
+                not skip_cleanup
+                and self.conn == connection
+                and not self._file_transfer_active
+                and self.incoming_info is None
+            ):
                 self._cancel_handshake_watchdog()
                 if self._keepalive_task:
                     self._keepalive_task.cancel()
@@ -2636,8 +3690,8 @@ class I2PChatCore:
             except asyncio.TimeoutError:
                 pass
             except Exception:
-                if self.network_status == "visible":
-                    self._emit_status("local_ok")
+                # Keep current network status on transient lookup errors.
+                pass
 
             await asyncio.sleep(20)
 

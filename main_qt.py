@@ -1,9 +1,11 @@
 import asyncio
 import json
 import os
+import secrets
 import subprocess
 import shutil
 import sys
+import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, List, Optional
 
@@ -22,6 +24,7 @@ from i2p_chat_core import (
     is_valid_profile_name,
     render_braille,
     render_bw,
+    validate_image,
 )
 
 try:
@@ -69,6 +72,157 @@ def _resolve_local_asset(filename: str) -> Optional[str]:
 
 def _default_notify_sound_path() -> Optional[str]:
     return _resolve_local_asset(BUNDLED_NOTIFY_SOUND_REL)
+
+
+def _network_status_display(code: str) -> str:
+    """Человекочитаемая подпись для внутреннего кода сетевого статуса (core)."""
+    return {
+        "initializing": "starting",
+        # Локально/SAM готовы, но видимость адреса в сети не подтверждена (туннели/восстановление).
+        "local_ok": "pending",
+        "visible": "visible",
+    }.get(code, code)
+
+
+def _blindbox_status_bar_and_tooltip(
+    *,
+    enabled: bool,
+    state: str,
+    sync: str,
+    queue: str,
+    epoch: str,
+    privacy: str,
+    hint: str,
+    telemetry_ok: bool,
+) -> tuple[str, str]:
+    """
+    Короткая строка для статус-бара и текст для toolTip: что такое BlindBox + техника + подсказка.
+    """
+    preamble = (
+        "What is BlindBox?\n"
+        "Offline / delayed delivery: encrypted blobs are placed on shared I2P Blind Box "
+        "servers. When the peer is away, messages can still be queued "
+        "and picked up later while the app polls those boxes.\n"
+    )
+    tech = (
+        f"Technical: enabled={enabled} state={state} poller={sync} "
+        f"send_queue_index={queue} root_epoch={epoch} privacy_profile={privacy}"
+    )
+    tail = "\n".join(x for x in (tech, hint) if x)
+    tooltip_block = preamble + tail
+
+    if not telemetry_ok:
+        return "BlindBox: status unknown", tooltip_block
+    if not enabled:
+        return "BlindBox: off", tooltip_block
+    if state == "ready":
+        if sync == "poll":
+            return "BlindBox: on (polling Blind Boxes)", tooltip_block
+        return "BlindBox: on", tooltip_block
+    if state == "await-root":
+        return "BlindBox: need live chat once", tooltip_block
+    if state == "on":
+        return "BlindBox: starting…", tooltip_block
+    return "BlindBox: off", tooltip_block
+
+
+def _delivery_status_bar_and_tooltip(state: str) -> tuple[str, str]:
+    if state == "connecting-handshake":
+        return (
+            "Send: wait secure",
+            "Live connection exists, secure handshake is still in progress.",
+        )
+    if state == "online-live":
+        return (
+            "Send: live",
+            "Send route: live secure session (peer is connected).",
+        )
+    if state == "offline-ready":
+        return (
+            "Send: offline queue",
+            "Send route: BlindBox queue. Peer may be offline; message will be delivered later.",
+        )
+    if state == "await-live-root":
+        return (
+            "Send: need Connect once",
+            "BlindBox is enabled but not initialized for this peer yet. "
+            "Run one successful live secure Connect to bootstrap offline delivery.",
+        )
+    if state == "blindbox-needs-locked-peer":
+        return (
+            "Send: lock peer first",
+            "BlindBox requires a locked peer in the current profile.",
+        )
+    if state == "blindbox-needs-boxes":
+        return (
+            "Send: configure Blind Boxes",
+            "No Blind Box servers are configured. Set I2PCHAT_BLINDBOX_REPLICAS, "
+            "I2PCHAT_BLINDBOX_DEFAULT_REPLICAS, or I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE, "
+            "or unset I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS to use release defaults (2 boxes).",
+        )
+    if state == "blindbox-starting-local-session":
+        return (
+            "Send: wait local I2P",
+            "Local I2P session is still starting. Wait for Pending/Visible.",
+        )
+    if state == "blindbox-disabled-transient":
+        return (
+            "Send: live only",
+            "TRANSIENT profile: BlindBox offline queue is disabled.",
+        )
+    if state == "blindbox-disabled":
+        return (
+            "Send: live only",
+            "BlindBox is disabled by configuration (I2PCHAT_BLINDBOX_ENABLED=0).",
+        )
+    return ("Send: unavailable", "Delivery route is currently unavailable.")
+
+
+def _should_start_auto_connect_retry(
+    *,
+    reason: str,
+    has_running_task: bool,
+    now_mono: float,
+    last_started_mono: float,
+    cooldown_sec: float = 6.0,
+) -> bool:
+    auto_connect_reasons = {
+        "blindbox-disabled",
+        "blindbox-await-root",
+        "blindbox-needs-boxes",
+        "transient-profile",
+        "send-failed",
+    }
+    if reason not in auto_connect_reasons:
+        return False
+    if has_running_task:
+        return False
+    return (now_mono - last_started_mono) >= cooldown_sec
+
+
+def _save_pasted_qimage_to_images_dir(image: QtGui.QImage) -> Optional[str]:
+    """Сохранить картинку из буфера в каталог images/ как PNG (универсально для validate_image)."""
+    if image.isNull():
+        return None
+    img_dir = get_images_dir()
+    try:
+        os.makedirs(img_dir, exist_ok=True)
+    except OSError:
+        return None
+    name = f"paste_{int(time.time() * 1000)}_{secrets.token_hex(4)}.png"
+    path = os.path.join(img_dir, name)
+    if image.save(path, "PNG"):
+        return path
+    return None
+
+
+def _compose_bar_input_height_px(edit: QtWidgets.QPlainTextEdit, *, lines: int = 2) -> int:
+    """Высота поля ввода под заданное число видимых строк (padding из QSS QPlainTextEdit 8+8)."""
+    fm = edit.fontMetrics()
+    line_px = max(int(fm.lineSpacing()), int(fm.height()))
+    dm = int(float(edit.document().documentMargin()) * 2.0)
+    vpad = 16  # padding: 8px сверху и снизу в темах для QPlainTextEdit
+    return max(48, vpad + dm + line_px * lines + 4)
 
 
 def _is_path_within_directory(path: str, directory: str) -> bool:
@@ -194,6 +348,26 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QPushButton#PrimaryActionButton:hover { background-color: #2d95ff; }
             QPushButton#PrimaryActionButton:pressed { background-color: #0076e9; }
+            QPushButton#ConnectPeerButton {
+                background-color: #0a84ff;
+                color: #ffffff;
+            }
+            QPushButton#ConnectPeerButton:hover { background-color: #2d95ff; }
+            QPushButton#ConnectPeerButton:pressed { background-color: #0076e9; }
+            QPushButton#ConnectPeerButton:disabled {
+                background-color: #c8d9f2;
+                color: rgba(255, 255, 255, 0.82);
+            }
+            QPushButton#DisconnectPeerButton {
+                background-color: #e6ebf3;
+                color: #b94b45;
+            }
+            QPushButton#DisconnectPeerButton:hover { background-color: #dfe6f0; }
+            QPushButton#DisconnectPeerButton:pressed { background-color: #d5deeb; }
+            QPushButton#DisconnectPeerButton:disabled {
+                background-color: #eef1f6;
+                color: rgba(185, 75, 69, 0.38);
+            }
             QPushButton#SecondaryActionButton {
                 background-color: #f3f5f9;
                 color: #3f4757;
@@ -227,19 +401,19 @@ THEMES: dict[str, dict[str, object]] = {
                 background-color: #d7e0ec;
             }
             QToolButton#ThemeSwitchButton {
-                background-color: #ffffff;
+                background-color: rgba(255, 255, 255, 0.85);
                 border: none;
-                border-radius: 9px;
-                color: #333845;
-                padding: 2px;
+                border-radius: 10px;
+                color: #525966;
+                padding: 0px;
                 min-width: 30px;
                 min-height: 30px;
             }
             QToolButton#ThemeSwitchButton:hover {
-                background-color: #f6f8fc;
+                background-color: #ffffff;
             }
             QToolButton#ThemeSwitchButton:pressed {
-                background-color: #edf1f8;
+                background-color: #f1f4fa;
             }
             QLabel { color: #1d1d1f; }
             QLabel#StatusLabel {
@@ -428,6 +602,26 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QPushButton#PrimaryActionButton:hover { background-color: #3a9eff; }
             QPushButton#PrimaryActionButton:pressed { background-color: #0069d9; }
+            QPushButton#ConnectPeerButton {
+                background-color: #0a84ff;
+                color: #ffffff;
+            }
+            QPushButton#ConnectPeerButton:hover { background-color: #3a9eff; }
+            QPushButton#ConnectPeerButton:pressed { background-color: #0069d9; }
+            QPushButton#ConnectPeerButton:disabled {
+                background-color: rgba(10, 132, 255, 0.32);
+                color: rgba(255, 255, 255, 0.5);
+            }
+            QPushButton#DisconnectPeerButton {
+                background-color: rgba(255, 255, 255, 0.10);
+                color: #ff8f88;
+            }
+            QPushButton#DisconnectPeerButton:hover { background-color: rgba(255, 255, 255, 0.16); }
+            QPushButton#DisconnectPeerButton:pressed { background-color: rgba(255, 255, 255, 0.22); }
+            QPushButton#DisconnectPeerButton:disabled {
+                background-color: rgba(255, 255, 255, 0.05);
+                color: rgba(255, 143, 136, 0.32);
+            }
             QPushButton#SecondaryActionButton {
                 background-color: rgba(255, 255, 255, 0.10);
                 color: #d4dbe6;
@@ -455,19 +649,19 @@ THEMES: dict[str, dict[str, object]] = {
             QToolButton#MoreActionsButton:hover { background-color: rgba(255, 255, 255, 0.14); }
             QToolButton#MoreActionsButton:pressed { background-color: rgba(255, 255, 255, 0.18); }
             QToolButton#ThemeSwitchButton {
-                background-color: rgba(255, 255, 255, 0.08);
+                background-color: rgba(255, 255, 255, 0.06);
                 border: none;
-                border-radius: 9px;
-                color: #c6cfdb;
-                padding: 2px;
+                border-radius: 10px;
+                color: #9fa1b5;
+                padding: 0px;
                 min-width: 30px;
                 min-height: 30px;
             }
             QToolButton#ThemeSwitchButton:hover {
-                background-color: rgba(255, 255, 255, 0.14);
+                background-color: rgba(255, 255, 255, 0.10);
             }
             QToolButton#ThemeSwitchButton:pressed {
-                background-color: rgba(255, 255, 255, 0.18);
+                background-color: rgba(255, 255, 255, 0.14);
             }
             QLabel { color: #f5f5f7; }
             QLabel#StatusLabel {
@@ -875,8 +1069,9 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     BUBBLE_RADIUS = 12
     
     # Настройки для inline-изображений
-    IMAGE_MAX_WIDTH = 300
-    IMAGE_MAX_HEIGHT = 200
+    # Макс. размер превью в бабле (масштабирование с сохранением пропорций).
+    IMAGE_MAX_WIDTH = 560
+    IMAGE_MAX_HEIGHT = 420
     
     # Кэш для QPixmap (путь -> pixmap)
     _pixmap_cache: dict = {}
@@ -926,18 +1121,33 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         self._pixmap_cache[real_path] = pixmap
         return pixmap
 
+    def _text_max_line_advance(self, text: str, metrics: QtGui.QFontMetrics) -> int:
+        """Макс. ширина среди явных строк (по \\n); для одной строки = её длина."""
+        if not text:
+            return int(metrics.horizontalAdvance(" "))
+        best = 0
+        for line in text.split("\n"):
+            w = int(metrics.horizontalAdvance(line if line else " "))
+            best = max(best, w)
+        return best if best > 0 else int(metrics.horizontalAdvance(" "))
+
     def _bubble_width(self, cell_width: int, text: str, font: QtGui.QFont) -> int:
         """
         Ширина бабла:
-        - не меньше 40% строки (чтобы короткие фразы не выглядели «таблеткой» по центру)
-        - не больше 75% строки (оставляем «воздух» по бокам)
-        - но при этом ограничена реальной длиной текста + отступы
+        - не больше 75% строки списка
+        - по ширине текста: максимальная из строк (перевод строки = несколько строк)
+        - для одной короткой строки — минимум ~40% (визуально «таблетка»)
+        - для многострочных сообщений — не растягиваем до 40%: только контент + небольшой пол
         """
         metrics = QtGui.QFontMetrics(font)
-        text_w = metrics.horizontalAdvance(text or " ") + self.PADDING_X * 4
-        min_w = int(cell_width * 0.4)
+        content_px = self._text_max_line_advance(text, metrics) + self.PADDING_X * 4
         max_w = int(cell_width * 0.75)
-        return max(min_w, min(max_w, text_w))
+        multiline = "\n" in (text or "")
+        if multiline:
+            min_w = max(72, int(cell_width * 0.12))
+        else:
+            min_w = int(cell_width * 0.4)
+        return max(min_w, min(max_w, content_px))
 
     def paint(
         self,
@@ -1533,12 +1743,54 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
     Отправка: Shift+Enter (везде), а также Ctrl+Enter (Windows/Linux) или ⌘+Enter (macOS).
     """
     sendRequested = QtCore.pyqtSignal()
+    # Путь к изображению после вставки из буфера (картинка или локальный файл)
+    imagePasteReady = QtCore.pyqtSignal(str)
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._theme_id = THEME_DEFAULT
         self._context_popup: Optional["ActionsPopup"] = None
         self._context_popup_suppress_until_ms = 0
+
+    def canPaste(self) -> bool:  # type: ignore[override]
+        mime = QtWidgets.QApplication.clipboard().mimeData()
+        if mime is not None and mime.hasImage():
+            return True
+        return super().canPaste()
+
+    def paste(self) -> None:  # type: ignore[override]
+        mime = QtWidgets.QApplication.clipboard().mimeData()
+        if mime is not None and mime.hasImage():
+            self.insertFromMimeData(mime)
+            return
+        super().paste()
+
+    def insertFromMimeData(self, source: QtGui.QMimeData) -> None:  # type: ignore[override]
+        if source.hasImage():
+            raw = source.imageData()
+            qimg = QtGui.QImage()
+            if isinstance(raw, QtGui.QImage):
+                qimg = raw
+            elif isinstance(raw, QtGui.QPixmap):
+                qimg = raw.toImage()
+            if not qimg.isNull():
+                path = _save_pasted_qimage_to_images_dir(qimg)
+                if path:
+                    self.imagePasteReady.emit(path)
+                return
+        if source.hasUrls():
+            for url in source.urls():
+                if not url.isLocalFile():
+                    continue
+                fpath = url.toLocalFile()
+                low = fpath.lower()
+                if not low.endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    continue
+                ok, _, _ = validate_image(fpath)
+                if ok:
+                    self.imagePasteReady.emit(fpath)
+                    return
+        super().insertFromMimeData(source)
 
     def set_theme(self, theme_id: str) -> None:
         self._theme_id = _resolve_theme(theme_id)
@@ -2400,7 +2652,11 @@ class ProfileSelectDialog(QtWidgets.QDialog):
             return None
         return ensure_valid_profile_name(text)
 
+
 class ChatWindow(QtWidgets.QMainWindow):
+    # Ниже этого порога ширины лейбла статуса показывается сокращённая строка.
+    _STATUS_LABEL_COMPACT_PX = 700
+    _STATUS_ROW_HEIGHT_PX = 30
     def __init__(self, profile: Optional[str] = None, theme_id: str = THEME_DEFAULT) -> None:
         super().__init__()
         self.profile = profile or "default"
@@ -2435,26 +2691,52 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         self.status_label.setWordWrap(False)
         self.status_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Minimum,
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
         )
+        # Важно для узких окон: строка статуса не должна задавать min-width окна.
+        self.status_label.setMinimumWidth(0)
+        self.status_label.setFixedHeight(self._STATUS_ROW_HEIGHT_PX)
         self.theme_switch_button = QtWidgets.QToolButton(self)
         self.theme_switch_button.setObjectName("ThemeSwitchButton")
         self.theme_switch_button.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.theme_switch_button.setAutoRaise(False)
+        self.theme_switch_button.setFixedHeight(self._STATUS_ROW_HEIGHT_PX)
+        self.theme_switch_button.setFixedWidth(self._STATUS_ROW_HEIGHT_PX)
         self.theme_switch_button.clicked.connect(self.on_theme_switch_clicked)
         self.status_row = QtWidgets.QWidget(self)
         status_row_layout = QtWidgets.QHBoxLayout(self.status_row)
         status_row_layout.setContentsMargins(0, 0, 0, 0)
         status_row_layout.setSpacing(6)
         status_row_layout.addWidget(self.status_label, 1)
-        status_row_layout.addWidget(self.theme_switch_button)
-        self._status_expanded_text: str = "Net: initializing"
-        self._status_compact_text: str = "Net: initializing"
+        status_row_layout.addWidget(
+            self.theme_switch_button,
+            0,
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
+        )
+        # Строка статус-бара (средняя детализация); что такое BlindBox — в toolTip.
+        self._status_line_text: str = (
+            "Net:starting | Prof:default (T) | Link:offline | Peer:none | St:none | Sec:off | "
+            "BlindBox: off | ACKdrop:0"
+        )
+        self._status_line_compact_text: str = (
+            "Net:starting | offline | none | Sec:off | BB:off | ACKdrop:0"
+        )
+        self._status_tooltip_text: str = self._status_line_text
         self._last_status: str = "initializing"
+        self._status_focus_signature: Optional[tuple[str, str, str, str]] = None
+        self._status_force_expand_until_mono: float = 0.0
+        self._status_event_text: str = ""
+        self._status_focus_timer = QtCore.QTimer(self)
+        self._status_focus_timer.setSingleShot(True)
+        self._status_focus_timer.timeout.connect(self._on_status_focus_timeout)
         self._transfer_row: Optional[int] = None
         self._transfer_is_image: bool = False
         self._active_file_offer_boxes: list[QtWidgets.QMessageBox] = []
+        self._auto_retry_send_task: Optional[asyncio.Task[None]] = None
+        self._last_auto_retry_started_at: float = 0.0
+        self._last_error_text: str = ""
+        self._last_error_ts: float = 0.0
 
         # Таймер для анимации прогресс-бара
         self._transfer_timer = QtCore.QTimer(self)
@@ -2494,24 +2776,24 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.input_edit = MessageInputEdit(self)
         if sys.platform == "darwin":
             self.input_edit.setPlaceholderText(
-                "Type message. Enter for new line, Shift+Enter or ⌘+Enter to send."
+                "Message · Enter new line · Shift+Enter or ⌘+Enter to send"
             )
         else:
             self.input_edit.setPlaceholderText(
-                "Type message. Enter for new line, Shift+Enter or Ctrl+Enter to send."
+                "Message · Enter new line · Shift+Enter or Ctrl+Enter to send"
             )
-        self.input_edit.setMinimumHeight(52)
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
         self.input_edit.setFont(font)
 
         self.send_button = QtWidgets.QPushButton("Send", self)
         self.send_button.setObjectName("PrimaryActionButton")
-        self.send_button.setMinimumHeight(52)
 
-        fixed_height = 52 if sys.platform == "darwin" else 56
-        self.input_edit.setFixedHeight(fixed_height)
-        self.send_button.setFixedHeight(fixed_height)
+        compose_h = _compose_bar_input_height_px(self.input_edit, lines=2)
+        self.input_edit.setMinimumHeight(compose_h)
+        self.input_edit.setFixedHeight(compose_h)
+        self.send_button.setMinimumHeight(compose_h)
+        self.send_button.setFixedHeight(compose_h)
         input_layout.addWidget(self.input_edit)
         input_layout.addWidget(self.send_button)
 
@@ -2532,9 +2814,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
 
         self.connect_button = QtWidgets.QPushButton("Connect", self)
-        self.connect_button.setObjectName("PrimaryActionButton")
+        self.connect_button.setObjectName("ConnectPeerButton")
         self.disconnect_button = QtWidgets.QPushButton("Disconnect", self)
-        self.disconnect_button.setObjectName("DangerActionButton")
+        self.disconnect_button.setObjectName("DisconnectPeerButton")
 
         self.more_toolbar_button = QtWidgets.QToolButton(self)
         self.more_toolbar_button.setObjectName("MoreActionsButton")
@@ -2585,8 +2867,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         # сигналы
         self.send_button.clicked.connect(self.on_send_clicked)
         self.input_edit.sendRequested.connect(self.on_send_clicked)
+        self.input_edit.imagePasteReady.connect(self.on_clipboard_image_ready)
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
+        self.addr_edit.textChanged.connect(lambda _t: self._refresh_connection_buttons())
         self.more_actions_popup.add_action("Load profile (.dat)", self.on_load_profile_clicked)
         self.more_actions_popup.add_action("Send picture", self.on_send_pic_clicked)
         self.more_actions_popup.add_action("Send file", self.on_send_file_clicked)
@@ -2600,6 +2884,64 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.core = self._create_core(self.profile)
         self._apply_theme(self.theme_id, persist=False)
         self.refresh_status_label()
+        self._refresh_connection_buttons()
+
+    def _peer_target_available(self) -> bool:
+        return bool(self.addr_edit.text().strip()) or bool(self.core.stored_peer)
+
+    def _refresh_connection_buttons(self) -> None:
+        """Connect — когда сеть уже Pending/Visible, есть адрес и нет сессии; Disconnect — при активной сессии."""
+        connected = self.core.conn is not None
+        busy = self.core.is_outbound_connect_busy()
+        has_target = self._peer_target_available()
+        # Исходящий I2P-connect имеет смысл только после local_ok (в UI — pending) или visible.
+        network_ready = self.core.network_status in ("local_ok", "visible")
+        can_connect = (
+            (not connected) and (not busy) and has_target and network_ready
+        )
+        self.connect_button.setEnabled(can_connect)
+        if connected:
+            c_tip = "Already connected — use Disconnect to end the session."
+        elif busy:
+            c_tip = "Connecting… please wait."
+        elif not has_target:
+            c_tip = "Enter a peer .b32.i2p address (or lock profile to a stored peer)."
+        elif not network_ready:
+            c_tip = (
+                "Wait until status shows Pending or Visible — I2P session is still starting."
+            )
+        else:
+            delivery_state = str(self.core.get_delivery_telemetry().get("state", "unknown"))
+            if delivery_state == "offline-ready":
+                c_tip = (
+                    "Optional: Connect starts a live chat. Send can already queue offline via BlindBox."
+                )
+            elif delivery_state == "await-live-root":
+                c_tip = (
+                    "Required once: Connect a live secure session to initialize BlindBox root."
+                )
+            else:
+                c_tip = ""
+        self.connect_button.setToolTip(c_tip)
+        can_disconnect = connected
+        self.disconnect_button.setEnabled(can_disconnect)
+        self.disconnect_button.setToolTip(
+            "" if can_disconnect else "No active connection."
+        )
+        self._refresh_send_controls()
+
+    def _refresh_send_controls(self) -> None:
+        delivery = self.core.get_delivery_telemetry()
+        state = str(delivery.get("state", "unknown"))
+        short_route, route_tip = _delivery_status_bar_and_tooltip(state)
+        if state == "offline-ready" and not bool(delivery.get("secure_live")):
+            self.send_button.setText("Send\noffline")
+        else:
+            self.send_button.setText("Send")
+        self.send_button.setToolTip(route_tip)
+        self.input_edit.setToolTip(
+            "Current mode: " + short_route + ". " + route_tip
+        )
 
     def _append_item(self, item: ChatItem) -> None:
         """Добавить элемент в модель и прокрутить к нему."""
@@ -2615,6 +2957,7 @@ class ChatWindow(QtWidgets.QMainWindow):
     def handle_status(self, status: str) -> None:
         self._last_status = status
         self.refresh_status_label()
+        self._refresh_connection_buttons()
 
     @QtCore.pyqtSlot(object)
     def handle_message(self, msg: ChatMessage) -> None:
@@ -2642,6 +2985,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Handshake-события приходят как system/success сообщения;
         # обновляем статус сразу, чтобы Secure не "залипал" на off.
         self.refresh_status_label()
+        self._refresh_connection_buttons()
 
     @QtCore.pyqtSlot(object)
     def handle_notify(self, msg: ChatMessage) -> None:
@@ -2702,10 +3046,23 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def handle_system(self, text: str) -> None:
         self._append_item(ChatItem(kind="system", timestamp="", sender="SYSTEM", text=text))
+        self.refresh_status_label()
+        self._refresh_connection_buttons()
 
     @QtCore.pyqtSlot(str)
     def handle_error(self, text: str) -> None:
+        now = time.monotonic()
+        # Guard against repeated identical transport errors flooding the chat.
+        if text == self._last_error_text and (now - self._last_error_ts) < 6.0:
+            self.refresh_status_label()
+            self._refresh_connection_buttons()
+            return
+        self._last_error_text = text
+        self._last_error_ts = now
         self._append_item(ChatItem(kind="error", timestamp="", sender="ERROR", text=text))
+        self.refresh_status_label()
+        self._focus_status_bar(duration_ms=4600, event_text=f"Error: {text}")
+        self._refresh_connection_buttons()
 
     def _animate_transfer(self) -> None:
         if self._transfer_row is not None:
@@ -2934,6 +3291,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         if peer:
             self.addr_edit.setText(peer)
         self.refresh_status_label()
+        self._refresh_connection_buttons()
 
     def _create_core(self, profile: Optional[str]) -> I2PChatCore:
         core = I2PChatCore(
@@ -3085,6 +3443,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.chat_view.set_theme(self.theme_id)
         self.input_edit.set_theme(self.theme_id)
         self.addr_edit.set_theme(self.theme_id)
+        self._refresh_connection_buttons()
 
     @QtCore.pyqtSlot()
     def on_theme_switch_clicked(self) -> None:
@@ -3139,24 +3498,48 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         return answer == QtWidgets.QMessageBox.StandardButton.Yes
 
-    def _set_status_text(self, expanded_text: str, compact_text: str) -> None:
-        """Поставить статус в compact/expanded режиме с безопасным elide."""
-        self._status_expanded_text = expanded_text
-        self._status_compact_text = compact_text
-        prefer_expanded = self.status_label.width() >= 760
-        text = expanded_text if prefer_expanded else compact_text
-        available = max(40, self.status_label.width() - 14)
+    def _set_status_text(
+        self, line_text_full: str, line_text_compact: str, tooltip_text: str
+    ) -> None:
+        """Полная и компактная строка; в лейбле — по ширине окна; toolTip — полная диагностика."""
+        self._status_line_text = line_text_full
+        self._status_line_compact_text = line_text_compact
+        self._status_tooltip_text = tooltip_text
+        self._update_status_label_visible_text()
+
+    def _on_status_focus_timeout(self) -> None:
+        self._status_event_text = ""
+        self._status_force_expand_until_mono = 0.0
+        self._update_status_label_visible_text()
+
+    def _focus_status_bar(self, duration_ms: int = 2800, event_text: str = "") -> None:
+        self._status_event_text = event_text.strip()
+        self._status_force_expand_until_mono = time.monotonic() + max(1.2, duration_ms / 1000.0)
+        self._status_focus_timer.start(max(1200, int(duration_ms)))
+        self._update_status_label_visible_text()
+
+    def _update_status_label_visible_text(self) -> None:
+        w = self.status_label.width()
+        now = time.monotonic()
+        forced_expanded = now < self._status_force_expand_until_mono
+        if self._status_event_text and forced_expanded:
+            raw = self._status_event_text
+        else:
+            use_compact = (0 < w < self._STATUS_LABEL_COMPACT_PX) and (not forced_expanded)
+            raw = self._status_line_compact_text if use_compact else self._status_line_text
+        available = max(40, w - 14)
         elided = self.status_label.fontMetrics().elidedText(
-            text,
+            raw,
             QtCore.Qt.TextElideMode.ElideRight,
             available,
         )
         self.status_label.setText(elided)
-        self.status_label.setToolTip(expanded_text if elided != text else "")
+        tip = self._status_tooltip_text.strip() if self._status_tooltip_text else ""
+        self.status_label.setToolTip(tip)
 
     def refresh_status_label(self) -> None:
         """Обновить строку статуса с учётом профиля и persist-режима."""
-        status = self._last_status
+        status = _network_status_display(self._last_status)
         mode = "PERSISTENT" if self.profile != "default" else "TRANSIENT"
         ack_drop_total = 0
         try:
@@ -3179,24 +3562,117 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         link_state = "online" if self.core.conn else "offline"
         secure_state = "on" if self.core.handshake_complete else "off"
+        blindbox_state = "off"
+        blindbox_sync = "idle"
+        blindbox_queue = "0"
+        blindbox_epoch = "0"
+        blindbox_hint = ""
+        bb_enabled = False
+        telemetry_ok = True
+        try:
+            bb = self.core.get_blindbox_telemetry()
+            bb_profile = str(bb.get("privacy_profile", "high"))
+            blindbox_epoch = str(int(bb.get("root_epoch", 0)))
+            bb_enabled = bool(bb.get("enabled"))
+            bb_enabled_source = str(bb.get("enabled_source", "default"))
+            bb_replicas_source = str(
+                bb.get("blind_boxes_source") or bb.get("replicas_source", "none")
+            )
+            if bb.get("enabled"):
+                if bb.get("ready"):
+                    if bb.get("has_root_secret"):
+                        blindbox_state = "ready"
+                    else:
+                        blindbox_state = "await-root"
+                        blindbox_hint = "waiting for initial BlindBox root exchange over a secure live session"
+                else:
+                    blindbox_state = "on"
+                    if not self.core.stored_peer:
+                        blindbox_hint = "lock profile to a peer to activate BlindBox"
+                    elif int(bb.get("blind_boxes", bb.get("replicas", 0))) <= 0:
+                        blindbox_hint = (
+                            "configure Blind Box servers via I2PCHAT_BLINDBOX_REPLICAS "
+                            "or I2PCHAT_BLINDBOX_DEFAULT_REPLICAS/"
+                            "I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE "
+                            "(or unset I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS for release defaults)"
+                        )
+                    elif bb_replicas_source == "release-builtin":
+                        blindbox_hint = "using release built-in Blind Box pair (i2p_chat_core.py)"
+                    elif bb_replicas_source == "local-auto":
+                        blindbox_hint = (
+                            "using local Blind Box fallback (single-host, "
+                            "I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1)"
+                        )
+                    else:
+                        blindbox_hint = "initializing local BlindBox runtime"
+                blindbox_sync = "poll" if bb.get("poller_running") else "idle"
+                blindbox_queue = str(int(bb.get("send_index", 0)))
+            else:
+                if self.profile == "default":
+                    blindbox_hint = "BlindBox is disabled in TRANSIENT mode"
+                elif bb_enabled_source == "env-disabled":
+                    blindbox_hint = "BlindBox is disabled by I2PCHAT_BLINDBOX_ENABLED=0"
+                else:
+                    blindbox_hint = "BlindBox disabled by runtime policy"
+        except Exception:
+            telemetry_ok = False
+            bb_enabled = False
+            blindbox_state = "off"
+            blindbox_sync = "idle"
+            blindbox_queue = "0"
+            blindbox_hint = "BlindBox telemetry unavailable"
+            bb_profile = "high"
+            blindbox_epoch = "0"
+        blindbox_bar, blindbox_tooltip = _blindbox_status_bar_and_tooltip(
+            enabled=bb_enabled,
+            state=blindbox_state,
+            sync=blindbox_sync,
+            queue=blindbox_queue,
+            epoch=blindbox_epoch,
+            privacy=bb_profile,
+            hint=blindbox_hint,
+            telemetry_ok=telemetry_ok,
+        )
+        delivery = self.core.get_delivery_telemetry()
+        delivery_state = str(delivery.get("state", "unknown"))
+        delivery_bar, delivery_tooltip = _delivery_status_bar_and_tooltip(delivery_state)
         current_peer_disp = _short_addr(self.core.current_peer_addr)
         stored_disp = _short_addr(stored)
         ack_part = f"ACKdrop:{ack_drop_total}" if ack_drop_total > 0 else "ACKdrop:0"
 
-        expanded_status = (
-            f"Net: {status} | Profile: {self.profile} ({mode}) | Link: {link_state} | "
-            f"Peer: {current_peer_disp} | Stored: {stored_disp} | Secure: {secure_state} | "
+        header_tooltip = (
+            f"Net: {status} | Profile: {self.profile} ({mode}) | Link: {link_state}\n"
+            f"Peer: {current_peer_disp} | Stored: {stored_disp} | Secure: {secure_state}\n"
             f"{ack_part}"
         )
-        compact_status = (
-            f"Net: {status} | {link_state} | Peer: {current_peer_disp} | "
-            f"Secure: {secure_state} | {ack_part}"
+        tooltip_text = f"{header_tooltip}\n\n{delivery_tooltip}\n\n{blindbox_tooltip}"
+
+        # Средняя строка в UI: BlindBox — короткая человекочитаемая фраза; детали в toolTip.
+        mode_tag = "P" if self.profile != "default" else "T"
+        status_line = (
+            f"Net:{status} | Prof:{self.profile} ({mode_tag}) | Link:{link_state} | "
+            f"Peer:{current_peer_disp} | St:{stored_disp} | Sec:{secure_state} | "
+            f"{delivery_bar} | {blindbox_bar} | {ack_part}"
         )
-        self._set_status_text(expanded_status, compact_status)
+        ack_compact = (
+            f" | {ack_part}" if ack_drop_total > 0 else ""
+        )
+        status_line_compact = (
+            f"Net:{status} | {link_state} | {current_peer_disp} | "
+            f"Sec:{secure_state} | Tx:{delivery_state} | BB:{blindbox_state}{ack_compact}"
+        )
+        self._set_status_text(status_line, status_line_compact, tooltip_text)
+        current_signature = (status, link_state, secure_state, delivery_state)
+        if (
+            self._status_focus_signature is not None
+            and current_signature != self._status_focus_signature
+        ):
+            self._focus_status_bar(duration_ms=2800)
+        self._status_focus_signature = current_signature
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
-        self._set_status_text(self._status_expanded_text, self._status_compact_text)
+        self._update_status_label_visible_text()
 
     # ----- обработчики UI -----
 
@@ -3205,8 +3681,72 @@ class ChatWindow(QtWidgets.QMainWindow):
         text = self.input_edit.toPlainText().strip()
         if not text:
             return
-        self.input_edit.clear()
-        asyncio.create_task(self.core.send_text(text))
+        asyncio.create_task(self._send_text_ui_flow(text))
+
+    async def _send_text_ui_flow(self, text: str) -> None:
+        result = await self.core.send_text(text)
+        if result.accepted:
+            self.input_edit.clear()
+        else:
+            # Keep text in the input when blocked (especially await-live-root),
+            # so user can press Connect and retry without retyping.
+            self.input_edit.setPlainText(text)
+            cursor = self.input_edit.textCursor()
+            cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+            self.input_edit.setTextCursor(cursor)
+            self.input_edit.setFocus()
+            if _should_start_auto_connect_retry(
+                reason=result.reason,
+                has_running_task=self._auto_retry_send_task is not None,
+                now_mono=time.monotonic(),
+                last_started_mono=self._last_auto_retry_started_at,
+            ):
+                self._last_auto_retry_started_at = time.monotonic()
+                self._auto_retry_send_task = asyncio.create_task(
+                    self._auto_connect_and_retry_send(text)
+                )
+        self.refresh_status_label()
+        self._refresh_connection_buttons()
+
+    async def _auto_connect_and_retry_send(self, text: str) -> None:
+        """Single-click flow: try live connect, then retry send once."""
+        try:
+            addr = self.addr_edit.text().strip() or (self.core.stored_peer or "")
+            if not addr:
+                self.handle_system("Auto-connect failed, message kept in input.")
+                return
+            self.handle_system("Auto-connect started for this message...")
+            if not self.core.conn and not self.core.is_outbound_connect_busy():
+                await self.core.connect_to_peer(addr)
+            deadline = time.monotonic() + 75.0
+            while time.monotonic() < deadline:
+                if self.core.conn is not None and self.core.handshake_complete:
+                    break
+                if (
+                    self.core.conn is None
+                    and not self.core.is_outbound_connect_busy()
+                ):
+                    self.handle_system("Auto-connect failed, message kept in input.")
+                    return
+                await asyncio.sleep(0.25)
+            if self.core.conn is not None and self.core.handshake_complete:
+                retry = await self.core.send_text(text)
+                if retry.accepted:
+                    self.input_edit.clear()
+                    self.handle_system("Auto-connect succeeded, message sent.")
+                else:
+                    self.input_edit.setPlainText(text)
+                    cursor = self.input_edit.textCursor()
+                    cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+                    self.input_edit.setTextCursor(cursor)
+                    self.input_edit.setFocus()
+                    self.handle_system("Auto-connect finished, but send is still blocked. Message kept.")
+            else:
+                self.handle_system("Auto-connect timed out, message kept in input.")
+        finally:
+            self._auto_retry_send_task = None
+            self.refresh_status_label()
+            self._refresh_connection_buttons()
 
     @QtCore.pyqtSlot()
     def on_connect_clicked(self) -> None:
@@ -3222,10 +3762,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                 )
                 return
         asyncio.create_task(self.core.connect_to_peer(addr))
+        QtCore.QTimer.singleShot(0, self._refresh_connection_buttons)
 
     @QtCore.pyqtSlot()
     def on_disconnect_clicked(self) -> None:
         asyncio.create_task(self.core.disconnect())
+        QtCore.QTimer.singleShot(0, self._refresh_connection_buttons)
 
     @QtCore.pyqtSlot()
     def on_cancel_transfer(self) -> None:
@@ -3279,6 +3821,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         try:
             self.core.save_stored_peer(self.core.current_peer_addr)
+            asyncio.create_task(self.core.ensure_blindbox_runtime_started())
             self.handle_system(
                 f"Identity {self.profile} is now locked to this peer."
             )
@@ -3355,6 +3898,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(f"I2PChat @ {clean_profile}")
         self.core = self._create_core(self.profile)
         self.refresh_status_label()
+        self._refresh_connection_buttons()
         await self.core.init_session()
 
     @QtCore.pyqtSlot()
@@ -3372,9 +3916,25 @@ class ChatWindow(QtWidgets.QMainWindow):
             self,
             "Select image to send",
             "",
-            "Images (*.png *.jpg *.jpeg);;All Files (*)",
+            "Images (*.png *.jpg *.jpeg *.webp);;All Files (*)",
         )
         if not path:
+            return
+        asyncio.create_task(self.core.send_image(path))
+
+    @QtCore.pyqtSlot(str)
+    def on_clipboard_image_ready(self, path: str) -> None:
+        """Вставка изображения из буфера или путь к локальному файлу из clipboard URLs."""
+        ok, err, _ = validate_image(path)
+        if not ok:
+            if _is_path_within_directory(path, get_images_dir()) and os.path.basename(
+                path
+            ).startswith("paste_"):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            self.handle_error(err or "Invalid image from clipboard")
             return
         asyncio.create_task(self.core.send_image(path))
 
