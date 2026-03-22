@@ -90,3 +90,31 @@
 - меньше ручных шагов для пользователя;
 - меньше служебного шума в чате;
 - более предсказуемая и понятная доставка (online/offline) с сохранением приватностных свойств BlindBox.
+
+---
+
+### Security hardening update (после v0.6.0)
+
+Дополнительно после релиза `v0.6.0` выполнено усиление безопасности (кроме `M-05`, оставленного отдельно):
+
+- **CI dependency audit (M-04):**
+  - основной gate переведён на `pip-audit -r requirements.txt` (lockfile-first);
+  - `pip-audit -r requirements.in` оставлен как дополнительный сигнал.
+
+- **Редакция чувствительных SAM-логов (M-01):**
+  - debug-лог SAM-ответов теперь проходит redaction чувствительных полей (`PRIV`, `DESTINATION` и др.).
+
+- **BlindBox local hardening (M-02/M-03):**
+  - в локальной реплике добавлен опциональный auth token для `PUT/GET`;
+  - добавлен лимит записей (`max_entries`) с ответом `FULL`;
+  - добавлен strict режим `I2PCHAT_BLINDBOX_REQUIRE_SAM=1` (запрет direct `host:port`);
+  - добавлено явное предупреждение при активном non-SAM транспорте.
+
+- **Local privacy hardening (L-01/L-02):**
+  - в UI/логах убраны абсолютные пути в чувствительных местах (basename-only);
+  - Windows stdout fallback уведомлений больше не печатает текст сообщений.
+
+- **Тесты и документация:**
+  - добавлены/обновлены тесты: `tests/test_aiosam_redaction.py`, `tests/test_blindbox_client.py`, `tests/test_blindbox_core_telemetry.py`;
+  - обновлены отчёты `AUDIT_EN.md`, `AUDIT_RU.md`;
+  - добавлен `REMEDIATION_PLAN.md`.
