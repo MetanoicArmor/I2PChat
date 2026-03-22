@@ -649,19 +649,19 @@ THEMES: dict[str, dict[str, object]] = {
             QToolButton#MoreActionsButton:hover { background-color: rgba(255, 255, 255, 0.14); }
             QToolButton#MoreActionsButton:pressed { background-color: rgba(255, 255, 255, 0.18); }
             QToolButton#ThemeSwitchButton {
-                background-color: rgba(255, 255, 255, 0.06);
+                background-color: rgba(255, 255, 255, 0.08);
                 border: none;
-                border-radius: 10px;
-                color: #9fa1b5;
-                padding: 0px;
+                border-radius: 9px;
+                color: #c6cfdb;
+                padding: 2px;
                 min-width: 30px;
                 min-height: 30px;
             }
             QToolButton#ThemeSwitchButton:hover {
-                background-color: rgba(255, 255, 255, 0.10);
+                background-color: rgba(255, 255, 255, 0.14);
             }
             QToolButton#ThemeSwitchButton:pressed {
-                background-color: rgba(255, 255, 255, 0.14);
+                background-color: rgba(255, 255, 255, 0.18);
             }
             QLabel { color: #f5f5f7; }
             QLabel#StatusLabel {
@@ -2774,14 +2774,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         input_layout.setContentsMargins(8, 8, 8, 8)
         input_layout.setSpacing(6)
         self.input_edit = MessageInputEdit(self)
-        if sys.platform == "darwin":
-            self.input_edit.setPlaceholderText(
-                "Message · Enter new line · Shift+Enter or ⌘+Enter to send"
-            )
-        else:
-            self.input_edit.setPlaceholderText(
-                "Message · Enter new line · Shift+Enter or Ctrl+Enter to send"
-            )
+        self.input_edit.setPlaceholderText(
+            "Type message. Enter to send, Shift+Enter for new line."
+        )
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
         self.input_edit.setFont(font)

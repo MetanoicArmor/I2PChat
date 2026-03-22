@@ -2840,7 +2840,10 @@ class I2PChatCore:
         )
         await writer.drain()
         reason = "rotated" if should_rotate and not should_bootstrap else "initialized"
-        self._emit_system(f"BlindBox root secret {reason} (epoch={next_epoch})")
+        if reason == "initialized":
+            self._emit_system("BlindBox root secret initialized")
+        else:
+            self._emit_system(f"BlindBox root secret {reason} (epoch={next_epoch})")
 
     async def _handle_handshake_message(
         self, body: str, writer: asyncio.StreamWriter
