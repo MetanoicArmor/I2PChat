@@ -13,10 +13,27 @@ import asyncio
 import hashlib
 import logging
 import socket
+import time
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, List, Optional
+
+import i2plib
+from i2plib.exceptions import SAMException
 
 logger = logging.getLogger("i2pchat")
+
+
+def _sam_exc_detail(exc: BaseException) -> str:
+    """i2plib SAM errors often have empty str(); still show something useful."""
+    text = str(exc).strip()
+    if text:
+        return text
+    if isinstance(exc, SAMException):
+        doc = (type(exc).__doc__ or "").strip()
+        first = doc.split("\n", 1)[0] if doc else ""
+        if first:
+            return f"{type(exc).__name__} — {first}"
+    return type(exc).__name__
 
 StreamPair = tuple[asyncio.StreamReader, asyncio.StreamWriter]
 StreamFactory = Callable[[str], Awaitable[StreamPair]]
@@ -44,6 +61,8 @@ class BlindBoxClient:
         retry_attempts: int = 3,
         retry_backoff_base: float = 0.25,
         io_timeout: float = 15.0,
+        # HELLO + SESSION CREATE can block a long time on a busy Java I2P router.
+        sam_session_timeout: float = 120.0,
     ) -> None:
         if not session_id:
             raise ValueError("session_id is required")
@@ -57,6 +76,8 @@ class BlindBoxClient:
             raise ValueError("retry_attempts must be >= 1")
         if io_timeout <= 0:
             raise ValueError("io_timeout must be positive")
+        if sam_session_timeout <= 0:
+            raise ValueError("sam_session_timeout must be positive")
 
         self.session_id = session_id
         self.replicas = list(replicas)
@@ -75,6 +96,7 @@ class BlindBoxClient:
         self.retry_attempts = retry_attempts
         self.retry_backoff_base = retry_backoff_base
         self.io_timeout = io_timeout
+        self.sam_session_timeout = sam_session_timeout
 
         self._ctrl_reader: Optional[asyncio.StreamReader] = None
         self._ctrl_writer: Optional[asyncio.StreamWriter] = None
@@ -82,6 +104,17 @@ class BlindBoxClient:
         # Serialize start(): poll loop and put()/get() can otherwise race and issue
         # two SESSION CREATE with the same ID → SAM RESULT=DUPLICATED_ID.
         self._start_lock = asyncio.Lock()
+        # Throttle identical replica failure logs (poller hammers GET).
+        self._replica_warn_next: dict[str, float] = {}
+
+    def _log_replica_failure(self, op: str, replica: str, err: Exception) -> None:
+        now = time.monotonic()
+        key = f"{op}|{replica}|{type(err).__name__}|{err!s}"
+        if now < self._replica_warn_next.get(key, 0):
+            logger.debug("BlindBox %s failed for %s (suppressed): %s", op, replica, err)
+            return
+        self._replica_warn_next[key] = now + 90.0
+        logger.warning("BlindBox %s failed for %s: %s", op, replica, err)
 
     async def start(self) -> None:
         if self._started:
@@ -97,20 +130,59 @@ class BlindBoxClient:
                 # custom stream mode handles setup externally.
                 self._started = True
                 return
+            t_sess = self.sam_session_timeout
+
             self._ctrl_reader, self._ctrl_writer = await asyncio.open_connection(
                 self.sam_host, self.sam_port
             )
-            await self._sam_hello(self._ctrl_reader, self._ctrl_writer)
+            try:
+                await self._sam_hello(
+                    self._ctrl_reader, self._ctrl_writer, line_timeout=t_sess
+                )
+            except asyncio.TimeoutError as exc:
+                writer = self._ctrl_writer
+                self._ctrl_writer = None
+                self._ctrl_reader = None
+                if writer is not None:
+                    try:
+                        writer.close()
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+                raise RuntimeError(
+                    f"SAM timed out ({t_sess:g}s) waiting for HELLO reply "
+                    f"({self.sam_host}:{self.sam_port}). "
+                    "Is I2P running? Increase I2PCHAT_BLINDBOX_SAM_SESSION_TIMEOUT if needed."
+                ) from exc
+
             options_str = " ".join(f"{k}={v}" for k, v in self.sam_options.items())
             cmd = (
                 "SESSION CREATE STYLE=STREAM "
-                f"ID={self.session_id} DESTINATION=TRANSIENT SIGNATURE_TYPE=7 OPTION {options_str}\n"
+                f"ID={self.session_id} DESTINATION=TRANSIENT "
+                f"SIGNATURE_TYPE=7 OPTION {options_str}\n"
             )
             self._ctrl_writer.write(cmd.encode("utf-8"))
             await self._ctrl_writer.drain()
-            response = await asyncio.wait_for(
-                self._ctrl_reader.readline(), timeout=self.io_timeout
-            )
+            try:
+                response = await asyncio.wait_for(
+                    self._ctrl_reader.readline(), timeout=t_sess
+                )
+            except asyncio.TimeoutError as exc:
+                writer = self._ctrl_writer
+                self._ctrl_writer = None
+                self._ctrl_reader = None
+                if writer is not None:
+                    try:
+                        writer.close()
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+                raise RuntimeError(
+                    f"SAM timed out ({t_sess:g}s) during BlindBox SESSION CREATE "
+                    f"({self.sam_host}:{self.sam_port}). "
+                    "I2P may still be building tunnels — wait and retry, or increase "
+                    "I2PCHAT_BLINDBOX_SAM_SESSION_TIMEOUT."
+                ) from exc
             response_text = response.decode("utf-8", errors="ignore").strip()
             if "RESULT=OK" not in response_text:
                 # Drop half-open ctrl connection so a retry can open a fresh socket.
@@ -123,7 +195,14 @@ class BlindBoxClient:
                         await writer.wait_closed()
                     except Exception:
                         pass
-                raise RuntimeError(f"SAM session create failed: {response_text}")
+                if not response.strip():
+                    msg = (
+                        "SAM session create failed: (no response / disconnected — "
+                        f"is I2P running and SAM enabled on {self.sam_host}:{self.sam_port}?)"
+                    )
+                else:
+                    msg = f"SAM session create failed: {response_text}"
+                raise RuntimeError(msg)
             self._started = True
 
     async def close(self) -> None:
@@ -152,7 +231,7 @@ class BlindBoxClient:
         ok_results: list[BlindBoxPutResult] = []
         for replica, result in zip(self.replicas, results):
             if isinstance(result, Exception):
-                logger.warning("BlindBox PUT failed for %s: %s", replica, result)
+                self._log_replica_failure("PUT", replica, result)
                 continue
             ok_results.append(result)
         success_count = sum(1 for r in ok_results if r.status in {"OK", "EXISTS"})
@@ -174,7 +253,7 @@ class BlindBoxClient:
         blobs: list[bytes] = []
         for replica, result in zip(self.replicas, results):
             if isinstance(result, Exception):
-                logger.warning("BlindBox GET failed for %s: %s", replica, result)
+                self._log_replica_failure("GET", replica, result)
                 continue
             if result is not None:
                 blobs.append(result)
@@ -257,27 +336,115 @@ class BlindBoxClient:
                 return await asyncio.open_connection(host, port)
         return await self._connect_via_sam(replica)
 
-    async def _connect_via_sam(self, destination: str) -> StreamPair:
+    @staticmethod
+    def _sam_destination_for_replica(replica: str) -> str:
+        """
+        SAM STREAM CONNECT requires a valid I2P DESTINATION (.b32.i2p, .i2p, or Base64).
+        Config lines like ``host.b32.i2p:19444`` use ``:19444`` as a human hint for the
+        Blind Box TCP port on the remote side, not as part of the SAM destination string.
+        Passing the suffix causes ``RESULT=INVALID_KEY``.
+        """
+        s = replica.strip()
+        if ":" not in s:
+            return s
+        host_part, port_part = s.rsplit(":", 1)
+        if port_part.isdigit() and host_part.endswith(".i2p"):
+            return host_part
+        return s
+
+    async def _open_sam_stream_to(self, dest_for_sam: str) -> StreamPair:
+        """New SAM TCP connection: HELLO + STREAM CONNECT (uses BlindBox session ID)."""
         reader, writer = await asyncio.open_connection(self.sam_host, self.sam_port)
-        await self._sam_hello(reader, writer)
-        cmd = f"STREAM CONNECT ID={self.session_id} DESTINATION={destination}\n"
-        writer.write(cmd.encode("utf-8"))
-        await writer.drain()
-        response = await asyncio.wait_for(reader.readline(), timeout=self.io_timeout)
-        response_text = response.decode("utf-8", errors="ignore").strip()
-        if "RESULT=OK" not in response_text:
+        try:
+            await self._sam_hello(reader, writer)
+            cmd = (
+                f"STREAM CONNECT ID={self.session_id} "
+                f"DESTINATION={dest_for_sam} SILENT=false\n"
+            )
+            writer.write(cmd.encode("utf-8"))
+            await writer.drain()
+            response = await asyncio.wait_for(
+                reader.readline(), timeout=self.io_timeout
+            )
+            response_text = response.decode("utf-8", errors="ignore").strip()
+            if "RESULT=OK" not in response_text:
+                await self._safe_close(writer)
+                if not response.strip():
+                    raise RuntimeError(
+                        "SAM STREAM CONNECT failed: (no response — "
+                        "Blind Box SAM session may not be started)"
+                    )
+                raise RuntimeError(f"SAM STREAM CONNECT failed: {response_text}")
+            return reader, writer
+        except Exception:
             await self._safe_close(writer)
-            raise RuntimeError(f"SAM STREAM CONNECT failed: {response_text}")
-        return reader, writer
+            raise
+
+    async def _connect_via_sam(self, replica: str) -> StreamPair:
+        destination = self._sam_destination_for_replica(replica)
+        sam_address = (self.sam_host, self.sam_port)
+        connect_order: List[str] = []
+
+        if destination.endswith(".b32.i2p"):
+            # Prefer NAMING LOOKUP → Base64 (matches i2plib.stream_connect). Some routers
+            # have no LeaseSet yet → KEY_NOT_FOUND; then raw .b32.i2p may still work.
+            try:
+                dest_obj = await i2plib.dest_lookup(
+                    destination, sam_address=sam_address
+                )
+                connect_order.append(dest_obj.base64)
+            except Exception as e:
+                logger.info(
+                    "BlindBox NAMING LOOKUP failed for %s (%s); will try raw .b32.i2p",
+                    destination,
+                    _sam_exc_detail(e),
+                )
+            connect_order.append(destination)
+        elif destination.endswith(".i2p"):
+            try:
+                dest_obj = await i2plib.dest_lookup(
+                    destination, sam_address=sam_address
+                )
+                connect_order.append(dest_obj.base64)
+            except Exception as e:
+                raise RuntimeError(
+                    f"I2P dest_lookup failed for Blind Box {destination!r}: "
+                    f"{_sam_exc_detail(e)}"
+                ) from e
+        else:
+            connect_order.append(destination)
+
+        errors: list[str] = []
+        for dest_str in connect_order:
+            try:
+                return await self._open_sam_stream_to(dest_str)
+            except RuntimeError as e:
+                errors.append(str(e))
+                continue
+        raise RuntimeError(
+            "SAM STREAM CONNECT exhausted destination attempts ("
+            + "; ".join(errors)
+            + ")"
+        )
 
     async def _sam_hello(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        *,
+        line_timeout: Optional[float] = None,
     ) -> None:
         writer.write(b"HELLO VERSION MIN=3.0 MAX=3.2\n")
         await writer.drain()
-        response = await asyncio.wait_for(reader.readline(), timeout=self.io_timeout)
+        t = self.io_timeout if line_timeout is None else line_timeout
+        response = await asyncio.wait_for(reader.readline(), timeout=t)
         response_text = response.decode("utf-8", errors="ignore").strip()
         if "RESULT=OK" not in response_text:
+            if not response.strip():
+                raise RuntimeError(
+                    "SAM HELLO failed: (no response / disconnected — "
+                    f"check I2P router and SAM on {self.sam_host}:{self.sam_port})"
+                )
             raise RuntimeError(f"SAM HELLO failed: {response_text}")
 
     @staticmethod

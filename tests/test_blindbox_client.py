@@ -146,6 +146,22 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             await srv_a.stop()
             await srv_b.stop()
 
+    def test_sam_destination_strips_i2p_port_suffix(self) -> None:
+        b32 = (
+            "dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p"
+        )
+        self.assertEqual(
+            BlindBoxClient._sam_destination_for_replica(f"{b32}:19444"),
+            b32,
+        )
+        self.assertEqual(BlindBoxClient._sam_destination_for_replica(b32), b32)
+
+    def test_sam_destination_keeps_host_port(self) -> None:
+        self.assertEqual(
+            BlindBoxClient._sam_destination_for_replica("127.0.0.1:19444"),
+            "127.0.0.1:19444",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

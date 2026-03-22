@@ -35,6 +35,16 @@ from protocol_codec import (
 
 logger = logging.getLogger("i2pchat")
 PROTOCOL_VERSION = 4
+
+
+def _exception_user_message(exc: BaseException) -> str:
+    """Human-readable detail for UI/logs; many exceptions have empty str()."""
+    text = str(exc).strip()
+    if text:
+        return text
+    return type(exc).__name__
+
+
 DEFAULT_LOCAL_BLINDBOX_REPLICA = "127.0.0.1:19444"
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 
@@ -724,14 +734,12 @@ class I2PChatCore:
             len(self.blindbox_replicas) > 0
             and all(_is_host_port_replica(item) for item in self.blindbox_replicas)
         )
+        # Default 1: still PUT to every replica in parallel, but accept success if any
+        # one responds (I2P paths are often asymmetric). Set I2PCHAT_BLINDBOX_PUT_QUORUM=2
+        # to require all configured boxes to ACK each offline message.
         self.blindbox_put_quorum = max(
             1,
-            int(
-                os.environ.get(
-                    "I2PCHAT_BLINDBOX_PUT_QUORUM",
-                    "2" if len(self.blindbox_replicas) >= 2 else "1",
-                )
-            ),
+            int(os.environ.get("I2PCHAT_BLINDBOX_PUT_QUORUM", "1")),
         )
         self.blindbox_get_quorum = max(
             1, int(os.environ.get("I2PCHAT_BLINDBOX_GET_QUORUM", "1"))
@@ -1943,11 +1951,21 @@ class I2PChatCore:
                         self.blindbox_replicas = [endpoint]
                         self._blindbox_use_sam = False
                     except Exception as e:
-                        self._emit_error(f"Local BlindBox replica startup failed: {e}")
+                        self._emit_error(
+                            f"Local BlindBox replica startup failed: {_exception_user_message(e)}"
+                        )
                         return
                 # Unique SAM ID: avoids collisions if two app instances share profile+second,
                 # and pairs with BlindBoxClient.start() lock against duplicate SESSION CREATE.
                 bb_sam_id = f"{self.session_id}_bb_{secrets.token_hex(6)}"
+                bb_sam_sess_timeout = max(
+                    15.0,
+                    float(
+                        os.environ.get(
+                            "I2PCHAT_BLINDBOX_SAM_SESSION_TIMEOUT", "120"
+                        )
+                    ),
+                )
                 self._blindbox_client = BlindBoxClient(
                     session_id=bb_sam_id,
                     replicas=self.blindbox_replicas,
@@ -1960,6 +1978,7 @@ class I2PChatCore:
                     get_quorum=min(
                         self.blindbox_get_quorum, len(self.blindbox_replicas)
                     ),
+                    sam_session_timeout=bb_sam_sess_timeout,
                 )
             if self._blindbox_task is None or self._blindbox_task.done():
                 loop = asyncio.get_running_loop()
@@ -1976,7 +1995,9 @@ class I2PChatCore:
             await client.start()
             self._emit_system("BlindBox runtime started")
         except Exception as e:
-            self._emit_error(f"BlindBox startup failed: {e}")
+            detail = _exception_user_message(e)
+            logger.exception("BlindBox startup failed: %s", detail)
+            self._emit_error(f"BlindBox startup failed: {detail}")
             return
         try:
             while True:
@@ -2043,7 +2064,9 @@ class I2PChatCore:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            self._emit_error(f"BlindBox poller stopped: {e}")
+            detail = _exception_user_message(e)
+            logger.exception("BlindBox poller stopped: %s", detail)
+            self._emit_error(f"BlindBox poller stopped: {detail}")
 
     async def _process_blindbox_frame(self, frame: bytes) -> bool:
         if len(frame) < HEADER_STRUCT.size:
@@ -2104,7 +2127,9 @@ class I2PChatCore:
             self._emit_message("me", text)
             return True
         except Exception as e:
-            self._emit_error(f"BlindBox send failed: {e}")
+            detail = _exception_user_message(e)
+            logger.warning("BlindBox send failed: %s", detail, exc_info=True)
+            self._emit_error(f"BlindBox send failed: {detail}")
             return False
 
     def is_outbound_connect_busy(self) -> bool:
