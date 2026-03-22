@@ -66,6 +66,8 @@ class BlindBoxClient:
         io_timeout: float = 15.0,
         # HELLO + SESSION CREATE can block a long time on a busy Java I2P router.
         sam_session_timeout: float = 120.0,
+        # Optional token sent only to loopback host:port replicas.
+        local_auth_token: str = "",
     ) -> None:
         if not session_id:
             raise ValueError("session_id is required")
@@ -104,6 +106,7 @@ class BlindBoxClient:
         self.retry_backoff_base = retry_backoff_base
         self.io_timeout = io_timeout
         self.sam_session_timeout = sam_session_timeout
+        self.local_auth_token = str(local_auth_token or "").strip()
 
         self._ctrl_reader: Optional[asyncio.StreamReader] = None
         self._ctrl_writer: Optional[asyncio.StreamWriter] = None
@@ -309,7 +312,10 @@ class BlindBoxClient:
         async def _op() -> BlindBoxPutResult:
             reader, writer = await self._connect(box_addr)
             try:
-                writer.write(f"PUT {key} {len(blob)}\n".encode("utf-8"))
+                auth_suffix = self._command_auth_suffix(box_addr)
+                writer.write(
+                    f"PUT {key} {len(blob)}{auth_suffix}\n".encode("utf-8")
+                )
                 writer.write(blob)
                 await writer.drain()
                 line = await asyncio.wait_for(reader.readline(), timeout=self.io_timeout)
@@ -326,7 +332,8 @@ class BlindBoxClient:
         async def _op() -> Optional[bytes]:
             reader, writer = await self._connect(box_addr)
             try:
-                writer.write(f"GET {key}\n".encode("utf-8"))
+                auth_suffix = self._command_auth_suffix(box_addr)
+                writer.write(f"GET {key}{auth_suffix}\n".encode("utf-8"))
                 await writer.drain()
                 line = await asyncio.wait_for(reader.readline(), timeout=self.io_timeout)
                 header = line.decode("utf-8", errors="ignore").strip()
@@ -345,6 +352,23 @@ class BlindBoxClient:
                 await self._safe_close(writer)
 
         return await self._with_retries(_op, op_name=f"GET {box_addr}")
+
+    def _command_auth_suffix(self, box_addr: str) -> str:
+        token = self.local_auth_token
+        if not token:
+            return ""
+        if self._is_loopback_endpoint(box_addr):
+            return f" {token}"
+        return ""
+
+    @staticmethod
+    def _is_loopback_endpoint(box_addr: str) -> bool:
+        try:
+            host, _port = box_addr.rsplit(":", 1)
+            host = host.strip().lower().strip("[]")
+        except Exception:
+            return False
+        return host in {"127.0.0.1", "localhost", "::1"}
 
     async def _with_retries(self, op, *, op_name: str):
         last_exc: Optional[Exception] = None

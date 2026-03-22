@@ -337,6 +337,30 @@ class BlindBoxCoreTelemetryTests(unittest.TestCase):
             else:
                 os.environ["I2PCHAT_BLINDBOX_MAX_PREVIOUS_ROOTS"] = old_limit
 
+    def test_blindbox_require_sam_rejects_direct_replicas(self) -> None:
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        old_require_sam = os.environ.get("I2PCHAT_BLINDBOX_REQUIRE_SAM")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "127.0.0.1:19444"
+        os.environ["I2PCHAT_BLINDBOX_REQUIRE_SAM"] = "1"
+        try:
+            with self.assertRaises(ValueError):
+                I2PChatCore(profile="alice")
+        finally:
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+            if old_require_sam is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REQUIRE_SAM", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REQUIRE_SAM"] = old_require_sam
+
 
 if __name__ == "__main__":
     unittest.main()

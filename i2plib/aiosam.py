@@ -5,13 +5,33 @@ import i2plib.exceptions
 import i2plib.utils
 from i2plib.log import logger
 
+SENSITIVE_SAM_KEYS = {"PRIV", "PRIVATE", "DESTINATION", "SIGNING_PRIVATE_KEY"}
+
+
+def _redact_sam_reply(raw_reply: str) -> str:
+    """Best-effort redaction for sensitive key=value SAM fields in debug logs."""
+    if not raw_reply:
+        return ""
+    redacted_parts = []
+    for token in raw_reply.split(" "):
+        if "=" not in token:
+            redacted_parts.append(token)
+            continue
+        key, value = token.split("=", 1)
+        if key in SENSITIVE_SAM_KEYS and value:
+            redacted_parts.append(f"{key}=<redacted>")
+        else:
+            redacted_parts.append(token)
+    return " ".join(redacted_parts)
+
 def parse_reply(data):
     if not data:
         raise ConnectionAbortedError("Empty response: SAM API went offline")
 
     try:
-        msg = i2plib.sam.Message(data.decode().strip())
-        logger.debug("SAM reply: "+str(msg))
+        raw_reply = data.decode().strip()
+        msg = i2plib.sam.Message(raw_reply)
+        logger.debug("SAM reply: %s", _redact_sam_reply(raw_reply))
     except Exception:
         raise ConnectionAbortedError("Invalid SAM response")
 

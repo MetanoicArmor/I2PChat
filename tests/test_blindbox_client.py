@@ -14,10 +14,18 @@ def _free_port() -> int:
 
 
 class _ReplicaServer:
-    def __init__(self, mode: str, storage: dict[str, bytes], *, flaky_first_put: bool = False) -> None:
+    def __init__(
+        self,
+        mode: str,
+        storage: dict[str, bytes],
+        *,
+        flaky_first_put: bool = False,
+        required_token: str = "",
+    ) -> None:
         self.mode = mode
         self.storage = storage
         self.flaky_first_put = flaky_first_put
+        self.required_token = required_token
         self.put_calls = 0
         self.server: asyncio.AbstractServer | None = None
         self.port = _free_port()
@@ -40,6 +48,11 @@ class _ReplicaServer:
                 return
             cmd = parts[0]
             if cmd == "PUT" and len(parts) >= 3:
+                if self.required_token:
+                    if len(parts) < 4 or parts[3] != self.required_token:
+                        writer.write(b"ERR\n")
+                        await writer.drain()
+                        return
                 key = parts[1]
                 size = int(parts[2])
                 self.put_calls += 1
@@ -58,6 +71,11 @@ class _ReplicaServer:
                 await writer.drain()
                 return
             if cmd == "GET" and len(parts) >= 2:
+                if self.required_token:
+                    if len(parts) < 3 or parts[2] != self.required_token:
+                        writer.write(b"ERR\n")
+                        await writer.drain()
+                        return
                 key = parts[1]
                 if key not in self.storage:
                     writer.write(b"MISS\n")
@@ -161,6 +179,26 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             BlindBoxClient._sam_destination_from_endpoint("127.0.0.1:19444"),
             "127.0.0.1:19444",
         )
+
+    async def test_local_auth_token_is_sent_to_loopback_replicas(self) -> None:
+        storage: dict[str, bytes] = {}
+        srv = _ReplicaServer("ok", storage, required_token="t123")
+        await srv.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-auth",
+                blind_boxes=[f"127.0.0.1:{srv.port}"],
+                use_sam=False,
+                local_auth_token="t123",
+            )
+            payload = b"auth-payload"
+            result = await client.put("k-auth", payload)
+            self.assertEqual(len(result), 1)
+            blobs = await client.get("k-auth")
+            self.assertEqual(blobs, [payload])
+            await client.close()
+        finally:
+            await srv.stop()
 
 
 if __name__ == "__main__":

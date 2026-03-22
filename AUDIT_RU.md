@@ -1,227 +1,305 @@
 # Отчёт по аудиту безопасности: I2PChat
 
-Дата аудита: 2026-03-17  
-Режим: полный аудит (архитектура + протокол + криптография + CI/build + supply chain)  
+Дата аудита: 2026-03-22  
+Режим: полный аудит (архитектура + протокол + криптография + runtime-проверки + CI/build + supply chain)  
 Область: текущее локальное состояние репозитория (`I2PChat`)
 
 ## Executive Summary
 
-Этот аудит сфокусирован на архитектурных trust boundaries и поведении протокола в атакующих сценариях, с дополнительной проверкой целостности сборки и CI.
+В рамках аудита проверены безопасность протокола, локальные границы доверия, runtime-поведение и контроли цепочки поставки.
 
 Подтверждённые находки:
 - Critical: 0
 - High: 0
 - Medium: 1
-- Low: 4
+- Low: 3
 
-Общий вывод: runtime-уровень протокола хорошо усилен (signed handshake, TOFU pinning, replay/downgrade защиты, context-bound MAC), а остаточный риск смещён в область аутентичности релизов и долгосрочного governance цепочки поставки.
+Общий вывод: контроли целостности на уровне протокола сильные (signed handshake, TOFU pinning, sequence/HMAC-проверки, downgrade detection). В этом цикле remediation в коде закрыты M-01/M-02/M-03; ключевые оставшиеся практичные риски теперь в release/CI supply-chain assurance.
 
 ## Scope и методология
 
 Проверенные компоненты:
-- Протокол и core runtime: `i2p_chat_core.py`, `protocol_codec.py`, `crypto.py`
-- GUI и локальные границы: `main_qt.py`, `notifications.py`
-- Сборка и упаковка: `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`, `I2PChat.spec`
-- Управление зависимостями и lock-файлами: `requirements.in`, `requirements.txt`, `requirements-build.txt`, `requirements-ci-audit.txt`
-- CI-контроли: `.github/workflows/security-audit.yml`, `.github/workflows/secret-scan.yml`
-- Security-регрессии: `tests/test_protocol_framing_vnext.py`, `tests/test_profile_import_overwrite.py`, `tests/test_audit_remediation.py`, `tests/test_asyncio_regression.py`
+- Ядро протокола и runtime: `i2p_chat_core.py`, `protocol_codec.py`, `crypto.py`
+- I2P/SAM-транспорт: `i2plib/aiosam.py`, `i2plib/sam.py`, `blindbox_client.py`, `blindbox_local_replica.py`
+- GUI/локальные границы: `main_qt.py`, `notifications.py`
+- Build/release pipeline: `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`, `I2PChat.spec`
+- Управление зависимостями и CI-политики: `requirements.in`, `requirements.txt`, `requirements-ci-audit.txt`, `.github/workflows/security-audit.yml`, `.github/workflows/secret-scan.yml`, `flake.nix`, `flake.lock`
 
 Метод:
 - Статический обзор trust boundaries и attack surface
-- Верификация протокольных и криптографических контролей
-- Анализ supply chain и release integrity
-- Запуск регрессионных тестов
+- Верификация криптографических и протокольных контролей
+- Runtime-проверки (тесты и dependency audit по lockfile)
+- Анализ supply-chain и release integrity
 
-Проверка тестами:
-- `python3 -m unittest tests/test_asyncio_regression.py tests/test_protocol_framing_vnext.py tests/test_profile_import_overwrite.py tests/test_audit_remediation.py` -> OK (46 tests)
+Выполненные runtime-проверки:
+- `python3 --version` -> `Python 3.14.3`
+- `python3 -m unittest tests/test_asyncio_regression.py tests/test_protocol_framing_vnext.py tests/test_profile_import_overwrite.py tests/test_audit_remediation.py` -> `FAILED (1)` из-за документационного ассершена (`test_metadata_padding_docs_present`)
+- `python3 -m unittest tests/test_blindbox_client.py` -> `OK (5 tests)`
+- `./.audit-venv/bin/pip-audit -r requirements.txt` -> `No known vulnerabilities found`
+- `./.audit-venv/bin/pip-audit -r requirements.in` -> `No known vulnerabilities found`
+
+Примечание:
+- Падение документационного теста зафиксировано как baseline-качество, а не как напрямую эксплуатируемая уязвимость.
 
 ## Архитектура и границы доверия
 
 ```mermaid
 flowchart LR
-  guiEntry[main_qt.py_chat-python.py] --> coreEngine[i2p_chat_core.py]
-  coreEngine --> protocolCodec[protocol_codec.py]
-  coreEngine --> cryptoLayer[crypto.py]
-  coreEngine --> samLayer[i2plib_sam]
-  coreEngine --> localStorage[profile_storage_and_files]
-  guiEntry --> notifyLayer[notifications.py]
+  uiEntry[main_qt.py_and_chat-python.py] --> coreRuntime[i2p_chat_core.py]
+  coreRuntime --> protocolCodec[protocol_codec.py]
+  coreRuntime --> cryptoLayer[crypto.py]
+  coreRuntime --> samTransport[i2plib_sam_and_aiosam]
+  coreRuntime --> blindBoxClient[blindbox_client.py]
+  coreRuntime --> localReplica[blindbox_local_replica.py]
+  coreRuntime --> localStorage[profiles_files_images]
+  uiEntry --> localNotifiers[notifications.py_and_audio_helpers]
 ```
 
 Основные границы:
-- Сетевой peer -> парсер протокола (`ProtocolCodec.read_frame`) -> диспетчер сообщений
-- Core runtime -> локальный SAM router (`i2plib.dest_lookup`)
-- Core/GUI -> профильное хранилище и файловые пути
-- GUI/runtime -> локальные subprocess helper-команды (notification/audio)
-- Build/CI -> релизные артефакты и публикуемые бинарники
+- Сетевой peer -> frame parser (`ProtocolCodec.read_frame`) -> dispatcher
+- Core runtime -> локальный SAM router (доверие к локальному I2P/SAM endpoint)
+- BlindBox client -> удалённые реплики или direct `host:port`
+- Core/GUI -> локальная файловая система и профильные данные
+- Build/CI -> релизные бинарники и dependency inputs
 
-Критичные для безопасности архитектурные факты:
-- Строгий vNext framing (`MAGIC`, явный `PROTOCOL_VERSION=4`, ограничение длины кадра)
-- Legacy-парсинг включается только явно (`allow_legacy=False` в настройке codec)
-- Операции с профилями/изображениями используют path confinement (`realpath` + проверки директории)
-- ACK-учёт имеет bounded state и TTL pruning (`ACK_MAX_PENDING`, `ACK_TTL_SECONDS`)
+Ключевые факты безопасности:
+- Строгий vNext framing и явное версионирование протокола
+- Явные anti-downgrade проверки после handshake
+- TOFU pinning ключа peer + signature-verified handshake
+- Path confinement в ключевых GUI-путях работы с файлами
+- Hash-pinned lockfiles для build/audit сценариев
 
 ## Углублённая оценка протокола и криптографии
 
 Подтверждённые контроли:
-- Signed handshake (`INIT`/`RESP`) на Ed25519
-- TOFU pinning ключа peer (`_pin_or_verify_peer_signing_key`)
-- PFS через эфемерные X25519 ключи и DH shared secret
-- Финальный shared secret выводится из DH + двух nonce
+- Подписанный handshake (`INIT`/`RESP`) на Ed25519
+- TOFU pinning через `_pin_or_verify_peer_signing_key`
+- Эфемерные X25519 + shared secret derivation
 - Context-bound HMAC (`seq`, `flags`, `msg_id`) и constant-time compare
-- Anti-replay через строгую валидацию sequence
-- Anti-downgrade обнаружение plaintext кадра после handshake
-- ACK context validation (`peer_addr`, `ack_kind`, `ack_session_epoch`)
+- Защита от replay/reorder через sequence validation
+- Downgrade detection для неожиданных plaintext-кадров после handshake
+- ACK context validation с bounded/pruned state
 
 Факты по framing:
 - Заголовок: `MAGIC(4) | VER(1) | TYPE(1) | FLAGS(1) | MSG_ID(8) | LEN(4)`
-- Жёсткий лимит resync (`resync_limit`, по умолчанию 64 KiB)
+- Лимит resync enforced в codec (`resync_limit`, default 64 KiB)
 
 ## Краткая модель угроз
 
 Рассмотренные нарушители:
-- Удалённый злонамеренный peer в I2P
-- Активный манипулятор на транспортной границе (MITM-like)
-- Локальный непривилегированный атакующий в hostile workstation environment
-- Supply-chain атакующий (dependency/build/release channel)
+- Злонамеренный удалённый peer в I2P
+- Активный манипулятор на транспортной границе
+- Локальный непривилегированный процесс на том же хосте
+- Supply-chain атакующий в цепочке dependencies/build/release
 
-Классы угроз, которые снижены:
-- Подмена/порча сообщений (HMAC)
-- Replay и reorder попытки (проверка sequence)
-- Protocol downgrade попытки (запрет plaintext после handshake)
-- Handshake impersonation без компрометации доверия (signed handshake + TOFU + SAM identity checks)
+Хорошо закрытые классы:
+- Подмена/порча сообщений и replay-атаки
+- Базовые downgrade-попытки после установления handshake
+- Impersonation без компрометации доверия (с оговоркой на TOFU и доверие к локальному SAM)
 
-Остаточные классы (design/operational):
-- Утечка метаданных из видимых полей framing и pre-handshake identity exchange
-- Пробелы аутентичности release-channel без platform-native signing/notarization
-- Долгосрочный риск сопровождения vendored transport-библиотеки
+Остаточные классы:
+- Локальные допущения доверия вокруг SAM и BlindBox local replica
+- Утечки метаданных в логах/UI по отдельным путям
+- Аутентичность релиза не встроена в platform-native trust chain
 
 ## Findings
 
-## [MEDIUM] A-01: Релизные артефакты имеют checksums/signature, но без platform-trust подписи
+## [LOW] M-01: Риск утечки чувствительных SAM-ответов в debug-логах — СНИЖЕН
+
+Затронуто:
+- `i2plib/aiosam.py`
+- `i2plib/sam.py`
+
+Категория: sensitive data exposure / local confidentiality
+
+Доказательства:
+- Добавлен `_redact_sam_reply(...)` для маскирования чувствительных полей перед логированием.
+- `parse_reply` теперь пишет в debug только отредактированный SAM-ответ.
+
+Влияние:
+- Остаточный риск существенно снижен; чувствительные SAM-поля маскируются в этом logging-пути.
+
+Эксплуатируемость:
+- Low после внедрённой mitigation.
+
+Рекомендации:
+1. Поддерживать список маскируемых SAM-полей в актуальном состоянии.
+2. Оставить regression-тесты redaction в CI.
+
+---
+
+## [LOW] M-02: Пробелы auth/isolation в BlindBox local replica — ЧАСТИЧНО СНИЖЕНЫ
+
+Затронуто:
+- `blindbox_local_replica.py`
+
+Категория: local trust boundary / unauthorized local access
+
+Доказательства:
+- В local replica добавлен опциональный auth token для `PUT/GET`.
+- В local-auto режиме core теперь создаёт/использует local auth token.
+- Добавлено ограничение количества записей (`max_entries`) с ответом `FULL`.
+
+Влияние:
+- Риск локального злоупотребления снижен для local-auto и token-enabled конфигураций; остаточный риск сохраняется, если direct/local режим используется без токена.
+
+Эксплуатируемость:
+- Low-to-medium в зависимости от жёсткости конфигурации.
+
+Рекомендации:
+1. Включать local token во всех direct/local deployment-сценариях.
+2. Следующим шагом добавить per-namespace quotas и rate limiting.
+
+---
+
+## [LOW] M-03: Риск downgrade BlindBox в direct TCP — СНИЖЕН ПОЛИТИКАМИ
+
+Затронуто:
+- `i2p_chat_core.py`
+- `blindbox_client.py`
+
+Категория: transport security posture / configuration risk
+
+Доказательства:
+- Добавлен strict mode `I2PCHAT_BLINDBOX_REQUIRE_SAM=1`, который отклоняет direct `host:port` реплики.
+- Добавлен явный runtime-warning при активном non-SAM direct transport.
+
+Влияние:
+- Риск misconfiguration снижен; strict mode принудительно фиксирует транспортную политику при включении.
+
+Эксплуатируемость:
+- Low при включённом strict mode; medium, если политика не включена.
+
+Рекомендации:
+1. В hardened deployment включать strict mode по умолчанию.
+2. Расширить operator docs по рискам direct/local транспорта.
+
+---
+
+## [LOW] M-04: Пробел CI lockfile-аудита — СНИЖЕН
+
+Затронуто:
+- `.github/workflows/security-audit.yml`
+- `requirements.in`
+- `requirements.txt`
+
+Категория: supply-chain assurance gap
+
+Доказательства:
+- В CI добавлен основной gate: `pip-audit -r requirements.txt`.
+- Проверка `pip-audit -r requirements.in` оставлена как дополнительный сигнал.
+
+Влияние:
+- Основной пробел lockfile-assurance закрыт.
+
+Эксплуатируемость:
+- Low после внедрённой mitigation.
+
+Рекомендации:
+1. Сохранять lockfile-first аудит обязательным в CI.
+2. Добавить хранение SBOM из lockfile в release-процессе.
+
+---
+
+## [MEDIUM] M-05: Доверие к релизам не усилено platform-native signing/notarization
 
 Затронуто:
 - `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`
-- `.github/workflows/security-audit.yml`
+- Политики релиза в `.github/workflows/security-audit.yml`
 
-Категория: release authenticity / supply chain
+Категория: release authenticity / distribution trust
 
-Наблюдение:
-- Build-скрипты формируют `SHA256SUMS` и detached подпись `SHA256SUMS.asc`.
-- Отсутствует platform-native trust chain (например, Authenticode для Windows, Apple signing/notarization для macOS, provenance attestations в release pipeline).
+Доказательства:
+- Build-скрипты формируют checksums и detached signatures
+- В текущем pipeline нет принудительной platform-native trust chain (например, Authenticode или Apple notarization)
 
 Влияние:
-- Пользователь вынужден опираться на ручной checksum/signature workflow и внешнее доверие к ключу.
-- При компрометации канала дистрибуции риск заметно возрастает.
+- Безопасность зависит от ручной checksum/signature-верификации и дисциплины пользователей; UX доверия платформы слабее для массового пользователя.
 
 Эксплуатируемость:
-- Medium. Требуется компрометация канала релиза или ошибка верификации у пользователя.
+- Medium. Нужна компрометация канала релиза или пропуск проверки пользователем.
 
 Рекомендации:
-1. Добавить platform-native signing/notarization для распространяемых бинарников.
-2. Добавить release provenance attestations в CI.
-3. Публиковать и поддерживать signing policy с pinning fingerprint ключа.
+1. Добавить platform-native signing и notarization в release workflows.
+2. Добавить provenance attestations в release CI.
+3. Публиковать версионируемую key policy и инструкции верификации.
 
 ---
 
-## [LOW] P-01: Вывод ключа handshake без явного key separation (без HKDF) — ИСПРАВЛЕНО
+## [LOW] L-01: Раскрытие локальных путей в UI/логах — СНИЖЕНО
 
 Затронуто:
-- `i2p_chat_core.py` (`_compute_final_shared_key`)
-- `crypto.py`
+- `i2p_chat_core.py`
 
-Категория: cryptographic robustness
-
-Статус remediation:
-- В `crypto.py` добавлен HKDF (`hkdf_extract`/`hkdf_expand`) и деривация subkeys через `derive_handshake_subkeys(...)`.
-- В `i2p_chat_core.py` handshake теперь формирует отдельные ключи `k_enc` и `k_mac` (`shared_key` + `shared_mac_key`).
-- Шифрование использует `k_enc`, а MAC-проверка — `k_mac`.
+Доказательства:
+- При приёме файла теперь выводится basename (`final_name`), а не абсолютный путь.
+- При очистке кеша изображений в лог теперь пишется basename.
 
 Влияние:
-- Практического взлома прошлой схемы не выявлено, однако явное разделение ключей через KDF даёт более строгую криптографическую гигиену.
+- Риск локальной утечки приватных путей в этих местах снижен.
 
-Эксплуатируемость:
-- Low. В первую очередь defense-in-depth.
-
-Итог:
-- Риск закрыт как defense-in-depth hardening.
+Рекомендация:
+- Сохранять basename-only подход в user-facing/system logging путях.
 
 ---
 
-## [LOW] P-02: Метаданные протокола остаются наблюдаемыми — ЧАСТИЧНО СНИЖЕНО
+## [LOW] L-02: Утечка содержимого уведомлений в Windows stdout fallback — СНИЖЕНА
 
 Затронуто:
-- `protocol_codec.py`
-- `i2p_chat_core.py` (path обмена identity preface)
+- `notifications.py`
 
-Категория: metadata privacy / traffic analysis
-
-Статус remediation:
-- Документация threat-model обновлена в `README.md`, `docs/MANUAL_RU.md`, `docs/MANUAL_EN.md`.
-- Введён опциональный профиль padding для encrypted payload; по умолчанию включён `balanced` (выравнивание по 128 байт).
-- Профиль может быть переключён через `I2PCHAT_PADDING_PROFILE` (`balanced`/`off`).
+Доказательства:
+- Fallback-путь теперь печатает только общий текст: `"[NOTIFY] New message received"`.
 
 Влияние:
-- Видимость заголовка по-прежнему позволяет выводы о паттернах трафика (тип/длина) и косвенной корреляции.
+- Риск утечки содержимого сообщений через stdout fallback снижен.
 
-Эксплуатируемость:
-- Low с точки зрения целостности протокола, но важно для privacy posture.
-
-Итог:
-- Полностью убрать наблюдаемость `TYPE/LEN` нельзя в текущем framing, но корреляция по длине снижена.
+Рекомендация:
+- Не возвращать plaintext сообщений в stdout fallback-пути.
 
 ---
 
-## [LOW] S-01: Vendored `i2plib` требует формализованного процесса security-обновлений — ИСПРАВЛЕНО
+## [LOW] L-03: Источник checksum в secret-scan не независим от источника артефакта
 
 Затронуто:
-- `i2plib/` (vendored copy)
-- `requirements.in` / `requirements.txt` (без PyPI `i2plib`)
+- `.github/workflows/secret-scan.yml`
 
-Категория: supply-chain lifecycle
-
-Статус remediation:
-- Добавлен machine-readable provenance файл `i2plib/VENDORED_UPSTREAM.json`.
-- Добавлена политика сопровождения `docs/VENDORED_I2PLIB_POLICY.md` (cadence, advisory sources, review workflow).
-- В CI (`.github/workflows/security-audit.yml`) добавлена проверка обязательных provenance-полей.
+Доказательства:
+- Архив `gitleaks` и checksums скачиваются с одного release source URL
 
 Влияние:
-- Без формальной политики синхронизации возможна задержка внедрения upstream security-fixes.
+- При компрометации источника можно одновременно подменить и артефакт, и checksum.
 
-Эксплуатируемость:
-- Низкая прямая эксплуатируемость; средний операционный риск в долгом горизонте.
-
-Итог:
-- Governance-процесс формализован и машинно проверяется в CI.
-
----
+Рекомендация:
+- По возможности проверять detached signatures/provenance из независимого trust root.
 
 ## Подтверждённые сильные стороны
 
-- Hash-pinned lockfiles и использование `--require-hashes` для build/audit зависимостей.
-- GitHub Actions закреплены по commit SHA; workflows работают с least-privilege (`contents: read`).
-- Есть отдельный secret scanning workflow с checksum-верификацией скачиваемого инструмента (`gitleaks`).
-- Framing протокола и downgrade-защиты покрыты regression-тестами.
-- ACK-state management использует TTL и bounded pending queue.
-- В GUI для изображений/профилей применены confinement и атомарные паттерны записи.
-- Linux helper-команды запускаются через absolute paths (`shutil.which`) перед subprocess.
+- Сильные протокольные контроли целостности и replay/downgrade safeguards.
+- Hash-pinned lockfiles и `--require-hashes` в критичных install-сценариях.
+- GitHub Actions закреплены по commit SHA, workflows работают с least privilege.
+- Явный governance для vendored dependency (`i2plib/VENDORED_UPSTREAM.json`).
+- В core Python-путях не обнаружено `shell=True`, `eval`, `exec`, unsafe deserialization.
 
 ## Остаточные риски и пробелы тестирования
 
 Остаточные риски:
-- Утечка privacy-метаданных остаётся осознанным trade-off текущего framing.
-- Доверие к релизной подписи по-прежнему зависит от дисциплины верификации пользователя и не усилено platform-native trust signing.
+- Security posture зависит от доверия к локальному SAM и операторской конфигурации.
+- Модель локального атакующего остаётся релевантной для BlindBox fallback mode.
+- Проверка релизов без platform-native signatures сложнее для non-expert пользователей.
 
 Рекомендуемые дополнительные тесты:
-1. Негативные тесты для malformed handshake transcript и mixed-role replay сценариев.
-2. Протокольные тесты граничных случаев padding (малые, около границы bucket и большие payload-и).
-3. CI policy-тесты на обязательность platform signing/notarization после внедрения.
+1. Тесты на redaction чувствительных SAM-полей в логах.
+2. Тесты strict-SAM режима (запрет direct TCP replica configs).
+3. Тесты квот/rate limits для BlindBox local replica после внедрения.
+4. Расширить CI-проверки: обязательный lockfile-based vulnerability audit.
 
 ## Приоритет remediation
 
-1. P1: A-01 (platform-native release trust + provenance attestations)
-2. P2: P-02 (дальнейшее privacy-усиление в рамках ограничений текущего header framing)
-3. P3: Непрерывная дисциплина сопровождения контролей S-01/S-02 (periodic governance reviews)
+1. P1: M-05 (platform-native release signing/notarization)
+2. P2: дополнительное hardening для M-02 (namespace/rate-limit политики)
+3. P3: дополнительное supply-chain hardening для `L-03`
 
 ## Заключение
 
-Текущее состояние I2PChat показывает сильные контроли целостности протокола и дисциплинированные defensive checks в runtime-путях. Наиболее существенный оставшийся пробел — аутентичность релизов на этапе дистрибуции; при этом внедрённые HKDF key separation и governance-контроли цепочки поставки заметно снизили часть прежних низкоуровневых рисков.
+I2PChat демонстрирует сильное усиление протокола и в целом аккуратный defensive coding. Основные оставшиеся риски лежат в практической операционной плоскости (доверие к локальным процессам, гигиена логирования и assurance релизов), а не в прямом взломе базовой криптографической логики протокола.

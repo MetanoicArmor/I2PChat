@@ -90,8 +90,9 @@ def show_notification(title: str, message: str) -> None:
                 except Exception:
                     pass
 
-            # Фоллбэк для Windows без GUI‑API: просто логируем текстом.
-            sys.stdout.write(f"[NOTIFY] {title}: {message}\n")
+            # Фоллбэк для Windows без GUI‑API: без содержимого сообщения, чтобы
+            # не утекали тексты в консольные логи.
+            sys.stdout.write("[NOTIFY] New message received\n")
     except Exception:
         # Любые ошибки нотификаций игнорируем.
         return

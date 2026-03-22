@@ -108,6 +108,14 @@ def _is_host_port_replica(value: str) -> bool:
     return 1 <= port <= 65535
 
 
+def _is_loopback_replica(value: str) -> bool:
+    if not _is_host_port_replica(value):
+        return False
+    host, _port = value.rsplit(":", 1)
+    host_norm = host.strip().lower().strip("[]")
+    return host_norm in {"127.0.0.1", "localhost", "::1"}
+
+
 def _parse_replicas_list(raw: str) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -467,7 +475,7 @@ def cleanup_images_cache() -> None:
         try:
             os.remove(path)
             total_size -= size
-            logger.info(f"Cleaned up old image: {path}")
+            logger.info("Cleaned up old image: %s", os.path.basename(path))
         except OSError:
             pass
 
@@ -734,6 +742,46 @@ class I2PChatCore:
             len(self.blindbox_replicas) > 0
             and all(_is_host_port_replica(item) for item in self.blindbox_replicas)
         )
+        self._blindbox_require_sam = (
+            os.environ.get("I2PCHAT_BLINDBOX_REQUIRE_SAM", "").strip().lower()
+            in TRUTHY_ENV_VALUES
+        )
+        if (
+            self._blindbox_require_sam
+            and len(self.blindbox_replicas) > 0
+            and not self._blindbox_use_sam
+        ):
+            raise ValueError(
+                "BlindBox strict SAM mode is enabled "
+                "(I2PCHAT_BLINDBOX_REQUIRE_SAM=1), "
+                "but replicas are configured as direct host:port endpoints. "
+                "Use .i2p replicas via SAM or disable strict SAM mode."
+            )
+        if self.blindbox_enabled and len(self.blindbox_replicas) > 0 and not self._blindbox_use_sam:
+            logger.warning(
+                "BlindBox transport is using direct TCP (non-SAM): %s. "
+                "Set I2PCHAT_BLINDBOX_REQUIRE_SAM=1 to forbid this mode.",
+                ", ".join(self.blindbox_replicas),
+            )
+        local_auth_token_env = os.environ.get("I2PCHAT_BLINDBOX_LOCAL_TOKEN", "").strip()
+        if self._blindbox_replicas_source == "local-auto":
+            self._blindbox_local_auth_token = local_auth_token_env or secrets.token_hex(24)
+        else:
+            self._blindbox_local_auth_token = local_auth_token_env
+        self._blindbox_local_max_entries = max(
+            64,
+            int(os.environ.get("I2PCHAT_BLINDBOX_LOCAL_MAX_ENTRIES", "4096")),
+        )
+        if (
+            self.blindbox_enabled
+            and not self._blindbox_use_sam
+            and any(_is_loopback_replica(item) for item in self.blindbox_replicas)
+            and not self._blindbox_local_auth_token
+        ):
+            logger.warning(
+                "BlindBox local/direct replicas are enabled without auth token. "
+                "Set I2PCHAT_BLINDBOX_LOCAL_TOKEN to require local auth."
+            )
         # Default 1: still PUT to every Blind Box in parallel, but accept success if any
         # one responds (I2P paths are often asymmetric). Set I2PCHAT_BLINDBOX_PUT_QUORUM=2
         # to require all configured boxes to ACK each offline message.
@@ -1804,8 +1852,11 @@ class I2PChatCore:
             "blind_boxes": len(self.blindbox_replicas),
             "blind_boxes_source": str(self._blindbox_replicas_source),
             "use_sam_for_blind_boxes": bool(self._blindbox_use_sam),
+            "require_sam_for_blind_boxes": bool(self._blindbox_require_sam),
             "replicas_source": str(self._blindbox_replicas_source),
             "use_sam_for_replicas": bool(self._blindbox_use_sam),
+            "require_sam_for_replicas": bool(self._blindbox_require_sam),
+            "local_auth_token_enabled": bool(self._blindbox_local_auth_token),
             "ready": bool(self._blindbox_ready()),
             "has_root_secret": self._blindbox_root_secret is not None,
             "replicas": len(self.blindbox_replicas),
@@ -1963,7 +2014,10 @@ class I2PChatCore:
             if self._blindbox_client is None:
                 if self._blindbox_replicas_source == "local-auto":
                     try:
-                        endpoint = await ensure_local_blindbox_replica()
+                        endpoint = await ensure_local_blindbox_replica(
+                            auth_token=self._blindbox_local_auth_token,
+                            max_entries=self._blindbox_local_max_entries,
+                        )
                         self.blindbox_replicas = [endpoint]
                         self._blindbox_use_sam = False
                     except Exception as e:
@@ -1995,6 +2049,7 @@ class I2PChatCore:
                         self.blindbox_get_quorum, len(self.blindbox_replicas)
                     ),
                     sam_session_timeout=bb_sam_sess_timeout,
+                    local_auth_token=self._blindbox_local_auth_token,
                 )
             if self._blindbox_task is None or self._blindbox_task.done():
                 loop = asyncio.get_running_loop()
@@ -3376,7 +3431,7 @@ class I2PChatCore:
                             filename=safe_path, size=size, received=0
                         )
                         self._emit_system(
-                            f"Receiving file: {safe_path} ({size} bytes)"
+                            f"Receiving file: {final_name} ({size} bytes)"
                         )
                         self._emit_file_event(self.incoming_info)
                     except Exception as e:

@@ -28,6 +28,9 @@ jobs:
 
       - name: Audit dependencies
         run: |
+          # Primary gate: audit the exact hash-locked dependency graph used in builds.
+          pip-audit -r requirements.txt
+          # Supplemental signal: unresolved input constraints.
           pip-audit -r requirements.in
 
   release-integrity-policy:
