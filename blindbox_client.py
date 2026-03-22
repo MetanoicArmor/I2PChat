@@ -215,6 +215,10 @@ class BlindBoxClient:
                 raise RuntimeError(msg)
             self._started = True
 
+    def is_runtime_ready(self) -> bool:
+        """True after start() completes (SAM session or direct mode ready for I/O)."""
+        return self._started
+
     async def close(self) -> None:
         writer = self._ctrl_writer
         self._ctrl_writer = None

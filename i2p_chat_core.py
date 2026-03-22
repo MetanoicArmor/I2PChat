@@ -1790,8 +1790,13 @@ class I2PChatCore:
     def get_blindbox_telemetry(self) -> dict[str, Any]:
         """Returns non-sensitive local BlindBox runtime telemetry."""
         has_client = self._blindbox_client is not None
+        # Task is "running" during client.start() too; UI should not say "polling" until
+        # the Blind Box SAM/direct session is actually up (matches "runtime started").
         poller_running = (
-            self._blindbox_task is not None and not self._blindbox_task.done()
+            self._blindbox_task is not None
+            and not self._blindbox_task.done()
+            and has_client
+            and self._blindbox_client.is_runtime_ready()
         )
         return {
             "enabled": bool(self.blindbox_enabled),
