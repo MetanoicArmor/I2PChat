@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import secrets
 import socket
 import time
 from dataclasses import dataclass
@@ -80,6 +81,10 @@ class BlindBoxClient:
             raise ValueError("sam_session_timeout must be positive")
 
         self.session_id = session_id
+        # SAM session nickname passed to SESSION CREATE / STREAM CONNECT. Rotated on
+        # each successful setup so a stale session left on the router after close()
+        # cannot cause RESULT=DUPLICATED_ID on the next start().
+        self._active_sam_id = session_id
         self.replicas = list(replicas)
         self.sam_host = sam_host
         self.sam_port = sam_port
@@ -155,10 +160,11 @@ class BlindBoxClient:
                     "Is I2P running? Increase I2PCHAT_BLINDBOX_SAM_SESSION_TIMEOUT if needed."
                 ) from exc
 
+            self._active_sam_id = f"{self.session_id}_{secrets.token_hex(4)}"
             options_str = " ".join(f"{k}={v}" for k, v in self.sam_options.items())
             cmd = (
                 "SESSION CREATE STYLE=STREAM "
-                f"ID={self.session_id} DESTINATION=TRANSIENT "
+                f"ID={self._active_sam_id} DESTINATION=TRANSIENT "
                 f"SIGNATURE_TYPE=7 OPTION {options_str}\n"
             )
             self._ctrl_writer.write(cmd.encode("utf-8"))
@@ -358,7 +364,7 @@ class BlindBoxClient:
         try:
             await self._sam_hello(reader, writer)
             cmd = (
-                f"STREAM CONNECT ID={self.session_id} "
+                f"STREAM CONNECT ID={self._active_sam_id} "
                 f"DESTINATION={dest_for_sam} SILENT=false\n"
             )
             writer.write(cmd.encode("utf-8"))
