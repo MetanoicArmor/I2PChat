@@ -38,6 +38,10 @@ I2PChat-windows*.zip
 I2PChat-*.AppImage
 I2PChat.AppDir/
 
+# Per-build integrity artifacts (attach to GitHub Releases; do not commit — differs per OS/artifact)
+SHA256SUMS
+SHA256SUMS.asc
+
 # Secrets / keys — never commit
 *.dat
 .env

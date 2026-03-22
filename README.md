@@ -182,6 +182,50 @@ It will:
 
 The resulting `I2PChat.exe` is self‑contained and can be distributed to machines without Python installed.
 
+### Verify release artifacts
+
+Release build scripts generate:
+
+- `SHA256SUMS` file for produced release archive(s);
+- detached armored GPG signature `SHA256SUMS.asc` (best-effort by default).
+
+These files are **not** tracked in git (they differ per OS/build); upload them **with the release assets** on GitHub.
+
+Build-time controls:
+
+- `I2PCHAT_SKIP_GPG_SIGN=1` — always skip detached signature creation;
+- `I2PCHAT_REQUIRE_GPG=1` — fail build if GPG signing is unavailable or fails;
+- `I2PCHAT_GPG_KEY_ID=<keyid>` — select a specific key for detached signature.
+
+Verification example:
+
+```bash
+gpg --verify SHA256SUMS.asc SHA256SUMS
+sha256sum -c SHA256SUMS
+```
+
+### Protocol metadata and padding profile
+
+The transport is encrypted after handshake, but some protocol metadata remains
+observable on the wire:
+
+- frame type (`TYPE`);
+- frame length (`LEN`);
+- pre-handshake peer identity preface exchange.
+
+To reduce traffic-shape leakage, encrypted payloads use a padding profile:
+
+- default: `balanced` (pads encrypted plaintext to 128-byte buckets);
+- optional: `off` (disable padding).
+
+You can override the profile with:
+
+```bash
+I2PCHAT_PADDING_PROFILE=off python main_qt.py
+```
+
+Trade-off: stronger padding reduces length correlation but increases bandwidth.
+
 #### ❄️ NixOS
 
 ```bash
