@@ -84,10 +84,10 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
         await srv_a.start()
         await srv_b.start()
         try:
-            replicas = [f"127.0.0.1:{srv_a.port}", f"127.0.0.1:{srv_b.port}"]
+            boxes = [f"127.0.0.1:{srv_a.port}", f"127.0.0.1:{srv_b.port}"]
             client = BlindBoxClient(
                 session_id="test1",
-                replicas=replicas,
+                blind_boxes=boxes,
                 use_sam=False,
                 put_quorum=2,
                 get_quorum=1,
@@ -112,7 +112,7 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
         try:
             client = BlindBoxClient(
                 session_id="test2",
-                replicas=[f"127.0.0.1:{srv_a.port}", f"127.0.0.1:{srv_b.port}"],
+                blind_boxes=[f"127.0.0.1:{srv_a.port}", f"127.0.0.1:{srv_b.port}"],
                 use_sam=False,
                 get_quorum=2,
             )
@@ -123,7 +123,7 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             await srv_a.stop()
             await srv_b.stop()
 
-    async def test_retry_backoff_on_flaky_replica(self) -> None:
+    async def test_retry_backoff_on_flaky_blind_box(self) -> None:
         storage_a: dict[str, bytes] = {}
         storage_b: dict[str, bytes] = {}
         srv_a = _ReplicaServer("ok", storage_a, flaky_first_put=True)
@@ -133,7 +133,7 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
         try:
             client = BlindBoxClient(
                 session_id="test3",
-                replicas=[f"127.0.0.1:{srv_a.port}", f"127.0.0.1:{srv_b.port}"],
+                blind_boxes=[f"127.0.0.1:{srv_a.port}", f"127.0.0.1:{srv_b.port}"],
                 use_sam=False,
                 put_quorum=2,
                 retry_attempts=3,
@@ -151,14 +151,14 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             "dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p"
         )
         self.assertEqual(
-            BlindBoxClient._sam_destination_for_replica(f"{b32}:19444"),
+            BlindBoxClient._sam_destination_from_endpoint(f"{b32}:19444"),
             b32,
         )
-        self.assertEqual(BlindBoxClient._sam_destination_for_replica(b32), b32)
+        self.assertEqual(BlindBoxClient._sam_destination_from_endpoint(b32), b32)
 
     def test_sam_destination_keeps_host_port(self) -> None:
         self.assertEqual(
-            BlindBoxClient._sam_destination_for_replica("127.0.0.1:19444"),
+            BlindBoxClient._sam_destination_from_endpoint("127.0.0.1:19444"),
             "127.0.0.1:19444",
         )
 

@@ -285,7 +285,7 @@
 - Нужен **постоянный профиль** и **Lock to peer**. Для межхостовой офлайн-доставки задайте общие **Blind Box**-серверы через `I2PCHAT_BLINDBOX_REPLICAS`. Для дефолта на весь деплой используйте `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`. Для централизованной прод-настройки — `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`. В **готовых сборках** дополнительно зашита **пара адресов** в `DEFAULT_RELEASE_BLINDBOX_ENDPOINTS` в `i2p_chat_core.py` (`tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444`, `dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p:19444`; перекрывается переменными выше; отключить: `I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`). См. [**RELEASE_0.6.0.md**](../RELEASE_0.6.0.md) — без повторения криптодеталей).  
   Опционально только для локальной/дев-сборки: `I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1` поднимает локальный Blind Box (`127.0.0.1:19444`).
   Принудительно выключить BlindBox можно `I2PCHAT_BLINDBOX_ENABLED=0`.
-  **Кворум PUT:** по умолчанию `I2PCHAT_BLINDBOX_PUT_QUORUM=1` (успех, если хотя бы одна реплика приняла blob). Значение `=2` — строгий режим: ответ должны дать все перечисленные коробки.
+  **Кворум PUT:** по умолчанию `I2PCHAT_BLINDBOX_PUT_QUORUM=1` (успех, если хотя бы один **Blind Box** принял blob). Значение `=2` — строгий режим: ответ должны дать все перечисленные Blind Box.
 - `Send` в GUI работает как «умный маршрут»:
   - при живой защищённой сессии отправляет онлайн;
   - при `Send: offline queue` ставит текст в BlindBox-очередь (без обязательного ручного Connect);

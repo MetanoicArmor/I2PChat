@@ -78,10 +78,7 @@ Practical notes:
 - For named profiles BlindBox is enabled by default.
 - For `default` (transient) profile BlindBox is off.
 - Disable explicitly with `I2PCHAT_BLINDBOX_ENABLED=0`.
-- For team/server deployments, set **Blind Box** server addresses once in the environment (`I2PCHAT_BLINDBOX_REPLICAS`, `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`, or `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`) so users get offline delivery.
-- **Release build default:** two Blind Box endpoints are **hardcoded** in `i2p_chat_core.py` (`DEFAULT_RELEASE_BLINDBOX_ENDPOINTS`): `tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444`, `dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p:19444`. Override anytime with env vars above. Opt out: `I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`.
-- **PUT quorum:** by default offline sends succeed if **at least one** replica stores the blob (`I2PCHAT_BLINDBOX_PUT_QUORUM=1`). Use `I2PCHAT_BLINDBOX_PUT_QUORUM=2` when you require every listed box to ACK (stricter; fails if any replica is down).
-- **SAM session create:** BlindBox opens a second SAM stream session; Java I2P can take a long time to answer `SESSION CREATE`. Default wait is **120s** (`I2PCHAT_BLINDBOX_SAM_SESSION_TIMEOUT`); increase if you still see timeouts on slow routers.
+- Deployments can set Blind Box endpoints via env (`I2PCHAT_BLINDBOX_REPLICAS`, `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`, or `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`). Built-in release defaults and further options → manuals / release notes above.
 
 ### 📸 Screenshots
 

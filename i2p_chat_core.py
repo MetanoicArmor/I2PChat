@@ -734,7 +734,7 @@ class I2PChatCore:
             len(self.blindbox_replicas) > 0
             and all(_is_host_port_replica(item) for item in self.blindbox_replicas)
         )
-        # Default 1: still PUT to every replica in parallel, but accept success if any
+        # Default 1: still PUT to every Blind Box in parallel, but accept success if any
         # one responds (I2P paths are often asymmetric). Set I2PCHAT_BLINDBOX_PUT_QUORUM=2
         # to require all configured boxes to ACK each offline message.
         self.blindbox_put_quorum = max(
@@ -1638,6 +1638,15 @@ class I2PChatCore:
             },
         )
 
+        # Blind Box uses a second SAM stream session; starting it here overlaps with
+        # the tunnel-build poll below so "BlindBox runtime started" is not delayed
+        # by the full main-tunnel wait (previously ~up to 90s extra wall time).
+        if self._blindbox_ready():
+            self._emit_system(
+                "Blind Box: starting SAM session in parallel with main tunnels…"
+            )
+            asyncio.create_task(self._ensure_blindbox_runtime_started())
+
         my_address = self.my_dest.base32 + ".b32.i2p"
         self._emit_system("Building I2P tunnels (may take 1–2 min)...")
         tunnels_ready = False
@@ -1674,6 +1683,7 @@ class I2PChatCore:
         self._accept_task = loop.create_task(self.accept_loop())
         self._tunnel_task = loop.create_task(self.tunnel_watcher())
         if self._blindbox_ready():
+            # Sync with early parallel boot (or run once if that task has not won yet).
             await self._ensure_blindbox_runtime_started()
 
     # ---------- публичные операции ----------
@@ -1852,6 +1862,7 @@ class I2PChatCore:
             "blindbox_replicas_source": str(self._blindbox_replicas_source),
             "blind_boxes_source": str(self._blindbox_replicas_source),
             "blindbox_use_sam_for_replicas": bool(self._blindbox_use_sam),
+            "blindbox_use_sam_for_blind_boxes": bool(self._blindbox_use_sam),
             "blindbox_ready": ready,
             "has_root_secret": has_root_secret,
             "stored_peer": bool(self.stored_peer),
@@ -1952,7 +1963,7 @@ class I2PChatCore:
                         self._blindbox_use_sam = False
                     except Exception as e:
                         self._emit_error(
-                            f"Local BlindBox replica startup failed: {_exception_user_message(e)}"
+                            f"Local Blind Box startup failed: {_exception_user_message(e)}"
                         )
                         return
                 # Unique SAM ID: avoids collisions if two app instances share profile+second,
@@ -1968,7 +1979,7 @@ class I2PChatCore:
                 )
                 self._blindbox_client = BlindBoxClient(
                     session_id=bb_sam_id,
-                    replicas=self.blindbox_replicas,
+                    blind_boxes=self.blindbox_replicas,
                     sam_host=self.sam_address[0],
                     sam_port=self.sam_address[1],
                     use_sam=self._blindbox_use_sam,

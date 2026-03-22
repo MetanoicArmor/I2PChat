@@ -1,5 +1,5 @@
 """
-Local BlindBox replica server (best-effort convenience fallback).
+Local Blind Box server (best-effort convenience fallback).
 
 Protocol:
 - PUT <key> <size>\n + <size bytes> -> OK | EXISTS | ERR
@@ -128,6 +128,6 @@ async def ensure_local_blindbox_replica(
     if not started:
         if not await _probe_existing_local_replica(host, port):
             raise RuntimeError(
-                f"Local BlindBox replica failed to bind on {host}:{port} (port busy?)"
+                f"Local Blind Box failed to bind on {host}:{port} (port busy?)"
             )
     return _LOCAL_REPLICA_SERVER.endpoint

@@ -42,7 +42,9 @@ StreamFactory = Callable[[str], Awaitable[StreamPair]]
 
 @dataclass(frozen=True)
 class BlindBoxPutResult:
-    replica: str
+    """One successful PUT to a Blind Box endpoint (address is host:port or .b32.i2p…)."""
+
+    address: str
     status: str
 
 
@@ -50,7 +52,7 @@ class BlindBoxClient:
     def __init__(
         self,
         session_id: str,
-        replicas: list[str],
+        blind_boxes: list[str],
         *,
         sam_host: str = "127.0.0.1",
         sam_port: int = 7656,
@@ -67,12 +69,12 @@ class BlindBoxClient:
     ) -> None:
         if not session_id:
             raise ValueError("session_id is required")
-        if not replicas:
-            raise ValueError("replicas list cannot be empty")
-        if put_quorum < 1 or put_quorum > len(replicas):
-            raise ValueError("put_quorum must be in range 1..len(replicas)")
-        if get_quorum < 1 or get_quorum > len(replicas):
-            raise ValueError("get_quorum must be in range 1..len(replicas)")
+        if not blind_boxes:
+            raise ValueError("blind_boxes list cannot be empty")
+        if put_quorum < 1 or put_quorum > len(blind_boxes):
+            raise ValueError("put_quorum must be in range 1..len(blind_boxes)")
+        if get_quorum < 1 or get_quorum > len(blind_boxes):
+            raise ValueError("get_quorum must be in range 1..len(blind_boxes)")
         if retry_attempts < 1:
             raise ValueError("retry_attempts must be >= 1")
         if io_timeout <= 0:
@@ -85,7 +87,7 @@ class BlindBoxClient:
         # each successful setup so a stale session left on the router after close()
         # cannot cause RESULT=DUPLICATED_ID on the next start().
         self._active_sam_id = session_id
-        self.replicas = list(replicas)
+        self.blind_boxes = list(blind_boxes)
         self.sam_host = sam_host
         self.sam_port = sam_port
         self.sam_options = sam_options or {
@@ -109,17 +111,19 @@ class BlindBoxClient:
         # Serialize start(): poll loop and put()/get() can otherwise race and issue
         # two SESSION CREATE with the same ID → SAM RESULT=DUPLICATED_ID.
         self._start_lock = asyncio.Lock()
-        # Throttle identical replica failure logs (poller hammers GET).
-        self._replica_warn_next: dict[str, float] = {}
+        # Throttle identical Blind Box failure logs (poller hammers GET).
+        self._box_warn_next: dict[str, float] = {}
 
-    def _log_replica_failure(self, op: str, replica: str, err: Exception) -> None:
+    def _log_box_failure(self, op: str, box_addr: str, err: Exception) -> None:
         now = time.monotonic()
-        key = f"{op}|{replica}|{type(err).__name__}|{err!s}"
-        if now < self._replica_warn_next.get(key, 0):
-            logger.debug("BlindBox %s failed for %s (suppressed): %s", op, replica, err)
+        key = f"{op}|{box_addr}|{type(err).__name__}|{err!s}"
+        if now < self._box_warn_next.get(key, 0):
+            logger.debug(
+                "Blind Box %s failed (%s) (suppressed): %s", op, box_addr, err
+            )
             return
-        self._replica_warn_next[key] = now + 90.0
-        logger.warning("BlindBox %s failed for %s: %s", op, replica, err)
+        self._box_warn_next[key] = now + 90.0
+        logger.warning("Blind Box %s failed (%s): %s", op, box_addr, err)
 
     async def start(self) -> None:
         if self._started:
@@ -184,7 +188,7 @@ class BlindBoxClient:
                     except Exception:
                         pass
                 raise RuntimeError(
-                    f"SAM timed out ({t_sess:g}s) during BlindBox SESSION CREATE "
+                    f"SAM timed out ({t_sess:g}s) during Blind Box SESSION CREATE "
                     f"({self.sam_host}:{self.sam_port}). "
                     "I2P may still be building tunnels — wait and retry, or increase "
                     "I2PCHAT_BLINDBOX_SAM_SESSION_TIMEOUT."
@@ -231,19 +235,32 @@ class BlindBoxClient:
         if not isinstance(blob, (bytes, bytearray)) or len(blob) == 0:
             raise ValueError("blob must be non-empty bytes")
 
-        tasks = [asyncio.create_task(self._put_to_replica(replica, key, bytes(blob))) for replica in self.replicas]
+        tasks = [
+            asyncio.create_task(self._put_to_blind_box(addr, key, bytes(blob)))
+            for addr in self.blind_boxes
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         ok_results: list[BlindBoxPutResult] = []
-        for replica, result in zip(self.replicas, results):
+        put_failures: list[tuple[str, Exception]] = []
+        for addr, result in zip(self.blind_boxes, results):
             if isinstance(result, Exception):
-                self._log_replica_failure("PUT", replica, result)
+                put_failures.append((addr, result))
                 continue
             ok_results.append(result)
         success_count = sum(1 for r in ok_results if r.status in {"OK", "EXISTS"})
         if success_count < self.put_quorum:
+            for addr, err in put_failures:
+                self._log_box_failure("PUT", addr, err)
             raise RuntimeError(
-                f"BlindBox PUT quorum not reached: {success_count}/{self.put_quorum}"
+                f"Blind Box PUT quorum not reached: {success_count}/{self.put_quorum}"
+            )
+        # Quorum met: another Blind Box carried the message — failures are non-fatal noise.
+        for addr, err in put_failures:
+            logger.debug(
+                "Blind Box PUT: %s failed (quorum already satisfied): %s",
+                addr,
+                err,
             )
         return ok_results
 
@@ -253,26 +270,40 @@ class BlindBoxClient:
         if not key:
             raise ValueError("key is required")
 
-        tasks = [asyncio.create_task(self._get_from_replica(replica, key)) for replica in self.replicas]
+        tasks = [
+            asyncio.create_task(self._get_from_blind_box(addr, key))
+            for addr in self.blind_boxes
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         blobs: list[bytes] = []
-        for replica, result in zip(self.replicas, results):
+        get_failures: list[tuple[str, Exception]] = []
+        for addr, result in zip(self.blind_boxes, results):
             if isinstance(result, Exception):
-                self._log_replica_failure("GET", replica, result)
+                get_failures.append((addr, result))
                 continue
             if result is not None:
                 blobs.append(result)
 
         if require_quorum and len(blobs) < self.get_quorum:
+            for addr, err in get_failures:
+                self._log_box_failure("GET", addr, err)
             raise RuntimeError(
-                f"BlindBox GET quorum not reached: {len(blobs)}/{self.get_quorum}"
+                f"Blind Box GET quorum not reached: {len(blobs)}/{self.get_quorum}"
+            )
+        for addr, err in get_failures:
+            logger.debug(
+                "Blind Box GET: %s failed (quorum already satisfied): %s",
+                addr,
+                err,
             )
         return self._dedup_blobs(blobs)
 
-    async def _put_to_replica(self, replica: str, key: str, blob: bytes) -> BlindBoxPutResult:
+    async def _put_to_blind_box(
+        self, box_addr: str, key: str, blob: bytes
+    ) -> BlindBoxPutResult:
         async def _op() -> BlindBoxPutResult:
-            reader, writer = await self._connect(replica)
+            reader, writer = await self._connect(box_addr)
             try:
                 writer.write(f"PUT {key} {len(blob)}\n".encode("utf-8"))
                 writer.write(blob)
@@ -281,15 +312,15 @@ class BlindBoxClient:
                 status = line.decode("utf-8", errors="ignore").strip()
                 if status not in {"OK", "EXISTS"}:
                     raise RuntimeError(f"Unexpected PUT response: {status!r}")
-                return BlindBoxPutResult(replica=replica, status=status)
+                return BlindBoxPutResult(address=box_addr, status=status)
             finally:
                 await self._safe_close(writer)
 
-        return await self._with_retries(_op, op_name=f"PUT {replica}")
+        return await self._with_retries(_op, op_name=f"PUT {box_addr}")
 
-    async def _get_from_replica(self, replica: str, key: str) -> Optional[bytes]:
+    async def _get_from_blind_box(self, box_addr: str, key: str) -> Optional[bytes]:
         async def _op() -> Optional[bytes]:
-            reader, writer = await self._connect(replica)
+            reader, writer = await self._connect(box_addr)
             try:
                 writer.write(f"GET {key}\n".encode("utf-8"))
                 await writer.drain()
@@ -309,7 +340,7 @@ class BlindBoxClient:
             finally:
                 await self._safe_close(writer)
 
-        return await self._with_retries(_op, op_name=f"GET {replica}")
+        return await self._with_retries(_op, op_name=f"GET {box_addr}")
 
     async def _with_retries(self, op, *, op_name: str):
         last_exc: Optional[Exception] = None
@@ -326,11 +357,11 @@ class BlindBoxClient:
         assert last_exc is not None
         raise last_exc
 
-    async def _connect(self, replica: str) -> StreamPair:
+    async def _connect(self, box_addr: str) -> StreamPair:
         if self.stream_factory is not None:
-            return await self.stream_factory(replica)
+            return await self.stream_factory(box_addr)
         if not self.use_sam:
-            host, port_raw = replica.rsplit(":", 1)
+            host, port_raw = box_addr.rsplit(":", 1)
             host = host.strip()
             port = int(port_raw)
             try:
@@ -340,17 +371,17 @@ class BlindBoxClient:
             except OSError:
                 # Fallback for environments where AF selection fails unexpectedly.
                 return await asyncio.open_connection(host, port)
-        return await self._connect_via_sam(replica)
+        return await self._connect_via_sam(box_addr)
 
     @staticmethod
-    def _sam_destination_for_replica(replica: str) -> str:
+    def _sam_destination_from_endpoint(endpoint: str) -> str:
         """
         SAM STREAM CONNECT requires a valid I2P DESTINATION (.b32.i2p, .i2p, or Base64).
         Config lines like ``host.b32.i2p:19444`` use ``:19444`` as a human hint for the
         Blind Box TCP port on the remote side, not as part of the SAM destination string.
         Passing the suffix causes ``RESULT=INVALID_KEY``.
         """
-        s = replica.strip()
+        s = endpoint.strip()
         if ":" not in s:
             return s
         host_part, port_part = s.rsplit(":", 1)
@@ -386,8 +417,8 @@ class BlindBoxClient:
             await self._safe_close(writer)
             raise
 
-    async def _connect_via_sam(self, replica: str) -> StreamPair:
-        destination = self._sam_destination_for_replica(replica)
+    async def _connect_via_sam(self, box_addr: str) -> StreamPair:
+        destination = self._sam_destination_from_endpoint(box_addr)
         sam_address = (self.sam_host, self.sam_port)
         connect_order: List[str] = []
 
@@ -401,7 +432,7 @@ class BlindBoxClient:
                 connect_order.append(dest_obj.base64)
             except Exception as e:
                 logger.info(
-                    "BlindBox NAMING LOOKUP failed for %s (%s); will try raw .b32.i2p",
+                    "Blind Box NAMING LOOKUP failed for %s (%s); will try raw .b32.i2p",
                     destination,
                     _sam_exc_detail(e),
                 )
@@ -428,7 +459,7 @@ class BlindBoxClient:
                 errors.append(str(e))
                 continue
         raise RuntimeError(
-            "SAM STREAM CONNECT exhausted destination attempts ("
+            "Blind Box SAM STREAM CONNECT failed for all destination forms tried ("
             + "; ".join(errors)
             + ")"
         )

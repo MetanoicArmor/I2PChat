@@ -285,7 +285,7 @@ Using this button you can:
 - You must use a **persistent profile** and **lock to peer**. For cross-host offline delivery, configure shared **Blind Box** servers via `I2PCHAT_BLINDBOX_REPLICAS`. For deployment-wide defaults, use `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`. For centrally managed production defaults, use `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`. **Release binaries** also ship a **built-in pair** in `DEFAULT_RELEASE_BLINDBOX_ENDPOINTS` inside `i2p_chat_core.py` (`tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444`, `dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p:19444`; override with env vars, disable with `I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`). See [**RELEASE_0.6.0.md**](../RELEASE_0.6.0.md) — no duplicate crypto detail here.
   Optional local/dev-only fallback: set `I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1` to start a local Blind Box server (`127.0.0.1:19444`).
   You can force-disable BlindBox with `I2PCHAT_BLINDBOX_ENABLED=0`.
-  **PUT quorum:** default `I2PCHAT_BLINDBOX_PUT_QUORUM=1` (success if any replica stores the blob). Use `=2` to require every listed box to ACK (stricter).
+  **PUT quorum:** default `I2PCHAT_BLINDBOX_PUT_QUORUM=1` (success if any **Blind Box** stores the blob). Use `=2` to require every listed Blind Box to ACK (stricter).
 - `Send` in GUI works as a smart route:
   - with a live secure session, text is sent online;
   - with `Send: offline queue`, text is queued via BlindBox (without mandatory manual Connect);
