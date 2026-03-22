@@ -2,21 +2,22 @@
   description = "I2PChat - Secure peer-to-peer chat over I2P";
 
   inputs = {
-    # Keep branch reference here; reproducibility is enforced via flake.lock.
+    # Reproducibility via flake.lock; update with: nix flake update
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { nixpkgs, flake-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        
+        lib = pkgs.lib;
+
         python = pkgs.python312;
-        textualNoChecks = pkgs.python312Packages.textual.overridePythonAttrs (_old: {
+        textualNoChecks = python.pkgs.textual.overridePythonAttrs (_old: {
           doCheck = false;
         });
-        
+
         pythonEnv = python.withPackages (ps: with ps; [
           textualNoChecks
           rich
@@ -26,35 +27,46 @@
           pillow
           pynacl
         ]);
-        
-      in {
-        packages.default = pkgs.stdenv.mkDerivation {
+
+        qtbase = pkgs.qt6.qtbase;
+        # qtPluginPrefix exists on most nixpkgs qt6.qtbase; fallback for older trees
+        qtPluginPath =
+          if qtbase ? qtPluginPrefix then "${qtbase}/${qtbase.qtPluginPrefix}"
+          else "${qtbase}/lib/qt-6/plugins";
+
+        i2pchat = pkgs.stdenv.mkDerivation {
           pname = "i2pchat";
-          version = "0.2.0";
-          
+          version = lib.removeSuffix "\n" (lib.removeSuffix "\r" (builtins.readFile ./VERSION));
+
           src = ./.;
-          
+
           nativeBuildInputs = [ pkgs.makeWrapper ];
-          buildInputs = [ pythonEnv pkgs.qt6.qtbase ];
-          
+          buildInputs = [ pythonEnv qtbase ];
+
           dontBuild = true;
-          dontWrapQtApps = true;
-          
+
           installPhase = ''
-            mkdir -p $out/lib/i2pchat $out/bin
-            
-            cp -r *.py i2plib $out/lib/i2pchat/
-            cp -r icon.png $out/lib/i2pchat/ 2>/dev/null || true
-            
-            makeWrapper ${pythonEnv}/bin/python $out/bin/i2pchat \
+            runHook preInstall
+            mkdir -p "$out/lib/i2pchat" "$out/bin"
+
+            shopt -s nullglob
+            for f in *.py; do
+              cp "$f" "$out/lib/i2pchat/"
+            done
+            cp -r i2plib "$out/lib/i2pchat/"
+            if [ -d assets ]; then cp -r assets "$out/lib/i2pchat/"; fi
+            if [ -e icon.png ]; then cp icon.png "$out/lib/i2pchat/"; fi
+
+            makeWrapper ${pythonEnv}/bin/python "$out/bin/i2pchat" \
               --add-flags "$out/lib/i2pchat/main_qt.py" \
-              --prefix QT_PLUGIN_PATH : "${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}"
-            
-            makeWrapper ${pythonEnv}/bin/python $out/bin/i2pchat-tui \
+              --prefix QT_PLUGIN_PATH : "${qtPluginPath}"
+
+            makeWrapper ${pythonEnv}/bin/python "$out/bin/i2pchat-tui" \
               --add-flags "$out/lib/i2pchat/chat-python.py"
+            runHook postInstall
           '';
-          
-          meta = with pkgs.lib; {
+
+          meta = with lib; {
             description = "Secure peer-to-peer chat client for the I2P anonymity network";
             homepage = "https://github.com/MetanoicArmor/I2PChat";
             license = licenses.mit;
@@ -62,27 +74,30 @@
             mainProgram = "i2pchat";
           };
         };
-        
+      in
+      {
+        packages.default = i2pchat;
+
         apps.default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/i2pchat";
-        };
-        
-        apps.tui = {
-          type = "app";
-          program = "${self.packages.${system}.default}/bin/i2pchat-tui";
+          program = "${i2pchat}/bin/i2pchat";
         };
 
-        checks.default = self.packages.${system}.default;
-        
+        apps.tui = {
+          type = "app";
+          program = "${i2pchat}/bin/i2pchat-tui";
+        };
+
+        checks.default = i2pchat;
+
         devShells.default = pkgs.mkShell {
           buildInputs = [
             pythonEnv
-            pkgs.qt6.qtbase
+            qtbase
           ];
-          
+
           shellHook = ''
-            export QT_PLUGIN_PATH="${pkgs.qt6.qtbase}/${pkgs.qt6.qtbase.qtPluginPrefix}"
+            export QT_PLUGIN_PATH="${qtPluginPath}"
             echo "I2PChat development shell"
             echo "Run: python main_qt.py"
           '';
