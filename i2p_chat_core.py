@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import shutil
 import struct
 import sys
@@ -737,6 +738,7 @@ class I2PChatCore:
         )
         self._blindbox_client: Optional[BlindBoxClient] = None
         self._blindbox_task: Optional[asyncio.Task[Any]] = None
+        self._blindbox_runtime_lock = asyncio.Lock()
         self._blindbox_state = BlindBoxState()
         self._blindbox_root_secret: Optional[bytes] = None
         self._blindbox_root_epoch: int = 0
@@ -1931,27 +1933,37 @@ class I2PChatCore:
     async def _ensure_blindbox_runtime_started(self) -> None:
         if not self._blindbox_ready():
             return
-        if self._blindbox_client is None:
-            if self._blindbox_replicas_source == "local-auto":
-                try:
-                    endpoint = await ensure_local_blindbox_replica()
-                    self.blindbox_replicas = [endpoint]
-                    self._blindbox_use_sam = False
-                except Exception as e:
-                    self._emit_error(f"Local BlindBox replica startup failed: {e}")
-                    return
-            self._blindbox_client = BlindBoxClient(
-                session_id=f"{self.session_id}_blindbox",
-                replicas=self.blindbox_replicas,
-                sam_host=self.sam_address[0],
-                sam_port=self.sam_address[1],
-                use_sam=self._blindbox_use_sam,
-                put_quorum=min(self.blindbox_put_quorum, len(self.blindbox_replicas)),
-                get_quorum=min(self.blindbox_get_quorum, len(self.blindbox_replicas)),
-            )
-        if self._blindbox_task is None or self._blindbox_task.done():
-            loop = asyncio.get_running_loop()
-            self._blindbox_task = loop.create_task(self._blindbox_poll_loop())
+        async with self._blindbox_runtime_lock:
+            if not self._blindbox_ready():
+                return
+            if self._blindbox_client is None:
+                if self._blindbox_replicas_source == "local-auto":
+                    try:
+                        endpoint = await ensure_local_blindbox_replica()
+                        self.blindbox_replicas = [endpoint]
+                        self._blindbox_use_sam = False
+                    except Exception as e:
+                        self._emit_error(f"Local BlindBox replica startup failed: {e}")
+                        return
+                # Unique SAM ID: avoids collisions if two app instances share profile+second,
+                # and pairs with BlindBoxClient.start() lock against duplicate SESSION CREATE.
+                bb_sam_id = f"{self.session_id}_bb_{secrets.token_hex(6)}"
+                self._blindbox_client = BlindBoxClient(
+                    session_id=bb_sam_id,
+                    replicas=self.blindbox_replicas,
+                    sam_host=self.sam_address[0],
+                    sam_port=self.sam_address[1],
+                    use_sam=self._blindbox_use_sam,
+                    put_quorum=min(
+                        self.blindbox_put_quorum, len(self.blindbox_replicas)
+                    ),
+                    get_quorum=min(
+                        self.blindbox_get_quorum, len(self.blindbox_replicas)
+                    ),
+                )
+            if self._blindbox_task is None or self._blindbox_task.done():
+                loop = asyncio.get_running_loop()
+                self._blindbox_task = loop.create_task(self._blindbox_poll_loop())
 
     async def ensure_blindbox_runtime_started(self) -> None:
         await self._ensure_blindbox_runtime_started()

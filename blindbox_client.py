@@ -79,36 +79,52 @@ class BlindBoxClient:
         self._ctrl_reader: Optional[asyncio.StreamReader] = None
         self._ctrl_writer: Optional[asyncio.StreamWriter] = None
         self._started = False
+        # Serialize start(): poll loop and put()/get() can otherwise race and issue
+        # two SESSION CREATE with the same ID → SAM RESULT=DUPLICATED_ID.
+        self._start_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self._started:
             return
-        if not self.use_sam and self.stream_factory is None:
-            # direct mode does not need SAM startup.
+        async with self._start_lock:
+            if self._started:
+                return
+            if not self.use_sam and self.stream_factory is None:
+                # direct mode does not need SAM startup.
+                self._started = True
+                return
+            if self.stream_factory is not None:
+                # custom stream mode handles setup externally.
+                self._started = True
+                return
+            self._ctrl_reader, self._ctrl_writer = await asyncio.open_connection(
+                self.sam_host, self.sam_port
+            )
+            await self._sam_hello(self._ctrl_reader, self._ctrl_writer)
+            options_str = " ".join(f"{k}={v}" for k, v in self.sam_options.items())
+            cmd = (
+                "SESSION CREATE STYLE=STREAM "
+                f"ID={self.session_id} DESTINATION=TRANSIENT SIGNATURE_TYPE=7 OPTION {options_str}\n"
+            )
+            self._ctrl_writer.write(cmd.encode("utf-8"))
+            await self._ctrl_writer.drain()
+            response = await asyncio.wait_for(
+                self._ctrl_reader.readline(), timeout=self.io_timeout
+            )
+            response_text = response.decode("utf-8", errors="ignore").strip()
+            if "RESULT=OK" not in response_text:
+                # Drop half-open ctrl connection so a retry can open a fresh socket.
+                writer = self._ctrl_writer
+                self._ctrl_writer = None
+                self._ctrl_reader = None
+                if writer is not None:
+                    try:
+                        writer.close()
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+                raise RuntimeError(f"SAM session create failed: {response_text}")
             self._started = True
-            return
-        if self.stream_factory is not None:
-            # custom stream mode handles setup externally.
-            self._started = True
-            return
-        self._ctrl_reader, self._ctrl_writer = await asyncio.open_connection(
-            self.sam_host, self.sam_port
-        )
-        await self._sam_hello(self._ctrl_reader, self._ctrl_writer)
-        options_str = " ".join(f"{k}={v}" for k, v in self.sam_options.items())
-        cmd = (
-            "SESSION CREATE STYLE=STREAM "
-            f"ID={self.session_id} DESTINATION=TRANSIENT SIGNATURE_TYPE=7 OPTION {options_str}\n"
-        )
-        self._ctrl_writer.write(cmd.encode("utf-8"))
-        await self._ctrl_writer.drain()
-        response = await asyncio.wait_for(
-            self._ctrl_reader.readline(), timeout=self.io_timeout
-        )
-        response_text = response.decode("utf-8", errors="ignore").strip()
-        if "RESULT=OK" not in response_text:
-            raise RuntimeError(f"SAM session create failed: {response_text}")
-        self._started = True
 
     async def close(self) -> None:
         writer = self._ctrl_writer
