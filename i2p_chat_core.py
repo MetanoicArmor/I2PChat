@@ -3084,9 +3084,7 @@ class I2PChatCore:
         if reason == "initialized":
             self._emit_system("BlindBox root secret initialized")
         else:
-            self._emit_system(
-                f"BlindBox root secret rotated (epoch={int(self._blindbox_root_epoch)})"
-            )
+            self._emit_system("BlindBox root secret rotated")
         return True
 
     async def _send_blindbox_root_ack(
@@ -3188,9 +3186,7 @@ class I2PChatCore:
         )
         await writer.drain()
         if is_new_pending:
-            self._emit_system(
-                f"BlindBox root secret {reason}; awaiting ACK (epoch={next_epoch})"
-            )
+            self._emit_system(f"BlindBox root secret {reason}; awaiting ACK")
 
     async def _handle_handshake_message(
         self, body: str, writer: asyncio.StreamWriter
