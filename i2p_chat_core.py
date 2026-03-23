@@ -1620,6 +1620,10 @@ class I2PChatCore:
                 f"Peer signing key mismatch for {peer_addr[:20]}... "
                 f"(expected {pinned_hex[:16]}, got {current_hex[:16]})"
             )
+            self._emit_system(
+                "Уверен, что у peer новый ключ? Нажимай Forget pinned peer key. "
+                "Не уверен? Не нажимай."
+            )
             return False
         return True
 

@@ -265,6 +265,24 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
                 with open(core._trust_store_path(), "r", encoding="utf-8") as f:
                     self.assertEqual(f.read().strip(), "{}")
 
+    async def test_signing_key_mismatch_emits_forget_pin_hint(self) -> None:
+        errors: list[str] = []
+        systems: list[str] = []
+        core = I2PChatCore(profile="alice", on_error=errors.append, on_system=systems.append)
+        core.peer_trusted_signing_keys["examplepeer.b32.i2p"] = "11" * 32
+
+        ok = await core._pin_or_verify_peer_signing_key(
+            "examplepeer.b32.i2p",
+            b"\x22" * 32,
+        )
+
+        self.assertFalse(ok)
+        self.assertTrue(any("Peer signing key mismatch" in msg for msg in errors), errors)
+        self.assertTrue(
+            any("Forget pinned peer key" in msg for msg in systems),
+            systems,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
