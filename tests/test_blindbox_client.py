@@ -172,7 +172,7 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
 
     def test_sam_destination_strips_i2p_port_suffix(self) -> None:
         b32 = (
-            "dzyhukukogujr6r2vwfy667cwm7vg300mhx2sryxhb6mn414wbjq.b32.i2p"
+            "dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p"
         )
         self.assertEqual(
             BlindBoxClient._sam_destination_from_endpoint(f"{b32}:19444"),
