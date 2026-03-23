@@ -14,7 +14,7 @@ Confirmed findings:
 - Medium: 1
 - Low: 3
 
-Overall conclusion: protocol-level integrity controls are strong (signed handshake, TOFU pinning, sequence/HMAC checks, downgrade detection). During this remediation cycle, M-01/M-02/M-03 were addressed in code; the highest remaining practical risks are release and CI supply-chain assurance gaps.
+Overall conclusion: protocol-level integrity controls are strong (signed handshake, TOFU pinning, sequence/HMAC checks, downgrade detection). During this remediation cycle, M-01/M-02/M-03 were addressed in code, and additional post-audit fixes were applied for BlindBox local-secret wrapping, locked-peer enforcement before BlindBox root exchange, and explicit CLI/TUI trust policy. The highest remaining practical risks are release and CI supply-chain assurance gaps.
 
 ## Scope and Methodology
 
@@ -37,6 +37,7 @@ Runtime checks executed:
 - `python3 -m unittest tests/test_blindbox_client.py` -> `OK (5 tests)`
 - `./.audit-venv/bin/pip-audit -r requirements.txt` -> `No known vulnerabilities found`
 - `./.audit-venv/bin/pip-audit -r requirements.in` -> `No known vulnerabilities found`
+- Post-audit targeted regression set: `python3 -m unittest tests.test_blindbox_state_wrap tests.test_asyncio_regression tests.test_blindbox_client tests.test_blindbox_core_telemetry tests.test_protocol_framing_vnext` -> `OK (47 tests, 1 skipped due to missing PyNaCl in test environment)`
 
 Notes:
 - The failing documentation test is treated as a baseline quality issue, not a direct exploitable vulnerability.
@@ -293,6 +294,15 @@ Recommended additional tests:
 2. Add tests for strict-SAM mode (reject direct TCP replica configs).
 3. Add tests for BlindBox local replica quotas/rate limits after mitigation.
 4. Extend CI checks to enforce lockfile-based vulnerability audit.
+
+## Post-Audit Hardening Update (2026-03-23)
+
+Additional findings reported after the main audit were reviewed and fixed in code:
+
+- BlindBox local at-rest wrapping now derives the wrap key from `my_signing_seed` via HKDF, with local wrap-versioning and compatibility fallback for older stored state.
+- Outbound `connect_to_peer(...)` now fail-closes when a profile is locked to a different `stored_peer`, and BlindBox root exchange is blocked unless the currently connected peer matches the locked peer.
+- CLI/TUI no longer silently auto-pin a first-seen peer key by default; without a trust callback, explicit opt-in is now required via `I2PCHAT_TRUST_AUTO=1`.
+- Regression coverage was added for wrap-key derivation, locked-peer enforcement, BlindBox root suppression on mismatch, and explicit CLI trust policy.
 
 ## Remediation Priority
 

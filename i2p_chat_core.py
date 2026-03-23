@@ -47,6 +47,8 @@ def _exception_user_message(exc: BaseException) -> str:
 
 DEFAULT_LOCAL_BLINDBOX_REPLICA = "127.0.0.1:19444"
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+BLINDBOX_LOCAL_WRAP_VERSION_LEGACY = 1
+BLINDBOX_LOCAL_WRAP_VERSION_CURRENT = 2
 
 # Официальный набор из двух Blind Box для готовых релизов I2PChat.
 # Формат для удаленных I2P-узлов: <base32>.b32.i2p:19444 (порт сервера Blind Box).
@@ -590,6 +592,9 @@ class I2PChatCore:
         self.on_file_delivered = on_file_delivered
         self.on_trust_decision = on_trust_decision
         self.legacy_compat = legacy_compat
+        self._trust_auto = (
+            os.environ.get("I2PCHAT_TRUST_AUTO", "").strip().lower() in TRUTHY_ENV_VALUES
+        )
 
         self.session_id = f"chat_{self.profile}_{int(time.time())}"
         self.network_status = "initializing"
@@ -1117,32 +1122,78 @@ class I2PChatCore:
         safe_peer = re.sub(r"[^a-z0-9._-]", "_", peer_id.lower())
         return self._profile_scoped_path(f"{self.profile}.blindbox.{safe_peer}.json")
 
-    def _blindbox_local_wrap_key(self, peer_id: str) -> bytes:
+    def _blindbox_local_wrap_key(
+        self,
+        peer_id: str,
+        *,
+        wrap_version: int = BLINDBOX_LOCAL_WRAP_VERSION_CURRENT,
+    ) -> bytes:
         if not self.my_signing_seed:
             raise ValueError("Local signing seed is not initialized")
-        salt = crypto.hkdf_extract(
-            b"",
-            hashlib.sha256(
-                b"BLINDBOX-LOCAL-WRAP-SALT|"
-                + self.profile.encode("utf-8")
-                + b"|"
-                + peer_id.encode("utf-8")
-            ).digest(),
+        peer_norm = (peer_id or "").strip().lower()
+        if not peer_norm:
+            raise ValueError("BlindBox peer id is not available")
+        if peer_norm.endswith(".b32.i2p"):
+            peer_norm = peer_norm[: -len(".b32.i2p")]
+        profile_bytes = self.profile.encode("utf-8")
+        peer_bytes = peer_norm.encode("utf-8")
+        if wrap_version == BLINDBOX_LOCAL_WRAP_VERSION_LEGACY:
+            salt = crypto.hkdf_extract(
+                b"",
+                hashlib.sha256(
+                    b"BLINDBOX-LOCAL-WRAP-SALT|" + profile_bytes + b"|" + peer_bytes
+                ).digest(),
+            )
+            return crypto.hkdf_expand(salt, b"BLINDBOX-LOCAL-WRAP-KEY", 32)
+        if wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT:
+            raise ValueError(f"Unsupported BlindBox local wrap version: {wrap_version}")
+        salt = hashlib.sha256(
+            b"BLINDBOX-LOCAL-WRAP-SALT-V2|" + profile_bytes + b"|" + peer_bytes
+        ).digest()
+        prk = crypto.hkdf_extract(salt, self.my_signing_seed)
+        return crypto.hkdf_expand(
+            prk,
+            b"BLINDBOX-LOCAL-WRAP-KEY-V2|" + profile_bytes + b"|" + peer_bytes,
+            32,
         )
-        return crypto.hkdf_expand(salt, b"BLINDBOX-LOCAL-WRAP-KEY", 32)
 
     def _blindbox_encrypt_root_secret(self, root_secret: bytes, peer_id: str) -> str:
-        wrap_key = self._blindbox_local_wrap_key(peer_id)
+        wrap_key = self._blindbox_local_wrap_key(
+            peer_id, wrap_version=BLINDBOX_LOCAL_WRAP_VERSION_CURRENT
+        )
         encrypted = crypto.encrypt_message(wrap_key, root_secret)
         return encrypted.hex()
 
-    def _blindbox_decrypt_root_secret(self, encrypted_hex: str, peer_id: str) -> bytes:
-        wrap_key = self._blindbox_local_wrap_key(peer_id)
+    def _blindbox_decrypt_root_secret(
+        self,
+        encrypted_hex: str,
+        peer_id: str,
+        *,
+        wrap_version: Optional[int] = None,
+    ) -> tuple[bytes, int]:
         encrypted = bytes.fromhex(encrypted_hex)
-        decrypted = crypto.decrypt_message(wrap_key, encrypted)
-        if decrypted is None:
-            raise ValueError("Failed to decrypt BlindBox root secret")
-        return decrypted
+        versions: list[int] = []
+        if wrap_version is not None:
+            versions.append(int(wrap_version))
+        versions.extend(
+            [
+                BLINDBOX_LOCAL_WRAP_VERSION_CURRENT,
+                BLINDBOX_LOCAL_WRAP_VERSION_LEGACY,
+            ]
+        )
+        seen: set[int] = set()
+        for version in versions:
+            if version in seen:
+                continue
+            seen.add(version)
+            try:
+                wrap_key = self._blindbox_local_wrap_key(peer_id, wrap_version=version)
+            except Exception:
+                continue
+            decrypted = crypto.decrypt_message(wrap_key, encrypted)
+            if decrypted is not None:
+                return decrypted, version
+        raise ValueError("Failed to decrypt BlindBox root secret")
 
     def _blindbox_prune_previous_roots(self) -> None:
         now_ts = int(time.time())
@@ -1189,11 +1240,25 @@ class I2PChatCore:
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as f:
                     raw = json.load(f)
+                wrap_version_raw = raw.get(
+                    "blindbox_wrap_version", BLINDBOX_LOCAL_WRAP_VERSION_LEGACY
+                )
+                try:
+                    wrap_version = int(wrap_version_raw)
+                except Exception:
+                    wrap_version = BLINDBOX_LOCAL_WRAP_VERSION_LEGACY
+                wrap_migration_needed = (
+                    wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT
+                )
                 enc_root = raw.get("blindbox_root_secret_enc")
                 if isinstance(enc_root, str) and enc_root:
-                    self._blindbox_root_secret = self._blindbox_decrypt_root_secret(
-                        enc_root, peer_id
+                    self._blindbox_root_secret, used_wrap_version = (
+                        self._blindbox_decrypt_root_secret(
+                            enc_root, peer_id, wrap_version=wrap_version
+                        )
                     )
+                    if used_wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT:
+                        wrap_migration_needed = True
                 self._blindbox_root_epoch = int(raw.get("blindbox_root_epoch", 0))
                 self._blindbox_root_created_at = int(
                     raw.get("blindbox_root_created_at", int(time.time()))
@@ -1214,11 +1279,15 @@ class I2PChatCore:
                         if not isinstance(enc_prev, str) or not enc_prev:
                             continue
                         try:
-                            dec_prev = self._blindbox_decrypt_root_secret(enc_prev, peer_id)
+                            dec_prev, prev_wrap_version = self._blindbox_decrypt_root_secret(
+                                enc_prev, peer_id, wrap_version=wrap_version
+                            )
                         except Exception:
                             continue
                         if len(dec_prev) != 32:
                             continue
+                        if prev_wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT:
+                            wrap_migration_needed = True
                         self._blindbox_prev_roots.append(
                             {
                                 "epoch": int(prev.get("epoch", 0)),
@@ -1227,6 +1296,8 @@ class I2PChatCore:
                             }
                         )
                 self._blindbox_prune_previous_roots()
+                if wrap_migration_needed and self._blindbox_root_secret is not None:
+                    self._save_blindbox_state()
             else:
                 self._blindbox_root_secret = None
                 self._blindbox_root_epoch = 0
@@ -1256,6 +1327,7 @@ class I2PChatCore:
             payload["blindbox_root_secret_enc"] = self._blindbox_encrypt_root_secret(
                 self._blindbox_root_secret, peer_id
             )
+            payload["blindbox_wrap_version"] = BLINDBOX_LOCAL_WRAP_VERSION_CURRENT
             payload["blindbox_root_epoch"] = int(self._blindbox_root_epoch)
             payload["blindbox_root_created_at"] = int(self._blindbox_root_created_at)
             payload["blindbox_root_send_index_base"] = int(
@@ -1280,6 +1352,7 @@ class I2PChatCore:
             with open(path, "r", encoding="utf-8") as f:
                 current = json.load(f)
             current["blindbox_root_secret_enc"] = payload["blindbox_root_secret_enc"]
+            current["blindbox_wrap_version"] = payload["blindbox_wrap_version"]
             current["blindbox_root_epoch"] = payload["blindbox_root_epoch"]
             current["blindbox_root_created_at"] = payload["blindbox_root_created_at"]
             current["blindbox_root_send_index_base"] = payload[
@@ -1304,6 +1377,11 @@ class I2PChatCore:
             and bool(self.blindbox_replicas)
             and self.my_dest is not None
         )
+
+    def _blindbox_current_peer_matches_locked_peer(self) -> bool:
+        locked_peer = self._normalize_peer_addr(self.stored_peer or "")
+        current_peer = self._normalize_peer_addr(self.current_peer_addr or "")
+        return bool(locked_peer and current_peer and locked_peer == current_peer)
 
     def _load_trust_store(self) -> None:
         """Загружает pinning-таблицу peer_addr -> signing_pub_hex."""
@@ -1506,8 +1584,20 @@ class I2PChatCore:
                         f"TOFU rejected: peer signing key {fp} for {peer_addr[:20]}..."
                     )
                     return False
+            elif not self._trust_auto:
+                self._emit_error(
+                    "TOFU confirmation required for a new peer key. "
+                    "Use the GUI trust prompt or set I2PCHAT_TRUST_AUTO=1 "
+                    "for explicit CLI/TUI auto-pin."
+                )
+                return False
             self.peer_trusted_signing_keys[peer_addr] = current_hex
             self._save_trust_store()
+            if self.on_trust_decision is None:
+                self._emit_system(
+                    "TOFU: auto-pinning peer signing key because "
+                    "I2PCHAT_TRUST_AUTO=1 is enabled."
+                )
             self._emit_system(
                 f"TOFU: pinned peer signing key {fp} for {peer_addr[:20]}..."
             )
@@ -2212,6 +2302,14 @@ class I2PChatCore:
             detail = getattr(crypto, "NACL_IMPORT_ERROR", "") or "pynacl not installed"
             self._emit_error(f"Secure protocol requires PyNaCl. Install: pip install pynacl. ({detail})")
             return
+        normalized_target = self._normalize_peer_addr(target_address)
+        locked_peer = self._normalize_peer_addr(self.stored_peer or "")
+        if locked_peer and normalized_target and normalized_target != locked_peer:
+            self._emit_error(
+                "Profile is locked to another peer. "
+                "Connect to the stored peer or unlock/change the profile first."
+            )
+            return
         if self.conn is not None:
             self._emit_system("Already connected. Disconnect first.")
             return
@@ -2223,11 +2321,11 @@ class I2PChatCore:
         deferred_system: Optional[str] = None
         try:
             try:
-                self.current_peer_addr = self._normalize_peer_addr(target_address)
+                self.current_peer_addr = normalized_target
                 self._reset_crypto_state()
-                self.current_peer_addr = self._normalize_peer_addr(target_address)
+                self.current_peer_addr = normalized_target
                 self._emit_system(
-                    f"Connecting to {target_address[:24]}... "
+                    f"Connecting to {normalized_target[:24]}... "
                     "(may take 1–2 min while I2P builds tunnels)"
                 )
                 reader: asyncio.StreamReader
@@ -2237,7 +2335,9 @@ class I2PChatCore:
                     try:
                         reader, writer = await asyncio.wait_for(
                             i2plib.stream_connect(
-                                self.session_id, target_address, sam_address=self.sam_address
+                                self.session_id,
+                                normalized_target,
+                                sam_address=self.sam_address,
                             ),
                             timeout=self.CONNECT_TIMEOUT,
                         )
@@ -2807,6 +2907,11 @@ class I2PChatCore:
         self, writer: asyncio.StreamWriter, *, force_rotate: bool = False
     ) -> None:
         if not self._blindbox_ready():
+            return
+        if not self._blindbox_current_peer_matches_locked_peer():
+            self._emit_error(
+                "BlindBox root exchange blocked: connected peer does not match locked peer."
+            )
             return
         if not self._should_initiate_blindbox_root_exchange():
             return

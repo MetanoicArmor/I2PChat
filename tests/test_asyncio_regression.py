@@ -6,7 +6,7 @@ import types
 import unittest
 from types import SimpleNamespace
 from typing import Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 # CI/agent environment may not have Pillow installed; for these tests
 # image functionality is irrelevant, so a lightweight stub is enough.
@@ -176,6 +176,80 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(ok)
         self.assertIsNotNone(seen)
+        self.assertIn("examplepeer.b32.i2p", core.peer_trusted_signing_keys)
+
+    async def test_connect_rejects_target_that_differs_from_locked_peer(self) -> None:
+        errors: list[str] = []
+        core = I2PChatCore(profile="alice", on_error=errors.append)
+        core.stored_peer = "locked-peer.b32.i2p"
+        import i2p_chat_core as core_module
+
+        original_nacl_available = core_module.crypto.NACL_AVAILABLE
+        core_module.crypto.NACL_AVAILABLE = True
+        try:
+            await core.connect_to_peer("other-peer.b32.i2p")
+        finally:
+            core_module.crypto.NACL_AVAILABLE = original_nacl_available
+
+        self.assertIsNone(core.conn)
+        self.assertTrue(
+            any("locked to another peer" in msg.lower() for msg in errors),
+            errors,
+        )
+
+    async def test_blindbox_root_not_sent_when_connected_peer_differs_from_lock(self) -> None:
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "r1.b32.i2p"
+        try:
+            errors: list[str] = []
+            core = I2PChatCore(profile="alice", on_error=errors.append)
+            core.my_signing_seed = b"D" * 32
+            core.stored_peer = "locked-peer.b32.i2p"
+            core.current_peer_addr = "other-peer.b32.i2p"
+            core.my_dest = SimpleNamespace(base32="me-peer.b32.i2p")
+            writer = _FakeWriter()
+
+            await core._send_blindbox_root_if_needed(writer)
+
+            self.assertEqual(writer.buffer, bytearray())
+            self.assertTrue(
+                any("does not match locked peer" in msg for msg in errors),
+                errors,
+            )
+        finally:
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+
+    async def test_tofu_without_callback_requires_explicit_policy(self) -> None:
+        errors: list[str] = []
+        core = I2PChatCore(profile="default", on_error=errors.append)
+
+        ok = await core._pin_or_verify_peer_signing_key(
+            "examplepeer.b32.i2p",
+            b"\x22" * 32,
+        )
+
+        self.assertFalse(ok)
+        self.assertNotIn("examplepeer.b32.i2p", core.peer_trusted_signing_keys)
+        self.assertTrue(any("I2PCHAT_TRUST_AUTO=1" in msg for msg in errors), errors)
+
+    async def test_tofu_auto_pin_requires_explicit_opt_in(self) -> None:
+        with patch.dict(os.environ, {"I2PCHAT_TRUST_AUTO": "1"}, clear=False):
+            core = I2PChatCore(profile="default")
+            ok = await core._pin_or_verify_peer_signing_key(
+                "examplepeer.b32.i2p",
+                b"\x33" * 32,
+            )
+
+        self.assertTrue(ok)
         self.assertIn("examplepeer.b32.i2p", core.peer_trusted_signing_keys)
 
 

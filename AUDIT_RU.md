@@ -14,7 +14,7 @@
 - Medium: 1
 - Low: 3
 
-Общий вывод: контроли целостности на уровне протокола сильные (signed handshake, TOFU pinning, sequence/HMAC-проверки, downgrade detection). В этом цикле remediation в коде закрыты M-01/M-02/M-03; ключевые оставшиеся практичные риски теперь в release/CI supply-chain assurance.
+Общий вывод: контроли целостности на уровне протокола сильные (signed handshake, TOFU pinning, sequence/HMAC-проверки, downgrade detection). В этом цикле remediation в коде закрыты M-01/M-02/M-03, а также внесены дополнительные post-audit исправления для локальной обёртки BlindBox-секрета, жёсткой привязки locked profile к peer до отправки BlindBox root и явной trust-policy для CLI/TUI. Ключевые оставшиеся практичные риски теперь в release/CI supply-chain assurance.
 
 ## Scope и методология
 
@@ -37,6 +37,7 @@
 - `python3 -m unittest tests/test_blindbox_client.py` -> `OK (5 tests)`
 - `./.audit-venv/bin/pip-audit -r requirements.txt` -> `No known vulnerabilities found`
 - `./.audit-venv/bin/pip-audit -r requirements.in` -> `No known vulnerabilities found`
+- Post-audit таргетный набор регрессий: `python3 -m unittest tests.test_blindbox_state_wrap tests.test_asyncio_regression tests.test_blindbox_client tests.test_blindbox_core_telemetry tests.test_protocol_framing_vnext` -> `OK (47 tests, 1 skipped из-за отсутствия PyNaCl в тестовом окружении)`
 
 Примечание:
 - Падение документационного теста зафиксировано как baseline-качество, а не как напрямую эксплуатируемая уязвимость.
@@ -293,6 +294,15 @@ flowchart LR
 2. Тесты strict-SAM режима (запрет direct TCP replica configs).
 3. Тесты квот/rate limits для BlindBox local replica после внедрения.
 4. Расширить CI-проверки: обязательный lockfile-based vulnerability audit.
+
+## Post-Audit Hardening Update (2026-03-23)
+
+Дополнительные finding’и, пришедшие уже после основного аудита, были отдельно проверены и закрыты в коде:
+
+- Локальная at-rest обёртка BlindBox-состояния теперь выводит wrap-key из `my_signing_seed` через HKDF; добавлены версия локальной обёртки и совместимый fallback/миграция старого формата.
+- Исходящий `connect_to_peer(...)` теперь fail-closed блокируется, если профиль locked на другого `stored_peer`; отдельно запрещена отправка BlindBox root, если текущий connected peer не совпадает с locked peer.
+- CLI/TUI больше не делает silent TOFU auto-pin по умолчанию; при отсутствии trust-callback нужен явный opt-in `I2PCHAT_TRUST_AUTO=1`.
+- Добавлены регрессионные тесты на derivation wrap-key, enforce locked-peer, suppression BlindBox root при mismatch и explicit trust policy в CLI.
 
 ## Приоритет remediation
 
