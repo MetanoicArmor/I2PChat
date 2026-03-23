@@ -2284,7 +2284,9 @@ class I2PChatCore:
                 deferred_system = "Waiting for incoming connections..."
             except Exception as e:
                 self.conn = None
-                detail = str(e).strip() or f"{type(e).__name__}: {e!r}"
+                # Пустое сообщение у SAM-исключений (например CantReachPeer()) — только имя типа,
+                # без «CantReachPeer: CantReachPeer()».
+                detail = str(e).strip() or type(e).__name__
                 deferred_error = f"Connection failed: {detail}"
                 deferred_system = "Waiting for incoming connections..."
         finally:
