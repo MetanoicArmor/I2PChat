@@ -405,6 +405,8 @@ class BlindBoxCoreTelemetryTests(unittest.TestCase):
             telemetry = core.get_blindbox_telemetry()
             self.assertFalse(bool(telemetry["local_auth_token_enabled"]))
             self.assertTrue(bool(telemetry["allow_insecure_local_replicas"]))
+            self.assertTrue(bool(telemetry["has_loopback_replicas"]))
+            self.assertTrue(bool(telemetry["insecure_local_mode"]))
         finally:
             if old_enabled is None:
                 os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
@@ -422,6 +424,34 @@ class BlindBoxCoreTelemetryTests(unittest.TestCase):
                 os.environ.pop("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL", None)
             else:
                 os.environ["I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL"] = old_allow_insecure
+
+    def test_blindbox_seen_hashes_are_bounded(self) -> None:
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        old_limit = os.environ.get("I2PCHAT_BLINDBOX_MAX_SEEN_HASHES")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "r1.b32.i2p"
+        os.environ["I2PCHAT_BLINDBOX_MAX_SEEN_HASHES"] = "3"
+        try:
+            core = I2PChatCore(profile="alice")
+            core._remember_blindbox_seen_hash("h1")  # noqa: SLF001 - internal behavior test
+            core._remember_blindbox_seen_hash("h2")  # noqa: SLF001 - internal behavior test
+            core._remember_blindbox_seen_hash("h3")  # noqa: SLF001 - internal behavior test
+            core._remember_blindbox_seen_hash("h4")  # noqa: SLF001 - internal behavior test
+            self.assertEqual(core._blindbox_seen_hashes, {"h2", "h3", "h4"})  # noqa: SLF001
+        finally:
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+            if old_limit is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_MAX_SEEN_HASHES", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_MAX_SEEN_HASHES"] = old_limit
 
     def test_normalize_peer_addr_rejects_forbidden_chars(self) -> None:
         core = I2PChatCore(profile="default")

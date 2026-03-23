@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -18,6 +19,8 @@ if "PIL" not in sys.modules:
 
 from i2p_chat_core import I2PChatCore
 
+VALID_PEER = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
+
 
 class AtomicWritesTests(unittest.TestCase):
     def test_blindbox_state_save_does_not_use_fixed_tmp_name(self) -> None:
@@ -31,11 +34,81 @@ class AtomicWritesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             with patch("i2p_chat_core.get_profiles_dir", return_value=td):
                 core = I2PChatCore(profile="alice")
-                core.peer_trusted_signing_keys["peer.b32.i2p"] = "a" * 64
+                core.peer_trusted_signing_keys[VALID_PEER] = "a" * 64
                 core._save_trust_store()  # noqa: SLF001 - internal persistence behavior
                 trust_path = os.path.join(td, "alice.trust.json")
                 self.assertTrue(os.path.exists(trust_path))
                 self.assertFalse(os.path.exists(trust_path + ".tmp"))
+
+    def test_profile_dat_write_does_not_use_fixed_tmp_name(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+                core = I2PChatCore(profile="alice")
+                core._write_profile_dat("priv-key", VALID_PEER)  # noqa: SLF001
+                profile_path = os.path.join(td, "alice.dat")
+                self.assertTrue(os.path.exists(profile_path))
+                self.assertFalse(os.path.exists(profile_path + ".tmp"))
+
+    def test_blindbox_state_save_is_single_pass_json_write(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with patch.dict(
+                os.environ,
+                {
+                    "I2PCHAT_BLINDBOX_ENABLED": "1",
+                    "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+                },
+                clear=False,
+            ):
+                with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+                    core = I2PChatCore(profile="alice")
+                    core.stored_peer = VALID_PEER
+                    core.current_peer_addr = VALID_PEER
+                    core.my_dest = types.SimpleNamespace(
+                        base32="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
+                    )
+                    core._blindbox_root_secret = b"\x11" * 32
+                    core._blindbox_root_epoch = 2
+                    core._blindbox_root_created_at = 123
+                    core._blindbox_root_send_index_base = 7
+                    core._blindbox_pending_root_secret = b"\x22" * 32
+                    core._blindbox_pending_root_epoch = 3
+                    core._blindbox_pending_root_created_at = 456
+                    core._blindbox_pending_root_send_index_base = 8
+                    core._blindbox_prev_roots = [
+                        {
+                            "epoch": 1,
+                            "secret": b"\x33" * 32,
+                            "expires_at": 9999999999,
+                        }
+                    ]
+                    with patch.object(
+                        core,
+                        "_blindbox_encrypt_root_secret",
+                        side_effect=lambda secret, peer_id: f"enc-{secret.hex()}-{peer_id}",
+                    ):
+                        with patch("i2p_chat_core.atomic_write_json") as mock_write:
+                            core._save_blindbox_state()  # noqa: SLF001
+
+                    mock_write.assert_called_once()
+                    payload = mock_write.call_args.args[1]
+                    self.assertEqual(payload["blindbox_root_epoch"], 2)
+                    self.assertEqual(payload["blindbox_pending_root_epoch"], 3)
+                    self.assertEqual(len(payload["blindbox_prev_roots"]), 1)
+
+    def test_profile_dat_fault_before_replace_keeps_old_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+                core = I2PChatCore(profile="alice")
+                profile_path = os.path.join(td, "alice.dat")
+                with open(profile_path, "w", encoding="utf-8") as f:
+                    f.write("old-key\n")
+
+                with patch("blindbox_state.os.replace", side_effect=OSError("boom")):
+                    with self.assertRaises(OSError):
+                        core._write_profile_dat("new-key", VALID_PEER)  # noqa: SLF001
+
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "old-key\n")
 
     def test_target_files_no_longer_build_path_plus_dot_tmp(self) -> None:
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

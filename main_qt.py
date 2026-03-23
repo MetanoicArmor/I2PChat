@@ -5,7 +5,6 @@ import secrets
 import subprocess
 import shutil
 import sys
-import tempfile
 import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, List, Optional
@@ -13,6 +12,7 @@ from typing import Callable, List, Optional
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
+from blindbox_state import atomic_write_json
 from i2p_chat_core import (
     ChatMessage,
     FileTransferInfo,
@@ -95,6 +95,7 @@ def _blindbox_status_bar_and_tooltip(
     privacy: str,
     hint: str,
     telemetry_ok: bool,
+    insecure_local: bool = False,
 ) -> tuple[str, str]:
     """
     Короткая строка для статус-бара и текст для toolTip: что такое BlindBox + техника + подсказка.
@@ -109,13 +110,22 @@ def _blindbox_status_bar_and_tooltip(
         f"Technical: enabled={enabled} state={state} poller={sync} "
         f"send_queue_index={queue} root_epoch={epoch} privacy_profile={privacy}"
     )
-    tail = "\n".join(x for x in (tech, hint) if x)
+    warning = ""
+    if insecure_local:
+        warning = (
+            "Warning: insecure local BlindBox mode is enabled "
+            "(loopback replica without auth token; "
+            "I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1)."
+        )
+    tail = "\n".join(x for x in (warning, tech, hint) if x)
     tooltip_block = preamble + tail
 
     if not telemetry_ok:
         return "BlindBox: status unknown", tooltip_block
     if not enabled:
         return "BlindBox: off", tooltip_block
+    if insecure_local:
+        return "BlindBox: insecure local", tooltip_block
     if state == "ready":
         if sync == "poll":
             return "BlindBox: on (polling Blind Boxes)", tooltip_block
@@ -773,28 +783,10 @@ def _load_ui_prefs() -> dict[str, object]:
 
 def _save_ui_prefs(data: dict[str, object]) -> None:
     path = _ui_prefs_path()
-    parent = os.path.dirname(os.path.abspath(path))
-    fd, tmp = tempfile.mkstemp(
-        prefix=".ui_prefs.",
-        suffix=".tmp",
-        dir=parent,
-    )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=True, indent=2, sort_keys=True)
-        os.replace(tmp, path)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        atomic_write_json(path, data)
     except Exception:
         pass
-    finally:
-        if os.path.exists(tmp):
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
 
 
 def load_saved_theme() -> str:
@@ -3576,6 +3568,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             bb_profile = str(bb.get("privacy_profile", "high"))
             blindbox_epoch = str(int(bb.get("root_epoch", 0)))
             bb_enabled = bool(bb.get("enabled"))
+            insecure_local_mode = bool(bb.get("insecure_local_mode"))
             bb_enabled_source = str(bb.get("enabled_source", "default"))
             bb_replicas_source = str(
                 bb.get("blind_boxes_source") or bb.get("replicas_source", "none")
@@ -3619,6 +3612,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         except Exception:
             telemetry_ok = False
             bb_enabled = False
+            insecure_local_mode = False
             blindbox_state = "off"
             blindbox_sync = "idle"
             blindbox_queue = "0"
@@ -3634,6 +3628,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             privacy=bb_profile,
             hint=blindbox_hint,
             telemetry_ok=telemetry_ok,
+            insecure_local=insecure_local_mode,
         )
         delivery = self.core.get_delivery_telemetry()
         delivery_state = str(delivery.get("state", "unknown"))

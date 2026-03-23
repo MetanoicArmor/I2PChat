@@ -21,6 +21,9 @@ if "PIL" not in sys.modules:
 from i2p_chat_core import I2PChatCore
 from protocol_codec import ProtocolCodec
 
+LOCAL_B32 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
+PEER_B32 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
+
 
 class _FakeReader:
     def __init__(self, payload: bytes) -> None:
@@ -66,6 +69,23 @@ class _FakeWriter:
 
 
 class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    async def _decode_frame(raw: bytes):
+        codec = ProtocolCodec(
+            allowed_types={"U", "S", "P", "O", "F", "D", "E", "I", "H", "G"},
+            max_frame_body=I2PChatCore.MAX_FRAME_BODY,
+        )
+        frame = await codec.read_frame(_FakeReader(raw))
+        return frame
+
+    def _make_blindbox_core(self) -> I2PChatCore:
+        core = I2PChatCore(profile="alice")
+        core.my_signing_seed = b"D" * 32
+        core.stored_peer = PEER_B32
+        core.current_peer_addr = PEER_B32
+        core.my_dest = SimpleNamespace(base32=LOCAL_B32)
+        return core
+
     def test_invalid_profile_name_rejected(self) -> None:
         with self.assertRaises(ValueError):
             I2PChatCore(profile="../../escape")
@@ -227,6 +247,125 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
                 os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
             else:
                 os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+
+    async def test_blindbox_root_sender_waits_for_ack_before_switching_active_root(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = self._make_blindbox_core()
+            writer = _FakeWriter()
+
+            await core._send_blindbox_root_if_needed(writer)
+
+            self.assertIsNone(core._blindbox_root_secret)
+            self.assertIsNotNone(core._blindbox_pending_root_secret)
+            self.assertEqual(core._blindbox_root_epoch, 0)
+            self.assertEqual(core._blindbox_pending_root_epoch, 1)
+
+    async def test_blindbox_root_receiver_applies_root_and_sends_ack(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            receiver = self._make_blindbox_core()
+            writer = _FakeWriter()
+            root_secret = b"\x44" * 32
+
+            await receiver._handle_incoming_blindbox_root_signal(
+                f"__SIGNAL__:BLINDBOX_ROOT|1|{root_secret.hex()}",
+                writer,
+            )
+
+            self.assertEqual(receiver._blindbox_root_secret, root_secret)
+            self.assertEqual(receiver._blindbox_root_epoch, 1)
+            frame = await self._decode_frame(bytes(writer.buffer))
+            self.assertEqual(frame.msg_type, "S")
+            self.assertEqual(
+                frame.payload.decode("utf-8"),
+                "__SIGNAL__:BLINDBOX_ROOT_ACK|1",
+            )
+
+    async def test_blindbox_root_reconnect_resends_same_pending_root(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = self._make_blindbox_core()
+            writer_a = _FakeWriter()
+            writer_b = _FakeWriter()
+
+            await core._send_blindbox_root_if_needed(writer_a)
+            await core._send_blindbox_root_if_needed(writer_b)
+
+            frame_a = await self._decode_frame(bytes(writer_a.buffer))
+            frame_b = await self._decode_frame(bytes(writer_b.buffer))
+            self.assertEqual(frame_a.payload, frame_b.payload)
+            self.assertEqual(core._blindbox_pending_root_epoch, 1)
+
+    async def test_blindbox_root_stale_ack_is_ignored(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = self._make_blindbox_core()
+            writer = _FakeWriter()
+
+            await core._send_blindbox_root_if_needed(writer)
+            pending_secret = core._blindbox_pending_root_secret
+
+            core._handle_blindbox_root_ack_signal("__SIGNAL__:BLINDBOX_ROOT_ACK|999")
+
+            self.assertIsNone(core._blindbox_root_secret)
+            self.assertEqual(core._blindbox_pending_root_secret, pending_secret)
+            self.assertEqual(core._blindbox_pending_root_epoch, 1)
+
+    async def test_blindbox_root_rotation_preserves_previous_root_after_ack(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = self._make_blindbox_core()
+            core._blindbox_root_secret = b"\x11" * 32
+            core._blindbox_root_epoch = 7
+            core._blindbox_root_created_at = 100
+            core._blindbox_root_send_index_base = 3
+            writer = _FakeWriter()
+
+            await core._send_blindbox_root_if_needed(writer, force_rotate=True)
+            new_secret = core._blindbox_pending_root_secret
+            self.assertIsNotNone(new_secret)
+
+            core._handle_blindbox_root_ack_signal(
+                f"__SIGNAL__:BLINDBOX_ROOT_ACK|{core._blindbox_pending_root_epoch}"
+            )
+
+            self.assertEqual(core._blindbox_root_secret, new_secret)
+            self.assertEqual(core._blindbox_root_epoch, 8)
+            self.assertTrue(core._blindbox_prev_roots)
+            self.assertEqual(core._blindbox_prev_roots[0]["epoch"], 7)
+            self.assertEqual(core._blindbox_prev_roots[0]["secret"], b"\x11" * 32)
+            self.assertIsNone(core._blindbox_pending_root_secret)
 
     async def test_tofu_without_callback_requires_explicit_policy(self) -> None:
         errors: list[str] = []

@@ -2,6 +2,8 @@
 Local Blind Box server (best-effort convenience fallback).
 
 Protocol:
+- PING\n -> PONG BLINDBOX_LOCAL_REPLICA_V1
+- AUTH <token>\n -> OK | ERR
 - PUT <key> <size> [token]\n + <size bytes> -> OK | EXISTS | FULL | ERR
 - GET <key> [token]\n -> MISS | OK <size>\n + <size bytes>
 """
@@ -11,6 +13,9 @@ from __future__ import annotations
 import asyncio
 import hmac
 from typing import Optional
+
+
+BLINDBOX_LOCAL_REPLICA_MAGIC = "PONG BLINDBOX_LOCAL_REPLICA_V1"
 
 
 class BlindBoxLocalReplicaServer:
@@ -55,58 +60,73 @@ class BlindBoxLocalReplicaServer:
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            line = await reader.readline()
-            parts = line.decode("utf-8", errors="ignore").strip().split()
-            if not parts:
+            while True:
+                line = await reader.readline()
+                if not line:
+                    return
+                parts = line.decode("utf-8", errors="ignore").strip().split()
+                if not parts:
+                    writer.write(b"ERR\n")
+                    await writer.drain()
+                    return
+                cmd = parts[0]
+                if cmd == "PING" and len(parts) == 1:
+                    writer.write(f"{BLINDBOX_LOCAL_REPLICA_MAGIC}\n".encode("utf-8"))
+                    await writer.drain()
+                    continue
+                if cmd == "AUTH" and len(parts) == 2:
+                    if self._is_probe_authorized(parts[1]):
+                        writer.write(b"OK\n")
+                    else:
+                        writer.write(b"ERR\n")
+                    await writer.drain()
+                    continue
+                if cmd == "PUT" and len(parts) >= 3:
+                    if not self._is_authorized(parts, token_index=3):
+                        writer.write(b"ERR\n")
+                        await writer.drain()
+                        return
+                    key = parts[1]
+                    try:
+                        size = int(parts[2])
+                    except Exception:
+                        writer.write(b"ERR\n")
+                        await writer.drain()
+                        return
+                    if size <= 0 or size > self.max_blob_size:
+                        writer.write(b"ERR\n")
+                        await writer.drain()
+                        return
+                    body = await reader.readexactly(size)
+                    if key in self._storage:
+                        writer.write(b"EXISTS\n")
+                    else:
+                        if len(self._storage) >= self.max_entries:
+                            writer.write(b"FULL\n")
+                            await writer.drain()
+                            return
+                        self._storage[key] = body
+                        writer.write(b"OK\n")
+                    await writer.drain()
+                    return
+                if cmd == "GET" and len(parts) >= 2:
+                    if not self._is_authorized(parts, token_index=2):
+                        writer.write(b"ERR\n")
+                        await writer.drain()
+                        return
+                    key = parts[1]
+                    data = self._storage.get(key)
+                    if data is None:
+                        writer.write(b"MISS\n")
+                        await writer.drain()
+                        return
+                    writer.write(f"OK {len(data)}\n".encode("utf-8"))
+                    writer.write(data)
+                    await writer.drain()
+                    return
                 writer.write(b"ERR\n")
                 await writer.drain()
                 return
-            cmd = parts[0]
-            if cmd == "PUT" and len(parts) >= 3:
-                if not self._is_authorized(parts, token_index=3):
-                    writer.write(b"ERR\n")
-                    await writer.drain()
-                    return
-                key = parts[1]
-                try:
-                    size = int(parts[2])
-                except Exception:
-                    writer.write(b"ERR\n")
-                    await writer.drain()
-                    return
-                if size <= 0 or size > self.max_blob_size:
-                    writer.write(b"ERR\n")
-                    await writer.drain()
-                    return
-                body = await reader.readexactly(size)
-                if key in self._storage:
-                    writer.write(b"EXISTS\n")
-                else:
-                    if len(self._storage) >= self.max_entries:
-                        writer.write(b"FULL\n")
-                        await writer.drain()
-                        return
-                    self._storage[key] = body
-                    writer.write(b"OK\n")
-                await writer.drain()
-                return
-            if cmd == "GET" and len(parts) >= 2:
-                if not self._is_authorized(parts, token_index=2):
-                    writer.write(b"ERR\n")
-                    await writer.drain()
-                    return
-                key = parts[1]
-                data = self._storage.get(key)
-                if data is None:
-                    writer.write(b"MISS\n")
-                    await writer.drain()
-                    return
-                writer.write(f"OK {len(data)}\n".encode("utf-8"))
-                writer.write(data)
-                await writer.drain()
-                return
-            writer.write(b"ERR\n")
-            await writer.drain()
         finally:
             writer.close()
             await writer.wait_closed()
@@ -117,6 +137,11 @@ class BlindBoxLocalReplicaServer:
         if len(parts) <= token_index:
             return False
         return hmac.compare_digest(parts[token_index], self.auth_token)
+
+    def _is_probe_authorized(self, token: str) -> bool:
+        if not self.auth_token:
+            return True
+        return hmac.compare_digest(str(token), self.auth_token)
 
 
 _LOCAL_REPLICA_SERVER: Optional[BlindBoxLocalReplicaServer] = None
@@ -129,14 +154,18 @@ async def _probe_existing_local_replica(host: str, port: int, auth_token: str = 
         return False
     try:
         token = str(auth_token or "").strip()
-        if token:
-            writer.write(f"GET __health__ {token}\n".encode("utf-8"))
-        else:
-            writer.write(b"GET __health__\n")
+        writer.write(b"PING\n")
         await writer.drain()
         line = await asyncio.wait_for(reader.readline(), timeout=1.5)
         status = line.decode("utf-8", errors="ignore").strip()
-        return status == "MISS" or status.startswith("OK ") or status == "ERR"
+        if status != BLINDBOX_LOCAL_REPLICA_MAGIC:
+            return False
+        if not token:
+            return True
+        writer.write(f"AUTH {token}\n".encode("utf-8"))
+        await writer.drain()
+        line = await asyncio.wait_for(reader.readline(), timeout=1.5)
+        return line.decode("utf-8", errors="ignore").strip() == "OK"
     except Exception:
         return False
     finally:

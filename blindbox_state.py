@@ -70,6 +70,15 @@ class BlindBoxState:
 
 
 def save_blindbox_state(path: str, state: BlindBoxState) -> None:
+    atomic_write_json(path, state.to_dict())
+
+
+def atomic_write_bytes(
+    path: str,
+    data: bytes,
+    *,
+    mode: int = 0o600,
+) -> None:
     if not path:
         raise ValueError("path is required")
     parent = os.path.dirname(os.path.abspath(path))
@@ -78,15 +87,9 @@ def save_blindbox_state(path: str, state: BlindBoxState) -> None:
     os.makedirs(parent, exist_ok=True)
 
     fd, tmp_path = tempfile.mkstemp(prefix=".blindbox_state.", suffix=".tmp", dir=parent)
-    encoded = json.dumps(
-        state.to_dict(),
-        ensure_ascii=True,
-        indent=2,
-        sort_keys=True,
-    ).encode("utf-8")
     try:
         with os.fdopen(fd, "wb") as f:
-            f.write(encoded)
+            f.write(data)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
@@ -97,9 +100,31 @@ def save_blindbox_state(path: str, state: BlindBoxState) -> None:
             except OSError:
                 pass
     try:
-        os.chmod(path, 0o600)
+        os.chmod(path, mode)
     except OSError:
         pass
+
+
+def atomic_write_text(
+    path: str,
+    text: str,
+    *,
+    mode: int = 0o600,
+) -> None:
+    atomic_write_bytes(path, text.encode("utf-8"), mode=mode)
+
+
+def atomic_write_json(
+    path: str,
+    obj: dict[str, Any],
+    *,
+    mode: int = 0o600,
+) -> None:
+    atomic_write_bytes(
+        path,
+        json.dumps(obj, ensure_ascii=True, indent=2, sort_keys=True).encode("utf-8"),
+        mode=mode,
+    )
 
 
 def load_blindbox_state(path: str) -> BlindBoxState:

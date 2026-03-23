@@ -51,23 +51,36 @@ class Message(object):
 # SAM request messages
 
 def hello(min_version, max_version):
+    min_version = _validate_sam_version(min_version, field_name="MIN")
+    max_version = _validate_sam_version(max_version, field_name="MAX")
     return "HELLO VERSION MIN={} MAX={}\n".format(min_version,
             max_version).encode()
 
 def session_create(style, session_id, destination, options=""):
+    style = _validate_sam_style(style)
+    session_id = _validate_session_id(session_id)
+    destination = _validate_sam_destination_token(destination)
+    options = _validate_sam_options(options)
     return "SESSION CREATE STYLE={} ID={} DESTINATION={} {}\n".format(
             style, session_id, destination, options).encode()
 
 
 def stream_connect(session_id, destination, silent="false"):
+    session_id = _validate_session_id(session_id)
     destination = _validate_sam_token(destination, field_name="DESTINATION", allow_equals=True)
+    silent = _validate_boolish_flag(silent, field_name="SILENT")
     return "STREAM CONNECT ID={} DESTINATION={} SILENT={}\n".format(
             session_id, destination, silent).encode()
 
 def stream_accept(session_id, silent="false"):
+    session_id = _validate_session_id(session_id)
+    silent = _validate_boolish_flag(silent, field_name="SILENT")
     return "STREAM ACCEPT ID={} SILENT={}\n".format(session_id, silent).encode()
 
 def stream_forward(session_id, port, options=""):
+    session_id = _validate_session_id(session_id)
+    port = _validate_port(port)
+    options = _validate_sam_options(options)
     return "STREAM FORWARD ID={} PORT={} {}\n".format(
             session_id, port, options).encode()
 
@@ -88,7 +101,56 @@ def _validate_sam_token(value, *, field_name, allow_equals):
         raise ValueError("SAM {} contains forbidden characters".format(field_name))
     return token
 
+
+def _validate_session_id(session_id):
+    return _validate_sam_token(session_id, field_name="ID", allow_equals=False)
+
+
+def _validate_boolish_flag(value, *, field_name):
+    token = _validate_sam_token(value, field_name=field_name, allow_equals=False).lower()
+    if token not in {"true", "false"}:
+        raise ValueError("SAM {} is invalid".format(field_name))
+    return token
+
+
+def _validate_port(port):
+    if type(port) != int:
+        raise ValueError("SAM PORT must be an int")
+    if port < 1 or port > 65535:
+        raise ValueError("SAM PORT is out of range")
+    return port
+
+
+def _validate_sam_options(options):
+    text = str(options or "").strip()
+    if any(ch in text for ch in ("\r", "\n", "\x00")):
+        raise ValueError("SAM OPTIONS contains forbidden characters")
+    return text
+
+
+def _validate_sam_style(style):
+    token = _validate_sam_token(style, field_name="STYLE", allow_equals=False).upper()
+    if token not in {"STREAM", "DATAGRAM", "RAW"}:
+        raise ValueError("SAM STYLE is invalid")
+    return token
+
+
+def _validate_sam_destination_token(destination):
+    token = _validate_sam_token(destination, field_name="DESTINATION", allow_equals=True)
+    if token == TRANSIENT_DESTINATION:
+        return token
+    return token
+
+
+def _validate_sam_version(version, *, field_name):
+    token = _validate_sam_token(version, field_name=field_name, allow_equals=False)
+    if not re.fullmatch(r"\d+\.\d+", token):
+        raise ValueError("SAM {} version is invalid".format(field_name))
+    return token
+
 def dest_generate(signature_type):
+    if type(signature_type) != int:
+        raise ValueError("SAM SIGNATURE_TYPE must be an int")
     return "DEST GENERATE SIGNATURE_TYPE={}\n".format(signature_type).encode()
 
 class Destination(object):

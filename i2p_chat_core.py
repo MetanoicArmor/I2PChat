@@ -12,6 +12,7 @@ import struct
 import sys
 import tempfile
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, List, Optional, Tuple
@@ -24,7 +25,12 @@ from blindbox_blob import decrypt_blindbox_blob, encrypt_blindbox_blob
 from blindbox_client import BlindBoxClient
 from blindbox_key_schedule import derive_blindbox_message_keys
 from blindbox_local_replica import ensure_local_blindbox_replica
-from blindbox_state import BlindBoxState, load_blindbox_state, save_blindbox_state
+from blindbox_state import (
+    BlindBoxState,
+    atomic_write_json,
+    atomic_write_text,
+    load_blindbox_state,
+)
 from protocol_codec import (
     ENCRYPTED_TRAILER_SIZE,
     FLAG_ENCRYPTED,
@@ -816,8 +822,17 @@ class I2PChatCore:
         self._blindbox_root_epoch: int = 0
         self._blindbox_root_created_at: int = 0
         self._blindbox_root_send_index_base: int = 0
+        self._blindbox_pending_root_secret: Optional[bytes] = None
+        self._blindbox_pending_root_epoch: int = 0
+        self._blindbox_pending_root_created_at: int = 0
+        self._blindbox_pending_root_send_index_base: int = 0
         self._blindbox_prev_roots: list[dict[str, Any]] = []
+        self._blindbox_max_seen_hashes = max(
+            1,
+            int(os.environ.get("I2PCHAT_BLINDBOX_MAX_SEEN_HASHES", "8192")),
+        )
         self._blindbox_seen_hashes: set[str] = set()
+        self._blindbox_seen_hash_order: deque[str] = deque()
         self._blindbox_rng = random.SystemRandom()
         self._blindbox_privacy_profile = _resolve_blindbox_privacy_profile(
             os.environ.get(
@@ -1280,6 +1295,38 @@ class I2PChatCore:
                         int(self._blindbox_state.send_index),
                     )
                 )
+                enc_pending_root = raw.get("blindbox_pending_root_secret_enc")
+                self._blindbox_pending_root_secret = None
+                if isinstance(enc_pending_root, str) and enc_pending_root:
+                    self._blindbox_pending_root_secret, pending_wrap_version = (
+                        self._blindbox_decrypt_root_secret(
+                            enc_pending_root, peer_id, wrap_version=wrap_version
+                        )
+                    )
+                    if pending_wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT:
+                        wrap_migration_needed = True
+                self._blindbox_pending_root_epoch = int(
+                    raw.get("blindbox_pending_root_epoch", 0)
+                )
+                self._blindbox_pending_root_created_at = int(
+                    raw.get("blindbox_pending_root_created_at", int(time.time()))
+                )
+                self._blindbox_pending_root_send_index_base = int(
+                    raw.get(
+                        "blindbox_pending_root_send_index_base",
+                        int(self._blindbox_state.send_index),
+                    )
+                )
+                if (
+                    self._blindbox_pending_root_secret is not None
+                    and len(self._blindbox_pending_root_secret) != 32
+                ):
+                    self._blindbox_pending_root_secret = None
+                    self._blindbox_pending_root_epoch = 0
+                    self._blindbox_pending_root_created_at = 0
+                    self._blindbox_pending_root_send_index_base = int(
+                        self._blindbox_state.send_index
+                    )
                 prev_items = raw.get("blindbox_prev_roots", [])
                 self._blindbox_prev_roots = []
                 if isinstance(prev_items, list):
@@ -1314,6 +1361,12 @@ class I2PChatCore:
                 self._blindbox_root_epoch = 0
                 self._blindbox_root_created_at = 0
                 self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
+                self._blindbox_pending_root_secret = None
+                self._blindbox_pending_root_epoch = 0
+                self._blindbox_pending_root_created_at = 0
+                self._blindbox_pending_root_send_index_base = int(
+                    self._blindbox_state.send_index
+                )
                 self._blindbox_prev_roots = []
         except Exception as e:
             logger.warning("Failed to load BlindBox state: %s", e)
@@ -1322,6 +1375,10 @@ class I2PChatCore:
             self._blindbox_root_epoch = 0
             self._blindbox_root_created_at = 0
             self._blindbox_root_send_index_base = 0
+            self._blindbox_pending_root_secret = None
+            self._blindbox_pending_root_epoch = 0
+            self._blindbox_pending_root_created_at = 0
+            self._blindbox_pending_root_send_index_base = 0
             self._blindbox_prev_roots = []
 
     def _save_blindbox_state(self) -> None:
@@ -1330,19 +1387,38 @@ class I2PChatCore:
         peer_id = self._blindbox_peer_id()
         if not peer_id:
             return
-        if self._blindbox_root_secret is None:
+        if (
+            self._blindbox_root_secret is None
+            and self._blindbox_pending_root_secret is None
+        ):
             return
         try:
             path = self._blindbox_state_path()
             payload = self._blindbox_state.to_dict()
-            payload["blindbox_root_secret_enc"] = self._blindbox_encrypt_root_secret(
-                self._blindbox_root_secret, peer_id
-            )
+            if self._blindbox_root_secret is not None:
+                payload["blindbox_root_secret_enc"] = self._blindbox_encrypt_root_secret(
+                    self._blindbox_root_secret, peer_id
+                )
             payload["blindbox_wrap_version"] = BLINDBOX_LOCAL_WRAP_VERSION_CURRENT
             payload["blindbox_root_epoch"] = int(self._blindbox_root_epoch)
             payload["blindbox_root_created_at"] = int(self._blindbox_root_created_at)
             payload["blindbox_root_send_index_base"] = int(
                 self._blindbox_root_send_index_base
+            )
+            if self._blindbox_pending_root_secret is not None:
+                payload["blindbox_pending_root_secret_enc"] = (
+                    self._blindbox_encrypt_root_secret(
+                        self._blindbox_pending_root_secret, peer_id
+                    )
+                )
+            payload["blindbox_pending_root_epoch"] = int(
+                self._blindbox_pending_root_epoch
+            )
+            payload["blindbox_pending_root_created_at"] = int(
+                self._blindbox_pending_root_created_at
+            )
+            payload["blindbox_pending_root_send_index_base"] = int(
+                self._blindbox_pending_root_send_index_base
             )
             self._blindbox_prune_previous_roots()
             payload["blindbox_prev_roots"] = [
@@ -1357,39 +1433,7 @@ class I2PChatCore:
                 if isinstance(item.get("secret"), (bytes, bytearray))
                 and len(bytes(item["secret"])) == 32
             ]
-            temp_state = BlindBoxState.from_dict(payload)
-            save_blindbox_state(path, temp_state)
-            # Persist extra encrypted root secret in the same JSON object.
-            with open(path, "r", encoding="utf-8") as f:
-                current = json.load(f)
-            current["blindbox_root_secret_enc"] = payload["blindbox_root_secret_enc"]
-            current["blindbox_wrap_version"] = payload["blindbox_wrap_version"]
-            current["blindbox_root_epoch"] = payload["blindbox_root_epoch"]
-            current["blindbox_root_created_at"] = payload["blindbox_root_created_at"]
-            current["blindbox_root_send_index_base"] = payload[
-                "blindbox_root_send_index_base"
-            ]
-            current["blindbox_prev_roots"] = payload["blindbox_prev_roots"]
-            parent = os.path.dirname(os.path.abspath(path))
-            fd, tmp_path = tempfile.mkstemp(
-                prefix=".blindbox_state_extra.",
-                suffix=".tmp",
-                dir=parent,
-            )
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(current, f, ensure_ascii=True, indent=2, sort_keys=True)
-                os.replace(tmp_path, path)
-            finally:
-                if os.path.exists(tmp_path):
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+            atomic_write_json(path, payload)
         except Exception as e:
             logger.warning("Failed to save BlindBox state: %s", e)
 
@@ -1431,28 +1475,10 @@ class I2PChatCore:
         if self.profile == "default":
             return
         path = self._trust_store_path()
-        parent = os.path.dirname(os.path.abspath(path))
-        fd, tmp_path = tempfile.mkstemp(
-            prefix=".trust_store.",
-            suffix=".tmp",
-            dir=parent,
-        )
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(self.peer_trusted_signing_keys, f, ensure_ascii=True, indent=2, sort_keys=True)
-            os.replace(tmp_path, path)
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+            atomic_write_json(path, self.peer_trusted_signing_keys)
         except Exception as e:
             logger.warning("Failed to save trust store %s: %s", path, e)
-        finally:
-            if os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
 
     def forget_pinned_peer_key(self, peer_addr: str) -> bool:
         """Удаляет TOFU pin для пира из памяти и trust store профиля."""
@@ -1554,12 +1580,7 @@ class I2PChatCore:
         if not lines:
             return
         path = self._profile_path()
-        with open(path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        atomic_write_text(path, "\n".join(lines) + "\n")
 
     def save_stored_peer(self, peer_addr: str) -> None:
         """
@@ -1989,6 +2010,14 @@ class I2PChatCore:
     def get_blindbox_telemetry(self) -> dict[str, Any]:
         """Returns non-sensitive local BlindBox runtime telemetry."""
         has_client = self._blindbox_client is not None
+        has_loopback_replicas = any(
+            _is_loopback_replica(item) for item in self.blindbox_replicas
+        )
+        insecure_local_mode = bool(
+            has_loopback_replicas
+            and not self._blindbox_local_auth_token
+            and self._blindbox_allow_insecure_local
+        )
         # Task is "running" during client.start() too; UI should not say "polling" until
         # the Blind Box SAM/direct session is actually up (matches "runtime started").
         poller_running = (
@@ -2009,6 +2038,8 @@ class I2PChatCore:
             "require_sam_for_replicas": bool(self._blindbox_require_sam),
             "local_auth_token_enabled": bool(self._blindbox_local_auth_token),
             "allow_insecure_local_replicas": bool(self._blindbox_allow_insecure_local),
+            "has_loopback_replicas": has_loopback_replicas,
+            "insecure_local_mode": insecure_local_mode,
             "ready": bool(self._blindbox_ready()),
             "has_root_secret": self._blindbox_root_secret is not None,
             "replicas": len(self.blindbox_replicas),
@@ -2134,6 +2165,16 @@ class I2PChatCore:
         return self._blindbox_rng.uniform(
             self._blindbox_poll_min_sec, self._blindbox_poll_max_sec
         )
+
+    def _remember_blindbox_seen_hash(self, digest: str) -> None:
+        token = str(digest or "").strip()
+        if not token or token in self._blindbox_seen_hashes:
+            return
+        self._blindbox_seen_hashes.add(token)
+        self._blindbox_seen_hash_order.append(token)
+        while len(self._blindbox_seen_hash_order) > self._blindbox_max_seen_hashes:
+            oldest = self._blindbox_seen_hash_order.popleft()
+            self._blindbox_seen_hashes.discard(oldest)
 
     def _blindbox_recv_candidates(self) -> list[int]:
         recv_start = self._blindbox_state.recv_base
@@ -2275,7 +2316,7 @@ class I2PChatCore:
                             accepted = await self._process_blindbox_frame(frame)
                             if accepted:
                                 got_valid = True
-                                self._blindbox_seen_hashes.add(digest)
+                                self._remember_blindbox_seen_hash(digest)
                                 break
                         if got_valid:
                             break
@@ -2965,6 +3006,161 @@ class I2PChatCore:
             or sent_since_epoch >= self._blindbox_root_rotate_messages
         )
 
+    def _blindbox_has_pending_root(self) -> bool:
+        return (
+            self._blindbox_pending_root_secret is not None
+            and len(self._blindbox_pending_root_secret) == 32
+            and int(self._blindbox_pending_root_epoch) > 0
+        )
+
+    def _clear_pending_blindbox_root(self) -> None:
+        self._blindbox_pending_root_secret = None
+        self._blindbox_pending_root_epoch = 0
+        self._blindbox_pending_root_created_at = 0
+        self._blindbox_pending_root_send_index_base = int(self._blindbox_state.send_index)
+
+    def _ensure_pending_blindbox_root(
+        self, *, force_rotate: bool = False
+    ) -> tuple[int, bytes, str, bool] | None:
+        if self._blindbox_has_pending_root():
+            assert self._blindbox_pending_root_secret is not None
+            reason = (
+                "initialized"
+                if self._blindbox_root_secret is None
+                else "rotated"
+            )
+            return (
+                int(self._blindbox_pending_root_epoch),
+                self._blindbox_pending_root_secret,
+                reason,
+                False,
+            )
+        should_bootstrap = self._blindbox_root_secret is None
+        should_rotate = force_rotate or self._blindbox_should_rotate_root()
+        if not should_bootstrap and not should_rotate:
+            return None
+        next_epoch = max(
+            int(self._blindbox_root_epoch),
+            int(self._blindbox_pending_root_epoch),
+        ) + 1
+        root_secret = os.urandom(32)
+        self._blindbox_pending_root_secret = root_secret
+        self._blindbox_pending_root_epoch = next_epoch
+        self._blindbox_pending_root_created_at = int(time.time())
+        self._blindbox_pending_root_send_index_base = int(self._blindbox_state.send_index)
+        self._save_blindbox_state()
+        reason = "rotated" if should_rotate and not should_bootstrap else "initialized"
+        return (next_epoch, root_secret, reason, True)
+
+    def _commit_pending_blindbox_root(self, ack_epoch: int) -> bool:
+        if not self._blindbox_has_pending_root():
+            return False
+        if int(ack_epoch) != int(self._blindbox_pending_root_epoch):
+            return False
+        assert self._blindbox_pending_root_secret is not None
+        reason = (
+            "initialized"
+            if self._blindbox_root_secret is None
+            else "rotated"
+        )
+        if self._blindbox_root_secret is not None:
+            expires_at = int(time.time()) + int(self._blindbox_previous_grace_seconds)
+            self._blindbox_prev_roots.append(
+                {
+                    "epoch": int(self._blindbox_root_epoch),
+                    "secret": self._blindbox_root_secret,
+                    "expires_at": expires_at,
+                }
+            )
+        self._blindbox_root_secret = self._blindbox_pending_root_secret
+        self._blindbox_root_epoch = int(self._blindbox_pending_root_epoch)
+        self._blindbox_root_created_at = int(self._blindbox_pending_root_created_at)
+        self._blindbox_root_send_index_base = int(
+            self._blindbox_pending_root_send_index_base
+        )
+        self._clear_pending_blindbox_root()
+        self._blindbox_prune_previous_roots()
+        self._save_blindbox_state()
+        if reason == "initialized":
+            self._emit_system("BlindBox root secret initialized")
+        else:
+            self._emit_system(
+                f"BlindBox root secret rotated (epoch={int(self._blindbox_root_epoch)})"
+            )
+        return True
+
+    async def _send_blindbox_root_ack(
+        self, writer: asyncio.StreamWriter, incoming_epoch: int
+    ) -> None:
+        writer.write(
+            self.frame_message("S", f"__SIGNAL__:BLINDBOX_ROOT_ACK|{int(incoming_epoch)}")
+        )
+        await writer.drain()
+
+    async def _handle_incoming_blindbox_root_signal(
+        self,
+        body: str,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        raw_tail = body.split("BLINDBOX_ROOT|", 1)[1].strip()
+        parts = raw_tail.split("|")
+        if len(parts) < 2 or not parts[0].isdigit():
+            raise ValueError("missing root epoch")
+        incoming_epoch = int(parts[0])
+        root_hex = parts[1].strip()
+        root_secret = bytes.fromhex(root_hex)
+        if len(root_secret) != 32:
+            raise ValueError("invalid root secret length")
+        if not self._blindbox_ready():
+            self._emit_error(
+                "BlindBox root received outside persistent locked-peer mode."
+            )
+            return
+        if self._blindbox_root_secret is None:
+            self._blindbox_root_secret = root_secret
+            self._blindbox_root_epoch = incoming_epoch
+            self._blindbox_root_created_at = int(time.time())
+            self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
+            self._save_blindbox_state()
+            self._emit_system(
+                f"BlindBox root secret received (epoch={incoming_epoch})"
+            )
+            await self._send_blindbox_root_ack(writer, incoming_epoch)
+            return
+        if incoming_epoch > int(self._blindbox_root_epoch):
+            expires_at = int(time.time()) + int(self._blindbox_previous_grace_seconds)
+            self._blindbox_prev_roots.append(
+                {
+                    "epoch": int(self._blindbox_root_epoch),
+                    "secret": self._blindbox_root_secret,
+                    "expires_at": expires_at,
+                }
+            )
+            self._blindbox_root_secret = root_secret
+            self._blindbox_root_epoch = incoming_epoch
+            self._blindbox_root_created_at = int(time.time())
+            self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
+            self._blindbox_prune_previous_roots()
+            self._save_blindbox_state()
+            self._emit_system(f"BlindBox root rotated (epoch={incoming_epoch})")
+            await self._send_blindbox_root_ack(writer, incoming_epoch)
+            return
+        if (
+            incoming_epoch == int(self._blindbox_root_epoch)
+            and self._blindbox_root_secret == root_secret
+        ):
+            await self._send_blindbox_root_ack(writer, incoming_epoch)
+            return
+        self._emit_system("Ignoring stale BlindBox root signal.")
+
+    def _handle_blindbox_root_ack_signal(self, body: str) -> None:
+        ack_raw = body.split("BLINDBOX_ROOT_ACK|", 1)[1].strip().split("|", 1)[0]
+        if not ack_raw.isdigit():
+            raise ValueError("invalid root ack epoch")
+        ack_epoch = int(ack_raw)
+        if not self._commit_pending_blindbox_root(ack_epoch):
+            self._emit_system("Ignoring stale BlindBox root ACK.")
+
     async def _send_blindbox_root_if_needed(
         self, writer: asyncio.StreamWriter, *, force_rotate: bool = False
     ) -> None:
@@ -2977,27 +3173,10 @@ class I2PChatCore:
             return
         if not self._should_initiate_blindbox_root_exchange():
             return
-        should_bootstrap = self._blindbox_root_secret is None
-        should_rotate = force_rotate or self._blindbox_should_rotate_root()
-        if not should_bootstrap and not should_rotate:
+        pending_root = self._ensure_pending_blindbox_root(force_rotate=force_rotate)
+        if pending_root is None:
             return
-        if self._blindbox_root_secret is not None:
-            expires_at = int(time.time()) + int(self._blindbox_previous_grace_seconds)
-            self._blindbox_prev_roots.append(
-                {
-                    "epoch": int(self._blindbox_root_epoch),
-                    "secret": self._blindbox_root_secret,
-                    "expires_at": expires_at,
-                }
-            )
-            self._blindbox_prune_previous_roots()
-        next_epoch = int(self._blindbox_root_epoch) + 1
-        root_secret = os.urandom(32)
-        self._blindbox_root_secret = root_secret
-        self._blindbox_root_epoch = next_epoch
-        self._blindbox_root_created_at = int(time.time())
-        self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
-        self._save_blindbox_state()
+        next_epoch, root_secret, reason, is_new_pending = pending_root
         writer.write(
             self.frame_message(
                 "S",
@@ -3008,11 +3187,10 @@ class I2PChatCore:
             )
         )
         await writer.drain()
-        reason = "rotated" if should_rotate and not should_bootstrap else "initialized"
-        if reason == "initialized":
-            self._emit_system("BlindBox root secret initialized")
-        else:
-            self._emit_system(f"BlindBox root secret {reason} (epoch={next_epoch})")
+        if is_new_pending:
+            self._emit_system(
+                f"BlindBox root secret {reason}; awaiting ACK (epoch={next_epoch})"
+            )
 
     async def _handle_handshake_message(
         self, body: str, writer: asyncio.StreamWriter
@@ -3677,62 +3855,18 @@ class I2PChatCore:
                     if "__SIGNAL__:" in body:
                         if "BLINDBOX_ROOT|" in body:
                             try:
-                                raw_tail = body.split("BLINDBOX_ROOT|", 1)[1].strip()
-                                parts = raw_tail.split("|")
-                                if len(parts) >= 2 and parts[0].isdigit():
-                                    incoming_epoch = int(parts[0])
-                                    root_hex = parts[1].strip()
-                                else:
-                                    # Backward compatibility for old single-field signal.
-                                    incoming_epoch = 1
-                                    root_hex = parts[0].strip()
-                                root_secret = bytes.fromhex(root_hex)
-                                if len(root_secret) != 32:
-                                    raise ValueError("invalid root secret length")
-                                if not self._blindbox_ready():
-                                    self._emit_error(
-                                        "BlindBox root received outside persistent locked-peer mode."
-                                    )
-                                elif self._blindbox_root_secret is None:
-                                    self._blindbox_root_secret = root_secret
-                                    self._blindbox_root_epoch = incoming_epoch
-                                    self._blindbox_root_created_at = int(time.time())
-                                    self._blindbox_root_send_index_base = int(
-                                        self._blindbox_state.send_index
-                                    )
-                                    self._save_blindbox_state()
-                                    self._emit_system(
-                                        f"BlindBox root secret received (epoch={incoming_epoch})"
-                                    )
-                                else:
-                                    if incoming_epoch > int(self._blindbox_root_epoch):
-                                        expires_at = int(time.time()) + int(
-                                            self._blindbox_previous_grace_seconds
-                                        )
-                                        self._blindbox_prev_roots.append(
-                                            {
-                                                "epoch": int(self._blindbox_root_epoch),
-                                                "secret": self._blindbox_root_secret,
-                                                "expires_at": expires_at,
-                                            }
-                                        )
-                                        self._blindbox_root_secret = root_secret
-                                        self._blindbox_root_epoch = incoming_epoch
-                                        self._blindbox_root_created_at = int(time.time())
-                                        self._blindbox_root_send_index_base = int(
-                                            self._blindbox_state.send_index
-                                        )
-                                        self._blindbox_prune_previous_roots()
-                                        self._save_blindbox_state()
-                                        self._emit_system(
-                                            f"BlindBox root rotated (epoch={incoming_epoch})"
-                                        )
-                                    else:
-                                        self._emit_system(
-                                            "Ignoring stale BlindBox root signal."
-                                        )
+                                await self._handle_incoming_blindbox_root_signal(
+                                    body, writer
+                                )
                             except Exception as e:
                                 self._emit_error(f"Invalid BlindBox root signal: {e}")
+                        elif "BLINDBOX_ROOT_ACK|" in body:
+                            try:
+                                self._handle_blindbox_root_ack_signal(body)
+                            except Exception as e:
+                                self._emit_error(
+                                    f"Invalid BlindBox root ACK signal: {e}"
+                                )
                         elif "MSG_ACK|" in body:
                             try:
                                 ack_id_raw = body.split("MSG_ACK|", 1)[1].strip().split("|", 1)[0]
