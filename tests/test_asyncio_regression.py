@@ -252,6 +252,19 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertIn("examplepeer.b32.i2p", core.peer_trusted_signing_keys)
 
+    def test_forget_pinned_peer_key_removes_normalized_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("i2p_chat_core.get_profiles_dir", return_value=tmpdir):
+                core = I2PChatCore(profile="alice")
+                core.peer_trusted_signing_keys["examplepeer.b32.i2p"] = "ab" * 32
+
+                removed = core.forget_pinned_peer_key("examplepeer")
+
+                self.assertTrue(removed)
+                self.assertNotIn("examplepeer.b32.i2p", core.peer_trusted_signing_keys)
+                with open(core._trust_store_path(), "r", encoding="utf-8") as f:
+                    self.assertEqual(f.read().strip(), "{}")
+
 
 if __name__ == "__main__":
     unittest.main()

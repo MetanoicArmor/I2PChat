@@ -2870,6 +2870,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_actions_popup.add_action("Send file", self.on_send_file_clicked)
         self.more_actions_popup.add_separator()
         self.more_actions_popup.add_action("Lock to peer", self.on_lock_peer_clicked)
+        self.more_actions_popup.add_action("Forget pinned peer key", self.on_forget_pinned_peer_key_clicked)
         self.more_actions_popup.add_action("Copy my address", self.on_copy_my_addr_clicked)
         self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
         self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
@@ -3824,6 +3825,48 @@ class ChatWindow(QtWidgets.QMainWindow):
         addr = self.core.my_dest.base32 + ".b32.i2p"
         QtWidgets.QApplication.clipboard().setText(addr)
         self.handle_system("My address copied to clipboard.")
+
+    @QtCore.pyqtSlot()
+    def on_forget_pinned_peer_key_clicked(self) -> None:
+        peer_addr = (
+            self.addr_edit.text().strip()
+            or (self.core.current_peer_addr or "").strip()
+            or (self.core.stored_peer or "").strip()
+        )
+        if not peer_addr:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Forget pinned peer key",
+                "No peer address is available.\nEnter a peer address or connect first.",
+            )
+            return
+        normalized = self.core._normalize_peer_addr(peer_addr)
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Forget pinned peer key",
+            "Remove the pinned signing key for this peer?\n\n"
+            f"{normalized}\n\n"
+            "On the next secure connect, this peer will be trusted again via TOFU.\n"
+            "Only continue if you expect the key change and have verified the fingerprint out-of-band.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        try:
+            removed = self.core.forget_pinned_peer_key(peer_addr)
+        except Exception as e:  # pragma: no cover - GUI path
+            self.handle_error(f"Failed to forget pinned peer key: {e}")
+            return
+        if removed:
+            self.handle_system(f"Forgot pinned peer key for {normalized}.")
+        else:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Forget pinned peer key",
+                f"No pinned key stored for:\n{normalized}",
+            )
 
     @QtCore.pyqtSlot()
     def on_load_profile_clicked(self) -> None:

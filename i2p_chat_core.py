@@ -1417,6 +1417,16 @@ class I2PChatCore:
         except Exception as e:
             logger.warning("Failed to save trust store %s: %s", path, e)
 
+    def forget_pinned_peer_key(self, peer_addr: str) -> bool:
+        """Удаляет TOFU pin для пира из памяти и trust store профиля."""
+        normalized = self._normalize_peer_addr(peer_addr)
+        if not normalized:
+            raise ValueError("Peer address is empty")
+        removed = self.peer_trusted_signing_keys.pop(normalized, None) is not None
+        if removed:
+            self._save_trust_store()
+        return removed
+
     @staticmethod
     def _fingerprint_pubkey(pubkey: bytes) -> str:
         import hashlib
