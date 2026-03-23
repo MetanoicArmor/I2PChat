@@ -361,6 +361,82 @@ class BlindBoxCoreTelemetryTests(unittest.TestCase):
             else:
                 os.environ["I2PCHAT_BLINDBOX_REQUIRE_SAM"] = old_require_sam
 
+    def test_blindbox_local_direct_requires_token_by_default(self) -> None:
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        old_local_token = os.environ.get("I2PCHAT_BLINDBOX_LOCAL_TOKEN")
+        old_allow_insecure = os.environ.get("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "127.0.0.1:19444"
+        os.environ.pop("I2PCHAT_BLINDBOX_LOCAL_TOKEN", None)
+        os.environ.pop("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL", None)
+        try:
+            with self.assertRaises(ValueError):
+                I2PChatCore(profile="alice")
+        finally:
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+            if old_local_token is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_LOCAL_TOKEN", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_LOCAL_TOKEN"] = old_local_token
+            if old_allow_insecure is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL"] = old_allow_insecure
+
+    def test_blindbox_local_direct_opt_out_allows_insecure_mode(self) -> None:
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        old_local_token = os.environ.get("I2PCHAT_BLINDBOX_LOCAL_TOKEN")
+        old_allow_insecure = os.environ.get("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "127.0.0.1:19444"
+        os.environ.pop("I2PCHAT_BLINDBOX_LOCAL_TOKEN", None)
+        os.environ["I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL"] = "1"
+        try:
+            core = I2PChatCore(profile="alice")
+            telemetry = core.get_blindbox_telemetry()
+            self.assertFalse(bool(telemetry["local_auth_token_enabled"]))
+            self.assertTrue(bool(telemetry["allow_insecure_local_replicas"]))
+        finally:
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+            if old_local_token is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_LOCAL_TOKEN", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_LOCAL_TOKEN"] = old_local_token
+            if old_allow_insecure is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL"] = old_allow_insecure
+
+    def test_normalize_peer_addr_rejects_forbidden_chars(self) -> None:
+        core = I2PChatCore(profile="default")
+        with self.assertRaises(ValueError):
+            core._normalize_peer_addr("abc\nxyz")  # noqa: SLF001 - validation behavior
+        with self.assertRaises(ValueError):
+            core._normalize_peer_addr("abc=xyz")  # noqa: SLF001 - validation behavior
+
+    def test_normalize_peer_addr_accepts_base32_host(self) -> None:
+        core = I2PChatCore(profile="default")
+        self.assertEqual(
+            core._normalize_peer_addr("a" * 52),  # noqa: SLF001 - validation behavior
+            ("a" * 52) + ".b32.i2p",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

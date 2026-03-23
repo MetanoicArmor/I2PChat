@@ -769,6 +769,10 @@ class I2PChatCore:
                 ", ".join(self.blindbox_replicas),
             )
         local_auth_token_env = os.environ.get("I2PCHAT_BLINDBOX_LOCAL_TOKEN", "").strip()
+        self._blindbox_allow_insecure_local = (
+            os.environ.get("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL", "").strip().lower()
+            in TRUTHY_ENV_VALUES
+        )
         if self._blindbox_replicas_source == "local-auto":
             self._blindbox_local_auth_token = local_auth_token_env or secrets.token_hex(24)
         else:
@@ -783,10 +787,17 @@ class I2PChatCore:
             and any(_is_loopback_replica(item) for item in self.blindbox_replicas)
             and not self._blindbox_local_auth_token
         ):
-            logger.warning(
-                "BlindBox local/direct replicas are enabled without auth token. "
-                "Set I2PCHAT_BLINDBOX_LOCAL_TOKEN to require local auth."
-            )
+            if self._blindbox_allow_insecure_local:
+                logger.warning(
+                    "BlindBox local/direct replicas are enabled without auth token "
+                    "because I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1 is set."
+                )
+            else:
+                raise ValueError(
+                    "BlindBox local/direct replicas require I2PCHAT_BLINDBOX_LOCAL_TOKEN. "
+                    "Set a token or explicitly opt out with "
+                    "I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1."
+                )
         # Default 1: still PUT to every Blind Box in parallel, but accept success if any
         # one responds (I2P paths are often asymmetric). Set I2PCHAT_BLINDBOX_PUT_QUORUM=2
         # to require all configured boxes to ACK each offline message.
@@ -1359,10 +1370,22 @@ class I2PChatCore:
                 "blindbox_root_send_index_base"
             ]
             current["blindbox_prev_roots"] = payload["blindbox_prev_roots"]
-            tmp_path = path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(current, f, ensure_ascii=True, indent=2, sort_keys=True)
-            os.replace(tmp_path, path)
+            parent = os.path.dirname(os.path.abspath(path))
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=".blindbox_state_extra.",
+                suffix=".tmp",
+                dir=parent,
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(current, f, ensure_ascii=True, indent=2, sort_keys=True)
+                os.replace(tmp_path, path)
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
             try:
                 os.chmod(path, 0o600)
             except OSError:
@@ -1379,8 +1402,11 @@ class I2PChatCore:
         )
 
     def _blindbox_current_peer_matches_locked_peer(self) -> bool:
-        locked_peer = self._normalize_peer_addr(self.stored_peer or "")
-        current_peer = self._normalize_peer_addr(self.current_peer_addr or "")
+        try:
+            locked_peer = self._normalize_peer_addr(self.stored_peer or "")
+            current_peer = self._normalize_peer_addr(self.current_peer_addr or "")
+        except ValueError:
+            return False
         return bool(locked_peer and current_peer and locked_peer == current_peer)
 
     def _load_trust_store(self) -> None:
@@ -1405,9 +1431,14 @@ class I2PChatCore:
         if self.profile == "default":
             return
         path = self._trust_store_path()
-        tmp_path = path + ".tmp"
+        parent = os.path.dirname(os.path.abspath(path))
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".trust_store.",
+            suffix=".tmp",
+            dir=parent,
+        )
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(self.peer_trusted_signing_keys, f, ensure_ascii=True, indent=2, sort_keys=True)
             os.replace(tmp_path, path)
             try:
@@ -1416,6 +1447,12 @@ class I2PChatCore:
                 pass
         except Exception as e:
             logger.warning("Failed to save trust store %s: %s", path, e)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     def forget_pinned_peer_key(self, peer_addr: str) -> bool:
         """Удаляет TOFU pin для пира из памяти и trust store профиля."""
@@ -1435,9 +1472,19 @@ class I2PChatCore:
 
     def _normalize_peer_addr(self, addr: str) -> str:
         raw = (addr or "").strip().lower()
-        if raw and not raw.endswith(".b32.i2p"):
-            raw += ".b32.i2p"
-        return raw
+        if not raw:
+            return ""
+        if any(ch in raw for ch in ("\r", "\n", "\x00", " ", "\t", "=")):
+            raise ValueError("Peer address contains forbidden characters")
+        if raw.endswith(".b32.i2p"):
+            host = raw[: -len(".b32.i2p")]
+        elif "." in raw:
+            raise ValueError("Peer address must use .b32.i2p format")
+        else:
+            host = raw
+        if not re.fullmatch(r"[a-z2-7]{40,80}", host):
+            raise ValueError("Peer address format is invalid")
+        return host + ".b32.i2p"
 
     def _canonical_dest_base64(self, raw_dest: str) -> str:
         dest = i2plib.Destination((raw_dest or "").strip())
@@ -1961,6 +2008,7 @@ class I2PChatCore:
             "use_sam_for_replicas": bool(self._blindbox_use_sam),
             "require_sam_for_replicas": bool(self._blindbox_require_sam),
             "local_auth_token_enabled": bool(self._blindbox_local_auth_token),
+            "allow_insecure_local_replicas": bool(self._blindbox_allow_insecure_local),
             "ready": bool(self._blindbox_ready()),
             "has_root_secret": self._blindbox_root_secret is not None,
             "replicas": len(self.blindbox_replicas),

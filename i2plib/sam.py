@@ -60,6 +60,7 @@ def session_create(style, session_id, destination, options=""):
 
 
 def stream_connect(session_id, destination, silent="false"):
+    destination = _validate_sam_token(destination, field_name="DESTINATION", allow_equals=True)
     return "STREAM CONNECT ID={} DESTINATION={} SILENT={}\n".format(
             session_id, destination, silent).encode()
 
@@ -73,7 +74,19 @@ def stream_forward(session_id, port, options=""):
 
 
 def naming_lookup(name):
+    name = _validate_sam_token(name, field_name="NAME", allow_equals=False)
     return "NAMING LOOKUP NAME={}\n".format(name).encode()
+
+
+def _validate_sam_token(value, *, field_name, allow_equals):
+    token = str(value or "").strip()
+    if not token:
+        raise ValueError("SAM {} is empty".format(field_name))
+    if any(ch in token for ch in ("\r", "\n", "\x00", " ", "\t")):
+        raise ValueError("SAM {} contains forbidden characters".format(field_name))
+    if not allow_equals and "=" in token:
+        raise ValueError("SAM {} contains forbidden characters".format(field_name))
+    return token
 
 def dest_generate(signature_type):
     return "DEST GENERATE SIGNATURE_TYPE={}\n".format(signature_type).encode()

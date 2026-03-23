@@ -21,11 +21,13 @@ class _ReplicaServer:
         *,
         flaky_first_put: bool = False,
         required_token: str = "",
+        get_header_override: str = "",
     ) -> None:
         self.mode = mode
         self.storage = storage
         self.flaky_first_put = flaky_first_put
         self.required_token = required_token
+        self.get_header_override = get_header_override
         self.put_calls = 0
         self.server: asyncio.AbstractServer | None = None
         self.port = _free_port()
@@ -79,6 +81,10 @@ class _ReplicaServer:
                 key = parts[1]
                 if key not in self.storage:
                     writer.write(b"MISS\n")
+                    await writer.drain()
+                    return
+                if self.get_header_override:
+                    writer.write(f"{self.get_header_override}\n".encode("utf-8"))
                     await writer.drain()
                     return
                 data = self.storage[key]
@@ -180,6 +186,12 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             "127.0.0.1:19444",
         )
 
+    def test_sam_destination_rejects_injection_chars(self) -> None:
+        with self.assertRaises(RuntimeError):
+            BlindBoxClient._validate_sam_destination("abc\nINJECT=1")
+        with self.assertRaises(RuntimeError):
+            BlindBoxClient._validate_sam_destination("abc def")
+
     async def test_local_auth_token_is_sent_to_loopback_replicas(self) -> None:
         storage: dict[str, bytes] = {}
         srv = _ReplicaServer("ok", storage, required_token="t123")
@@ -196,6 +208,49 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(result), 1)
             blobs = await client.get("k-auth")
             self.assertEqual(blobs, [payload])
+            await client.close()
+        finally:
+            await srv.stop()
+
+    async def test_get_rejects_oversized_header_before_body_read(self) -> None:
+        storage: dict[str, bytes] = {"k-big": b"x"}
+        srv = _ReplicaServer(
+            "ok",
+            storage,
+            get_header_override="OK 999999999",
+        )
+        await srv.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-big",
+                blind_boxes=[f"127.0.0.1:{srv.port}"],
+                use_sam=False,
+                retry_attempts=1,
+                io_timeout=0.2,
+            )
+            with self.assertRaises(RuntimeError):
+                await client.get("k-big")
+            await client.close()
+        finally:
+            await srv.stop()
+
+    async def test_get_rejects_malformed_size_header(self) -> None:
+        storage: dict[str, bytes] = {"k-bad": b"x"}
+        srv = _ReplicaServer(
+            "ok",
+            storage,
+            get_header_override="OK not-a-number",
+        )
+        await srv.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-bad-header",
+                blind_boxes=[f"127.0.0.1:{srv.port}"],
+                use_sam=False,
+                retry_attempts=1,
+            )
+            with self.assertRaises(RuntimeError):
+                await client.get("k-bad")
             await client.close()
         finally:
             await srv.stop()

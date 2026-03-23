@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable, List, Optional
 
 import i2plib
+from blindbox_blob import BLINDBOX_MAX_FRAME_SIZE
 from i2plib.exceptions import SAMException
 
 logger = logging.getLogger("i2pchat")
@@ -68,6 +69,8 @@ class BlindBoxClient:
         sam_session_timeout: float = 120.0,
         # Optional token sent only to loopback host:port replicas.
         local_auth_token: str = "",
+        # Hard safety cap for GET response body size.
+        max_get_blob_size: int = BLINDBOX_MAX_FRAME_SIZE,
     ) -> None:
         if not session_id:
             raise ValueError("session_id is required")
@@ -83,6 +86,8 @@ class BlindBoxClient:
             raise ValueError("io_timeout must be positive")
         if sam_session_timeout <= 0:
             raise ValueError("sam_session_timeout must be positive")
+        if int(max_get_blob_size) <= 0:
+            raise ValueError("max_get_blob_size must be positive")
 
         self.session_id = session_id
         # SAM session nickname passed to SESSION CREATE / STREAM CONNECT. Rotated on
@@ -107,6 +112,7 @@ class BlindBoxClient:
         self.io_timeout = io_timeout
         self.sam_session_timeout = sam_session_timeout
         self.local_auth_token = str(local_auth_token or "").strip()
+        self.max_get_blob_size = int(max_get_blob_size)
 
         self._ctrl_reader: Optional[asyncio.StreamReader] = None
         self._ctrl_writer: Optional[asyncio.StreamWriter] = None
@@ -345,8 +351,12 @@ class BlindBoxClient:
                     size = int(header.split(" ", 1)[1])
                 except Exception as exc:
                     raise RuntimeError(f"Malformed GET header: {header!r}") from exc
-                if size < 0:
-                    raise RuntimeError("Negative blob size in GET response")
+                if size <= 0:
+                    raise RuntimeError("Invalid blob size in GET response")
+                if size > self.max_get_blob_size:
+                    raise RuntimeError(
+                        f"GET blob size {size} exceeds limit {self.max_get_blob_size}"
+                    )
                 return await asyncio.wait_for(reader.readexactly(size), timeout=self.io_timeout)
             finally:
                 await self._safe_close(writer)
@@ -419,6 +429,7 @@ class BlindBoxClient:
 
     async def _open_sam_stream_to(self, dest_for_sam: str) -> StreamPair:
         """New SAM TCP connection: HELLO + STREAM CONNECT (uses BlindBox session ID)."""
+        dest_for_sam = self._validate_sam_destination(dest_for_sam)
         reader, writer = await asyncio.open_connection(self.sam_host, self.sam_port)
         try:
             await self._sam_hello(reader, writer)
@@ -444,6 +455,15 @@ class BlindBoxClient:
         except Exception:
             await self._safe_close(writer)
             raise
+
+    @staticmethod
+    def _validate_sam_destination(dest_for_sam: str) -> str:
+        value = str(dest_for_sam or "").strip()
+        if not value:
+            raise RuntimeError("Empty SAM destination")
+        if any(ch in value for ch in ("\r", "\n", "\x00", " ", "\t")):
+            raise RuntimeError("Invalid SAM destination")
+        return value
 
     async def _connect_via_sam(self, box_addr: str) -> StreamPair:
         destination = self._sam_destination_from_endpoint(box_addr)

@@ -5,6 +5,7 @@ import secrets
 import subprocess
 import shutil
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, List, Optional
@@ -772,9 +773,14 @@ def _load_ui_prefs() -> dict[str, object]:
 
 def _save_ui_prefs(data: dict[str, object]) -> None:
     path = _ui_prefs_path()
-    tmp = path + ".tmp"
+    parent = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(
+        prefix=".ui_prefs.",
+        suffix=".tmp",
+        dir=parent,
+    )
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=True, indent=2, sort_keys=True)
         os.replace(tmp, path)
         try:
@@ -783,6 +789,12 @@ def _save_ui_prefs(data: dict[str, object]) -> None:
             pass
     except Exception:
         pass
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def load_saved_theme() -> str:

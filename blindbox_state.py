@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -76,18 +77,25 @@ def save_blindbox_state(path: str, state: BlindBoxState) -> None:
         raise ValueError("Invalid state path")
     os.makedirs(parent, exist_ok=True)
 
-    tmp_path = path + ".tmp"
+    fd, tmp_path = tempfile.mkstemp(prefix=".blindbox_state.", suffix=".tmp", dir=parent)
     encoded = json.dumps(
         state.to_dict(),
         ensure_ascii=True,
         indent=2,
         sort_keys=True,
     ).encode("utf-8")
-    with open(tmp_path, "wb") as f:
-        f.write(encoded)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(encoded)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
     try:
         os.chmod(path, 0o600)
     except OSError:
