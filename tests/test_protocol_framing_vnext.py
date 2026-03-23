@@ -20,6 +20,10 @@ if "PIL" not in sys.modules:
 
 from i2p_chat_core import I2PChatCore
 
+PEER_CTX_A = "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk.b32.i2p"
+PEER_CTX_B = "llllllllllllllllllllllllllllllllllllllll.b32.i2p"
+PEER_CTX_C = "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm.b32.i2p"
+
 
 class _Reader:
     def __init__(self, payload: bytes) -> None:
@@ -400,7 +404,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         )  # type: ignore[assignment]
 
         core = I2PChatCore()
-        core.current_peer_addr = "peer.b32.i2p"
+        core.current_peer_addr = PEER_CTX_A
         core._ack_session_epoch = 1
         core._register_pending_ack(
             core._pending_text_acks,
@@ -456,7 +460,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         )  # type: ignore[assignment]
 
         core = I2PChatCore()
-        core.current_peer_addr = "peer-a.b32.i2p"
+        core.current_peer_addr = PEER_CTX_B
         core._ack_session_epoch = 1
         core._register_pending_ack(
             core._pending_file_acks,
@@ -465,7 +469,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             ack_kind="file",
         )
         # Switch peer context before ACK arrives.
-        core.current_peer_addr = "peer-b.b32.i2p"
+        core.current_peer_addr = PEER_CTX_C
         core.handshake_complete = True
         core.use_encryption = True
         core.shared_key = b"x" * 32

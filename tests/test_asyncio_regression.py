@@ -23,6 +23,10 @@ from protocol_codec import ProtocolCodec
 
 LOCAL_B32 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
 PEER_B32 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
+LOCKED_B32 = "cccccccccccccccccccccccccccccccccccccccc.b32.i2p"
+OTHER_B32 = "dddddddddddddddddddddddddddddddddddddddd.b32.i2p"
+EXAMPLE_HOST = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+EXAMPLE_B32 = EXAMPLE_HOST + ".b32.i2p"
 
 
 class _FakeReader:
@@ -107,7 +111,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_lock_requires_verified_identity_binding(self) -> None:
         core = I2PChatCore(profile="alice")
-        core.current_peer_addr = "peer.b32.i2p"
+        core.current_peer_addr = PEER_B32
         core.handshake_complete = True
         core.peer_identity_binding_verified = False
         self.assertFalse(core.is_current_peer_verified_for_lock())
@@ -136,7 +140,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         core_module.i2plib.stream_connect = _fake_stream_connect  # type: ignore[assignment]
         core_module.crypto.NACL_AVAILABLE = True
         try:
-            await core.connect_to_peer("peer.b32.i2p")
+            await core.connect_to_peer(PEER_B32)
         finally:
             core_module.i2plib.stream_connect = original_stream_connect  # type: ignore[assignment]
             core_module.crypto.NACL_AVAILABLE = original_nacl_available
@@ -190,24 +194,24 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         core = I2PChatCore(on_trust_decision=trust_cb)
         ok = await core._pin_or_verify_peer_signing_key(
-            "examplepeer.b32.i2p",
+            EXAMPLE_B32,
             b"\x11" * 32,
         )
 
         self.assertTrue(ok)
         self.assertIsNotNone(seen)
-        self.assertIn("examplepeer.b32.i2p", core.peer_trusted_signing_keys)
+        self.assertIn(EXAMPLE_B32, core.peer_trusted_signing_keys)
 
     async def test_connect_rejects_target_that_differs_from_locked_peer(self) -> None:
         errors: list[str] = []
         core = I2PChatCore(profile="alice", on_error=errors.append)
-        core.stored_peer = "locked-peer.b32.i2p"
+        core.stored_peer = LOCKED_B32
         import i2p_chat_core as core_module
 
         original_nacl_available = core_module.crypto.NACL_AVAILABLE
         core_module.crypto.NACL_AVAILABLE = True
         try:
-            await core.connect_to_peer("other-peer.b32.i2p")
+            await core.connect_to_peer(OTHER_B32)
         finally:
             core_module.crypto.NACL_AVAILABLE = original_nacl_available
 
@@ -226,9 +230,9 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             errors: list[str] = []
             core = I2PChatCore(profile="alice", on_error=errors.append)
             core.my_signing_seed = b"D" * 32
-            core.stored_peer = "locked-peer.b32.i2p"
-            core.current_peer_addr = "other-peer.b32.i2p"
-            core.my_dest = SimpleNamespace(base32="me-peer.b32.i2p")
+            core.stored_peer = LOCKED_B32
+            core.current_peer_addr = OTHER_B32
+            core.my_dest = SimpleNamespace(base32=LOCAL_B32)
             writer = _FakeWriter()
 
             await core._send_blindbox_root_if_needed(writer)
@@ -372,35 +376,35 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         core = I2PChatCore(profile="default", on_error=errors.append)
 
         ok = await core._pin_or_verify_peer_signing_key(
-            "examplepeer.b32.i2p",
+            EXAMPLE_B32,
             b"\x22" * 32,
         )
 
         self.assertFalse(ok)
-        self.assertNotIn("examplepeer.b32.i2p", core.peer_trusted_signing_keys)
+        self.assertNotIn(EXAMPLE_B32, core.peer_trusted_signing_keys)
         self.assertTrue(any("I2PCHAT_TRUST_AUTO=1" in msg for msg in errors), errors)
 
     async def test_tofu_auto_pin_requires_explicit_opt_in(self) -> None:
         with patch.dict(os.environ, {"I2PCHAT_TRUST_AUTO": "1"}, clear=False):
             core = I2PChatCore(profile="default")
             ok = await core._pin_or_verify_peer_signing_key(
-                "examplepeer.b32.i2p",
+                EXAMPLE_B32,
                 b"\x33" * 32,
             )
 
         self.assertTrue(ok)
-        self.assertIn("examplepeer.b32.i2p", core.peer_trusted_signing_keys)
+        self.assertIn(EXAMPLE_B32, core.peer_trusted_signing_keys)
 
     def test_forget_pinned_peer_key_removes_normalized_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("i2p_chat_core.get_profiles_dir", return_value=tmpdir):
                 core = I2PChatCore(profile="alice")
-                core.peer_trusted_signing_keys["examplepeer.b32.i2p"] = "ab" * 32
+                core.peer_trusted_signing_keys[EXAMPLE_B32] = "ab" * 32
 
-                removed = core.forget_pinned_peer_key("examplepeer")
+                removed = core.forget_pinned_peer_key(EXAMPLE_HOST)
 
                 self.assertTrue(removed)
-                self.assertNotIn("examplepeer.b32.i2p", core.peer_trusted_signing_keys)
+                self.assertNotIn(EXAMPLE_B32, core.peer_trusted_signing_keys)
                 with open(core._trust_store_path(), "r", encoding="utf-8") as f:
                     self.assertEqual(f.read().strip(), "{}")
 
@@ -408,10 +412,10 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         errors: list[str] = []
         systems: list[str] = []
         core = I2PChatCore(profile="alice", on_error=errors.append, on_system=systems.append)
-        core.peer_trusted_signing_keys["examplepeer.b32.i2p"] = "11" * 32
+        core.peer_trusted_signing_keys[EXAMPLE_B32] = "11" * 32
 
         ok = await core._pin_or_verify_peer_signing_key(
-            "examplepeer.b32.i2p",
+            EXAMPLE_B32,
             b"\x22" * 32,
         )
 

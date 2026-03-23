@@ -17,6 +17,7 @@
 - **Bounded dedup cache:** offline BlindBox receive path limits growth of seen blob digests (default cap configurable via `I2PCHAT_BLINDBOX_MAX_SEEN_HASHES`, minimum 1).
 - **Built-in BlindBox endpoint fix:** the release-default second BlindBox replica address was corrected to `dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444`. This fixes the previously embedded typo in the fallback/default replica list.
 - **Regression coverage:** added/extended unit tests for probe behavior, `BLINDBOX_ROOT` / ACK, oversized GET headers, local-token policy, SAM input validation, atomic writes (including profile fault-injection), and telemetry for insecure local mode.
+- **Peer address hardening test alignment:** regression tests were updated to use valid I2P base32 peer addresses (40+ chars, `[a-z2-7]`) so TOFU/connect/lock scenarios remain covered under the stricter `_normalize_peer_addr()` validation model.
 
 ### Compatibility
 
@@ -60,6 +61,7 @@ This is a patch release for the `v0.6.x` line.
 - **Ограничение кэша дедупликации:** рост множества хэшей увиденных blob’ов ограничен (лимит по умолчанию задаётся `I2PCHAT_BLINDBOX_MAX_SEEN_HASHES`, минимум 1).
 - **Исправление встроенного BlindBox endpoint:** второй адрес BlindBox-реплики в release-дефолтах исправлен на `dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444`. Это исправляет прежнюю опечатку в зашитом списке fallback/default-реплик.
 - **Тесты:** добавлены/расширены кейсы на probe, обмен root/ACK, oversized GET, политику токена, SAM, атомарные записи (в т.ч. fault injection для `.dat`) и телеметрию insecure local.
+- **Выравнивание тестов под hardening peer address:** регрессионные тесты обновлены на валидные I2P base32 peer-адреса (host 40+ символов, `[a-z2-7]`), чтобы сценарии TOFU/connect/lock корректно покрывались при строгой валидации `_normalize_peer_addr()`.
 
 ### Совместимость
 

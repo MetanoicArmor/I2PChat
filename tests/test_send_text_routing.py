@@ -16,6 +16,12 @@ if "PIL" not in sys.modules:
 from i2p_chat_core import I2PChatCore
 from main_qt import _should_start_auto_connect_retry
 
+DUMMY_DEST_B32 = "ffffffffffffffffffffffffffffffffffffffff.b32.i2p"
+STORED_PEER_1 = "gggggggggggggggggggggggggggggggggggggggg.b32.i2p"
+STORED_PEER_2 = "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh.b32.i2p"
+STORED_PEER_3 = "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii.b32.i2p"
+STORED_PEER_4 = "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj.b32.i2p"
+
 
 class _DummyWriter:
     def __init__(self) -> None:
@@ -30,7 +36,7 @@ class _DummyWriter:
 
 class _DummyDest:
     def __init__(self) -> None:
-        self.base32 = "dummy-peer.b32.i2p"
+        self.base32 = DUMMY_DEST_B32
 
 
 class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
@@ -53,7 +59,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             core = I2PChatCore(profile="alice")
-            core.stored_peer = "peer-1.b32.i2p"
+            core.stored_peer = STORED_PEER_1
             core.my_dest = _DummyDest()
             core._send_text_via_blindbox = AsyncMock(return_value=True)  # type: ignore[method-assign]
             result = await core.send_text("hello-offline")
@@ -71,7 +77,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             core = I2PChatCore(profile="alice")
-            core.stored_peer = "peer-2.b32.i2p"
+            core.stored_peer = STORED_PEER_2
             core.my_dest = _DummyDest()
             core._blindbox_root_secret = None
             core._send_text_via_blindbox = AsyncMock(return_value=False)  # type: ignore[method-assign]
@@ -90,7 +96,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             core = I2PChatCore(profile="alice")
-            core.stored_peer = "peer-3.b32.i2p"
+            core.stored_peer = STORED_PEER_3
             core._send_text_via_blindbox = AsyncMock(return_value=False)  # type: ignore[method-assign]
             result = await core.send_text("hello-disabled")
             self.assertFalse(result.accepted)
@@ -106,7 +112,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             core = I2PChatCore(profile="alice")
-            core.stored_peer = "peer-4.b32.i2p"
+            core.stored_peer = STORED_PEER_4
             core.my_dest = _DummyDest()
             core._blindbox_root_secret = b"x" * 32
             self.assertEqual(core.get_delivery_telemetry()["state"], "offline-ready")
