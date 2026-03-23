@@ -18,6 +18,11 @@
 
 This is a patch release for the `v0.6.x` line. Live protocol behavior stays compatible with current peers; the main changes are local security policy and BlindBox state handling.
 
+### If you see `Peer signing key mismatch`
+
+If the peer intentionally changed profile/keys (for example after reinstall or profile recreation), use `Forget pinned peer key` and reconnect.  
+If the key change is unexpected, do **not** forget the pin until you verify the peer fingerprint out-of-band.
+
 ---
 
 ## RU
@@ -37,3 +42,8 @@ This is a patch release for the `v0.6.x` line. Live protocol behavior stays comp
 ### Совместимость
 
 Это patch-релиз в линии `v0.6.x`. Live-протокол совместим с текущими peer; основные изменения касаются локальной security policy и хранения BlindBox state.
+
+### Если видите `Peer signing key mismatch`
+
+Если peer осознанно сменил профиль/ключи (например после переустановки или пересоздания профиля), используйте `Forget pinned peer key` и подключитесь заново.  
+Если смена ключа неожиданная, **не** сбрасывайте pin до проверки fingerprint peer по внешнему каналу.
