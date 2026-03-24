@@ -313,3 +313,113 @@ flowchart LR
 ## Заключение
 
 I2PChat демонстрирует сильное усиление протокола и в целом аккуратный defensive coding. Основные оставшиеся риски лежат в практической операционной плоскости (доверие к локальным процессам, гигиена логирования и assurance релизов), а не в прямом взломе базовой криптографической логики протокола.
+
+## Addendum к deep-аудиту (2026-03-24)
+
+Этот блок фиксирует результаты более позднего полного deep-аудита (код, протокол, архитектура) по high-risk runtime-поверхностям.
+
+### Обновлённый срез findings
+
+- Critical: 0
+- High: 0
+- Medium: 4 (2 confirmed, 2 plausible)
+- Low: 2
+
+### Подтверждённые находки (confirmed)
+
+1. **[MEDIUM] Symlink-обход profile-path confinement**
+   - Затронуто: `i2p_chat_core.py` (`_profile_scoped_path` и профильные пути чтения/записи)
+   - Влияние: локальный процесс того же пользователя может через symlink перенаправить profile/trust/signing/blindbox файлы на неожиданные цели ФС.
+
+2. **[MEDIUM] Неатомарная fallback-запись signing seed**
+   - Затронуто: `i2p_chat_core.py` (`_ensure_local_signing_key`)
+   - Влияние: при crash/power-loss возможно повреждение `*.signing` и потеря continuity signing-identity.
+
+### Правдоподобные находки (plausible)
+
+1. **[MEDIUM] Handshake role-conflict / double-INIT race**
+   - Затронуто: `i2p_chat_core.py` (`initiate_secure_handshake`, `_handle_handshake_message`)
+   - Влияние: нестабильность установления сессии и DoS-поведение при одновременной инициации с двух сторон.
+
+2. **[MEDIUM] Семантика BlindBox quorum: `EXISTS` считается успехом PUT**
+   - Затронуто: `blindbox_client.py` (`put`)
+   - Влияние: byzantine-реплика может вернуть логический успех без гарантии фактического хранения.
+
+### Низкий / defense-in-depth
+
+1. **[LOW] Двойное чтение одного файла BlindBox state**
+   - Затронуто: `i2p_chat_core.py` (`_load_blindbox_state`)
+   - Влияние: TOCTOU-риск несогласованного снимка при локальной конкурентной подмене.
+
+2. **[LOW] Хрупкая диагностическая ветка downgrade**
+   - Затронуто: `i2p_chat_core.py` (`receive_loop`)
+   - Влияние: в основном качество диагностики/наблюдаемости, не bypass базового контроля.
+
+### Обновлённый приоритет remediation
+
+1. **P0:** symlink-safe политика для profile-путей + атомарная запись signing-seed.
+2. **P1:** детерминированный guard конфликтующих ролей handshake + регрессионные тесты.
+3. **P1:** усиление семантики BlindBox PUT (`EXISTS` и стратегия верификации).
+4. **P2:** single-snapshot загрузка BlindBox state и уточнение downgrade-диагностики.
+
+## Addendum II к deep-аудиту (2026-03-24)
+
+Этот раздел фиксирует второй раунд глубокого аудита после последних hardening-изменений по протоколу, BlindBox, local persistence и supply-chain.
+
+### Обновлённый срез
+
+- Critical: 0
+- High: 0
+- Medium: 2 confirmed, 3 plausible
+- Low: 4
+
+### Подтверждённые находки (confirmed)
+
+1. **[MEDIUM] В релизной цепочке всё ещё нет platform-native trust integration**
+   - Область: release/build/CI
+   - Статус: не закрыто (основной сценарий верификации — manual checksum/GPG)
+   - Влияние: более слабый UX доверия и выше риск операционных ошибок проверки у пользователей.
+
+2. **[MEDIUM] В CI по-прежнему нет обязательного test gate**
+   - Область: GitHub workflows
+   - Статус: снижено в этом цикле (`.github/workflows/test-gate.yml`)
+   - Влияние: регрессии протокола/безопасности могут попасть в `main` без runtime-проверки.
+
+### Правдоподобные находки (plausible)
+
+1. **[MEDIUM] Гонка индексов при конкурентных offline-send в BlindBox**
+   - Область: offline send path в `i2p_chat_core.py`
+   - Влияние: проблемы доступности/quorum при высокой локальной конкурентности (без прямого взлома конфиденциальности/целостности).
+
+2. **[MEDIUM] Локальное состояние BlindBox не имеет криптографической аутентичности**
+   - Область: `blindbox.*.json`
+   - Влияние: локальный атакующий с доступом на запись может влиять на replay/consumed-поведение.
+
+3. **[MEDIUM] TOFU на первом контакте остаётся риском модели продукта**
+   - Область: trust model
+   - Влияние: MITM-риск первого контакта без out-of-band подтверждения fingerprint.
+
+### Низкий / defense-in-depth
+
+1. **[LOW] vNext resync-путь допускает CPU-stress на соединение до `resync_limit`.**
+2. **[LOW] Политика путей для `ui_prefs.json` мягче, чем для profile key/trust/signing путей.**
+3. **[LOW] gitleaks артефакт и checksum берутся из одного trust-источника релиза.**
+4. **[LOW] В CI-аудите зависимостей не покрыт `requirements-build.txt`.** (снижено в этом цикле)
+
+### Подтверждённые улучшения с прошлого раунда
+
+- Входящие `BLINDBOX_ROOT`/`BLINDBOX_ROOT_ACK` теперь требуют locked-peer match до изменения persistent state.
+- BlindBox `SESSION CREATE` формируется через `i2plib.sam.session_create(...)` с централизованной валидацией.
+- BlindBox PUT больше не доверяет «голому» `EXISTS`: нужен контент-чек перед зачётом кворума.
+- Профильные пути теперь защищены от symlink-target подмены и ограничены real-path confinement.
+- Fallback-запись signing seed переведена на атомарный путь.
+- Загрузка BlindBox state переведена на single-snapshot (одно чтение JSON).
+- Ошибки malformed framing после handshake стабильно обрабатываются как протокольное нарушение/downgrade с disconnect.
+- Добавлен обязательный CI security regression test gate для PR/main (`.github/workflows/test-gate.yml`).
+- В `security-audit.yml` расширен dependency audit gate: теперь включает `requirements-build.txt`.
+
+### Текущий приоритетный backlog
+
+1. **P1:** внедрить platform-native signing/notarization и provenance attestations для релизов.
+2. **P1:** сериализовать конкурентные offline-send в BlindBox (или ввести детерминированную conflict-обработку).
+3. **P2:** усилить local-state hardening (опциональная MAC/подпись metadata state, более строгая политика пути для prefs).

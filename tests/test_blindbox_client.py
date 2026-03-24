@@ -1,8 +1,10 @@
 import asyncio
 import socket
 import unittest
+from unittest.mock import patch
 
 from blindbox_client import BlindBoxClient
+from i2plib.sam import session_create
 
 
 def _free_port() -> int:
@@ -65,6 +67,8 @@ class _ReplicaServer:
                 body = await reader.readexactly(size)
                 if self.mode == "error":
                     writer.write(b"ERR\n")
+                elif self.mode == "exists_no_store":
+                    writer.write(b"EXISTS\n")
                 elif key in self.storage:
                     writer.write(b"EXISTS\n")
                 else:
@@ -100,6 +104,104 @@ class _ReplicaServer:
 
 
 class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_uses_validated_session_create_command(self) -> None:
+        lines: list[str] = []
+        done = asyncio.Event()
+
+        async def _handle_ctrl(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            try:
+                hello = await reader.readline()
+                if hello:
+                    lines.append(hello.decode("utf-8", errors="ignore").strip())
+                    writer.write(b"HELLO REPLY RESULT=OK VERSION=3.1\n")
+                    await writer.drain()
+                create_cmd = await reader.readline()
+                if create_cmd:
+                    lines.append(create_cmd.decode("utf-8", errors="ignore").strip())
+                    writer.write(b"SESSION STATUS RESULT=OK DESTINATION=TRANSIENT\n")
+                    await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                done.set()
+
+        server = await asyncio.start_server(_handle_ctrl, "127.0.0.1", _free_port())
+        sam_port = server.sockets[0].getsockname()[1]
+        try:
+            client = BlindBoxClient(
+                session_id="sess",
+                blind_boxes=["x.b32.i2p"],
+                use_sam=True,
+                sam_host="127.0.0.1",
+                sam_port=int(sam_port),
+                sam_options={
+                    "inbound.length": "2",
+                    "outbound.length": "2",
+                },
+            )
+            with patch("blindbox_client.secrets.token_hex", return_value="cafebabe"):
+                await client.start()
+            await client.close()
+            await asyncio.wait_for(done.wait(), timeout=1.0)
+
+            self.assertGreaterEqual(len(lines), 2, lines)
+            self.assertEqual(lines[0], "HELLO VERSION MIN=3.0 MAX=3.2")
+            expected = session_create(
+                "STREAM",
+                "sess_cafebabe",
+                "TRANSIENT",
+                "SIGNATURE_TYPE=7 OPTION inbound.length=2 outbound.length=2",
+            ).decode("utf-8").strip()
+            self.assertEqual(lines[1], expected)
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    async def test_start_rejects_invalid_sam_options_via_validation(self) -> None:
+        lines: list[str] = []
+        done = asyncio.Event()
+
+        async def _handle_ctrl(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            try:
+                hello = await reader.readline()
+                if hello:
+                    lines.append(hello.decode("utf-8", errors="ignore").strip())
+                    writer.write(b"HELLO REPLY RESULT=OK VERSION=3.1\n")
+                    await writer.drain()
+                maybe_create = await reader.readline()
+                if maybe_create:
+                    lines.append(maybe_create.decode("utf-8", errors="ignore").strip())
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                done.set()
+
+        server = await asyncio.start_server(_handle_ctrl, "127.0.0.1", _free_port())
+        sam_port = server.sockets[0].getsockname()[1]
+        try:
+            client = BlindBoxClient(
+                session_id="sess",
+                blind_boxes=["x.b32.i2p"],
+                use_sam=True,
+                sam_host="127.0.0.1",
+                sam_port=int(sam_port),
+                sam_options={"inbound.length": "2\nBAD=1"},
+            )
+            with patch("blindbox_client.secrets.token_hex", return_value="cafebabe"):
+                with self.assertRaises(ValueError):
+                    await client.start()
+            await client.close()
+            await asyncio.wait_for(done.wait(), timeout=1.0)
+
+            self.assertEqual(lines, ["HELLO VERSION MIN=3.0 MAX=3.2"])
+        finally:
+            server.close()
+            await server.wait_closed()
+
     async def test_put_quorum_and_get_dedup(self) -> None:
         storage_a: dict[str, bytes] = {}
         storage_b: dict[str, bytes] = {}
@@ -146,6 +248,23 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await srv_a.stop()
             await srv_b.stop()
+
+    async def test_put_rejects_unverified_exists_response(self) -> None:
+        storage: dict[str, bytes] = {}
+        srv = _ReplicaServer("exists_no_store", storage)
+        await srv.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-exists",
+                blind_boxes=[f"127.0.0.1:{srv.port}"],
+                use_sam=False,
+                put_quorum=1,
+            )
+            with self.assertRaises(RuntimeError):
+                await client.put("k-exists", b"payload")
+            await client.close()
+        finally:
+            await srv.stop()
 
     async def test_retry_backoff_on_flaky_blind_box(self) -> None:
         storage_a: dict[str, bytes] = {}

@@ -29,7 +29,6 @@ from blindbox_state import (
     BlindBoxState,
     atomic_write_json,
     atomic_write_text,
-    load_blindbox_state,
 )
 from protocol_codec import (
     ENCRYPTED_TRAILER_SIZE,
@@ -344,6 +343,8 @@ def import_profile_dat_atomic(
     base_name = ensure_valid_profile_name(profile_name)
     src_abs = os.path.abspath(source_path)
     profiles_abs = os.path.abspath(profiles_dir)
+    if os.path.islink(src_abs):
+        raise ValueError("Refusing to import profile from symlink path")
     os.makedirs(profiles_abs, exist_ok=True)
     reserved_path = ""
     tmp_path = ""
@@ -1116,8 +1117,14 @@ class I2PChatCore:
 
     def _profile_scoped_path(self, filename: str) -> str:
         base_dir = os.path.abspath(get_profiles_dir())
+        base_real = os.path.realpath(base_dir)
         target = os.path.abspath(os.path.join(base_dir, filename))
         if not target.startswith(base_dir + os.sep):
+            raise ValueError(f"Refusing profile path outside profiles dir: {filename!r}")
+        if os.path.lexists(target) and os.path.islink(target):
+            raise ValueError(f"Refusing symlinked profile path: {filename!r}")
+        target_real = os.path.realpath(target)
+        if not (target_real == base_real or target_real.startswith(base_real + os.sep)):
             raise ValueError(f"Refusing profile path outside profiles dir: {filename!r}")
         return target
 
@@ -1262,101 +1269,8 @@ class I2PChatCore:
             return
         try:
             path = self._blindbox_state_path()
-            self._blindbox_state = load_blindbox_state(path)
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
-                    raw = json.load(f)
-                wrap_version_raw = raw.get(
-                    "blindbox_wrap_version", BLINDBOX_LOCAL_WRAP_VERSION_LEGACY
-                )
-                try:
-                    wrap_version = int(wrap_version_raw)
-                except Exception:
-                    wrap_version = BLINDBOX_LOCAL_WRAP_VERSION_LEGACY
-                wrap_migration_needed = (
-                    wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT
-                )
-                enc_root = raw.get("blindbox_root_secret_enc")
-                if isinstance(enc_root, str) and enc_root:
-                    self._blindbox_root_secret, used_wrap_version = (
-                        self._blindbox_decrypt_root_secret(
-                            enc_root, peer_id, wrap_version=wrap_version
-                        )
-                    )
-                    if used_wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT:
-                        wrap_migration_needed = True
-                self._blindbox_root_epoch = int(raw.get("blindbox_root_epoch", 0))
-                self._blindbox_root_created_at = int(
-                    raw.get("blindbox_root_created_at", int(time.time()))
-                )
-                self._blindbox_root_send_index_base = int(
-                    raw.get(
-                        "blindbox_root_send_index_base",
-                        int(self._blindbox_state.send_index),
-                    )
-                )
-                enc_pending_root = raw.get("blindbox_pending_root_secret_enc")
-                self._blindbox_pending_root_secret = None
-                if isinstance(enc_pending_root, str) and enc_pending_root:
-                    self._blindbox_pending_root_secret, pending_wrap_version = (
-                        self._blindbox_decrypt_root_secret(
-                            enc_pending_root, peer_id, wrap_version=wrap_version
-                        )
-                    )
-                    if pending_wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT:
-                        wrap_migration_needed = True
-                self._blindbox_pending_root_epoch = int(
-                    raw.get("blindbox_pending_root_epoch", 0)
-                )
-                self._blindbox_pending_root_created_at = int(
-                    raw.get("blindbox_pending_root_created_at", int(time.time()))
-                )
-                self._blindbox_pending_root_send_index_base = int(
-                    raw.get(
-                        "blindbox_pending_root_send_index_base",
-                        int(self._blindbox_state.send_index),
-                    )
-                )
-                if (
-                    self._blindbox_pending_root_secret is not None
-                    and len(self._blindbox_pending_root_secret) != 32
-                ):
-                    self._blindbox_pending_root_secret = None
-                    self._blindbox_pending_root_epoch = 0
-                    self._blindbox_pending_root_created_at = 0
-                    self._blindbox_pending_root_send_index_base = int(
-                        self._blindbox_state.send_index
-                    )
-                prev_items = raw.get("blindbox_prev_roots", [])
-                self._blindbox_prev_roots = []
-                if isinstance(prev_items, list):
-                    for prev in prev_items:
-                        if not isinstance(prev, dict):
-                            continue
-                        enc_prev = prev.get("secret_enc")
-                        if not isinstance(enc_prev, str) or not enc_prev:
-                            continue
-                        try:
-                            dec_prev, prev_wrap_version = self._blindbox_decrypt_root_secret(
-                                enc_prev, peer_id, wrap_version=wrap_version
-                            )
-                        except Exception:
-                            continue
-                        if len(dec_prev) != 32:
-                            continue
-                        if prev_wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT:
-                            wrap_migration_needed = True
-                        self._blindbox_prev_roots.append(
-                            {
-                                "epoch": int(prev.get("epoch", 0)),
-                                "secret": dec_prev,
-                                "expires_at": int(prev.get("expires_at", 0)),
-                            }
-                        )
-                self._blindbox_prune_previous_roots()
-                if wrap_migration_needed and self._blindbox_root_secret is not None:
-                    self._save_blindbox_state()
-            else:
+            if not os.path.exists(path):
+                self._blindbox_state = BlindBoxState()
                 self._blindbox_root_secret = None
                 self._blindbox_root_epoch = 0
                 self._blindbox_root_created_at = 0
@@ -1368,6 +1282,105 @@ class I2PChatCore:
                     self._blindbox_state.send_index
                 )
                 self._blindbox_prev_roots = []
+                return
+
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                raise ValueError("BlindBox state must be a JSON object")
+
+            # Single-snapshot load: use one parsed JSON object for both state and root metadata.
+            self._blindbox_state = BlindBoxState.from_dict(raw)
+            wrap_version_raw = raw.get(
+                "blindbox_wrap_version", BLINDBOX_LOCAL_WRAP_VERSION_LEGACY
+            )
+            try:
+                wrap_version = int(wrap_version_raw)
+            except Exception:
+                wrap_version = BLINDBOX_LOCAL_WRAP_VERSION_LEGACY
+            wrap_migration_needed = (
+                wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT
+            )
+            enc_root = raw.get("blindbox_root_secret_enc")
+            if isinstance(enc_root, str) and enc_root:
+                self._blindbox_root_secret, used_wrap_version = (
+                    self._blindbox_decrypt_root_secret(
+                        enc_root, peer_id, wrap_version=wrap_version
+                    )
+                )
+                if used_wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT:
+                    wrap_migration_needed = True
+            self._blindbox_root_epoch = int(raw.get("blindbox_root_epoch", 0))
+            self._blindbox_root_created_at = int(
+                raw.get("blindbox_root_created_at", int(time.time()))
+            )
+            self._blindbox_root_send_index_base = int(
+                raw.get(
+                    "blindbox_root_send_index_base",
+                    int(self._blindbox_state.send_index),
+                )
+            )
+            enc_pending_root = raw.get("blindbox_pending_root_secret_enc")
+            self._blindbox_pending_root_secret = None
+            if isinstance(enc_pending_root, str) and enc_pending_root:
+                self._blindbox_pending_root_secret, pending_wrap_version = (
+                    self._blindbox_decrypt_root_secret(
+                        enc_pending_root, peer_id, wrap_version=wrap_version
+                    )
+                )
+                if pending_wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT:
+                    wrap_migration_needed = True
+            self._blindbox_pending_root_epoch = int(
+                raw.get("blindbox_pending_root_epoch", 0)
+            )
+            self._blindbox_pending_root_created_at = int(
+                raw.get("blindbox_pending_root_created_at", int(time.time()))
+            )
+            self._blindbox_pending_root_send_index_base = int(
+                raw.get(
+                    "blindbox_pending_root_send_index_base",
+                    int(self._blindbox_state.send_index),
+                )
+            )
+            if (
+                self._blindbox_pending_root_secret is not None
+                and len(self._blindbox_pending_root_secret) != 32
+            ):
+                self._blindbox_pending_root_secret = None
+                self._blindbox_pending_root_epoch = 0
+                self._blindbox_pending_root_created_at = 0
+                self._blindbox_pending_root_send_index_base = int(
+                    self._blindbox_state.send_index
+                )
+            prev_items = raw.get("blindbox_prev_roots", [])
+            self._blindbox_prev_roots = []
+            if isinstance(prev_items, list):
+                for prev in prev_items:
+                    if not isinstance(prev, dict):
+                        continue
+                    enc_prev = prev.get("secret_enc")
+                    if not isinstance(enc_prev, str) or not enc_prev:
+                        continue
+                    try:
+                        dec_prev, prev_wrap_version = self._blindbox_decrypt_root_secret(
+                            enc_prev, peer_id, wrap_version=wrap_version
+                        )
+                    except Exception:
+                        continue
+                    if len(dec_prev) != 32:
+                        continue
+                    if prev_wrap_version != BLINDBOX_LOCAL_WRAP_VERSION_CURRENT:
+                        wrap_migration_needed = True
+                    self._blindbox_prev_roots.append(
+                        {
+                            "epoch": int(prev.get("epoch", 0)),
+                            "secret": dec_prev,
+                            "expires_at": int(prev.get("expires_at", 0)),
+                        }
+                    )
+            self._blindbox_prune_previous_roots()
+            if wrap_migration_needed and self._blindbox_root_secret is not None:
+                self._save_blindbox_state()
         except Exception as e:
             logger.warning("Failed to load BlindBox state: %s", e)
             self._blindbox_state = BlindBoxState()
@@ -1737,12 +1750,7 @@ class I2PChatCore:
         self.my_signing_seed = seed
         self.my_signing_public = pub
         if not _try_keyring_set(keyring_name, seed.hex()):
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(seed.hex())
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
+            atomic_write_text(path, seed.hex())
 
     def _build_init_sig_payload(
         self,
@@ -3114,6 +3122,11 @@ class I2PChatCore:
                 "BlindBox root received outside persistent locked-peer mode."
             )
             return
+        if not self._blindbox_current_peer_matches_locked_peer():
+            self._emit_error(
+                "BlindBox root ignored: connected peer does not match locked peer."
+            )
+            return
         if self._blindbox_root_secret is None:
             self._blindbox_root_secret = root_secret
             self._blindbox_root_epoch = incoming_epoch
@@ -3156,6 +3169,16 @@ class I2PChatCore:
         if not ack_raw.isdigit():
             raise ValueError("invalid root ack epoch")
         ack_epoch = int(ack_raw)
+        if not self._blindbox_ready():
+            self._emit_error(
+                "BlindBox root ACK received outside persistent locked-peer mode."
+            )
+            return
+        if not self._blindbox_current_peer_matches_locked_peer():
+            self._emit_error(
+                "BlindBox root ACK ignored: connected peer does not match locked peer."
+            )
+            return
         if not self._commit_pending_blindbox_root(ack_epoch):
             self._emit_system("Ignoring stale BlindBox root ACK.")
 
@@ -3221,6 +3244,15 @@ class I2PChatCore:
                 return nonce, eph_pub, sign_pub, signature, nonce_hex, eph_hex, sign_pub_hex
 
             if body.startswith("INIT:"):
+                if self._handshake_initiated:
+                    logger.warning(
+                        "Received INIT while local INIT is pending; closing to avoid handshake role conflict."
+                    )
+                    self._emit_error(
+                        "Handshake role conflict detected; reconnecting."
+                    )
+                    self._schedule_disconnect()
+                    return
                 if not self.current_peer_addr or not self.my_dest:
                     raise ValueError("Missing peer/local address for INIT verification")
                 if not self.my_signing_seed or not self.my_signing_public:
@@ -3488,9 +3520,10 @@ class I2PChatCore:
                             self._codec.read_frame(reader), timeout=self.READ_TIMEOUT
                         )
                     except ValueError as e:
-                        if self.handshake_complete and "prefix" in str(e).lower():
+                        if self.handshake_complete:
                             logger.warning(
-                                "Protocol downgrade detected: invalid vNext prefix after handshake"
+                                "Protocol framing violation after handshake: %s",
+                                e,
                             )
                             self._emit_error("Protocol downgrade detected")
                             self._schedule_disconnect()

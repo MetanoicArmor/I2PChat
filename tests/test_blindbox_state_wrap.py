@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 # test environment may not have Pillow installed
 if "PIL" not in sys.modules:
@@ -112,6 +113,55 @@ class BlindBoxStateWrapTests(unittest.TestCase):
                     BLINDBOX_LOCAL_WRAP_VERSION_CURRENT,
                 )
                 self.assertNotEqual(saved["blindbox_root_secret_enc"], legacy_root)
+        finally:
+            core_module.get_profiles_dir = original_get_profiles_dir  # type: ignore[assignment]
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+
+    def test_load_blindbox_state_reads_single_snapshot(self) -> None:
+        original_get_profiles_dir = core_module.get_profiles_dir
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "peer-box.b32.i2p"
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                core_module.get_profiles_dir = lambda: tmp_dir  # type: ignore[assignment]
+                core = I2PChatCore(profile="alice")
+                core.stored_peer = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
+                path = core._blindbox_state_path()
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "version": BLINDBOX_STATE_V1,
+                            "send_index": 2,
+                            "recv_base": 1,
+                            "recv_window": 16,
+                            "consumed_recv": [],
+                            "updated_at": 1700000000,
+                            "blindbox_wrap_version": BLINDBOX_LOCAL_WRAP_VERSION_CURRENT,
+                            "blindbox_root_epoch": 0,
+                        },
+                        f,
+                        ensure_ascii=True,
+                        indent=2,
+                        sort_keys=True,
+                    )
+
+                with patch("i2p_chat_core.open", wraps=open) as mock_open:
+                    core._load_blindbox_state()
+                load_calls = [
+                    c
+                    for c in mock_open.call_args_list
+                    if c.args and c.args[0] == path and "r" in str(c.args[1])
+                ]
+                self.assertEqual(len(load_calls), 1)
         finally:
             core_module.get_profiles_dir = original_get_profiles_dir  # type: ignore[assignment]
             if old_enabled is None:

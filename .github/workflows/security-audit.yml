@@ -30,6 +30,8 @@ jobs:
         run: |
           # Primary gate: audit the exact hash-locked dependency graph used in builds.
           pip-audit -r requirements.txt
+          # Build-time toolchain dependencies must also be audited.
+          pip-audit -r requirements-build.txt
           # Supplemental signal: unresolved input constraints.
           pip-audit -r requirements.in
 

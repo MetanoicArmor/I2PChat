@@ -51,6 +51,17 @@ class ProfileImportSafetyTests(unittest.TestCase):
                 with open(os.path.join(profiles_dir, f"{name}.dat"), "rb") as f:
                     self.assertEqual(f.read(), b"secret-profile-bytes")
 
+    def test_atomic_import_rejects_symlink_source(self) -> None:
+        with tempfile.TemporaryDirectory() as profiles_dir:
+            outside_source = os.path.join(profiles_dir, "outside.dat")
+            with open(outside_source, "wb") as f:
+                f.write(b"payload")
+            symlink_source = os.path.join(profiles_dir, "incoming.dat")
+            os.symlink(outside_source, symlink_source)
+
+            with self.assertRaises(ValueError):
+                import_profile_dat_atomic(symlink_source, profiles_dir, "alice")
+
 
 if __name__ == "__main__":
     unittest.main()

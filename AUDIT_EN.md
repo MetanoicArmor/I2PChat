@@ -313,3 +313,113 @@ Additional findings reported after the main audit were reviewed and fixed in cod
 ## Conclusion
 
 I2PChat shows solid protocol hardening and generally careful defensive coding. The main remaining risks are practical operational boundaries (local process trust, logging hygiene, and release assurance), not a direct break of core cryptographic protocol logic.
+
+## Deep Audit Addendum (2026-03-24)
+
+This addendum captures a later full-scope deep review (code, protocol, and architecture) focused on high-risk runtime surfaces.
+
+### Updated Findings Snapshot
+
+- Critical: 0
+- High: 0
+- Medium: 4 (2 confirmed, 2 plausible)
+- Low: 2
+
+### Confirmed Findings
+
+1. **[MEDIUM] Symlink-based profile path escape risk**
+   - Affected: `i2p_chat_core.py` (`_profile_scoped_path` and profile-bound reads/writes)
+   - Impact: local same-user process can redirect profile/trust/signing/blindbox paths via symlink to unexpected filesystem targets.
+
+2. **[MEDIUM] Non-atomic fallback write for signing seed**
+   - Affected: `i2p_chat_core.py` (`_ensure_local_signing_key`)
+   - Impact: crash/power-loss window can corrupt `*.signing`, causing identity-signing continuity loss.
+
+### Plausible Findings
+
+1. **[MEDIUM] Handshake role-conflict / double-INIT race**
+   - Affected: `i2p_chat_core.py` (`initiate_secure_handshake`, `_handle_handshake_message`)
+   - Impact: session-establishment instability and potential DoS under simultaneous initiation.
+
+2. **[MEDIUM] BlindBox quorum semantics accept `EXISTS` as PUT success**
+   - Affected: `blindbox_client.py` (`put`)
+   - Impact: byzantine replica can report logical success without durable storage.
+
+### Low / Defense-in-Depth
+
+1. **[LOW] BlindBox state load uses two reads of the same file**
+   - Affected: `i2p_chat_core.py` (`_load_blindbox_state`)
+   - Impact: possible TOCTOU consistency gap under local concurrent mutation.
+
+2. **[LOW] Protocol downgrade diagnostic branch is string-fragile**
+   - Affected: `i2p_chat_core.py` (`receive_loop`)
+   - Impact: mostly observability/diagnostics quality, not core control bypass.
+
+### Remediation Priority (Updated)
+
+1. **P0:** enforce symlink-safe profile path policy and atomic signing-seed writes.
+2. **P1:** add deterministic handshake role-conflict guard and regression tests.
+3. **P1:** harden BlindBox PUT semantics (`EXISTS` handling and verification strategy).
+4. **P2:** convert BlindBox state load path to single-snapshot parse and tighten downgrade diagnostics.
+
+## Deep Audit Addendum II (2026-03-24)
+
+This section captures a second deep pass across protocol, runtime, BlindBox, local persistence, and supply chain after the latest hardening changes.
+
+### Updated Snapshot
+
+- Critical: 0
+- High: 0
+- Medium: 2 confirmed, 3 plausible
+- Low: 4
+
+### Confirmed Findings
+
+1. **[MEDIUM] Release authenticity still lacks platform-native trust integration**
+   - Area: release/build/CI
+   - Status: unresolved (manual checksum/GPG verification model remains primary)
+   - Impact: weaker end-user trust UX and higher social/operational verification failure risk.
+
+2. **[MEDIUM] CI still lacks a mandatory automated test gate**
+   - Area: GitHub workflows
+   - Status: mitigated in this cycle (`.github/workflows/test-gate.yml`)
+   - Impact: protocol/security regressions can reach `main` without runtime validation.
+
+### Plausible Findings
+
+1. **[MEDIUM] BlindBox concurrent offline-send index race**
+   - Area: `i2p_chat_core.py` offline send path
+   - Impact: availability/quorum instability under highly concurrent local send operations (not a confidentiality/integrity break).
+
+2. **[MEDIUM] BlindBox local state integrity is not cryptographically authenticated**
+   - Area: local `blindbox.*.json`
+   - Impact: local attacker with file-write capability can influence replay/consumption behavior.
+
+3. **[MEDIUM] TOFU first-contact trust remains an inherent product-model risk**
+   - Area: trust model
+   - Impact: first-contact MITM risk without out-of-band fingerprint confirmation.
+
+### Low / Defense-in-Depth
+
+1. **[LOW] vNext resync path can be used for per-connection CPU stress up to `resync_limit`.**
+2. **[LOW] `ui_prefs.json` path handling is less strict than profile-scoped key/trust/signing paths.**
+3. **[LOW] gitleaks artifact + checksum are fetched from the same release trust source.**
+4. **[LOW] build dependency audit gap (`requirements-build.txt`) in CI security gate.** (mitigated in this cycle)
+
+### Verified Improvements Since Previous Round
+
+- Inbound `BLINDBOX_ROOT`/`BLINDBOX_ROOT_ACK` now enforce locked-peer match before mutating persistent root state.
+- BlindBox `SESSION CREATE` uses `i2plib.sam.session_create(...)` with centralized input validation.
+- BlindBox PUT no longer trusts bare `EXISTS`: content verification is required before counting quorum success.
+- Profile path handling now rejects symlink targets with real-path confinement checks.
+- Signing seed fallback persistence now uses atomic writes.
+- BlindBox state load now uses a single JSON snapshot (single-read consistency).
+- Post-handshake malformed framing is consistently handled as protocol violation/downgrade with disconnect.
+- Added mandatory CI security regression test gate for PR/main (`.github/workflows/test-gate.yml`).
+- Extended dependency audit gate to include `requirements-build.txt` in `security-audit.yml`.
+
+### Priority Backlog (Current)
+
+1. **P1:** implement platform-native signing/notarization and release provenance attestations.
+2. **P1:** serialize concurrent offline BlindBox sends (or add deterministic conflict handling).
+3. **P2:** tighten local state hardening (optional signed/MACed state metadata, stricter prefs path policy).

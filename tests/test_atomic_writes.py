@@ -18,6 +18,7 @@ if "PIL" not in sys.modules:
     sys.modules["PIL.Image"] = pil_image_module
 
 from i2p_chat_core import I2PChatCore
+import crypto
 
 VALID_PEER = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
 
@@ -121,6 +122,24 @@ class AtomicWritesTests(unittest.TestCase):
             with open(path, "r", encoding="utf-8") as f:
                 content = f.read()
             self.assertNotIn('path + ".tmp"', content)
+
+    def test_signing_seed_fallback_write_uses_atomic_write_text(self) -> None:
+        if not crypto.NACL_AVAILABLE:
+            self.skipTest("PyNaCl is required for signing seed persistence test")
+        with tempfile.TemporaryDirectory() as td:
+            with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+                core = I2PChatCore(profile="alice")
+                with patch("i2p_chat_core._try_keyring_get", return_value=""):
+                    with patch("i2p_chat_core._try_keyring_set", return_value=False):
+                        with patch(
+                            "i2p_chat_core.crypto.generate_signing_keypair",
+                            return_value=(b"A" * 32, b"B" * 32),
+                        ):
+                            with patch("i2p_chat_core.atomic_write_text") as mock_write:
+                                core._ensure_local_signing_key()  # noqa: SLF001
+                mock_write.assert_called_once()
+                self.assertTrue(mock_write.call_args.args[0].endswith("alice.signing"))
+                self.assertEqual(mock_write.call_args.args[1], (b"A" * 32).hex())
 
 
 if __name__ == "__main__":

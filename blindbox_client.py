@@ -21,6 +21,7 @@ from typing import Awaitable, Callable, List, Optional
 import i2plib
 from blindbox_blob import BLINDBOX_MAX_FRAME_SIZE
 from i2plib.exceptions import SAMException
+from i2plib.sam import session_create
 
 logger = logging.getLogger("i2pchat")
 
@@ -175,12 +176,16 @@ class BlindBoxClient:
 
             self._active_sam_id = f"{self.session_id}_{secrets.token_hex(4)}"
             options_str = " ".join(f"{k}={v}" for k, v in self.sam_options.items())
-            cmd = (
-                "SESSION CREATE STYLE=STREAM "
-                f"ID={self._active_sam_id} DESTINATION=TRANSIENT "
-                f"SIGNATURE_TYPE=7 OPTION {options_str}\n"
+            sam_cmd_options = "SIGNATURE_TYPE=7 OPTION"
+            if options_str:
+                sam_cmd_options += f" {options_str}"
+            cmd = session_create(
+                "STREAM",
+                self._active_sam_id,
+                "TRANSIENT",
+                sam_cmd_options,
             )
-            self._ctrl_writer.write(cmd.encode("utf-8"))
+            self._ctrl_writer.write(cmd)
             await self._ctrl_writer.drain()
             try:
                 response = await asyncio.wait_for(
@@ -261,7 +266,32 @@ class BlindBoxClient:
                 put_failures.append((addr, result))
                 continue
             ok_results.append(result)
-        success_count = sum(1 for r in ok_results if r.status in {"OK", "EXISTS"})
+        success_count = 0
+        for result in ok_results:
+            if result.status == "OK":
+                success_count += 1
+                continue
+            if result.status != "EXISTS":
+                continue
+            try:
+                existing_blob = await self._get_from_blind_box(result.address, key)
+            except Exception as exc:
+                put_failures.append(
+                    (
+                        result.address,
+                        RuntimeError(f"PUT EXISTS verification failed: {exc}"),
+                    )
+                )
+                continue
+            if existing_blob == bytes(blob):
+                success_count += 1
+                continue
+            put_failures.append(
+                (
+                    result.address,
+                    RuntimeError("PUT EXISTS verification mismatch"),
+                )
+            )
         if success_count < self.put_quorum:
             for addr, err in put_failures:
                 self._log_box_failure("PUT", addr, err)

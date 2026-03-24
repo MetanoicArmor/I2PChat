@@ -295,6 +295,30 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delivered, [])
         self.assertIn(123, core._pending_file_acks)
 
+    async def test_malformed_vnext_frame_after_handshake_is_downgrade(self) -> None:
+        errors: list[str] = []
+        core = I2PChatCore(on_error=errors.append)
+        core.handshake_complete = True
+        core.use_encryption = True
+        core.shared_key = b"x" * 32
+        core._reset_crypto_state = lambda: None  # type: ignore[assignment]
+
+        malformed = HEADER_STRUCT.pack(
+            MAGIC,
+            4,
+            ord("Z"),  # unknown frame type for codec
+            0,
+            1,
+            0,
+        )
+        conn = (_Reader(malformed), _Writer())
+        core.conn = conn
+
+        await core.receive_loop(conn)
+
+        self.assertTrue(any("Protocol downgrade detected" in e for e in errors), errors)
+        self.assertIsNone(core.conn)
+
     async def test_header_msg_id_tampering_is_rejected(self) -> None:
         errors: list[str] = []
         core_module, original_crypto = self._patch_crypto_identity_keep_mac()

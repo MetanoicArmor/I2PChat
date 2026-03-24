@@ -109,6 +109,23 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         finally:
             core_module.get_profiles_dir = original_get_profiles_dir  # type: ignore[assignment]
 
+    def test_profile_paths_reject_symlink_targets(self) -> None:
+        import i2p_chat_core as core_module
+
+        original_get_profiles_dir = core_module.get_profiles_dir
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                outside_path = os.path.join(tmp_dir, "outside.dat")
+                with open(outside_path, "w", encoding="utf-8") as f:
+                    f.write("x")
+                os.symlink(outside_path, os.path.join(tmp_dir, "alice.dat"))
+                core_module.get_profiles_dir = lambda: tmp_dir  # type: ignore[assignment]
+                core = I2PChatCore(profile="alice")
+                with self.assertRaises(ValueError):
+                    core._profile_path()
+        finally:
+            core_module.get_profiles_dir = original_get_profiles_dir  # type: ignore[assignment]
+
     def test_lock_requires_verified_identity_binding(self) -> None:
         core = I2PChatCore(profile="alice")
         core.current_peer_addr = PEER_B32
@@ -183,6 +200,31 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
 
         self.assertEqual(disconnect_mock.call_count, 1)
+
+    async def test_handshake_role_conflict_on_init_triggers_disconnect(self) -> None:
+        errors: list[str] = []
+        core = I2PChatCore(on_error=errors.append)
+        core._handshake_initiated = True
+        writer = _FakeWriter()
+        core._disconnect_scheduled_for_test = False  # type: ignore[attr-defined]
+
+        def _mark_disconnect() -> None:
+            core._disconnect_scheduled_for_test = True  # type: ignore[attr-defined]
+
+        core._schedule_disconnect = _mark_disconnect  # type: ignore[method-assign]
+
+        import i2p_chat_core as core_module
+
+        original_nacl_available = core_module.crypto.NACL_AVAILABLE
+        core_module.crypto.NACL_AVAILABLE = True
+        try:
+            await core._handle_handshake_message("INIT:malformed", writer)
+        finally:
+            core_module.crypto.NACL_AVAILABLE = original_nacl_available
+
+        self.assertEqual(writer.buffer, bytearray())
+        self.assertTrue(getattr(core, "_disconnect_scheduled_for_test", False))
+        self.assertTrue(any("role conflict" in msg.lower() for msg in errors), errors)
 
     async def test_pin_or_verify_waits_for_trust_decision_future(self) -> None:
         seen: Optional[tuple[str, str, str]] = None
@@ -298,6 +340,37 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
                 "__SIGNAL__:BLINDBOX_ROOT_ACK|1",
             )
 
+    async def test_blindbox_root_receiver_ignores_root_when_peer_differs_from_lock(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            errors: list[str] = []
+            receiver = I2PChatCore(profile="alice", on_error=errors.append)
+            receiver.my_signing_seed = b"D" * 32
+            receiver.stored_peer = LOCKED_B32
+            receiver.current_peer_addr = OTHER_B32
+            receiver.my_dest = SimpleNamespace(base32=LOCAL_B32)
+            writer = _FakeWriter()
+            root_secret = b"\x44" * 32
+
+            await receiver._handle_incoming_blindbox_root_signal(
+                f"__SIGNAL__:BLINDBOX_ROOT|1|{root_secret.hex()}",
+                writer,
+            )
+
+            self.assertIsNone(receiver._blindbox_root_secret)
+            self.assertEqual(receiver._blindbox_root_epoch, 0)
+            self.assertEqual(writer.buffer, bytearray())
+            self.assertTrue(
+                any("does not match locked peer" in msg for msg in errors),
+                errors,
+            )
+
     async def test_blindbox_root_reconnect_resends_same_pending_root(self) -> None:
         with patch.dict(
             os.environ,
@@ -339,6 +412,38 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(core._blindbox_root_secret)
             self.assertEqual(core._blindbox_pending_root_secret, pending_secret)
             self.assertEqual(core._blindbox_pending_root_epoch, 1)
+
+    async def test_blindbox_root_ack_ignored_when_peer_differs_from_lock(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            errors: list[str] = []
+            core = I2PChatCore(profile="alice", on_error=errors.append)
+            core.my_signing_seed = b"D" * 32
+            core.stored_peer = LOCKED_B32
+            core.current_peer_addr = LOCKED_B32
+            core.my_dest = SimpleNamespace(base32=LOCAL_B32)
+            writer = _FakeWriter()
+
+            await core._send_blindbox_root_if_needed(writer)
+            self.assertEqual(core._blindbox_pending_root_epoch, 1)
+            pending_secret = core._blindbox_pending_root_secret
+
+            core.current_peer_addr = OTHER_B32
+            core._handle_blindbox_root_ack_signal("__SIGNAL__:BLINDBOX_ROOT_ACK|1")
+
+            self.assertIsNone(core._blindbox_root_secret)
+            self.assertEqual(core._blindbox_pending_root_secret, pending_secret)
+            self.assertEqual(core._blindbox_pending_root_epoch, 1)
+            self.assertTrue(
+                any("does not match locked peer" in msg for msg in errors),
+                errors,
+            )
 
     async def test_blindbox_root_rotation_preserves_previous_root_after_ack(self) -> None:
         with patch.dict(
