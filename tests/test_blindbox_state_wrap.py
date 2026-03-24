@@ -50,7 +50,7 @@ class BlindBoxStateWrapTests(unittest.TestCase):
                 core_module.get_profiles_dir = lambda: tmp_dir  # type: ignore[assignment]
                 bootstrap = I2PChatCore(profile="alice")
                 bootstrap.my_signing_seed = b"C" * 32
-                bootstrap.stored_peer = "peer-1.b32.i2p"
+                bootstrap.stored_peer = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
                 peer_id = bootstrap._blindbox_peer_id()
                 assert peer_id is not None
                 path = bootstrap._blindbox_state_path()
@@ -99,7 +99,7 @@ class BlindBoxStateWrapTests(unittest.TestCase):
 
                 migrated = I2PChatCore(profile="alice")
                 migrated.my_signing_seed = b"C" * 32
-                migrated.stored_peer = "peer-1.b32.i2p"
+                migrated.stored_peer = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
                 migrated._load_blindbox_state()
 
                 self.assertEqual(migrated._blindbox_root_secret, root_secret)
