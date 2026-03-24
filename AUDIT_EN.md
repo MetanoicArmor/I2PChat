@@ -423,3 +423,67 @@ This section captures a second deep pass across protocol, runtime, BlindBox, loc
 1. **P1:** implement platform-native signing/notarization and release provenance attestations.
 2. **P1:** serialize concurrent offline BlindBox sends (or add deterministic conflict handling).
 3. **P2:** tighten local state hardening (optional signed/MACed state metadata, stricter prefs path policy).
+
+## Deep Audit Addendum III (2026-03-24)
+
+This addendum captures an additional deep pass after CI P0 closure (test gate + build dependency audit gate).
+
+### Snapshot (Current)
+
+- Critical: 0
+- High: 0
+- Medium: 3 confirmed, 2 plausible
+- Low: 4
+
+### Confirmed Findings (Current)
+
+1. **[MEDIUM] Release trust still lacks platform-native signing/notarization**
+   - Area: release/distribution trust
+   - Status: unresolved
+   - Impact: users still rely on manual checksum/GPG workflow.
+
+2. **[MEDIUM] Python-version policy drift (CI 3.12 vs project 3.14 guidance)**
+   - Area: CI/reproducibility
+   - Status: unresolved
+   - Impact: security/test behavior may diverge across interpreter versions.
+
+3. **[MEDIUM] Legacy BlindBox local-wrap mode remains decryptable by weak context**
+   - Area: local at-rest compatibility path
+   - Status: partially mitigated (migration on load), not retroactive for old leaked backups.
+   - Impact: legacy state copies may expose root material under weaker derivation assumptions.
+
+### Plausible Findings
+
+1. **[MEDIUM] Concurrent offline BlindBox send race on state/index mutation**
+   - Area: `i2p_chat_core.py` offline send/poll state updates
+   - Impact: availability/quorum instability (duplication/loss), not a direct crypto break.
+
+2. **[MEDIUM] Local state integrity is not cryptographically authenticated**
+   - Area: local state files (`blindbox.*.json`, prefs)
+   - Impact: local write-capable attacker can influence replay/consumption behavior.
+
+### Low / Defense-in-Depth
+
+1. **[LOW] vNext resync path allows bounded per-connection CPU stress (`resync_limit`).**
+2. **[LOW] `legacy_compat` config flag currently does not change codec policy (operator confusion risk).**
+3. **[LOW] `ui_prefs.json` path policy is less strict than profile-scoped key/trust/signing paths.**
+4. **[LOW] gitleaks artifact + checksum are fetched from the same upstream trust source.**
+
+### Verified Progress Since Addendum II
+
+- CI P0 is closed:
+  - mandatory security regression gate exists (`.github/workflows/test-gate.yml`),
+  - `requirements-build.txt` is now audited in `security-audit.yml`.
+- Runtime hardening from previous rounds remains intact:
+  - peer-lock checks on BlindBox root/ack paths,
+  - verified `EXISTS` handling in BlindBox PUT,
+  - single-snapshot BlindBox state load,
+  - profile path symlink confinement and atomic signing-seed persistence.
+
+### Priority Backlog (Updated)
+
+1. **P1:** platform-native release signing/notarization + provenance attestations.
+2. **P1:** align interpreter policy across CI/docs/lockfiles (3.12 vs 3.14).
+3. **P1:** serialize concurrent offline BlindBox state mutations.
+4. **P2:** optional local-state authenticity (MAC/signature) and stricter prefs path policy.
+5. **P2:** clean up/activate `legacy_compat` flag semantics to avoid operator confusion.
