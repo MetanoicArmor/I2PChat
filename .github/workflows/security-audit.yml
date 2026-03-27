@@ -28,12 +28,14 @@ jobs:
 
       - name: Audit dependencies
         run: |
+          # CVE-2026-4539 (Pygments ReDoS): no fixed release on PyPI yet; fix is merged upstream (await >2.19.2).
+          IGNORE_PYGMENTS='--ignore-vuln CVE-2026-4539'
           # Primary gate: audit the exact hash-locked dependency graph used in builds.
-          pip-audit -r requirements.txt
+          pip-audit -r requirements.txt ${IGNORE_PYGMENTS}
           # Build-time toolchain dependencies must also be audited.
-          pip-audit -r requirements-build.txt
+          pip-audit -r requirements-build.txt ${IGNORE_PYGMENTS}
           # Supplemental signal: unresolved input constraints.
-          pip-audit -r requirements.in
+          pip-audit -r requirements.in ${IGNORE_PYGMENTS}
 
   release-integrity-policy:
     runs-on: ubuntu-latest
