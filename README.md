@@ -28,6 +28,7 @@
 ### 📑 Table of contents
 
 - [✨ Features](#-features)
+- [🔌 Protocol overview](#-protocol-overview)
 - [📬 BlindBox in short](#-blindbox-in-short)
 - [📸 Screenshots](#-screenshots)
 - [📦 Prebuilt binaries](#-prebuilt-binaries)
@@ -55,6 +56,20 @@
 - **English manual**: [**docs/MANUAL_EN.md**](docs/MANUAL_EN.md)
 - **Русский мануал**: [**docs/MANUAL_RU.md**](docs/MANUAL_RU.md)
 - BlindBox design notes: [**RELEASE_0.6.0.md**](RELEASE_0.6.0.md)
+
+### 🔌 Protocol overview
+
+Traffic is a **byte stream** over **I2P SAM** (one TCP session to the router). Application data is split into **vNext binary frames**:
+
+```
+┌─────────── vNext frame ────────────────────────────────────────┐
+│ MAGIC (4) │ VER (1) │ TYPE (1) │ FLAGS (1) │ MSG_ID (8) │ LEN (4) │ PAYLOAD (LEN bytes) │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- **Handshake** uses **plain** frame bodies (UTF‑8 text: identities, `INIT` / replies, signatures).
+- After the secure handshake, payloads are **encrypted** (`FLAGS` marks it): each body is **sequence (8 B) + ciphertext + MAC** (NaCl SecretBox + HMAC over metadata).
+- **Message IDs** and **sequence numbers** tie frames to ordering and replay protection; see also [padding](#protocol-metadata-and-padding-profile) below.
 
 ### 📬 BlindBox
 
