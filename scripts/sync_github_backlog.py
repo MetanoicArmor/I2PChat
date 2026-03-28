@@ -6,9 +6,25 @@ Usage:
 
     GITHUB_TOKEN=ghp_xxx python3 scripts/sync_github_backlog.py
 
+`GH_TOKEN` is accepted as an alias for `GITHUB_TOKEN` (same as GitHub CLI).
+
 Optional:
 
     GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=ghp_xxx python3 scripts/sync_github_backlog.py
+
+Local token without exporting each time — create a repo-root `.env` (gitignored) or
+`scripts/.env` with a single line::
+
+    GITHUB_TOKEN=ghp_xxx
+
+Or copy `scripts/backlog.env.example` to `.env` and fill in the value.
+
+You can also obtain a token from the CLI::
+
+    export GITHUB_TOKEN="$(gh auth token)"
+
+Or run the workflow **Sync GitHub backlog** in the Actions tab (uses the default
+`GITHUB_TOKEN` for this repository).
 
 The script is idempotent for the bundled milestone and issue titles:
 - it creates missing labels;
@@ -24,13 +40,58 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 
-REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "MetanoicArmor/I2PChat")
-TOKEN = os.environ.get("GITHUB_TOKEN")
+def _load_env_from_files() -> None:
+    """Load backlog-related vars from optional .env files (do not override non-empty env)."""
+    root = Path(__file__).resolve().parent.parent
+    for relative in (".env", "scripts/.env"):
+        path = root / relative
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].strip()
+            if "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key == "GITHUB_REPOSITORY":
+                if (os.environ.get("GITHUB_REPOSITORY") or "").strip():
+                    continue
+                os.environ["GITHUB_REPOSITORY"] = val
+                continue
+            if key not in ("GITHUB_TOKEN", "GH_TOKEN"):
+                continue
+            if (os.environ.get(key) or "").strip():
+                continue
+            os.environ[key] = val
+
+
+_load_env_from_files()
+
+_repo_raw = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
+REPOSITORY = _repo_raw if _repo_raw else "MetanoicArmor/I2PChat"
+TOKEN = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
 
 if not TOKEN:
-    print("error: GITHUB_TOKEN is required", file=sys.stderr)
+    print(
+        "error: GITHUB_TOKEN (or GH_TOKEN) is required\n"
+        "  export GITHUB_TOKEN=…   or   export GH_TOKEN=…\n"
+        "  or put GITHUB_TOKEN=… in repo-root .env (see scripts/backlog.env.example)\n"
+        "  or: export GITHUB_TOKEN=\"$(gh auth token)\"\n"
+        "  or run the 'Sync GitHub backlog' workflow in GitHub Actions",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 BASE_URL = f"https://api.github.com/repos/{REPOSITORY}"
@@ -463,8 +524,28 @@ def api_request(method: str, path: str, data: dict | None = None) -> object:
     return json.loads(raw)
 
 
+def api_get_list_paginated(path: str) -> list:
+    """GET a JSON array endpoint with GitHub pagination (100 items per page)."""
+    base = path.rstrip("&")
+    connector = "&" if "?" in base else "?"
+    all_rows: list = []
+    page = 1
+    while True:
+        chunk = api_request(
+            "GET",
+            f"{base}{connector}per_page=100&page={page}",
+        )
+        if not isinstance(chunk, list):
+            raise TypeError(f"expected list from {path}, got {type(chunk)}")
+        all_rows.extend(chunk)
+        if len(chunk) < 100:
+            break
+        page += 1
+    return all_rows
+
+
 def ensure_labels() -> None:
-    existing = {item["name"] for item in api_request("GET", "/labels?per_page=100")}
+    existing = {item["name"] for item in api_get_list_paginated("/labels")}
     for name, color in LABEL_COLORS.items():
         if name in existing:
             print(f"label exists: {name}")
@@ -476,7 +557,7 @@ def ensure_labels() -> None:
 def ensure_milestones() -> dict[str, int]:
     milestones = {
         item["title"]: int(item["number"])
-        for item in api_request("GET", "/milestones?state=all&per_page=100")
+        for item in api_get_list_paginated("/milestones?state=all")
     }
     for milestone in MILESTONES:
         if milestone["title"] in milestones:
@@ -491,7 +572,7 @@ def ensure_milestones() -> dict[str, int]:
 def ensure_issues(milestones: dict[str, int]) -> None:
     existing = {
         item["title"]
-        for item in api_request("GET", "/issues?state=all&per_page=100")
+        for item in api_get_list_paginated("/issues?state=all")
         if "pull_request" not in item
     }
     for issue in ISSUES:

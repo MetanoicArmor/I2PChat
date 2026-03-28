@@ -17,8 +17,11 @@ Examples:
   GITHUB_TOKEN=ghp_xxx ./scripts/sync_backlog.sh owner/repo
 
 Environment:
-  GITHUB_TOKEN       Required. Token with repository issue/milestone write access.
-  GITHUB_REPOSITORY  Optional fallback target repository.
+  GITHUB_TOKEN       Required (or GH_TOKEN). Token with issue/milestone write access.
+  GITHUB_REPOSITORY  Optional target repository.
+
+Optional: repo-root `.env` or `scripts/.env` with GITHUB_TOKEN=… (see
+scripts/backlog.env.example). The Python script loads these automatically.
 
 If no repository is provided, the wrapper uses GITHUB_REPOSITORY or
 MetanoicArmor/I2PChat by default.
@@ -35,12 +38,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-  echo "error: GITHUB_TOKEN is required" >&2
-  echo >&2
-  usage >&2
-  exit 1
-fi
+# Token may come from the environment or from repo-root / scripts/.env (loaded by Python).
 
 if [[ $# -gt 1 ]]; then
   echo "error: expected at most one positional argument: [owner/repo]" >&2
