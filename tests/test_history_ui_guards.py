@@ -29,6 +29,11 @@ class HistoryUiGuardsTests(unittest.TestCase):
         self.assertIn("self._history_loaded_for_peer = None", src)
         self.assertIn("self._history_flush_timer.stop()", src)
 
+    def test_save_history_failure_is_reported(self) -> None:
+        src = self._main_qt_source()
+        self.assertIn("Warning: failed to save chat history:", src)
+        self.assertIn("self._history_save_error_reported", src)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,211 +1,230 @@
 # Security Audit Report: I2PChat
 
 Audit date: 2026-03-28  
-Repository state: `0ed6586`  
-Mode: full audit (protocol + cryptography + local persistence + UI boundaries + CI/release + supply chain)
+Repository state: `02bbbd9`  
+Mode: full audit (protocol + cryptography + local persistence + UI + CI/release + supply chain)
 
 ## Executive Summary
 
-This audit reviewed the current repository end-to-end, including the newly added encrypted chat history functionality.
+This audit reviewed the current repository state after the recent history-encryption and security-hardening changes.
 
 Confirmed findings:
 - Critical: 0
 - High: 0
-- Medium: 3
-- Low: 3
+- Medium: 2
+- Low: 4
 
-Overall status:
-- Core protocol protections are strong (signed handshake, TOFU pinning for named profiles, strict seq/HMAC checks, downgrade handling).
-- New local encrypted chat history is implemented correctly at-rest (HKDF-derived keys + NaCl SecretBox + atomic writes).
-- Remaining risks are mostly logic-level integrity edge cases and operational hardening gaps (release trust/distribution policies).
+Overall assessment:
+- The protocol layer is in good shape: signed handshake, TOFU pinning for persistent profiles, strict sequence/HMAC validation, downgrade handling, and the recent strict file-transfer end check are all present.
+- The new encrypted chat history feature is implemented soundly at rest: HKDF-derived keys, per-peer separation, NaCl SecretBox, atomic writes, and correct ON/OFF guards.
+- Remaining issues are mostly edge-case integrity gaps and operational hardening gaps, not a fundamental break of the secure-channel design.
 
 ## Scope and Methodology
 
 Reviewed components:
-- Protocol/crypto/runtime: `i2p_chat_core.py`, `protocol_codec.py`, `crypto.py`
+- Protocol/runtime/crypto: `i2p_chat_core.py`, `protocol_codec.py`, `crypto.py`
 - Offline subsystem: `blindbox_client.py`, `blindbox_blob.py`, `blindbox_state.py`, `blindbox_local_replica.py`
-- UI boundary and local behavior: `main_qt.py`, `chat_history.py`, `notifications.py`
-- Build/release/CI and dependency governance: `requirements.txt`, `requirements.in`, `.github/workflows/*`, `build-*.sh`, `build-windows.ps1`
+- UI/local state: `main_qt.py`, `chat_history.py`, `notifications.py`
+- Build/release/CI: `.github/workflows/*`, `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`, dependency lockfiles
 
 Method:
-- static trust-boundary and attack-surface review
+- static trust-boundary review
 - protocol and cryptographic control verification
-- targeted runtime security regression checks
-- supply-chain and release-integrity review
+- targeted runtime regression checks
+- release/supply-chain policy review
 
 Executed checks:
-- `python3 -m unittest tests.test_protocol_framing_vnext tests.test_sam_input_validation tests.test_asyncio_regression tests.test_chat_history tests.test_history_ui_guards -v`
-  - Result: `OK (69 tests)`
-- Additional targeted checks performed during this audit cycle:
-  - history + atomic-write suites: `OK`
-  - encrypted history smoke check: history file has `I2CH` magic and does not contain plaintext payload text
+- `python3 -m unittest tests.test_protocol_framing_vnext tests.test_sam_input_validation tests.test_asyncio_regression tests.test_chat_history tests.test_history_ui_guards tests.test_audit_remediation -v`
+  - Result: `OK (86 tests)`
+- Encrypted-history smoke check:
+  - saved history file uses `I2CH` magic
+  - plaintext chat message was not present in the stored ciphertext file
 
 ## Threat Model Summary
 
 Adversaries considered:
-- malicious remote peer on I2P
-- active transport/path manipulator
-- local unprivileged process on same host
-- supply-chain/distribution attacker
+- malicious remote I2P peer
+- active network/path manipulator
+- local unprivileged process on the same host
+- supply-chain / release-distribution attacker
 
 Well-mitigated classes:
-- message tampering and replay attempts
-- post-handshake plaintext downgrade attempts
-- frame desync abuse beyond bounded resync limits
+- message tampering after handshake
+- replay/reorder within the framed channel
+- plaintext downgrade after secure channel establishment
+- out-of-directory profile-path abuse
 
 Residual classes:
-- product-model TOFU first-contact risk (especially in transient profile mode)
-- local-host trust assumptions around SAM and BlindBox local options
-- release authenticity relying on manual verification workflows
+- TOFU first-contact risk by design
+- local-host trust assumptions for local BlindBox modes
+- release authenticity depending on operator/user verification discipline
 
-## Findings (ordered by severity)
+## Findings
 
-### [MEDIUM] A-01: File transfer completion accepts `E` without strict final size equality
+### [MEDIUM] A-01: Inline image transfer still lacks strict final size equality check
 
 Affected:
-- `i2p_chat_core.py` -> `receive_loop`, branch `msg_type == "E"`
+- `i2p_chat_core.py` -> `receive_loop`, branch `msg_type == "G"`
 
 Issue:
-- On end-of-file marker `E`, current logic finalizes transfer and emits success/ACK without explicit `incoming_info.received == incoming_info.size` verification.
-- Chunk-level bounds in `msg_type == "D"` are present, but a strict final integrity gate is still missing.
+- Regular file transfers now reject completion unless `received_size == expected_size` before `FILE_ACK`.
+- Inline image transfers do not apply the same final integrity rule. On `__IMG_END__`, the code validates size only against `MAX_IMAGE_SIZE`, validates image format, and then emits success with `received=expected_size` and sends `IMG_ACK`.
+- A sender can therefore stop early and still get a success path if the truncated payload remains a decodable image.
 
 Impact:
-- A malicious authenticated peer (or buggy sender) can terminate early and have a truncated file accepted as complete.
+- A malicious authenticated peer can cause truncated inline images to be accepted as complete, producing an integrity mismatch between declared and actual content.
 
 Recommendation:
-1. In `E` branch, require strict equality (`received == declared size`) before success/ACK.
-2. On mismatch: emit error, delete partial file, and skip success ACK.
+1. Before saving or ACKing, require `len(self.inline_image_buffer) == expected_size`.
+2. On mismatch, discard the image, emit an error/failure event, and do not send `IMG_ACK`.
+3. Add a regression test mirroring `test_file_end_without_full_payload_is_rejected`.
 
 ---
 
-### [MEDIUM] A-02: Trust persistence gap for transient `default` profile
+### [MEDIUM] A-02: Release signing exists, but signed artifacts are not enforced by default
 
 Affected:
-- `i2p_chat_core.py` -> `_ensure_local_signing_key`, `_load_trust_store`, `_save_trust_store`
+- `build-linux.sh`
+- `build-macos.sh`
+- `build-windows.ps1`
+- `.github/workflows/security-audit.yml`
 
 Issue:
-- For `profile == "default"`, signing seed is ephemeral and trust-store pinning is not persisted.
-- This is an intentional product behavior, but it weakens cross-session trust continuity.
+- Release scripts can still produce unsigned output when `gpg` is missing or when `I2PCHAT_SKIP_GPG_SIGN=1` is set.
+- The CI release-policy job checks that signing-related tokens exist in scripts, but it does not verify that official release artifacts are always detached-signed, platform-signed, or notarized.
 
 Impact:
-- First-contact TOFU risk effectively reappears on each run for transient profile usage.
+- Runtime protocol security remains intact, but distribution authenticity still depends on manual operator discipline and user-side verification.
 
 Recommendation:
-1. Keep behavior for transient mode, but keep the security trade-off explicit in UI/docs.
-2. Recommend named profiles for users requiring stable trust continuity.
+1. Make detached signing mandatory in official release automation.
+2. Add platform-native signing/notarization where applicable.
+3. Publish a strict verification procedure for end users and release maintainers.
 
 ---
 
-### [MEDIUM] A-03: Release authenticity still lacks enforced platform-native trust chain
+### [LOW] A-03: History filenames use a truncated 64-bit peer hash
 
 Affected:
-- `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`
-- release policy checks in `.github/workflows/security-audit.yml`
+- `chat_history.py` -> `_safe_peer_id`, `_history_path`
 
 Issue:
-- Checksums and detached signatures are present, but there is no enforced platform-native signing/notarization flow in release automation.
+- History files are keyed by the first 16 hex characters of SHA-256 of the normalized peer address.
+- This is usually fine, but it is still a truncated 64-bit identifier.
 
 Impact:
-- Verification quality depends on manual user discipline; operational risk remains for mass distribution.
+- A collision is unlikely in normal use, but in theory two different peers could map to the same history filename and cause mixing or overwrite of local history.
 
 Recommendation:
-1. Add platform-native signing/notarization workflows.
-2. Add provenance attestations for release artifacts.
-3. Publish a strict end-user verification policy.
+1. Use a longer identifier, preferably full SHA-256 hex or a longer prefix.
 
 ---
 
-### [LOW] A-04: `legacy_compat` semantics can confuse operators
+### [LOW] A-04: Decrypted history does not verify embedded `peer` metadata against requested peer
 
 Affected:
-- `i2p_chat_core.py` (`ProtocolCodec(..., allow_legacy=False)` path)
-- UI/env flag surface in `main_qt.py`
+- `chat_history.py` -> `load_history`, `_json_to_entries`
 
 Issue:
-- Flag naming/expectation and effective codec behavior can diverge, increasing operator confusion risk.
+- The encryption key is derived from the requested peer address, which is good.
+- After decryption, the stored JSON field `peer` is parsed but ignored.
+
+Impact:
+- This is only relevant to a local attacker who can already tamper with profile files and operate within the same key context, but it weakens defense in depth for local history integrity.
 
 Recommendation:
-1. Either wire behavior end-to-end or remove/rename the flag.
+1. After decrypting, compare stored `peer` with the normalized requested peer.
+2. Reject the file on mismatch.
 
 ---
 
-### [LOW] A-05: Insecure local BlindBox mode remains available by explicit override
+### [LOW] A-05: GUI silently suppresses history-save failures
 
 Affected:
-- `i2p_chat_core.py` (`I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL`, direct/local policy handling)
-- `blindbox_local_replica.py`
+- `main_qt.py` -> `_save_history_if_needed`
 
 Issue:
-- Reduced-security local mode can still be intentionally enabled.
+- `save_history(...)` is wrapped in `try/except Exception: pass`.
+
+Impact:
+- On disk, permission, or unexpected write errors, the user may believe history is being saved while persistence is actually failing.
+- This is primarily an integrity/operability issue, but it affects trust in the local security feature.
 
 Recommendation:
-1. Keep warning telemetry/UI explicit.
-2. Prefer strict deployment policy (`I2PCHAT_BLINDBOX_REQUIRE_SAM=1` and tokenized local access).
+1. Log failures and surface a system message in the UI.
+2. Consider disabling auto-save after repeated failures until the user reconnects or re-enables history.
 
 ---
 
-### [LOW] A-06: Secret-scan tool archive and checksum share trust source
+### [LOW] A-06: Main CI test gate does not include all security-relevant test modules
 
 Affected:
-- `.github/workflows/secret-scan.yml`
+- `.github/workflows/test-gate.yml`
 
 Issue:
-- Tool archive and checksum are fetched from the same upstream source.
+- The main gate runs a focused subset of tests, but it does not include `tests.test_chat_history`, `tests.test_history_ui_guards`, or `tests.test_audit_remediation`.
+
+Impact:
+- Security regressions in encrypted history behavior, UI guard logic, or audit-policy checks could pass the default gate unless another workflow catches them.
 
 Recommendation:
-1. Prefer detached signatures or independent provenance trust roots when available.
+1. Add those suites to `test-gate.yml`, or introduce a broader mandatory security regression job.
 
 ## Verified Security Strengths
 
-- Signed handshake and peer key continuity model for named profiles:
-  - `i2p_chat_core.py` (`_handle_handshake_message`, `_pin_or_verify_peer_signing_key`)
-- Strong framing/integrity controls:
-  - `protocol_codec.py` vNext framing + resync bounds
-  - `crypto.py` context-bound HMAC (`seq`, `flags`, `msg_id`)
-- Anti-downgrade and replay/reorder protections:
-  - strict encrypted-frame expectations after handshake
-  - sequence monotonicity checks
-- Path confinement and safer persistence:
-  - profile-scoped path checks + atomic writes in `blindbox_state.py`
-- Supply-chain hygiene:
-  - hash-pinned lockfile installs in CI paths
-  - pinned action refs, dedicated test/audit workflows
+- Handshake authentication and channel key separation are strong:
+  - signed INIT/RESP payloads bind peer addresses and ephemeral keys
+  - session subkeys are derived via HKDF with distinct contexts
+- Framing and integrity checks are robust:
+  - strict sequence monotonicity
+  - HMAC verification binds `seq`, `flags`, and `msg_id`
+  - plaintext after handshake is treated as downgrade and disconnects the session
+- The previously identified file-transfer completion bug is fixed:
+  - regular file transfers now reject `E` if received bytes do not exactly match the declared size
+  - covered by `test_file_end_without_full_payload_is_rejected`
+- Profile path handling is hardened:
+  - scoped profile paths stay inside the profiles directory and reject symlink escapes
+- Encrypted chat history is well-designed at rest:
+  - per-peer files
+  - HKDF-derived key hierarchy from the profile identity
+  - NaCl SecretBox encryption
+  - atomic replacement writes
+- Recent security-hardening changes are present:
+  - transient-profile trust warning
+  - explicit legacy-compat wiring
+  - insecure local BlindBox warning path
+  - pinned Gitleaks archive checksum in `secret-scan.yml`
 
-## Encrypted Chat History Security Review (new feature)
+## Encrypted Chat History Review
 
-Status: no direct cryptographic or logic break found in current implementation.
+Status: no direct cryptographic break found.
 
 Validated properties:
-- per-peer file separation (`<profile>.history.<peer_hash>.enc`)
-- no plaintext payload leak in stored history file
-- clean failure on wrong key/corrupt history file
-- ON/OFF capture behavior enforced by guards
-- disconnect/close state reset and save paths covered by tests
+- history files are not stored in plaintext
+- corrupted or wrongly keyed history files fail closed
+- per-peer history is separated on disk
+- history capture obeys the UI toggle
+- disconnect/close handling resets or flushes state correctly
 
 Residual note:
-- like other local state, confidentiality still depends on host compromise model.
+- Like any host-local encrypted state derived from the profile identity, confidentiality still depends on the local-machine compromise model.
 
-## Testing and Coverage Notes
+## Operational Residual Risks
 
-Strong coverage exists for:
-- vNext framing integrity and downgrade behavior
-- SAM input validation
-- async regressions in handshake/BlindBox state handling
-- encrypted history storage and UI guard semantics
-
-Remaining useful tests to add:
-1. explicit regression test for strict file-size equality at `msg_type == "E"`
-2. dedicated integration test for end-of-file mismatch handling (cleanup + no ACK)
-3. expanded release pipeline verification tests (artifact signing policy checks)
+These are important assumptions, but not rated as new findings in this audit:
+- `default` remains a transient profile by design, so TOFU trust continuity does not survive restarts; the current UI/runtime warnings make this explicit.
+- `legacy_compat` is now properly wired and remains explicit opt-in; using it broadens the interoperability surface and should stay off by default.
+- BlindBox local/direct insecure mode still exists only as an explicit override and is clearly warned about; this is a risky mode, but it is no longer silent.
+- Persistent profiles may rely on release-built-in BlindBox replicas unless operators override that policy; privacy-sensitive deployments may prefer their own replicas.
 
 ## Remediation Priority
 
-1. **P1:** implement strict file completion integrity check on `msg_type == "E"` (A-01).
-2. **P1:** enforce platform-native release trust chain and provenance (A-03).
-3. **P2:** clarify/clean up `legacy_compat` semantics (A-04).
-4. **P2:** continue policy hardening docs around transient profile trust and local BlindBox overrides (A-02, A-05).
-5. **P3:** improve independent trust for secret-scan tooling verification (A-06).
+1. **P1:** add strict final-size verification for inline image completion and a matching regression test.
+2. **P1:** enforce signed release artifacts in official release automation.
+3. **P2:** strengthen local history integrity checks (`peer` verification and longer peer identifier).
+4. **P2:** make history-save failures visible to the user.
+5. **P3:** widen the default CI security regression gate.
 
 ## Conclusion
 
-No confirmed Critical/High vulnerabilities were found in the current repository state. Protocol and cryptographic controls are generally strong; the main practical work left is one file-transfer integrity edge case and release/distribution trust hardening.
+No confirmed Critical or High software vulnerabilities were found in the current codebase. The secure-channel design, handshake authentication, and encrypted local history are in solid shape. The most important remaining code issue is the inline-image completion integrity gap; the rest are mainly release-policy and defense-in-depth improvements.

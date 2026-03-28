@@ -3700,13 +3700,33 @@ class I2PChatCore:
                         # Завершение приёма изображения
                         if self.inline_image_info and self.inline_image_buffer:
                             filename, expected_size = self.inline_image_info
+                            actual_size = len(self.inline_image_buffer)
                             
                             # Проверяем размер
-                            if len(self.inline_image_buffer) > MAX_IMAGE_SIZE:
+                            if actual_size > MAX_IMAGE_SIZE:
                                 self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                 self._emit_error("Received image too large, discarding")
                                 self.inline_image_buffer = bytearray()
                                 self.inline_image_info = None
+                                self._incoming_image_msg_id = None
+                                continue
+
+                            if actual_size != expected_size:
+                                self._emit_file_event(
+                                    FileTransferInfo(
+                                        filename=filename,
+                                        size=expected_size,
+                                        received=-1,
+                                        is_sending=False,
+                                        is_inline_image=True,
+                                    )
+                                )
+                                self._emit_error(
+                                    f"Image transfer incomplete: received {actual_size} of {expected_size} bytes"
+                                )
+                                self.inline_image_buffer = bytearray()
+                                self.inline_image_info = None
+                                self._incoming_image_msg_id = None
                                 continue
                             
                             # Проверяем magic bytes
@@ -3717,6 +3737,7 @@ class I2PChatCore:
                                 self._emit_error("Received image has invalid format")
                                 self.inline_image_buffer = bytearray()
                                 self.inline_image_info = None
+                                self._incoming_image_msg_id = None
                                 continue
                             
                             # Сохраняем изображение
@@ -3736,7 +3757,15 @@ class I2PChatCore:
                                     self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                     self._emit_error(f"Received invalid image: {error_msg}")
                                 else:
-                                    self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=expected_size, is_sending=False, is_inline_image=True))
+                                    self._emit_file_event(
+                                        FileTransferInfo(
+                                            filename=filename,
+                                            size=expected_size,
+                                            received=actual_size,
+                                            is_sending=False,
+                                            is_inline_image=True,
+                                        )
+                                    )
                                     self._emit_inline_image(safe_path, is_from_me=False)
                                     try:
                                         ack_id = self._incoming_image_msg_id or 0

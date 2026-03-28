@@ -569,6 +569,33 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         finally:
             self._restore_crypto_identity(core_module, original_crypto)
 
+    async def test_inline_image_end_without_full_payload_is_rejected(self) -> None:
+        errors: list[str] = []
+        core_module, original_crypto = self._patch_crypto_identity()
+        try:
+            core = I2PChatCore(on_error=errors.append)
+            core.handshake_complete = True
+            core.use_encryption = True
+            core.shared_key = b"x" * 32
+            core._reset_crypto_state = lambda: None  # type: ignore[assignment]
+            payload = (
+                core.frame_message("G", "img.png|4")
+                + core.frame_message("G", base64.b64encode(b"ab").decode("ascii"))
+                + core.frame_message("G", "__IMG_END__")
+            )
+            writer = _Writer()
+            conn = (_Reader(payload), writer)
+            core.conn = conn
+
+            await core.receive_loop(conn)
+
+            self.assertTrue(any("Image transfer incomplete" in e for e in errors))
+            self.assertIsNone(core.inline_image_info)
+            self.assertEqual(core.inline_image_buffer, bytearray())
+            self.assertNotIn(b"IMG_ACK", bytes(writer.buf))
+        finally:
+            self._restore_crypto_identity(core_module, original_crypto)
+
     async def test_file_chunk_invalid_base64_is_rejected(self) -> None:
         import i2p_chat_core as core_module
 

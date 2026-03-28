@@ -31,6 +31,9 @@ jobs:
             tests.test_asyncio_regression \
             tests.test_blindbox_client \
             tests.test_atomic_writes \
+            tests.test_chat_history \
+            tests.test_history_ui_guards \
             tests.test_profile_import_overwrite \
             tests.test_protocol_framing_vnext \
-            tests.test_sam_input_validation
+            tests.test_sam_input_validation \
+            tests.test_audit_remediation

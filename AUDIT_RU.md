@@ -1,211 +1,230 @@
 # Отчёт по аудиту безопасности: I2PChat
 
 Дата аудита: 2026-03-28  
-Состояние репозитория: `0ed6586`  
-Режим: полный аудит (протокол + криптография + локальная персистентность + UI-границы + CI/release + supply chain)
+Состояние репозитория: `02bbbd9`  
+Режим: полный аудит (протокол + криптография + локальная персистентность + UI + CI/release + supply chain)
 
 ## Краткий итог
 
-Проведён полный пересмотр текущего состояния репозитория, включая новый функционал зашифрованной истории чата.
+Проведён повторный полный аудит текущего состояния репозитория после последних изменений по истории чата и security hardening.
 
 Подтверждённые findings:
 - Critical: 0
 - High: 0
-- Medium: 3
-- Low: 3
+- Medium: 2
+- Low: 4
 
 Общая оценка:
-- Протокольные контроли сильные (signed handshake, TOFU-pinning для именованных профилей, строгие seq/HMAC-проверки, downgrade-обработка).
-- Новый механизм локальной зашифрованной истории реализован корректно на уровне at-rest защиты (HKDF-derived key + NaCl SecretBox + atomic write).
-- Основные остаточные риски: логический edge-case целостности файлов и операционные пробелы в release trust.
+- Протокольный слой выглядит крепко: signed handshake, TOFU-pinning для постоянных профилей, строгая проверка seq/HMAC, downgrade handling и уже исправленная строгая проверка окончания обычной передачи файлов.
+- Новый механизм локальной зашифрованной истории реализован корректно на уровне хранения: HKDF-derived keys, разделение по peer, NaCl SecretBox, atomic writes и корректные ON/OFF guards.
+- Оставшиеся проблемы относятся в основном к edge-case целостности и операционному hardening, а не к фундаментальному пробою secure channel.
 
 ## Scope и методология
 
 Проверенные компоненты:
-- Протокол/крипто/runtime: `i2p_chat_core.py`, `protocol_codec.py`, `crypto.py`
+- Протокол/runtime/криптография: `i2p_chat_core.py`, `protocol_codec.py`, `crypto.py`
 - Offline-подсистема: `blindbox_client.py`, `blindbox_blob.py`, `blindbox_state.py`, `blindbox_local_replica.py`
-- UI-границы и локальное поведение: `main_qt.py`, `chat_history.py`, `notifications.py`
-- Build/release/CI и управление зависимостями: `requirements.txt`, `requirements.in`, `.github/workflows/*`, `build-*.sh`, `build-windows.ps1`
+- UI и локальное состояние: `main_qt.py`, `chat_history.py`, `notifications.py`
+- Build/release/CI: `.github/workflows/*`, `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`, lockfile-зависимости
 
 Подход:
-- статический анализ trust boundaries и attack surface
+- статический анализ trust boundaries
 - проверка протокольных и криптографических контролей
-- таргетные runtime-regression проверки
-- анализ supply-chain и release-integrity
+- точечные runtime-regression проверки
+- анализ release/supply-chain политики
 
 Выполненные проверки:
-- `python3 -m unittest tests.test_protocol_framing_vnext tests.test_sam_input_validation tests.test_asyncio_regression tests.test_chat_history tests.test_history_ui_guards -v`
-  - Результат: `OK (69 tests)`
-- Дополнительные проверки в текущем цикле:
-  - history + atomic-write тесты: `OK`
-  - smoke-check истории: файл истории содержит `I2CH` magic и не содержит plaintext текста сообщения
+- `python3 -m unittest tests.test_protocol_framing_vnext tests.test_sam_input_validation tests.test_asyncio_regression tests.test_chat_history tests.test_history_ui_guards tests.test_audit_remediation -v`
+  - Результат: `OK (86 tests)`
+- Отдельный smoke-check зашифрованной истории:
+  - файл истории имеет magic `I2CH`
+  - plaintext сообщения отсутствует в сохранённом файле
 
 ## Сводка модели угроз
 
 Рассмотренные нарушители:
 - злонамеренный удалённый peer в I2P
-- активный манипулятор транспортного пути
+- активный манипулятор сетевого пути
 - локальный непривилегированный процесс на том же хосте
-- supply-chain/distribution атакующий
+- атакующий на цепочку поставки или дистрибуцию релиза
 
-Хорошо закрытые классы:
-- tampering/replay сообщений
-- plaintext downgrade после handshake
-- desync-атаки сверх ограниченного `resync_limit`
+Хорошо закрытые классы угроз:
+- tampering после handshake
+- replay/reorder внутри framed-канала
+- plaintext downgrade после установления защищённого канала
+- выход за пределы каталога профилей
 
 Остаточные классы:
-- риск TOFU первого контакта (особенно в transient `default` профиле)
-- локальные допущения доверия вокруг SAM и local BlindBox режимов
-- аутентичность релиза, завязанная на ручной verify workflow
+- TOFU-риск первого контакта по дизайну
+- локальные допущения доверия вокруг local BlindBox режимов
+- аутентичность релиза, завязанная на дисциплину сборщика и пользователя
 
-## Findings (по убыванию критичности)
+## Findings
 
-### [MEDIUM] A-01: Завершение передачи файла (`E`) без строгой финальной проверки размера
+### [MEDIUM] A-01: Для inline image нет строгой финальной проверки равенства размера
 
 Затронуто:
-- `i2p_chat_core.py` -> `receive_loop`, ветка `msg_type == "E"`
+- `i2p_chat_core.py` -> `receive_loop`, ветка `msg_type == "G"`
 
 Суть:
-- На маркере конца файла `E` текущая логика завершает приём и шлёт success/ACK без явной проверки `incoming_info.received == incoming_info.size`.
-- Ветвь `msg_type == "D"` имеет chunk-bound checks, но строгого финального gate пока нет.
+- Для обычных файлов теперь есть строгая проверка `received_size == expected_size` перед `FILE_ACK`.
+- Для inline image аналогичное финальное правило не применяется. На `__IMG_END__` код проверяет только `MAX_IMAGE_SIZE`, формат изображения и затем отправляет success с `received=expected_size` и `IMG_ACK`.
+- Поэтому отправитель может завершить передачу раньше, а при обрезанном, но всё ещё декодируемом изображении пройти по успешному пути.
 
 Влияние:
-- Злонамеренный аутентифицированный peer (или buggy sender) может завершить поток раньше и добиться принятия усечённого файла как полного.
+- Злонамеренный аутентифицированный peer может добиться принятия усечённого inline image как корректно завершённого.
 
 Рекомендации:
-1. В ветке `E` требовать строгого равенства `received == declared size` до success/ACK.
-2. При mismatch: emit error, удалить partial file, не отправлять success ACK.
+1. Перед сохранением и ACK требовать `len(self.inline_image_buffer) == expected_size`.
+2. При mismatch удалять буфер, эмитить ошибку/failed event и не отправлять `IMG_ACK`.
+3. Добавить regression-тест по аналогии с `test_file_end_without_full_payload_is_rejected`.
 
 ---
 
-### [MEDIUM] A-02: Разрыв доверия между сессиями для transient `default` профиля
+### [MEDIUM] A-02: Подпись релизов существует, но не является обязательной по умолчанию
 
 Затронуто:
-- `i2p_chat_core.py` -> `_ensure_local_signing_key`, `_load_trust_store`, `_save_trust_store`
+- `build-linux.sh`
+- `build-macos.sh`
+- `build-windows.ps1`
+- `.github/workflows/security-audit.yml`
 
 Суть:
-- Для `profile == "default"` signing seed эфемерный, trust-store pinning не персистится.
-- Это ожидаемое продуктовое поведение, но оно ослабляет межсессионную continuity доверия.
+- Скрипты сборки по-прежнему могут выпустить неподписанный артефакт, если `gpg` отсутствует или включён `I2PCHAT_SKIP_GPG_SIGN=1`.
+- CI-проверка release policy лишь убеждается, что в скриптах присутствуют signing-related токены, но не гарантирует, что официальный релиз всегда подписан, platform-signed или notarized.
 
 Влияние:
-- Риск TOFU first-contact фактически повторяется на каждом запуске transient-профиля.
+- Безопасность рантайм-протокола не страдает, но аутентичность дистрибутива всё ещё зависит от ручной дисциплины сборщика и проверки пользователем.
 
 Рекомендации:
-1. Оставить поведение transient-режима, но явно подсвечивать trade-off в UI/документации.
-2. Для пользователей с требованиями к устойчивому доверию рекомендовать именованные профили.
+1. Сделать detached-signing обязательным в официальной release automation.
+2. Добавить platform-native signing/notarization там, где это применимо.
+3. Опубликовать строгую процедуру верификации для пользователей и релиз-инженеров.
 
 ---
 
-### [MEDIUM] A-03: В release-цепочке нет принудительной platform-native trust-интеграции
+### [LOW] A-03: Имя history-файла использует усечённый 64-битный hash peer-адреса
 
 Затронуто:
-- `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`
-- release-policy проверки в `.github/workflows/security-audit.yml`
+- `chat_history.py` -> `_safe_peer_id`, `_history_path`
 
 Суть:
-- Checksums и detached signatures есть, но нет enforced platform-native signing/notarization в automation.
+- Имя файла истории строится по первым 16 hex-символам SHA-256 от нормализованного peer-адреса.
+- На практике этого почти всегда достаточно, но это всё равно усечённый 64-битный идентификатор.
 
 Влияние:
-- Качество верификации релизов зависит от ручной дисциплины пользователя; остаётся операционный риск для массовой дистрибуции.
+- Коллизия маловероятна, но теоретически два разных peer могут попасть в один и тот же history-файл, что приведёт к смешению или перезаписи локальной истории.
 
 Рекомендации:
-1. Добавить platform-native signing/notarization workflows.
-2. Добавить provenance attestations для release-артефактов.
-3. Опубликовать строгую user-facing политику верификации.
+1. Использовать более длинный идентификатор, лучше полный SHA-256 hex или более длинный префикс.
 
 ---
 
-### [LOW] A-04: Семантика `legacy_compat` может путать операторов
+### [LOW] A-04: При загрузке истории не сверяется поле `peer` внутри расшифрованного JSON
 
 Затронуто:
-- `i2p_chat_core.py` (`ProtocolCodec(..., allow_legacy=False)` путь)
-- env/UI-поверхность в `main_qt.py`
+- `chat_history.py` -> `load_history`, `_json_to_entries`
 
 Суть:
-- Ожидание от флага и фактическое поведение кодека могут расходиться, что создаёт риск operator confusion.
+- Ключ шифрования корректно выводится из запрошенного peer-адреса.
+- Но после расшифровки поле `peer` из JSON читается и затем игнорируется.
 
-Рекомендация:
-1. Либо корректно связать поведение end-to-end, либо удалить/переименовать флаг.
-
----
-
-### [LOW] A-05: Insecure local BlindBox режим всё ещё доступен по явному override
-
-Затронуто:
-- `i2p_chat_core.py` (`I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL`, direct/local policy)
-- `blindbox_local_replica.py`
-
-Суть:
-- Ослабленный локальный режим может быть намеренно включён.
+Влияние:
+- Это релевантно только для локального атакующего, который уже умеет подменять profile-файлы и работает в том же ключевом контексте, но с точки зрения defense in depth это ослабляет локальную целостность истории.
 
 Рекомендации:
-1. Сохранять явные warning-сигналы в telemetry/UI.
-2. Для hardened deployment использовать строгую политику (`I2PCHAT_BLINDBOX_REQUIRE_SAM=1` и tokenized local access).
+1. После decrypt сравнивать сохранённый `peer` с нормализованным ожидаемым peer.
+2. При несовпадении отклонять файл.
 
 ---
 
-### [LOW] A-06: Артефакт secret-scan и checksum берутся из одного trust-источника
+### [LOW] A-05: GUI молча проглатывает ошибки сохранения истории
 
 Затронуто:
-- `.github/workflows/secret-scan.yml`
+- `main_qt.py` -> `_save_history_if_needed`
 
 Суть:
-- Архив инструмента и его checksum скачиваются из одного upstream.
+- Вызов `save_history(...)` обёрнут в `try/except Exception: pass`.
 
-Рекомендация:
-1. Где возможно, использовать detached signatures или независимый provenance trust root.
+Влияние:
+- При ошибках диска, прав или неожиданных сбоях пользователь может думать, что история сохраняется, хотя запись фактически не происходит.
+- Это в первую очередь проблема целостности/эксплуатационной надёжности, но она влияет и на доверие к локальной security-функции.
+
+Рекомендации:
+1. Логировать ошибку и показывать системное сообщение в UI.
+2. При повторных сбоях можно временно отключать autosave до переподключения или повторного включения истории.
+
+---
+
+### [LOW] A-06: Основной CI test gate не запускает все security-relevant тесты
+
+Затронуто:
+- `.github/workflows/test-gate.yml`
+
+Суть:
+- Главный gate запускает ограниченный набор тестов, но не включает `tests.test_chat_history`, `tests.test_history_ui_guards` и `tests.test_audit_remediation`.
+
+Влияние:
+- Регрессии в зашифрованной истории, UI guard-логике или audit-policy проверках могут пройти основной gate, если их не поймает другой workflow.
+
+Рекомендации:
+1. Добавить эти suite в `test-gate.yml` или завести более широкий обязательный security regression job.
 
 ## Подтверждённые сильные стороны
 
-- Signed handshake и continuity-модель peer-ключа для именованных профилей:
-  - `i2p_chat_core.py` (`_handle_handshake_message`, `_pin_or_verify_peer_signing_key`)
-- Сильные framing/integrity контроли:
-  - `protocol_codec.py` (vNext framing + bounded resync)
-  - `crypto.py` (context-bound HMAC: `seq`, `flags`, `msg_id`)
-- Anti-downgrade и replay/reorder защита:
-  - strict encrypted-frame expectations после handshake
-  - sequence monotonicity checks
-- Path confinement и безопасная персистентность:
-  - profile-scoped path checks + atomic writes в `blindbox_state.py`
-- Supply-chain hygiene:
-  - hash-pinned install paths в CI
-  - pinned action refs, выделенные test/audit workflow
+- Handshake-аутентификация и разделение session keys сделаны хорошо:
+  - подписанные INIT/RESP payloads привязывают peer-адреса и эфемерные ключи
+  - session subkeys выводятся через HKDF с разными контекстами
+- Framing и контроль целостности сильные:
+  - строгая монотонность sequence numbers
+  - HMAC привязан к `seq`, `flags`, `msg_id`
+  - plaintext после handshake считается downgrade и рвёт сессию
+- Ранее найденный баг окончания обычной передачи файла уже исправлен:
+  - `E` теперь отклоняется, если число полученных байт не совпадает с заявленным
+  - это покрыто тестом `test_file_end_without_full_payload_is_rejected`
+- Обработка путей профиля укреплена:
+  - profile-scoped paths остаются внутри `profiles` и режут symlink escape
+- Зашифрованная история чата спроектирована корректно для хранения на диске:
+  - отдельные файлы по peer
+  - HKDF-derived key hierarchy от profile identity
+  - шифрование через NaCl SecretBox
+  - атомарная замена файла
+- Последние hardening-изменения действительно присутствуют:
+  - warning для transient profile
+  - корректная wiring для `legacy_compat`
+  - warning path для insecure local BlindBox
+  - pinned checksum архива Gitleaks в `secret-scan.yml`
 
-## Оценка безопасности новой истории чата
+## Оценка новой истории чата
 
-Статус: прямых криптографических или логических пробоев не подтверждено.
+Статус: прямого криптографического пробоя не найдено.
 
 Проверенные свойства:
-- изоляция файлов истории по peer (`<profile>.history.<peer_hash>.enc`)
-- отсутствие plaintext payload в сохранённом history-файле
-- корректный fail на wrong key/corrupt file
-- строгие guard-условия ON/OFF в capture-пути
-- корректный save/reset lifecycle при disconnect/close (покрыто тестами)
+- history-файлы не сохраняются в plaintext
+- повреждённые или расшифровываемые неверным ключом файлы fail-closed
+- история разделяется по peer на диске
+- захват сообщений obeys UI toggle
+- disconnect/close корректно сбрасывает или flush-ит состояние
 
-Остаточное замечание:
-- как и другие локальные данные, защита зависит от модели компрометации хоста.
+Остаточная заметка:
+- Как и любой локально зашифрованный state, завязанный на profile identity, конфиденциальность зависит от модели компрометации самой машины.
 
-## Пробелы и рекомендации по тестам
+## Операционные остаточные риски
 
-Сильное текущее покрытие есть для:
-- vNext framing integrity и downgrade-поведения
-- SAM input validation
-- async-regression сценариев handshake/BlindBox
-- encrypted history и UI-guard семантики
-
-Рекомендуемые дополнительные тесты:
-1. явный regression-тест строгой проверки размера в `msg_type == "E"`
-2. интеграционный тест на end-of-file mismatch (cleanup + no ACK)
-3. расширенные проверки release policy в CI (artifact signing/notarization requirements)
+Это важные допущения, но не новые findings в рамках данного аудита:
+- `default` остаётся transient-профилем по дизайну, поэтому TOFU continuity не переживает перезапуски; сейчас это явно подсвечено в UI и runtime.
+- `legacy_compat` теперь корректно подключён и остаётся явным opt-in; включать его стоит только для совместимости.
+- Insecure local BlindBox режим существует только как явный override и теперь явно предупреждается; режим рискованный, но уже не скрытый.
+- Для persistent-профилей могут использоваться built-in BlindBox replicas из релиза, если оператор это не переопределил; в privacy-sensitive установках лучше задавать свои реплики.
 
 ## Приоритет remediation
 
-1. **P1:** внедрить строгую финальную проверку целостности файла в `msg_type == "E"` (A-01).
-2. **P1:** усилить release trust chain (platform-native signing/notarization + provenance) (A-03).
-3. **P2:** привести `legacy_compat` к однозначной семантике (A-04).
-4. **P2:** продолжить hardening-документацию по transient trust и local BlindBox override (A-02, A-05).
-5. **P3:** усилить независимость trust-источника для secret-scan tooling verify (A-06).
+1. **P1:** добавить строгую финальную проверку размера для inline image и соответствующий regression-тест.
+2. **P1:** сделать подписанные release artifacts обязательными в официальной release automation.
+3. **P2:** усилить локальную целостность history (`peer` verification и более длинный peer identifier).
+4. **P2:** сделать ошибки сохранения истории видимыми для пользователя.
+5. **P3:** расширить основной CI security regression gate.
 
 ## Заключение
 
-В текущем состоянии репозитория подтверждённых Critical/High уязвимостей не выявлено. Протокольные и криптографические контроли в целом сильные; основной практический фокус — один edge-case целостности file-transfer и hardening release/distribution trust.
+Подтверждённых Critical или High уязвимостей в текущем коде не выявлено. Secure-channel дизайн, handshake-аутентификация и локальная зашифрованная история находятся в хорошем состоянии. Самая важная оставшаяся code-level проблема — финальная проверка целостности inline image; остальное относится в основном к release policy и defense in depth.

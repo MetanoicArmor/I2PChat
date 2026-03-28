@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import secrets
 import struct
@@ -11,6 +13,8 @@ from chat_history import (
     HISTORY_MAGIC,
     HISTORY_VERSION,
     HistoryEntry,
+    _derive_file_key,
+    _safe_peer_id,
     delete_history,
     derive_history_key,
     load_history,
@@ -153,6 +157,11 @@ class ChatHistoryDeleteTests(unittest.TestCase):
 
 @unittest.skipUnless(crypto.NACL_AVAILABLE, "PyNaCl required")
 class ChatHistoryPeerIsolationTests(unittest.TestCase):
+    def test_safe_peer_id_uses_full_sha256_digest(self) -> None:
+        expected = hashlib.sha256(PEER.encode("utf-8")).hexdigest()
+        self.assertEqual(_safe_peer_id(PEER), expected)
+        self.assertEqual(len(_safe_peer_id(PEER)), 64)
+
     def test_different_peers_have_separate_histories(self) -> None:
         peer_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
         peer_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
@@ -197,6 +206,40 @@ class ChatHistoryPeerIsolationTests(unittest.TestCase):
 
             loaded = load_history(td, "alice", PEER, IDENTITY_KEY)
             self.assertEqual([x.text for x in loaded], ["new"])
+
+    def test_peer_metadata_mismatch_returns_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            save_history(
+                td,
+                "alice",
+                PEER,
+                [HistoryEntry(kind="peer", text="hello", ts="2026-01-01T00:00:03Z")],
+                IDENTITY_KEY,
+            )
+            path = os.path.join(td, os.listdir(td)[0])
+            with open(path, "rb") as f:
+                raw = f.read()
+
+            salt = raw[6:38]
+            ciphertext = raw[38:]
+            profile_key = derive_history_key(IDENTITY_KEY)
+            file_key = _derive_file_key(profile_key, salt, PEER)
+            plaintext = crypto.decrypt_message(file_key, ciphertext)
+            self.assertIsNotNone(plaintext)
+
+            obj = json.loads(plaintext.decode("utf-8"))
+            obj["peer"] = "evil-peer.b32.i2p"
+            tampered_plaintext = json.dumps(
+                obj,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            tampered_ciphertext = crypto.encrypt_message(file_key, tampered_plaintext)
+            with open(path, "wb") as f:
+                f.write(raw[:38] + tampered_ciphertext)
+
+            loaded = load_history(td, "alice", PEER, IDENTITY_KEY)
+            self.assertEqual(loaded, [])
 
 
 @unittest.skipUnless(crypto.NACL_AVAILABLE, "PyNaCl required")

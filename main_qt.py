@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import secrets
 import subprocess
@@ -44,6 +45,7 @@ def _read_version() -> str:
 
 APP_VERSION = _read_version()
 BUNDLED_NOTIFY_SOUND_REL = "assets/sounds/notify.wav"
+logger = logging.getLogger("i2pchat.gui")
 
 
 def _resolve_local_asset(filename: str) -> Optional[str]:
@@ -2807,6 +2809,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._history_loaded_for_peer: Optional[str] = None
         self._history_entries: list[HistoryEntry] = []
         self._history_dirty = False
+        self._history_save_error_reported = False
         self._history_flush_timer = QtCore.QTimer(self)
         self._history_flush_timer.setInterval(60_000)
         self._history_flush_timer.timeout.connect(self._flush_history)
@@ -4056,8 +4059,14 @@ class ChatWindow(QtWidgets.QMainWindow):
                     identity_key,
                     max_messages=load_history_max_messages(),
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to save chat history: %s", e, exc_info=True)
+                if not self._history_save_error_reported:
+                    self.handle_system(f"Warning: failed to save chat history: {e}")
+                    self._history_save_error_reported = True
+                # Keep dirty state to retry on next flush/disconnect.
+                return
+            self._history_save_error_reported = False
         self._history_dirty = False
 
     @QtCore.pyqtSlot()

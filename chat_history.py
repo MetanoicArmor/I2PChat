@@ -42,6 +42,10 @@ SALT_SIZE = 32
 DEFAULT_MAX_MESSAGES = 1000
 
 
+def _normalize_peer_addr(peer_addr: str) -> str:
+    return peer_addr.strip().lower()
+
+
 @dataclass
 class HistoryEntry:
     kind: str
@@ -50,9 +54,9 @@ class HistoryEntry:
 
 
 def _safe_peer_id(peer_addr: str) -> str:
-    """SHA-256 of the normalised peer address, truncated to 16 hex chars."""
-    normalized = peer_addr.strip().lower()
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    """SHA-256 of the normalised peer address (full hex digest)."""
+    normalized = _normalize_peer_addr(peer_addr)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _history_path(profiles_dir: str, profile: str, peer_addr: str) -> str:
@@ -67,7 +71,7 @@ def derive_history_key(identity_key_bytes: bytes) -> bytes:
 
 
 def _derive_file_key(profile_key: bytes, salt: bytes, peer_addr: str) -> bytes:
-    peer_id = peer_addr.strip().lower().encode("utf-8")
+    peer_id = _normalize_peer_addr(peer_addr).encode("utf-8")
     prk = crypto.hkdf_extract(salt, profile_key)
     return crypto.hkdf_expand(prk, b"I2PCHAT-HISTORY|file-key|" + peer_id, 32)
 
@@ -193,6 +197,15 @@ def load_history(
 
     try:
         _peer, entries, _truncated = _json_to_entries(plaintext)
+        expected_peer = _normalize_peer_addr(peer_addr)
+        if _normalize_peer_addr(_peer) != expected_peer:
+            logger.warning(
+                "Peer mismatch in history file %s: expected %s, got %s",
+                path,
+                expected_peer,
+                _peer,
+            )
+            return []
         return entries
     except Exception as e:
         logger.warning("Failed to parse history JSON from %s: %s", path, e)
