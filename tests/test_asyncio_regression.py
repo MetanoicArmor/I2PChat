@@ -94,6 +94,12 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             I2PChatCore(profile="../../escape")
 
+    def test_legacy_compat_controls_codec_legacy_mode(self) -> None:
+        strict_core = I2PChatCore(profile="alice", legacy_compat=False)
+        legacy_core = I2PChatCore(profile="alice", legacy_compat=True)
+        self.assertFalse(strict_core._codec.allow_legacy)  # noqa: SLF001
+        self.assertTrue(legacy_core._codec.allow_legacy)  # noqa: SLF001
+
     def test_profile_paths_stay_within_profiles_dir(self) -> None:
         import i2p_chat_core as core_module
 

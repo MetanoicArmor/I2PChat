@@ -2658,7 +2658,8 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         layout.addSpacing(8)
         
         hint = QtWidgets.QLabel(
-            "Use <b>default</b> for a one-time session, or enter a name to save your identity."
+            "Use <b>default</b> for a one-time session, or enter a name to save your identity.<br>"
+            "<b>Security note:</b> in <b>default</b> mode, TOFU trust is not persisted between app restarts."
         )
         self.hint = hint
         hint.setWordWrap(True)
@@ -2747,6 +2748,24 @@ class ProfileSelectDialog(QtWidgets.QDialog):
             self.accept()
             return
         super().keyPressEvent(event)
+
+    def accept(self) -> None:  # type: ignore[override]
+        selected = self.combo.currentText().strip() if self.combo.currentText() else ""
+        if selected == "default":
+            confirm = QtWidgets.QMessageBox.question(
+                self,
+                "Transient profile warning",
+                "You selected the transient profile 'default'.\n\n"
+                "TOFU trust pins are not persisted between app restarts in this mode.\n"
+                "For persistent trust continuity, use a named profile.\n\n"
+                "Continue with 'default' anyway?",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.Cancel,
+                QtWidgets.QMessageBox.StandardButton.Cancel,
+            )
+            if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+        super().accept()
     
     def selected_profile(self) -> Optional[str]:
         text = self.combo.currentText().strip() if self.combo.currentText() else ""

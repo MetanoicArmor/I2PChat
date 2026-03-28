@@ -642,6 +642,45 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         finally:
             self._restore_crypto_identity(patched_module, original_crypto)
 
+    async def test_file_end_without_full_payload_is_rejected(self) -> None:
+        import i2p_chat_core as core_module
+
+        errors: list[str] = []
+        original_get_downloads_dir = core_module.get_downloads_dir
+        patched_module, original_crypto = self._patch_crypto_identity()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                core_module.get_downloads_dir = lambda: tmp_dir  # type: ignore[assignment]
+                try:
+                    core = I2PChatCore(
+                        on_error=errors.append,
+                        on_file_offer=lambda _name, _size: True,
+                    )
+                    core.handshake_complete = True
+                    core.use_encryption = True
+                    core.shared_key = b"x" * 32
+                    core._reset_crypto_state = lambda: None  # type: ignore[assignment]
+                    payload = (
+                        core.frame_message("F", "safe.bin|4")
+                        + core.frame_message("D", base64.b64encode(b"ab").decode("ascii"))
+                        + core.frame_message("E", "done")
+                    )
+                    writer = _Writer()
+                    conn = (_Reader(payload), writer)
+                    core.conn = conn
+
+                    await core.receive_loop(conn)
+                finally:
+                    core_module.get_downloads_dir = original_get_downloads_dir  # type: ignore[assignment]
+
+                self.assertTrue(any("File transfer incomplete" in e for e in errors))
+                self.assertIsNone(core.incoming_file)
+                self.assertIsNone(core.incoming_info)
+                self.assertEqual(os.listdir(tmp_dir), [])
+                self.assertNotIn(b"FILE_ACK", bytes(writer.buf))
+        finally:
+            self._restore_crypto_identity(patched_module, original_crypto)
+
     async def test_incoming_file_name_collision_is_renamed(self) -> None:
         import i2p_chat_core as core_module
 

@@ -18,6 +18,7 @@ How to use it:
 
 - **`default`**:
   - leave this value if you want a one‑time (TRANSIENT) profile without locking to a single peer;
+  - security note: TOFU trust pins are not persisted between app restarts in `default` mode;
 - **pick from the list**:
   - open the drop‑down on the right and select an existing profile (a `.dat` file from the profiles directory);
 - **enter a new name**:

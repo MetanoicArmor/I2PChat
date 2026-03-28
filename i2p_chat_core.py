@@ -690,9 +690,8 @@ class I2PChatCore:
         self._codec = ProtocolCodec(
             allowed_types={"U", "S", "P", "O", "F", "D", "E", "I", "H", "G"},
             max_frame_body=self.MAX_FRAME_BODY,
-            # Keep strict vNext by default; legacy mode should be explicit
-            # and only re-enabled with full negotiation support.
-            allow_legacy=False,
+            # Legacy framing support is explicit and opt-in via `legacy_compat`.
+            allow_legacy=self.legacy_compat,
         )
         blindbox_enabled_raw = os.environ.get("I2PCHAT_BLINDBOX_ENABLED", "").strip().lower()
         self._blindbox_enabled_source = "default"
@@ -1805,6 +1804,20 @@ class I2PChatCore:
 
         key_file = self._profile_path()
         is_persistent = self.profile != "default"
+        if not is_persistent:
+            self._emit_system(
+                "Security note: TRANSIENT profile does not persist TOFU trust pins between restarts."
+            )
+            self._emit_system(
+                "Use a named profile for persistent peer-key trust continuity."
+            )
+        if self.legacy_compat:
+            self._emit_system(
+                "Warning: legacy framing compatibility is enabled (I2PCHAT_LEGACY_COMPAT=1)."
+            )
+            self._emit_system(
+                "Use this only for interoperability troubleshooting; vNext-only mode is safer."
+            )
 
         dest: Optional[i2plib.Destination] = None
 
@@ -1859,6 +1872,15 @@ class I2PChatCore:
         self._load_trust_store()
         self._ensure_local_signing_key()
         self._load_blindbox_state()
+        telemetry = self.get_blindbox_telemetry()
+        if bool(telemetry.get("insecure_local_mode")):
+            self._emit_system(
+                "Warning: BlindBox insecure local mode is active "
+                "(I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1)."
+            )
+            self._emit_system(
+                "Set I2PCHAT_BLINDBOX_LOCAL_TOKEN and disable insecure local mode for stronger local security."
+            )
 
         self._emit_system("Starting I2P session, please wait…")
 
@@ -3866,15 +3888,42 @@ class I2PChatCore:
 
                 elif msg_type == "E":
                     if self.incoming_file and self.incoming_info:
-                        self.incoming_file.close()
                         ack_filename = self.incoming_info.filename
+                        expected_size = self.incoming_info.size
+                        received_size = self.incoming_info.received
+                        try:
+                            self.incoming_file.close()
+                        except Exception:
+                            pass
+                        if received_size != expected_size:
+                            self._emit_error(
+                                f"File transfer incomplete: expected {expected_size} bytes, got {received_size}"
+                            )
+                            self._emit_file_event(
+                                FileTransferInfo(
+                                    filename=ack_filename,
+                                    size=expected_size,
+                                    received=-1,
+                                    is_sending=False,
+                                )
+                            )
+                            try:
+                                os.remove(ack_filename)
+                            except OSError:
+                                pass
+                            self.incoming_file = None
+                            self.incoming_info = None
+                            self._incoming_file_msg_id = None
+                            continue
                         ack_msg_id = self._incoming_file_msg_id or 0
-                        self._emit_file_event(FileTransferInfo(
-                            filename=ack_filename,
-                            size=self.incoming_info.size,
-                            received=self.incoming_info.size,
-                            is_sending=False,
-                        ))
+                        self._emit_file_event(
+                            FileTransferInfo(
+                                filename=ack_filename,
+                                size=expected_size,
+                                received=expected_size,
+                                is_sending=False,
+                            )
+                        )
                         self.incoming_file = None
                         self.incoming_info = None
                         # Подтверждение получения файла (галочки у отправителя); отправляем basename, чтобы совпало с file_name у отправителя
