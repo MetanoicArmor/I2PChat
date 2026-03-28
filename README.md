@@ -22,6 +22,8 @@
 
 [![English manual](https://img.shields.io/badge/📖%20Manual-EN-blue.svg)](docs/MANUAL_EN.md)
 [![Русский мануал](https://img.shields.io/badge/📖%20Мануал-RU-red.svg)](docs/MANUAL_RU.md)
+[![Roadmap](https://img.shields.io/badge/🗺️%20Roadmap-0.6.5→1.0.0-teal.svg)](ROADMAP.md)
+[![Issue backlog](https://img.shields.io/badge/📝%20Issue%20Backlog-planned-blueviolet.svg)](ISSUE_BACKLOG.md)
 
 ---
 
