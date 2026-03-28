@@ -46,6 +46,13 @@
 
 Patch release for `v0.6.x`. No protocol/frame changes for normal online chat exchange.
 
+### Additional fixes included in the `v0.6.4` tag (on `main`)
+
+- Security / audit follow-ups: strict file-transfer end (`E`) size check, trust and legacy/BlindBox warnings, `legacy_compat` wired to the codec, pinned `gitleaks` archive SHA256 in CI, wider default test gate (`chat_history`, UI guards, audit policy), refreshed `AUDIT_EN.md` / `AUDIT_RU.md`.
+- History hardening: full SHA-256 peer id in filenames, validate embedded `peer` after decrypt, surface save failures in the UI, **load/delete compatibility for legacy short-hash filenames** so existing history is not “lost” after upgrade.
+- Inline images: strict final size check before `IMG_ACK` (mirrors file transfers).
+- UX: BlindBox root rotation system line without `(epoch=…)` suffix.
+
 ---
 
 ## RU
@@ -93,3 +100,10 @@ Patch release for `v0.6.x`. No protocol/frame changes for normal online chat exc
 ### Совместимость
 
 Patch-релиз для ветки `v0.6.x`, без изменений форматов обычного online chat-протокола.
+
+### Дополнительные исправления в теге `v0.6.4` (на `main`)
+
+- Security / аудит: строгая проверка конца передачи файла (`E`), предупреждения по trust / legacy / BlindBox, корректная привязка `legacy_compat` к codec, зафиксированный SHA256 архива `gitleaks` в CI, расширенный test gate, обновлённые `AUDIT_EN.md` / `AUDIT_RU.md`.
+- История: полный SHA-256 peer id в имени файла, проверка поля `peer` после decrypt, показ ошибок сохранения в UI, **совместимость со старыми именами файлов (короткий hash)** — старая история снова загружается.
+- Inline-изображения: строгая финальная проверка размера до `IMG_ACK`.
+- UX: системное сообщение о ротации BlindBox root без суффикса `(epoch=…)`.
