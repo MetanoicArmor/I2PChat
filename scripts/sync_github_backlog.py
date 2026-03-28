@@ -529,6 +529,7 @@ def ensure_issues(milestones: dict[str, int]) -> None:
 
 
 def main() -> int:
+    print(f"sync GitHub backlog → {REPOSITORY}")
     try:
         ensure_labels()
         milestones = ensure_milestones()
@@ -537,6 +538,17 @@ def main() -> int:
         body = exc.read().decode("utf-8", errors="replace")
         print(f"GitHub API error: HTTP {exc.code}", file=sys.stderr)
         print(body, file=sys.stderr)
+        if exc.code == 403 and "not accessible by personal access token" in body:
+            print(
+                "\nThis usually means the token can read the repo but cannot write Issues "
+                "(labels, milestones, issues).\n"
+                "Fine-grained PAT: for this repository set Issues → Read and write; "
+                "ensure the token explicitly includes this repo (or all repos).\n"
+                "Classic PAT: enable the repo scope.\n"
+                "You must be a collaborator with permission to manage issues on the "
+                "target repository.\n",
+                file=sys.stderr,
+            )
         return 1
     return 0
 

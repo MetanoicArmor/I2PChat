@@ -103,11 +103,17 @@ Usually means the token does not have sufficient repository permissions for
 issues/milestones, or the token belongs to an integration with restricted
 write scope.
 
+If the JSON says **`Resource not accessible by personal access token`** while
+**listing** labels works but **creating** a label fails, the PAT almost always
+lacks **Issues: Read and write** (fine-grained) or **`repo`** scope (classic).
+
 Check:
 
 - token type and scopes;
 - whether the repository is the one intended by `GITHUB_REPOSITORY`;
-- whether issues are enabled in repository settings.
+- whether issues are enabled in repository settings;
+- for fine-grained PAT: **Issues → Read and write** and the repo is included in
+  **Repository access**.
 
 #### `404 Not Found`
 
