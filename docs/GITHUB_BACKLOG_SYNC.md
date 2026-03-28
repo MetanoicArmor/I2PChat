@@ -1,7 +1,11 @@
 ## GitHub backlog sync
 
-This repository includes `scripts/sync_github_backlog.py` to create labels,
-milestones, and issues from the roadmap/backlog planning docs.
+This repository includes:
+
+- `scripts/sync_github_backlog.py` - the Python implementation that talks to the GitHub API
+- `scripts/sync_backlog.sh` - a small shell wrapper for one-command local use
+
+They create labels, milestones, and issues from the roadmap/backlog planning docs.
 
 ### What the script creates
 
@@ -49,6 +53,14 @@ Before running the script, verify:
 
 ### Run against the default repository
 
+Recommended wrapper:
+
+```bash
+GITHUB_TOKEN=ghp_your_token_here ./scripts/sync_backlog.sh
+```
+
+Direct Python invocation:
+
 ```bash
 GITHUB_TOKEN=ghp_your_token_here python3 scripts/sync_github_backlog.py
 ```
@@ -60,6 +72,14 @@ MetanoicArmor/I2PChat
 ```
 
 ### Run against another repository
+
+Recommended wrapper:
+
+```bash
+GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=ghp_your_token_here ./scripts/sync_backlog.sh
+```
+
+Direct Python invocation:
 
 ```bash
 GITHUB_REPOSITORY=owner/repo GITHUB_TOKEN=ghp_your_token_here python3 scripts/sync_github_backlog.py
