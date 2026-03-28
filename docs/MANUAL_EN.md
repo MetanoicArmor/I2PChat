@@ -76,7 +76,10 @@ The actions bar is located **at the bottom of the window**, below the message in
   - **Send picture**;
   - **Send file**;
   - **Lock to peer**;
+  - **Forget pinned peer key**;
   - **Copy my address**.
+  - **Chat history: ON/OFF**;
+  - **Clear history**.
 
 All controls in the bar have the same height and are laid out in a single row.
 
@@ -84,13 +87,16 @@ All controls in the bar have the same height and are laid out in a single row.
 
 Clicking the **`⋯`** button opens a popup menu with profile and connection actions:
 
-<img src="../screenshots/2.png" alt="More actions menu (⋯): Load profile, Send picture/file, Lock to peer, Copy my address" width="320" />
+<img src="../screenshots/2.png" alt="More actions menu (⋯): profile actions, sending, peer lock, chat history ON/OFF and clear" width="320" />
 
 - **Load profile (.dat)** — open a file dialog to load a profile from a `.dat` file.
 - **Send picture** — send an image file to the connected peer.
 - **Send file** — send any file to the connected peer.
 - **Lock to peer** — bind the current profile to the connected peer (see section 4.7).
+- **Forget pinned peer key** — remove the saved TOFU signing-key pin for the current peer (see section 4.10).
 - **Copy my address** — copy your I2P destination to the clipboard.
+- **Chat history: ON/OFF** — enable/disable local history persistence (see section 4.11).
+- **Clear history** — delete the local history file for the current peer.
 
 #### 4.2. Peer address field
 
@@ -295,6 +301,52 @@ Using this button you can:
 - Runtime state appears in the **status row** (`Send:*` and BlindBox fields); hover for hints if something is misconfigured.
 - **Compatibility:** peers on older builds may not support BlindBox traffic; live chat and file/image transfer work as before.
 
+#### 4.10. `Forget pinned peer key` action (`⋯` menu)
+
+The **`Forget pinned peer key`** action removes the stored TOFU signing-key pin for the current peer.
+
+Use this when:
+
+- your peer legitimately rotated their signing key;
+- you want to reset trust and run TOFU for that peer again.
+
+What happens:
+
+1. The GUI asks for confirmation.
+2. The peer entry is removed from the trust store (`<profile>.trust.json`).
+3. On the next secure connect to that peer, TOFU confirmation is shown again.
+
+#### 4.11. Chat history (locally encrypted)
+
+Chat history is stored **locally per peer** in separate encrypted files.
+
+- History files are created in the profiles folder with this name pattern:
+  - `<profile>.history.<peer_hash>.enc`
+- Encryption details:
+  - payload is encrypted with `NaCl SecretBox`;
+  - the profile history key is derived from the profile identity key via HKDF;
+  - each peer gets a separate file key (salt + peer-scoped context).
+- Writes are atomic (temp file + `fsync` + `replace`) to reduce corruption risk on crashes/power loss.
+
+Control from the `⋯` menu:
+
+- **Chat history: ON/OFF**:
+  - `ON` — new messages from the current secure session are collected and persisted locally;
+  - `OFF` — new messages are not captured and not written to history.
+- **Clear history**:
+  - removes the history file for the current peer.
+
+Runtime behavior:
+
+- history is loaded after a secure channel is established;
+- history is saved on disconnect and on window close;
+- periodic flush is also used when there are unsaved changes.
+
+Size limit:
+
+- by default, the latest `1000` messages per peer are stored;
+- you can override this in `ui_prefs.json` via `history_max_messages`.
+
 ### 5. System notifications and sound
 
 The GUI uses a system tray icon (`QSystemTrayIcon`) and, where supported,  
@@ -469,6 +521,7 @@ The I2PChat GUI provides:
 - an informative status row (Net/Link/Peer/Secure/ACKdrop);
 - a convenient bar for managing profiles and connections;
 - file and image sending;
+- local encrypted chat history with ON/OFF toggle;
 - system and sound notifications for incoming messages.
 
 For everyday use you typically only need to:

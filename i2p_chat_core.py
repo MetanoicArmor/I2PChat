@@ -1140,6 +1140,16 @@ class I2PChatCore:
         """Файл seed локального signing-key (fallback при недоступном keyring)."""
         return self._profile_scoped_path(f"{self.profile}.signing")
 
+    def get_identity_key_bytes(self) -> Optional[bytes]:
+        """Return raw bytes of the I2P identity private key, or None."""
+        if self.my_dest is not None and self.my_dest.private_key is not None:
+            return self.my_dest.private_key.data
+        return None
+
+    def get_profiles_dir(self) -> str:
+        """Public accessor for the profiles directory path."""
+        return get_profiles_dir()
+
     def _blindbox_peer_id(self) -> Optional[str]:
         peer = self._normalize_peer_addr(self.stored_peer or self.current_peer_addr or "")
         if not peer:

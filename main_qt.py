@@ -13,6 +13,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
 from blindbox_state import atomic_write_json
+from chat_history import HistoryEntry, delete_history, load_history, save_history
 from i2p_chat_core import (
     ChatMessage,
     FileTransferInfo,
@@ -818,6 +819,26 @@ def save_notify_sound(sound_path: Optional[str]) -> None:
     else:
         data.pop("notify_sound", None)
     _save_ui_prefs(data)
+
+
+def load_history_enabled() -> bool:
+    data = _load_ui_prefs()
+    val = data.get("history_enabled")
+    return val is not False
+
+
+def save_history_enabled(enabled: bool) -> None:
+    data = _load_ui_prefs()
+    data["history_enabled"] = enabled
+    _save_ui_prefs(data)
+
+
+def load_history_max_messages() -> int:
+    data = _load_ui_prefs()
+    val = data.get("history_max_messages")
+    if isinstance(val, int) and val > 0:
+        return val
+    return 1000
 
 
 @dataclass
@@ -2472,13 +2493,14 @@ class ActionsPopup(QtWidgets.QFrame):
         self.surface_layout.setContentsMargins(8, 8, 8, 8)
         self.surface_layout.setSpacing(4)
 
-    def add_action(self, text: str, callback: Callable[[], None], enabled: bool = True) -> None:
+    def add_action(self, text: str, callback: Callable[[], None], enabled: bool = True) -> QtWidgets.QPushButton:
         btn = QtWidgets.QPushButton(text, self.surface)
         btn.setObjectName("ActionsPopupItem")
         btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         btn.setEnabled(enabled)
         btn.clicked.connect(lambda: (self.hide(), callback()))
         self.surface_layout.addWidget(btn)
+        return btn
 
     def add_separator(self) -> None:
         sep = QtWidgets.QFrame(self.surface)
@@ -2763,6 +2785,13 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._more_actions_suppress_until_ms = 0
         self.more_actions_popup.closed.connect(self._on_more_actions_popup_closed)
 
+        self._history_loaded_for_peer: Optional[str] = None
+        self._history_entries: list[HistoryEntry] = []
+        self._history_dirty = False
+        self._history_flush_timer = QtCore.QTimer(self)
+        self._history_flush_timer.setInterval(60_000)
+        self._history_flush_timer.timeout.connect(self._flush_history)
+
         # диагностическая строка статуса
         self.status_label = QtWidgets.QLabel("Status: initializing", self)
         self.status_label.setObjectName("StatusLabel")
@@ -2952,6 +2981,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_actions_popup.add_action("Lock to peer", self.on_lock_peer_clicked)
         self.more_actions_popup.add_action("Forget pinned peer key", self.on_forget_pinned_peer_key_clicked)
         self.more_actions_popup.add_action("Copy my address", self.on_copy_my_addr_clicked)
+        self.more_actions_popup.add_separator()
+        self._history_enabled = load_history_enabled()
+        self._history_toggle_btn = self.more_actions_popup.add_action(
+            self._history_toggle_label(), self._on_toggle_history_clicked,
+        )
+        self.more_actions_popup.add_action("Clear history", self._on_clear_history_clicked)
         self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
         self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
 
@@ -3056,9 +3091,27 @@ class ChatWindow(QtWidgets.QMainWindow):
         else:
             sender = "SYSTEM"
 
+        if kind in ("me", "peer") and self._history_enabled:
+            ts_iso = msg.timestamp.isoformat()
+            self._history_entries.append(
+                HistoryEntry(kind=kind, text=text, ts=ts_iso)
+            )
+            max_messages = load_history_max_messages()
+            if len(self._history_entries) > max_messages:
+                self._history_entries = self._history_entries[-max_messages:]
+            self._history_dirty = True
+
+        if kind == "success" and "Secure channel" in text:
+            self._try_load_history()
+
+        if kind == "disconnect":
+            self._save_history_if_needed()
+            self._history_loaded_for_peer = None
+            self._history_entries = []
+            self._history_dirty = False
+            self._history_flush_timer.stop()
+
         self._append_item(ChatItem(kind=kind, timestamp=ts, sender=sender, text=text))
-        # Handshake-события приходят как system/success сообщения;
-        # обновляем статус сразу, чтобы Secure не "залипал" на off.
         self.refresh_status_label()
         self._refresh_connection_buttons()
 
@@ -3832,6 +3885,11 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_disconnect_clicked(self) -> None:
+        self._save_history_if_needed()
+        self._history_flush_timer.stop()
+        self._history_loaded_for_peer = None
+        self._history_entries = []
+        self._history_dirty = False
         asyncio.create_task(self.core.disconnect())
         QtCore.QTimer.singleShot(0, self._refresh_connection_buttons)
 
@@ -3908,6 +3966,123 @@ class ChatWindow(QtWidgets.QMainWindow):
         addr = self.core.my_dest.base32 + ".b32.i2p"
         QtWidgets.QApplication.clipboard().setText(addr)
         self.handle_system("My address copied to clipboard.")
+
+    def _current_history_peer(self) -> Optional[str]:
+        return (
+            self.core.current_peer_addr
+            or self.core.stored_peer
+            or self.addr_edit.text().strip()
+            or None
+        )
+
+    def _try_load_history(self) -> None:
+        if not self._history_enabled:
+            return
+        peer = self._current_history_peer()
+        if not peer or peer == self._history_loaded_for_peer:
+            return
+        identity_key = self.core.get_identity_key_bytes()
+        if not identity_key:
+            return
+        entries = load_history(
+            self.core.get_profiles_dir(), self.core.profile, peer, identity_key,
+        )
+        self._history_entries = list(entries)
+        self._history_dirty = False
+        if entries:
+            self._append_item(ChatItem(
+                kind="system", timestamp="", sender="",
+                text=f"--- {len(entries)} message(s) from history ---",
+            ))
+            for e in entries:
+                if e.kind == "me":
+                    sender = "Me"
+                elif e.kind == "peer":
+                    sender = self.profile if self.profile != "default" else "Peer"
+                else:
+                    continue
+                ts_display = ""
+                if e.ts:
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(e.ts.replace("Z", "+00:00"))
+                        ts_display = dt.strftime("%H:%M:%S")
+                    except Exception:
+                        ts_display = e.ts[:8]
+                self._append_item(ChatItem(kind=e.kind, timestamp=ts_display, sender=sender, text=e.text))
+            self._append_item(ChatItem(
+                kind="system", timestamp="", sender="",
+                text="--- end of history ---",
+            ))
+        self._history_loaded_for_peer = peer
+        self._history_flush_timer.start()
+
+    def _save_history_if_needed(self) -> None:
+        if not self._history_enabled or not self._history_dirty:
+            return
+        peer = self._history_loaded_for_peer or self._current_history_peer()
+        if not peer:
+            return
+        identity_key = self.core.get_identity_key_bytes()
+        if not identity_key:
+            return
+        entries = self._history_entries[-load_history_max_messages():]
+        if entries:
+            try:
+                save_history(
+                    self.core.get_profiles_dir(),
+                    self.core.profile,
+                    peer,
+                    entries,
+                    identity_key,
+                    max_messages=load_history_max_messages(),
+                )
+            except Exception:
+                pass
+        self._history_dirty = False
+
+    @QtCore.pyqtSlot()
+    def _flush_history(self) -> None:
+        if self._history_dirty:
+            self._save_history_if_needed()
+
+    def _history_toggle_label(self) -> str:
+        return "Chat history: ON" if self._history_enabled else "Chat history: OFF"
+
+    @QtCore.pyqtSlot()
+    def _on_toggle_history_clicked(self) -> None:
+        self._history_enabled = not self._history_enabled
+        save_history_enabled(self._history_enabled)
+        self._history_toggle_btn.setText(self._history_toggle_label())
+        if self._history_enabled:
+            if self.core.conn is not None and self.core.handshake_complete:
+                self._try_load_history()
+            self.handle_system("Chat history saving enabled.")
+        else:
+            self._history_flush_timer.stop()
+            self._history_entries = []
+            self._history_dirty = False
+            self._history_loaded_for_peer = None
+            self.handle_system("Chat history saving disabled.")
+
+    @QtCore.pyqtSlot()
+    def _on_clear_history_clicked(self) -> None:
+        peer = (
+            self.core.current_peer_addr
+            or self.core.stored_peer
+            or self.addr_edit.text().strip()
+        )
+        if not peer:
+            self.handle_system("No peer to clear history for.")
+            return
+        deleted = delete_history(self.core.get_profiles_dir(), self.core.profile, peer)
+        if deleted:
+            if peer == self._history_loaded_for_peer:
+                self._history_entries = []
+                self._history_dirty = False
+            self.handle_system("History cleared for this peer.")
+        else:
+            self.handle_system("No saved history found for this peer.")
 
     @QtCore.pyqtSlot()
     def on_forget_pinned_peer_key_clicked(self) -> None:
@@ -4104,6 +4279,9 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         """Останавливаем ядро и event loop при закрытии окна."""
+        self._history_flush_timer.stop()
+        self._save_history_if_needed()
+
         loop = asyncio.get_event_loop()
 
         async def _shutdown() -> None:

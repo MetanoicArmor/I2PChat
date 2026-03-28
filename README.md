@@ -49,6 +49,7 @@
 - **System notifications** — tray toasts for new messages
 - **Sound notifications** for incoming messages
 - **BlindBox (default-on for named profiles)** — offline message delivery
+- **Optional encrypted chat history** — per-peer local history (toggle **Chat history: ON/OFF** in the **⋯** menu); encrypted at rest with keys derived from your profile identity (see **§4.11** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md))
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
 #### 📖 Manuals
