@@ -28,7 +28,7 @@
 [![Issue Backlog RU](https://img.shields.io/badge/📝%20Issue%20Backlog-RU-orange.svg)](docs/ISSUE_BACKLOG_RU.md)
 [![GitHub Backlog Sync](https://img.shields.io/badge/🔐%20GitHub%20Backlog%20Sync-PAT%20Guide-brightgreen.svg)](docs/GITHUB_BACKLOG_SYNC.md)
 
-Backlog sync: [guide](docs/GITHUB_BACKLOG_SYNC.md) — `GITHUB_TOKEN` or `GH_TOKEN`, optional `.env` from `scripts/backlog.env.example`, or **Actions → Sync GitHub backlog**.
+Backlog sync helper: `GITHUB_TOKEN=... ./scripts/sync_backlog.sh`
 
 ---
 

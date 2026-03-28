@@ -15,7 +15,7 @@ They create labels, milestones, and issues from the roadmap/backlog planning doc
   - `0.7.0 - Contacts and conversations`
   - `0.8.0 - Trust, delivery, offline clarity`
   - `0.9.0 - Portability, privacy, hardening`
-- issue drafts defined in `scripts/sync_github_backlog.py` (kept in sync with `ISSUE_BACKLOG.md` / `docs/ISSUE_BACKLOG_RU.md` for planning)
+- issue drafts from `ISSUE_BACKLOG.md`
 
 The script is idempotent for bundled titles:
 - existing labels are reused;
@@ -51,13 +51,6 @@ Before running the script, verify:
 - you are targeting the correct repository;
 - you are comfortable with the bundled milestone titles and issue titles.
 
-### Token: env, `.env`, GitHub CLI, or Actions
-
-- **Environment:** `GITHUB_TOKEN` or `GH_TOKEN` (same meaning as `gh`).
-- **`.env`:** copy `scripts/backlog.env.example` to repo-root `.env` (gitignored) and set `GITHUB_TOKEN=…`. The Python script also reads `scripts/.env` if present.
-- **GitHub CLI:** `export GITHUB_TOKEN="$(gh auth token)"` then run the script.
-- **No local token:** in the GitHub UI open **Actions → Sync GitHub backlog → Run workflow**. That job uses the repository `GITHUB_TOKEN` with `issues: write`.
-
 ### Run against the default repository
 
 Recommended wrapper:
@@ -70,12 +63,6 @@ Direct Python invocation:
 
 ```bash
 GITHUB_TOKEN=ghp_your_token_here python3 scripts/sync_github_backlog.py
-```
-
-Same with `GH_TOKEN`:
-
-```bash
-GH_TOKEN=ghp_your_token_here python3 scripts/sync_github_backlog.py
 ```
 
 By default, the script targets:
