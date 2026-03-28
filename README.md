@@ -22,8 +22,11 @@
 
 [![English manual](https://img.shields.io/badge/📖%20Manual-EN-blue.svg)](docs/MANUAL_EN.md)
 [![Русский мануал](https://img.shields.io/badge/📖%20Мануал-RU-red.svg)](docs/MANUAL_RU.md)
-[![Roadmap](https://img.shields.io/badge/🗺️%20Roadmap-0.6.5→1.0.0-teal.svg)](ROADMAP.md)
-[![Issue backlog](https://img.shields.io/badge/📝%20Issue%20Backlog-planned-blueviolet.svg)](ISSUE_BACKLOG.md)
+[![Roadmap EN](https://img.shields.io/badge/🗺️%20Roadmap-EN-teal.svg)](ROADMAP.md)
+[![Roadmap RU](https://img.shields.io/badge/🗺️%20Roadmap-RU-red.svg)](docs/ROADMAP_RU.md)
+[![Issue Backlog EN](https://img.shields.io/badge/📝%20Issue%20Backlog-EN-blueviolet.svg)](ISSUE_BACKLOG.md)
+[![Issue Backlog RU](https://img.shields.io/badge/📝%20Issue%20Backlog-RU-orange.svg)](docs/ISSUE_BACKLOG_RU.md)
+[![GitHub Backlog Sync](https://img.shields.io/badge/🔐%20GitHub%20Backlog%20Sync-PAT%20Guide-brightgreen.svg)](docs/GITHUB_BACKLOG_SYNC.md)
 
 ---
 
