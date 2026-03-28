@@ -17,7 +17,7 @@ Examples:
   GITHUB_TOKEN=ghp_xxx ./scripts/sync_backlog.sh owner/repo
 
 Environment:
-  GITHUB_TOKEN       Required. Token with repository issue/milestone write access.
+  GITHUB_TOKEN       Required (or GH_TOKEN). Token with issue/milestone write access.
   GITHUB_REPOSITORY  Optional fallback target repository.
 
 If no repository is provided, the wrapper uses GITHUB_REPOSITORY or
@@ -35,8 +35,8 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-  echo "error: GITHUB_TOKEN is required" >&2
+if [[ -z "${GITHUB_TOKEN:-}" && -z "${GH_TOKEN:-}" ]]; then
+  echo "error: GITHUB_TOKEN or GH_TOKEN is required" >&2
   echo >&2
   usage >&2
   exit 1

@@ -51,6 +51,8 @@ Before running the script, verify:
 - you are targeting the correct repository;
 - you are comfortable with the bundled milestone titles and issue titles.
 
+The script reads the token **only from the environment** (`GITHUB_TOKEN` or `GH_TOKEN`). Do not commit tokens into the repository.
+
 ### Run against the default repository
 
 Recommended wrapper:
