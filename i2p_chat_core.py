@@ -3185,7 +3185,7 @@ class I2PChatCore:
             self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
             self._blindbox_prune_previous_roots()
             self._save_blindbox_state()
-            self._emit_system(f"BlindBox root rotated (epoch={incoming_epoch})")
+            self._emit_system("BlindBox root rotated")
             await self._send_blindbox_root_ack(writer, incoming_epoch)
             return
         if (

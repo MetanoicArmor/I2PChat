@@ -40,6 +40,7 @@ HISTORY_VERSION = 1
 HEADER_SIZE = 4 + 2 + 32  # magic + version + salt
 SALT_SIZE = 32
 DEFAULT_MAX_MESSAGES = 1000
+LEGACY_PEER_ID_HEX_LEN = 16
 
 
 def _normalize_peer_addr(peer_addr: str) -> str:
@@ -59,9 +60,39 @@ def _safe_peer_id(peer_addr: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _legacy_safe_peer_id(peer_addr: str) -> str:
+    """Legacy peer id format (first 16 hex chars of SHA-256)."""
+    normalized = _normalize_peer_addr(peer_addr)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:LEGACY_PEER_ID_HEX_LEN]
+
+
 def _history_path(profiles_dir: str, profile: str, peer_addr: str) -> str:
     pid = _safe_peer_id(peer_addr)
     return os.path.join(profiles_dir, f"{profile}.history.{pid}.enc")
+
+
+def _legacy_history_path(profiles_dir: str, profile: str, peer_addr: str) -> str:
+    pid = _legacy_safe_peer_id(peer_addr)
+    return os.path.join(profiles_dir, f"{profile}.history.{pid}.enc")
+
+
+def _history_path_candidates(profiles_dir: str, profile: str, peer_addr: str) -> list[str]:
+    current = _history_path(profiles_dir, profile, peer_addr)
+    legacy = _legacy_history_path(profiles_dir, profile, peer_addr)
+    if legacy == current:
+        return [current]
+    return [current, legacy]
+
+
+def _resolve_existing_history_path(
+    profiles_dir: str,
+    profile: str,
+    peer_addr: str,
+) -> Optional[str]:
+    for candidate in _history_path_candidates(profiles_dir, profile, peer_addr):
+        if os.path.exists(candidate):
+            return candidate
+    return None
 
 
 def derive_history_key(identity_key_bytes: bytes) -> bytes:
@@ -131,6 +162,10 @@ def save_history(
     # Try to reuse the existing salt so the file key stays stable.
     salt = _read_existing_salt(path)
     if salt is None:
+        legacy_path = _legacy_history_path(profiles_dir, profile, peer_addr)
+        if legacy_path != path:
+            salt = _read_existing_salt(legacy_path)
+    if salt is None:
         salt = secrets.token_bytes(SALT_SIZE)
 
     truncated_at: Optional[str] = None
@@ -159,8 +194,8 @@ def load_history(
         logger.warning("PyNaCl not available — cannot load encrypted history")
         return []
 
-    path = _history_path(profiles_dir, profile, peer_addr)
-    if not os.path.exists(path):
+    path = _resolve_existing_history_path(profiles_dir, profile, peer_addr)
+    if path is None:
         return []
 
     try:
@@ -218,15 +253,16 @@ def delete_history(
     peer_addr: str,
 ) -> bool:
     """Remove the encrypted history file for a peer.  Returns True if deleted."""
-    path = _history_path(profiles_dir, profile, peer_addr)
-    try:
-        os.remove(path)
-        return True
-    except FileNotFoundError:
-        return False
-    except OSError as e:
-        logger.warning("Failed to delete history file %s: %s", path, e)
-        return False
+    deleted_any = False
+    for path in _history_path_candidates(profiles_dir, profile, peer_addr):
+        try:
+            os.remove(path)
+            deleted_any = True
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            logger.warning("Failed to delete history file %s: %s", path, e)
+    return deleted_any
 
 
 def _read_existing_salt(path: str) -> Optional[bytes]:

@@ -14,6 +14,7 @@ from chat_history import (
     HISTORY_VERSION,
     HistoryEntry,
     _derive_file_key,
+    _legacy_safe_peer_id,
     _safe_peer_id,
     delete_history,
     derive_history_key,
@@ -154,6 +155,17 @@ class ChatHistoryDeleteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             self.assertFalse(delete_history(td, "alice", PEER))
 
+    def test_delete_legacy_named_history_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            save_history(td, "alice", PEER, _make_entries(3), IDENTITY_KEY)
+            current_name = os.listdir(td)[0]
+            current_path = os.path.join(td, current_name)
+            legacy_name = f"alice.history.{_legacy_safe_peer_id(PEER)}.enc"
+            legacy_path = os.path.join(td, legacy_name)
+            os.replace(current_path, legacy_path)
+            self.assertTrue(delete_history(td, "alice", PEER))
+            self.assertEqual(os.listdir(td), [])
+
 
 @unittest.skipUnless(crypto.NACL_AVAILABLE, "PyNaCl required")
 class ChatHistoryPeerIsolationTests(unittest.TestCase):
@@ -240,6 +252,19 @@ class ChatHistoryPeerIsolationTests(unittest.TestCase):
 
             loaded = load_history(td, "alice", PEER, IDENTITY_KEY)
             self.assertEqual(loaded, [])
+
+    def test_load_history_from_legacy_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            entries = [HistoryEntry(kind="peer", text="legacy", ts="2026-01-01T00:00:04Z")]
+            save_history(td, "alice", PEER, entries, IDENTITY_KEY)
+            current_name = os.listdir(td)[0]
+            current_path = os.path.join(td, current_name)
+            legacy_name = f"alice.history.{_legacy_safe_peer_id(PEER)}.enc"
+            legacy_path = os.path.join(td, legacy_name)
+            os.replace(current_path, legacy_path)
+
+            loaded = load_history(td, "alice", PEER, IDENTITY_KEY)
+            self.assertEqual([x.text for x in loaded], ["legacy"])
 
 
 @unittest.skipUnless(crypto.NACL_AVAILABLE, "PyNaCl required")
