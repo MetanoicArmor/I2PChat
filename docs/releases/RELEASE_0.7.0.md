@@ -10,7 +10,7 @@
 
 - **Saved peers sidebar**
   - Two-line rows: title (display name or short address) with unread hint, plus **last message preview** and **last activity** time when known.
-  - **Context menu** (implemented in-tree after the v0.7.0 tag): *Edit name & note…* (local-only labels), *Contact details…* (trust, copy address, remove pin), *Remove from saved peers…* (optional: encrypted history, TOFU pin, profile lock, BlindBox state file).
+  - **Context menu**: *Edit name & note…* (local-only labels), *Contact details…* (trust, copy address, remove pin), *Remove from saved peers…* (optional: encrypted history, TOFU pin, profile lock, BlindBox state file).
   - **More (⋯) menu**: *Forget pinned peer key* for the peer implied by the address field / session (same trust store as contact details).
 
 - **Contact book (v2 file)**
