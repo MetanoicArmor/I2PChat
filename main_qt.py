@@ -17,6 +17,11 @@ from blindbox_state import atomic_write_json
 from compose_drafts import apply_compose_draft_peer_switch
 from reply_format import format_reply_quote
 from status_presentation import build_status_presentation
+from notification_prefs import (
+    notification_body_for_display,
+    should_play_notification_sound,
+    should_show_tray_message,
+)
 from unread_counters import (
     bump_unread_if_inactive,
     clear_unread_for_peer,
@@ -839,6 +844,48 @@ def save_notify_sound(sound_path: Optional[str]) -> None:
         data["notify_sound"] = cleaned
     else:
         data.pop("notify_sound", None)
+    _save_ui_prefs(data)
+
+
+def load_notify_sound_enabled() -> bool:
+    data = _load_ui_prefs()
+    return data.get("notify_sound_enabled") is not False
+
+
+def save_notify_sound_enabled(enabled: bool) -> None:
+    data = _load_ui_prefs()
+    if enabled:
+        data.pop("notify_sound_enabled", None)
+    else:
+        data["notify_sound_enabled"] = False
+    _save_ui_prefs(data)
+
+
+def load_notify_hide_body() -> bool:
+    data = _load_ui_prefs()
+    return data.get("notify_hide_body") is True
+
+
+def save_notify_hide_body(hide: bool) -> None:
+    data = _load_ui_prefs()
+    if hide:
+        data["notify_hide_body"] = True
+    else:
+        data.pop("notify_hide_body", None)
+    _save_ui_prefs(data)
+
+
+def load_notify_quiet_mode() -> bool:
+    data = _load_ui_prefs()
+    return data.get("notify_quiet_mode") is True
+
+
+def save_notify_quiet_mode(quiet: bool) -> None:
+    data = _load_ui_prefs()
+    if quiet:
+        data["notify_quiet_mode"] = True
+    else:
+        data.pop("notify_quiet_mode", None)
     _save_ui_prefs(data)
 
 
@@ -3119,6 +3166,31 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._history_toggle_label(), self._on_toggle_history_clicked,
         )
         self.more_actions_popup.add_action("Clear history", self._on_clear_history_clicked)
+        self.more_actions_popup.add_separator()
+        self._notify_sound_enabled = load_notify_sound_enabled()
+        self._notify_hide_body = load_notify_hide_body()
+        self._notify_quiet_mode = load_notify_quiet_mode()
+        self._notify_sound_toggle_btn = self.more_actions_popup.add_action(
+            self._notify_sound_toggle_label(),
+            self._on_toggle_notify_sound_clicked,
+        )
+        self._notify_sound_toggle_btn.setToolTip(
+            "When off, notification sounds are never played (custom sound path is kept)."
+        )
+        self._notify_hide_body_toggle_btn = self.more_actions_popup.add_action(
+            self._notify_hide_body_toggle_label(),
+            self._on_toggle_notify_hide_body_clicked,
+        )
+        self._notify_hide_body_toggle_btn.setToolTip(
+            "When on, the tray message hides the message text; the title may still name the peer."
+        )
+        self._notify_quiet_toggle_btn = self.more_actions_popup.add_action(
+            self._notify_quiet_toggle_label(),
+            self._on_toggle_notify_quiet_clicked,
+        )
+        self._notify_quiet_toggle_btn.setToolTip(
+            "While the app window is focused, suppress tray toasts and sounds (other chats included)."
+        )
         self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
         self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
         self.chat_view.replyRequested.connect(self._on_reply_requested)
@@ -3280,7 +3352,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             return
 
         if msg.kind == "peer":
-            preview = msg.text.replace("\n", " ")
+            notify_kind = "peer"
+            preview = (msg.text or "").replace("\n", " ")
             title = "New message"
             peer_addr = msg.source_peer or self.core.current_peer_addr
             if peer_addr:
@@ -3289,6 +3362,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     clean_peer = f"{clean_peer[:6]}..{clean_peer[-6:]}"
                 title = f"New message from {clean_peer}"
         elif msg.kind == "connect":
+            notify_kind = "connect"
             peer = (msg.text or "").strip()
             clean_peer = peer.replace(".b32.i2p", "") if peer else "peer"
             if len(clean_peer) > 12:
@@ -3324,15 +3398,31 @@ class ChatWindow(QtWidgets.QMainWindow):
             if is_app_active and is_window_active:
                 return
 
-        if self.tray_icon is not None:
-            self.tray_icon.showMessage(
-                title,
-                preview,
-                QtWidgets.QSystemTrayIcon.MessageIcon.Information,
-                5000,
-            )
+        body = notification_body_for_display(
+            kind=notify_kind,
+            preview=preview,
+            hide_body=self._notify_hide_body,
+        )
+        if should_show_tray_message(
+            quiet_mode=self._notify_quiet_mode,
+            is_app_active=is_app_active,
+            is_window_active=is_window_active,
+        ):
+            if self.tray_icon is not None:
+                self.tray_icon.showMessage(
+                    title,
+                    body,
+                    QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+                    5000,
+                )
 
-        self._play_notification_sound()
+        if should_play_notification_sound(
+            sound_enabled=self._notify_sound_enabled,
+            quiet_mode=self._notify_quiet_mode,
+            is_app_active=is_app_active,
+            is_window_active=is_window_active,
+        ):
+            self._play_notification_sound()
 
     @QtCore.pyqtSlot(str)
     def handle_system(self, text: str) -> None:
@@ -4336,6 +4426,41 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _history_toggle_label(self) -> str:
         return "Chat history: ON" if self._history_enabled else "Chat history: OFF"
+
+    def _notify_sound_toggle_label(self) -> str:
+        return (
+            "Notification sound: ON"
+            if self._notify_sound_enabled
+            else "Notification sound: OFF"
+        )
+
+    def _notify_hide_body_toggle_label(self) -> str:
+        return (
+            "Hide message in notifications: ON"
+            if self._notify_hide_body
+            else "Hide message in notifications: OFF"
+        )
+
+    def _notify_quiet_toggle_label(self) -> str:
+        return "Quiet mode (focused): ON" if self._notify_quiet_mode else "Quiet mode (focused): OFF"
+
+    @QtCore.pyqtSlot()
+    def _on_toggle_notify_sound_clicked(self) -> None:
+        self._notify_sound_enabled = not self._notify_sound_enabled
+        save_notify_sound_enabled(self._notify_sound_enabled)
+        self._notify_sound_toggle_btn.setText(self._notify_sound_toggle_label())
+
+    @QtCore.pyqtSlot()
+    def _on_toggle_notify_hide_body_clicked(self) -> None:
+        self._notify_hide_body = not self._notify_hide_body
+        save_notify_hide_body(self._notify_hide_body)
+        self._notify_hide_body_toggle_btn.setText(self._notify_hide_body_toggle_label())
+
+    @QtCore.pyqtSlot()
+    def _on_toggle_notify_quiet_clicked(self) -> None:
+        self._notify_quiet_mode = not self._notify_quiet_mode
+        save_notify_quiet_mode(self._notify_quiet_mode)
+        self._notify_quiet_toggle_btn.setText(self._notify_quiet_toggle_label())
 
     @QtCore.pyqtSlot()
     def _on_toggle_history_clicked(self) -> None:
