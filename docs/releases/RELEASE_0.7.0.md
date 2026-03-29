@@ -23,10 +23,15 @@
 - **Contact details / trust MVP**
   - Shows full address, **pinned** state (TOFU signing key), short **fingerprint**, truncated hex key; **Remove pin…** with confirmation.
 
+- **Polish shipped with 0.7.0**
+  - **Profile switch** reloads the contact book and merges a **locked** peer into Saved peers when needed (sidebar no longer stale across profiles).
+  - **Saved peers** context menu uses the same **rounded** popup style as the **⋯** menu; **Edit name / Contact details** dialogs use a dedicated theme sheet (readable text on macOS light window chrome).
+  - **Default** open width for the Saved peers strip: narrower (about **¼** of the splitter, capped) until you resize it.
+
 ### Developer / modules
 
-- **`contact_book.py`**: load/save, v1→v2 migration, `touch_peer_message_meta`, tests `tests/test_contact_book.py`.
-- **`i2p_chat_core.I2PChatCore.get_peer_trust_info`**: read-only trust snapshot for UI; `tests/test_peer_trust_info.py`.
+- **`contact_book.py`**: load/save, v1→v2 migration, `touch_peer_message_meta`, `remove_peer`, tests `tests/test_contact_book.py`.
+- **`i2p_chat_core.I2PChatCore`**: `get_peer_trust_info`, `clear_locked_peer` (UI remove-with-lock); tests `tests/test_peer_trust_info.py`, `tests/test_clear_locked_peer.py`.
 
 ### Compatibility
 
@@ -51,10 +56,14 @@ Minor release on the **0.7.x** line. Existing **v1** `*.contacts.json` is upgrad
 - Поле **поиска** над лентой чата с переходом по совпадениям.
 - Диалог **Contact details** из меню «⋯» или контекста списка: pin, отпечаток, снятие pin.
 
+- **Дополнительно в составе 0.7.0**
+  - При **смене профиля** перезагружается книга контактов и при необходимости в список подмешивается **залоченный** пир (нет «пустого» Saved peers после switch).
+  - ПКМ по Saved peers — тот же **скруглённый** popup, что у меню **⋯**; диалоги правки имени и деталей контакта с отдельной темой (читаемый текст на macOS).
+  - **Дефолтная** ширина открытой панели Saved peers — уже (≈¼ сплиттера, с верхним пределом), пока не меняли вручную.
+
 ### Разработка
 
-- Модуль **`contact_book.py`** и тесты **`tests/test_contact_book.py`**.
-- **`get_peer_trust_info`** в ядре, тесты **`tests/test_peer_trust_info.py`**.
+- **`contact_book.py`**, тесты **`tests/test_contact_book.py`**; в ядре **`get_peer_trust_info`**, **`clear_locked_peer`**, тесты **`tests/test_peer_trust_info.py`**, **`tests/test_clear_locked_peer.py`**.
 
 ### Совместимость
 
