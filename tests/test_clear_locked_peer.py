@@ -14,7 +14,8 @@ if importlib.util.find_spec("i2plib") is None:
 from i2p_chat_core import I2PChatCore
 
 PEER = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
-FAKE_KEY = "dGVzdC1wcml2YXRlLWtleS1saW5lLWJhc2U2NAo="
+# First line of .dat (mock identity blob); avoid *KEY* name — gitleaks generic-api-key false positive.
+MOCK_DAT_LINE1 = "dGVzdC1wcml2YXRlLWtleS1saW5lLWJhc2U2NAo="
 
 
 class ClearLockedPeerTests(unittest.TestCase):
@@ -22,7 +23,7 @@ class ClearLockedPeerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             dat = os.path.join(td, "p.dat")
             with open(dat, "w", encoding="utf-8") as f:
-                f.write(f"{FAKE_KEY}\n{PEER}\n")
+                f.write(f"{MOCK_DAT_LINE1}\n{PEER}\n")
             with patch("i2p_chat_core.get_profiles_dir", return_value=td):
                 core = I2PChatCore(profile="p", on_error=lambda _m: None)
                 core.stored_peer = PEER
@@ -31,7 +32,7 @@ class ClearLockedPeerTests(unittest.TestCase):
             self.assertIsNone(core.stored_peer)
             with open(dat, "r", encoding="utf-8") as f:
                 lines = [ln.strip() for ln in f.readlines() if ln.strip()]
-            self.assertEqual(lines, [FAKE_KEY])
+            self.assertEqual(lines, [MOCK_DAT_LINE1])
 
     def test_keyring_only_peer_file_removed(self) -> None:
         with tempfile.TemporaryDirectory() as td:

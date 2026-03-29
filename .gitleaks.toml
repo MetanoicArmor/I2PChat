@@ -1,0 +1,13 @@
+# Local overrides; CI runs: gitleaks detect --source . --redact
+# Gitleaks auto-discovers this file in the repo root.
+
+title = "I2PChat"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Mock .dat first-line fixtures in unit tests (not production secrets)"
+paths = [
+  '''tests/test_clear_locked_peer\.py''',
+]
