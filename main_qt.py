@@ -3513,7 +3513,8 @@ class _ContactsSidebarResizeGrip(QtWidgets.QWidget):
             dx = int(event.globalPosition().x()) - self._start_global_x
             rmin = self._host._SPLITTER_RIGHT_MIN_PX if self._host else 200
             mn = self._host._CONTACTS_SIDEBAR_MIN_OPEN_PX if self._host else 160
-            new_w = max(mn, min(520, self._start_sidebar_w + self._delta_sign * dx))
+            mx = self._host._CONTACTS_SIDEBAR_MAX_OPEN_PX if self._host else 520
+            new_w = max(mn, min(mx, self._start_sidebar_w + self._delta_sign * dx))
             total = max(400, sum(self._splitter.sizes()) or self._splitter.width())
             self._splitter.setSizes([new_w, max(rmin, total - new_w)])
             if self._host is not None and new_w >= mn:
@@ -3548,6 +3549,10 @@ class ChatWindow(QtWidgets.QMainWindow):
     # Ближе к шагу сетки, чем 3px — визуально ровнее зазор ◀↔чат.
     _CONTACTS_RESIZE_GRIP_WIDTH_PX = 4
     _CONTACTS_SIDEBAR_MIN_OPEN_PX = 160
+    # Стартовая ширина до ручного ресайза: не шире этого (на широких окнах панель остаётся узкой).
+    _CONTACTS_SIDEBAR_DEFAULT_OPEN_PX = 240
+    # Верхняя граница ширины панели (как при перетаскивании разделителя).
+    _CONTACTS_SIDEBAR_MAX_OPEN_PX = 520
     _CONTACTS_SIDEBAR_ANIM_MS = 200
     _SPLITTER_RIGHT_MIN_PX = 200
 
@@ -3655,7 +3660,8 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         self._contact_book = ContactBook()
         self._contacts_sidebar_collapsed = False
-        self._contacts_sidebar_width_saved = 280
+        # 0 — ещё не задавали вручную: при открытии узкая панель (см. _contacts_sidebar_open_target_px).
+        self._contacts_sidebar_width_saved = 0
         self._contacts_sidebar_anim: Optional[QtCore.QVariantAnimation] = None
 
         # Таймер для анимации прогресс-бара
@@ -4074,17 +4080,27 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._contacts_sidebar_anim.deleteLater()
         self._contacts_sidebar_anim = None
 
+    def _contacts_sidebar_open_target_px(self, total: int) -> int:
+        """Ширина открытой панели: сохранённая или узкий дефолт (¼ ширины, не больше DEFAULT)."""
+        rmin = self._SPLITTER_RIGHT_MIN_PX
+        avail = max(0, total - rmin)
+        mn = self._CONTACTS_SIDEBAR_MIN_OPEN_PX
+        mx = self._CONTACTS_SIDEBAR_MAX_OPEN_PX
+        cap = self._CONTACTS_SIDEBAR_DEFAULT_OPEN_PX
+        saved = int(self._contacts_sidebar_width_saved)
+        if saved <= 0:
+            quarter = max(0, total // 4)
+            raw = max(mn, min(quarter, cap))
+            return min(raw, mx, avail)
+        return min(max(mn, saved), avail)
+
     def _balance_contacts_splitter_initial(self) -> None:
         total = max(400, self.contacts_splitter.width() or self.width() or 900)
         if self._contacts_sidebar_collapsed or not self.contacts_sidebar.isVisible():
             self.contacts_splitter.setSizes([0, total])
             self._sync_contacts_right_pack_left_margin()
             return
-        avail = max(0, total - self._SPLITTER_RIGHT_MIN_PX)
-        sw = min(
-            max(self._CONTACTS_SIDEBAR_MIN_OPEN_PX, int(self._contacts_sidebar_width_saved)),
-            avail,
-        )
+        sw = self._contacts_sidebar_open_target_px(total)
         self.contacts_splitter.setSizes([sw, total - sw])
         self._sync_contacts_right_pack_left_margin()
 
@@ -4173,11 +4189,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             anim_c.start()
             return
 
-        avail = max(0, total - rmin)
-        sw1 = min(
-            max(self._CONTACTS_SIDEBAR_MIN_OPEN_PX, int(self._contacts_sidebar_width_saved)),
-            avail,
-        )
+        sw1 = self._contacts_sidebar_open_target_px(total)
         self._contacts_sidebar_collapsed = False
         self.contacts_toggle_btn.setText("◀")
         self.contacts_sidebar.show()
