@@ -2,6 +2,19 @@
 Smoke tests for unread UI wiring (ChatWindow) without a real I2P session.
 
 Uses Qt offscreen platform so no visible window is required (CI / agents).
+
+Manual QA checklist (two peers, notifications / 0.6.5 behavior)
+----------------------------------------------------------------
+1. Add two saved peers; make peer A the active chat (address field matches A, session as usual).
+2. Put I2PChat in the background (another app focused). Receive a message for peer B
+   (e.g. offline/BlindBox delivery for B, or connect to B after switching): expect tray title
+   to reference B and window title suffix ``(N)`` for unread.
+3. Focus I2PChat with Quiet mode OFF: while viewing chat A, a new message for A should not
+   toast (same chat). Switch the address field to B; behavior should follow B as active key.
+4. Turn Quiet mode ON (focused): expect no tray toasts and no notification sound while the
+   window is focused, for any peer.
+5. Turn Quiet mode OFF, minimize the window, receive a message for the connected peer:
+   expect tray toast and sound according to sound / hide-body toggles.
 """
 
 from __future__ import annotations
@@ -17,6 +30,7 @@ import pytest
 
 pytest.importorskip("PyQt6.QtWidgets")
 
+from PyQt6 import QtCore
 from PyQt6.QtWidgets import QApplication
 
 from i2p_chat_core import ChatMessage
@@ -107,3 +121,63 @@ def test_handle_notify_peer_same_chat_does_not_throw(qapp: QApplication) -> None
     w.handle_notify(
         ChatMessage(kind="peer", text="ping", timestamp=ts, source_peer=PEER_A)
     )
+
+
+def _patch_focused_chat_window(
+    w: object, qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """App + window considered active/focused (matches handle_notify gating)."""
+    monkeypatch.setattr(w, "isActiveWindow", lambda: True)
+    monkeypatch.setattr(w, "isMinimized", lambda: False)
+    monkeypatch.setattr(
+        qapp,
+        "applicationState",
+        lambda: QtCore.Qt.ApplicationState.ApplicationActive,
+    )
+
+
+def test_handle_notify_same_chat_suppresses_tray_when_focused(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from main_qt import THEME_DEFAULT, ChatWindow
+
+    w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    w._notify_quiet_mode = False
+    ts = datetime.now(timezone.utc)
+    w.addr_edit.setText(PEER_A)
+    w._on_addr_editing_finished_for_drafts()
+    _patch_focused_chat_window(w, qapp, monkeypatch)
+    calls: list[object] = []
+    monkeypatch.setattr(w.tray_icon, "showMessage", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(w, "_play_notification_sound", lambda: None)
+
+    w.handle_notify(
+        ChatMessage(kind="peer", text="ping", timestamp=ts, source_peer=PEER_A)
+    )
+    assert calls == []
+
+
+def test_handle_notify_cross_peer_shows_tray_when_focused(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Message for B while UI active key is A: not same_chat, tray path should run."""
+    from main_qt import THEME_DEFAULT, ChatWindow
+
+    w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    w._notify_quiet_mode = False
+    ts = datetime.now(timezone.utc)
+    w.addr_edit.setText(PEER_A)
+    w._on_addr_editing_finished_for_drafts()
+    _patch_focused_chat_window(w, qapp, monkeypatch)
+    calls: list[object] = []
+    monkeypatch.setattr(w.tray_icon, "showMessage", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(w, "_play_notification_sound", lambda: None)
+
+    w.handle_notify(
+        ChatMessage(kind="peer", text="hello", timestamp=ts, source_peer=PEER_B)
+    )
+    assert len(calls) == 1
+    args, _kw = calls[0]
+    title = args[0]
+    assert "New message" in title
+    assert "bbbbbb" in title
