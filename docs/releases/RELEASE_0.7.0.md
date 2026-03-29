@@ -10,8 +10,8 @@
 
 - **Saved peers sidebar**
   - Two-line rows: title (display name or short address) with unread hint, plus **last message preview** and **last activity** time when known.
-  - **Context menu**: *Edit name & note…* (local-only labels), *Contact details…* (trust).
-  - **More (⋯) menu**: *Contact details…* for the peer in the address field.
+  - **Context menu** (implemented in-tree after the v0.7.0 tag): *Edit name & note…* (local-only labels), *Contact details…* (trust, copy address, remove pin), *Remove from saved peers…* (optional: encrypted history, TOFU pin, profile lock, BlindBox state file).
+  - **More (⋯) menu**: *Forget pinned peer key* for the peer implied by the address field / session (same trust store as contact details).
 
 - **Contact book (v2 file)**
   - Fields per peer: `display_name`, `note`, `last_preview`, `last_activity_ts`, plus MRU ordering.
@@ -46,7 +46,7 @@ Minor release on the **0.7.x** line. Existing **v1** `*.contacts.json` is upgrad
 
 ### Что видит пользователь
 
-- Боковая панель **Saved peers**: две строки на контакт, превью и время, непрочитанные; ПКМ — правка имени/заметки и детали контакта.
+- Боковая панель **Saved peers**: две строки на контакт, превью и время, непрочитанные; ПКМ — правка имени/заметки, карточка контакта (адрес, TOFU, снятие pin), удаление из списка с опциями (история, pin, lock, BlindBox).
 - Восстановление **last_active_peer** при запуске и смене профиля.
 - Поле **поиска** над лентой чата с переходом по совпадениям.
 - Диалог **Contact details** из меню «⋯» или контекста списка: pin, отпечаток, снятие pin.

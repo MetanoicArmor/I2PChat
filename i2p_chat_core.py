@@ -1768,6 +1768,39 @@ class I2PChatCore:
         self.stored_peer = normalized_peer
         self._load_blindbox_state()
 
+    def clear_locked_peer(self) -> None:
+        """
+        Снять Lock to peer: в .dat остаётся только приватный ключ (или файл с одной строкой
+        пира удаляется при сценарии keyring-only .dat).
+        """
+        if self.profile == "default":
+            return
+        private_key_base64: Optional[str] = None
+        if self.my_dest is not None:
+            try:
+                private_key_base64 = self.my_dest.private_key.base64
+            except Exception:
+                private_key_base64 = None
+        key_file = self._profile_path()
+        if not private_key_base64 and os.path.exists(key_file):
+            with open(key_file, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+            if lines and not self._is_probable_peer_addr(lines[0]):
+                private_key_base64 = lines[0]
+        if private_key_base64:
+            self._write_profile_dat(private_key_base64, None)
+        else:
+            if os.path.isfile(key_file):
+                try:
+                    with open(key_file, "r", encoding="utf-8") as f:
+                        lines = [line.strip() for line in f.readlines() if line.strip()]
+                    if len(lines) == 1 and self._is_probable_peer_addr(lines[0]):
+                        os.remove(key_file)
+                except OSError:
+                    pass
+        self.stored_peer = None
+        self._load_blindbox_state()
+
     def is_current_peer_verified_for_lock(self) -> bool:
         return bool(
             self.current_peer_addr

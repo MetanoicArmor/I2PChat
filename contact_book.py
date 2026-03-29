@@ -254,6 +254,20 @@ def touch_peer_message_meta(
     return True
 
 
+def remove_peer(book: ContactBook, addr: str) -> bool:
+    """Удалить контакт из книги. Сбрасывает last_active_peer, если он совпал. Возвращает True, если запись была."""
+    n = normalize_peer_address(addr) or ""
+    if not n:
+        return False
+    i = book.peer_index(n)
+    if i < 0:
+        return False
+    book.contacts.pop(i)
+    if book.last_active_peer == n:
+        book.last_active_peer = None
+    return True
+
+
 def has_peer(book: ContactBook, addr: str) -> bool:
     a = normalize_peer_address(addr) or ""
     return bool(a) and book.peer_index(a) >= 0

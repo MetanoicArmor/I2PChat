@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import shutil
@@ -56,8 +57,10 @@ from contact_book import (
     load_book,
     normalize_peer_address,
     remember_peer,
+    remove_peer,
     save_book,
     set_last_active_peer,
+    set_peer_profile,
     touch_peer_message_meta,
 )
 
@@ -113,11 +116,24 @@ def _contacts_file_path(profile: str) -> str:
     return os.path.join(get_profiles_dir(), f"{profile}.contacts.json")
 
 
-def _short_b32_display(addr: str) -> str:
-    clean = (addr or "").replace(".b32.i2p", "").strip()
-    if len(clean) > 12:
-        clean = f"{clean[:6]}..{clean[-6:]}"
-    return clean + ".b32.i2p"
+# Сайдбар узкий: полный .b32 выглядит как «стена» из одинаковых символов и не различается визуально.
+_CONTACT_B32_TITLE_PREFIX_LEN = 8
+_CONTACT_B32_TITLE_SUFFIX_LEN = 8
+
+
+def _contact_row_address_title(addr: str) -> str:
+    """Заголовок строки без display_name: компактная подпись .b32 (полный адрес — в toolTip)."""
+    s = (addr or "").strip()
+    low = s.lower()
+    if not low.endswith(".b32.i2p"):
+        return s
+    host = low[: -len(".b32.i2p")]
+    max_plain = _CONTACT_B32_TITLE_PREFIX_LEN + _CONTACT_B32_TITLE_SUFFIX_LEN
+    if len(host) <= max_plain:
+        return s
+    p = _CONTACT_B32_TITLE_PREFIX_LEN
+    t = _CONTACT_B32_TITLE_SUFFIX_LEN
+    return f"{host[:p]}…{host[-t:]}.b32.i2p"
 
 
 def _peer_lock_indicator_pixmap(
@@ -352,6 +368,16 @@ THEMES: dict[str, dict[str, object]] = {
             QPushButton#SecondaryButton:pressed { background-color: #d5deeb; }
             QPushButton#PrimaryButton { background-color: #0a84ff; color: #ffffff; }
             QPushButton#PrimaryButton:hover { background-color: #409cff; }
+            QLineEdit {
+                background: #ffffff;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 10px;
+                color: #1d1d1f;
+            }
+            QLineEdit:focus { border: 1px solid #0a84ff; }
+            QCheckBox { color: #1d1d1f; spacing: 8px; }
+            QCheckBox::indicator { width: 18px; height: 18px; }
         """,
         "window_stylesheet": """
             QMainWindow { background-color: #e6eaf2; }
@@ -679,6 +705,16 @@ THEMES: dict[str, dict[str, object]] = {
             QPushButton#SecondaryButton:pressed { background-color: rgba(255, 255, 255, 0.24); }
             QPushButton#PrimaryButton { background-color: #0a84ff; }
             QPushButton#PrimaryButton:hover { background-color: #409cff; }
+            QLineEdit {
+                background: #1f1f23;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 10px;
+                color: #f5f5f7;
+            }
+            QLineEdit:focus { border: 1px solid #0a84ff; }
+            QCheckBox { color: #f5f5f7; spacing: 8px; }
+            QCheckBox::indicator { width: 18px; height: 18px; }
         """,
         "window_stylesheet": """
             QMainWindow { background-color: #101114; }
@@ -959,6 +995,12 @@ def _resolve_theme(theme_id: Optional[str]) -> str:
     return THEME_DEFAULT
 
 
+def _apply_dialog_theme_sheet(widget: QtWidgets.QWidget, theme_id: Optional[str]) -> None:
+    """Отдельный лист от QMainWindow: иначе на macOS QDialog с светлым фоном наследует QLabel { color: #f5f5f7 }."""
+    theme = THEMES[_resolve_theme(theme_id)]
+    widget.setStyleSheet(str(theme["dialog_stylesheet"]))
+
+
 def _ui_prefs_path() -> str:
     return os.path.join(get_profiles_dir(), "ui_prefs.json")
 
@@ -1140,6 +1182,13 @@ class ChatListModel(QtCore.QAbstractListModel):
         if 0 <= row < len(self._items):
             return self._items[row]
         return None
+
+    def clear_items(self) -> None:
+        if not self._items:
+            return
+        self.beginResetModel()
+        self._items.clear()
+        self.endResetModel()
 
 
 _BAYER4: tuple[tuple[int, int, int, int], ...] = (
@@ -3194,8 +3243,8 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         self.combo.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
 
     def _apply_theme_style(self, theme_id: str) -> None:
+        _apply_dialog_theme_sheet(self, theme_id)
         theme = THEMES[_resolve_theme(theme_id)]
-        self.setStyleSheet(str(theme["dialog_stylesheet"]))
         muted = str(theme.get("hint_muted", "#9fa1b5"))
         secondary = str(theme.get("hint_secondary", "#6c6e7e"))
         label_primary = str(theme.get("label_primary", "#e0e0e0"))
@@ -3263,7 +3312,9 @@ class ContactRowWidget(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(2)
-        self._full_title = record.display_name.strip() or _short_b32_display(record.addr)
+        self._full_title = record.display_name.strip() or _contact_row_address_title(
+            record.addr
+        )
         self._full_sub = (record.last_preview or record.note or "").strip()
         self._title = QtWidgets.QLabel(self._full_title)
         self._title.setObjectName("ContactRowTitle")
@@ -3287,10 +3338,19 @@ class ContactRowWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
+        self._sync_row_tooltip(record.display_name)
 
     @property
     def contact_addr(self) -> str:
         return self._addr
+
+    def _sync_row_tooltip(self, display_name: str = "") -> None:
+        addr = (self._addr or "").strip()
+        name = (display_name or "").strip()
+        if name:
+            self.setToolTip(f"{name}\n{addr}")
+        else:
+            self.setToolTip(addr)
 
     def _apply_elide(self) -> None:
         w = max(1, self.width() - 20)
@@ -3310,8 +3370,11 @@ class ContactRowWidget(QtWidgets.QWidget):
 
     def set_record(self, record: ContactRecord) -> None:
         self._addr = record.addr
-        self._full_title = record.display_name.strip() or _short_b32_display(record.addr)
+        self._full_title = record.display_name.strip() or _contact_row_address_title(
+            record.addr
+        )
         self._full_sub = (record.last_preview or record.note or "").strip()
+        self._sync_row_tooltip(record.display_name)
         self.updateGeometry()
         self._apply_elide()
 
@@ -3319,6 +3382,95 @@ class ContactRowWidget(QtWidgets.QWidget):
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self.activate.emit(self._addr)
         super().mouseReleaseEvent(event)
+
+
+class _ContactNameNoteDialog(QtWidgets.QDialog):
+    """Локальные display_name и note для записи в contact book."""
+
+    def __init__(
+        self,
+        parent: Optional[QtWidgets.QWidget],
+        *,
+        display_name: str,
+        note: str,
+        theme_id: Optional[str] = None,
+    ) -> None:
+        super().__init__(parent)
+        _apply_dialog_theme_sheet(self, theme_id)
+        self.setWindowTitle("Edit name & note")
+        lay = QtWidgets.QFormLayout(self)
+        self._name = QtWidgets.QLineEdit(display_name)
+        self._note = QtWidgets.QLineEdit(note)
+        self._name.setPlaceholderText("Optional label in Saved peers list")
+        self._note.setPlaceholderText("Short note (shown under title when no preview)")
+        lay.addRow("Display name", self._name)
+        lay.addRow("Note", self._note)
+        bb = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addRow(bb)
+
+    def profile_values(self) -> tuple[str, str]:
+        return self._name.text().strip(), self._note.text().strip()
+
+
+class _RemoveSavedPeerDialog(QtWidgets.QDialog):
+    """Подтверждение удаления контакта с опциями побочных данных."""
+
+    def __init__(
+        self,
+        parent: Optional[QtWidgets.QWidget],
+        *,
+        peer_addr: str,
+        show_lock_checkbox: bool,
+        show_blindbox_checkbox: bool,
+        theme_id: Optional[str] = None,
+    ) -> None:
+        super().__init__(parent)
+        _apply_dialog_theme_sheet(self, theme_id)
+        self.setWindowTitle("Remove from saved peers")
+        v = QtWidgets.QVBoxLayout(self)
+        v.addWidget(
+            QtWidgets.QLabel(
+                "Remove this peer from Saved peers?\n\n" + peer_addr,
+                self,
+            )
+        )
+        self._cb_history = QtWidgets.QCheckBox(
+            "Also delete encrypted chat history for this peer"
+        )
+        self._cb_pin = QtWidgets.QCheckBox("Also remove TOFU pin for this peer")
+        self._cb_lock = QtWidgets.QCheckBox("Also clear profile lock (Lock to peer)")
+        self._cb_lock.setVisible(show_lock_checkbox)
+        self._cb_bb = QtWidgets.QCheckBox(
+            "Also remove BlindBox local state file for this peer"
+        )
+        self._cb_bb.setVisible(show_blindbox_checkbox)
+        v.addWidget(self._cb_history)
+        v.addWidget(self._cb_pin)
+        v.addWidget(self._cb_lock)
+        v.addWidget(self._cb_bb)
+        bb = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        bb.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Remove")
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def options(
+        self,
+    ) -> tuple[bool, bool, bool, bool]:
+        return (
+            self._cb_history.isChecked(),
+            self._cb_pin.isChecked(),
+            self._cb_lock.isChecked(),
+            self._cb_bb.isChecked(),
+        )
 
 
 class _ContactsSidebarResizeGrip(QtWidgets.QWidget):
@@ -3741,6 +3893,12 @@ class ChatWindow(QtWidgets.QMainWindow):
             QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
         )
         self.contacts_list.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.contacts_list.setContextMenuPolicy(
+            QtCore.Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.contacts_list.customContextMenuRequested.connect(
+            self._on_saved_peers_context_menu
+        )
         sidebar_layout.addWidget(contacts_title)
         sidebar_layout.addWidget(self.contacts_list, 1)
 
@@ -3875,6 +4033,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.core = self._create_core(self.profile)
         self._load_compose_drafts_from_disk()
         self._load_contacts_book()
+        self._ensure_stored_peer_in_contact_book()
         self._refresh_contacts_list()
         self._apply_startup_peer_from_book()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
@@ -3888,6 +4047,22 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _load_contacts_book(self) -> None:
         self._contact_book = load_book(_contacts_file_path(self.profile))
+
+    def _ensure_stored_peer_in_contact_book(self) -> None:
+        """Lock-пир из .dat всегда есть в Saved peers, даже если contacts.json пустой."""
+        raw = (self.core.stored_peer or "").strip() or (
+            peek_persisted_stored_peer(self.profile) or ""
+        )
+        sp = normalize_peer_address(raw)
+        if not sp:
+            return
+        changed = False
+        if remember_peer(self._contact_book, sp):
+            changed = True
+        if set_last_active_peer(self._contact_book, sp):
+            changed = True
+        if changed:
+            self._save_contacts_book()
 
     def _save_contacts_book(self) -> None:
         save_book(_contacts_file_path(self.profile), self._contact_book)
@@ -4111,6 +4286,234 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self.refresh_status_label()
         self._refresh_connection_buttons()
+
+    def _on_saved_peers_context_menu(self, pos: QtCore.QPoint) -> None:
+        item = self.contacts_list.itemAt(pos)
+        if item is None:
+            return
+        w = self.contacts_list.itemWidget(item)
+        if not isinstance(w, ContactRowWidget):
+            return
+        addr = w.contact_addr
+        menu = QtWidgets.QMenu(self)
+        menu.addAction("Edit name & note…", lambda a=addr: self._saved_peer_edit_name_note(a))
+        menu.addAction("Contact details…", lambda a=addr: self._saved_peer_contact_details(a))
+        menu.addSeparator()
+        menu.addAction("Remove from saved peers…", lambda a=addr: self._saved_peer_remove(a))
+        menu.exec(self.contacts_list.mapToGlobal(pos))
+
+    def _saved_peer_edit_name_note(self, addr: str) -> None:
+        norm = normalize_peer_address(addr)
+        if not norm:
+            return
+        rec = self._contact_book.get(norm)
+        d = _ContactNameNoteDialog(
+            self,
+            display_name=(rec.display_name if rec else ""),
+            note=(rec.note if rec else ""),
+            theme_id=self.theme_id,
+        )
+        if d.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        name, note = d.profile_values()
+        if set_peer_profile(self._contact_book, norm, display_name=name, note=note):
+            self._save_contacts_book()
+            self._refresh_contacts_list()
+
+    def _saved_peer_contact_details(self, addr: str) -> None:
+        norm = normalize_peer_address(addr) or (addr or "").strip().lower()
+        if not norm:
+            return
+        info = self.core.get_peer_trust_info(norm)
+        dlg = QtWidgets.QDialog(self)
+        _apply_dialog_theme_sheet(dlg, self.theme_id)
+        dlg.setWindowTitle("Contact details")
+        v = QtWidgets.QVBoxLayout(dlg)
+        v.addWidget(QtWidgets.QLabel(f"<b>Address</b><br>{norm}", dlg))
+        if info is None:
+            v.addWidget(QtWidgets.QLabel("Invalid address.", dlg))
+        elif info.pinned:
+            key_hex = info.signing_key_hex or ""
+            short_key = f"{key_hex[:24]}…{key_hex[-16:]}" if len(key_hex) > 48 else key_hex
+            v.addWidget(
+                QtWidgets.QLabel(
+                    f"<b>TOFU</b>: pinned<br>"
+                    f"Fingerprint (SHA-256, short): {info.fingerprint_short or '—'}<br>"
+                    f"Signing key (hex, truncated): {short_key}",
+                    dlg,
+                )
+            )
+        else:
+            v.addWidget(QtWidgets.QLabel("No TOFU pin stored for this peer.", dlg))
+
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(10)
+        copy_btn = QtWidgets.QPushButton("Copy address", dlg)
+        copy_btn.clicked.connect(lambda: QtWidgets.QApplication.clipboard().setText(norm))
+        row.addWidget(copy_btn)
+        if info is not None and info.pinned:
+            forget_btn = QtWidgets.QPushButton("Remove pin…", dlg)
+
+            def forget() -> None:
+                dlg.accept()
+                self._forget_pinned_peer_key_for_address(norm)
+
+            forget_btn.clicked.connect(forget)
+            row.addWidget(forget_btn)
+        row.addStretch(1)
+        close_btn = QtWidgets.QPushButton("Close", dlg)
+        close_btn.setDefault(True)
+        close_btn.setAutoDefault(True)
+        close_btn.clicked.connect(dlg.accept)
+        row.addWidget(close_btn)
+        v.addLayout(row)
+        dlg.exec()
+
+    def _forget_pinned_peer_key_for_address(self, peer_addr: str) -> None:
+        if not peer_addr:
+            return
+        try:
+            normalized = self.core._normalize_peer_addr(peer_addr)
+        except Exception:
+            QtWidgets.QMessageBox.warning(
+                self, "Forget pinned peer key", "Invalid peer address."
+            )
+            return
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Forget pinned peer key",
+            "Remove the pinned signing key for this peer?\n\n"
+            f"{normalized}\n\n"
+            "On the next secure connect, this peer will be trusted again via TOFU.\n"
+            "Only continue if you expect the key change and have verified the fingerprint out-of-band.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        try:
+            removed = self.core.forget_pinned_peer_key(peer_addr)
+        except Exception as e:  # pragma: no cover - GUI path
+            self.handle_error(f"Failed to forget pinned peer key: {e}")
+            return
+        if removed:
+            self.handle_system(f"Forgot pinned peer key for {normalized}.")
+        else:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Forget pinned peer key",
+                f"No pinned key stored for:\n{normalized}",
+            )
+
+    def _saved_peer_ui_targets_peer(self, norm_cb: str) -> bool:
+        k = normalize_peer_addr(norm_cb)
+        if not k:
+            return False
+        u = self.addr_edit.text().strip()
+        if u and normalize_peer_addr(u) == k:
+            return True
+        cur_hist = self._current_history_peer()
+        if cur_hist and normalize_peer_addr(cur_hist) == k:
+            return True
+        return False
+
+    def _peer_matches_active_connection(self, norm_cb: str) -> bool:
+        if self.core.conn is None:
+            return False
+        cur = (self.core.current_peer_addr or "").strip()
+        if not cur:
+            return False
+        try:
+            return normalize_peer_address(norm_cb) == normalize_peer_address(cur)
+        except Exception:
+            return False
+
+    def _blindbox_state_path_for_peer_b32(self, peer_b32: str) -> str:
+        host = (
+            peer_b32[: -len(".b32.i2p")]
+            if peer_b32.endswith(".b32.i2p")
+            else peer_b32
+        )
+        safe = re.sub(r"[^a-z0-9._-]", "_", host.lower())
+        return os.path.join(get_profiles_dir(), f"{self.profile}.blindbox.{safe}.json")
+
+    def _saved_peer_remove(self, addr: str) -> None:
+        norm_cb = normalize_peer_address(addr)
+        if not norm_cb:
+            return
+        if self._peer_matches_active_connection(norm_cb):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Remove saved peer",
+                "Disconnect from this peer first, then remove it from Saved peers.",
+            )
+            return
+        stored_n = normalize_peer_address(self.core.stored_peer or "")
+        show_lock = self.profile != "default" and bool(stored_n) and stored_n == norm_cb
+        show_bb = self.profile != "default"
+        dlg = _RemoveSavedPeerDialog(
+            self,
+            peer_addr=norm_cb,
+            show_lock_checkbox=show_lock,
+            show_blindbox_checkbox=show_bb,
+            theme_id=self.theme_id,
+        )
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        del_hist, del_pin, del_lock, del_bb = dlg.options()
+        if del_hist:
+            delete_history(self.core.get_profiles_dir(), self.profile, norm_cb)
+            if norm_cb == self._history_loaded_for_peer:
+                self._history_entries = []
+                self._history_dirty = False
+                self._history_loaded_for_peer = None
+        if del_pin:
+            try:
+                self.core.forget_pinned_peer_key(norm_cb)
+            except Exception as e:  # pragma: no cover
+                self.handle_error(f"Failed to remove pin: {e}")
+        if del_lock and show_lock:
+            try:
+                self.core.clear_locked_peer()
+            except Exception as e:  # pragma: no cover
+                self.handle_error(f"Failed to clear lock: {e}")
+            self._update_peer_lock_indicator()
+            self._set_contacts_sidebar_collapsed(False, animated=False)
+            QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
+            self.handle_system("Profile lock cleared.")
+        if del_bb and show_bb:
+            p = self._blindbox_state_path_for_peer_b32(norm_cb)
+            try:
+                if os.path.isfile(p):
+                    os.remove(p)
+            except OSError as e:  # pragma: no cover
+                logger.debug("blindbox state remove: %s", e)
+
+        draft_key = normalize_peer_addr(norm_cb)
+        self._compose_drafts.pop(draft_key, None)
+        self._compose_drafts.pop(norm_cb, None)
+        clear_unread_for_peer(self._unread_by_peer, draft_key)
+        clear_unread_for_peer(self._unread_by_peer, norm_cb)
+
+        remove_peer(self._contact_book, norm_cb)
+        self._save_contacts_book()
+        self._refresh_contacts_list()
+
+        if self._saved_peer_ui_targets_peer(norm_cb):
+            self._save_history_if_needed()
+            self._history_flush_timer.stop()
+            self._history_loaded_for_peer = None
+            self._history_entries = []
+            self._history_dirty = False
+            self.chat_model.clear_items()
+            self.addr_edit.clear()
+            self._sync_compose_draft_to_peer_key(None)
+        self._schedule_compose_drafts_persist()
+        self._update_unread_chrome()
+        self.refresh_status_label()
+        self._refresh_connection_buttons()
+        self.handle_system(f"Removed from saved peers: {norm_cb}")
 
     def _update_peer_lock_indicator(self) -> None:
         # stored_peer в ядре появляется после async init_session; до этого читаем .dat (как сайдбар при старте).
@@ -5635,33 +6038,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 "No peer address is available.\nEnter a peer address or connect first.",
             )
             return
-        normalized = self.core._normalize_peer_addr(peer_addr)
-        confirm = QtWidgets.QMessageBox.question(
-            self,
-            "Forget pinned peer key",
-            "Remove the pinned signing key for this peer?\n\n"
-            f"{normalized}\n\n"
-            "On the next secure connect, this peer will be trusted again via TOFU.\n"
-            "Only continue if you expect the key change and have verified the fingerprint out-of-band.",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.Cancel,
-            QtWidgets.QMessageBox.StandardButton.Cancel,
-        )
-        if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
-            return
-        try:
-            removed = self.core.forget_pinned_peer_key(peer_addr)
-        except Exception as e:  # pragma: no cover - GUI path
-            self.handle_error(f"Failed to forget pinned peer key: {e}")
-            return
-        if removed:
-            self.handle_system(f"Forgot pinned peer key for {normalized}.")
-        else:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Forget pinned peer key",
-                f"No pinned key stored for:\n{normalized}",
-            )
+        self._forget_pinned_peer_key_for_address(peer_addr)
 
     @QtCore.pyqtSlot()
     def on_load_profile_clicked(self) -> None:
@@ -5726,6 +6103,15 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.refresh_status_label()
         self._refresh_connection_buttons()
         await self.core.init_session()
+        self._load_contacts_book()
+        self._ensure_stored_peer_in_contact_book()
+        self._refresh_contacts_list()
+        self._apply_contacts_sidebar_startup_state()
+        self._sync_contacts_list_selection()
+        self._update_peer_lock_indicator()
+        self.refresh_status_label()
+        self._refresh_connection_buttons()
+        QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
 
     @QtCore.pyqtSlot()
     def on_send_file_clicked(self) -> None:

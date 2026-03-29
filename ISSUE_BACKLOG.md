@@ -116,6 +116,8 @@ Improve progress and error visibility for file and image sends.
 
 *Status: issues 7–12 are implemented in **v0.7.0** (see [`docs/releases/RELEASE_0.7.0.md`](docs/releases/RELEASE_0.7.0.md)).*
 
+*Implementation note (post–v0.7.0 tag): **Saved peers** list context menu — **Edit name & note…**, **Contact details…** (address, TOFU, remove pin), **Remove from saved peers…** (optional: encrypted history, pin, profile lock, BlindBox state file); core adds `clear_locked_peer()`, `contact_book` adds `remove_peer()`.*
+
 ### 7. Contacts sidebar
 
 **Description**

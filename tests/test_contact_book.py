@@ -98,6 +98,34 @@ def test_roundtrip_file() -> None:
         assert loaded.contacts[0].display_name == "A"
 
 
+def test_remove_peer() -> None:
+    book = cb.ContactBook(
+        contacts=[
+            cb.ContactRecord(addr=PEER_A, display_name="A"),
+            cb.ContactRecord(addr=PEER_B),
+        ],
+        last_active_peer=PEER_B,
+    )
+    assert cb.remove_peer(book, PEER_A) is True
+    assert len(book.contacts) == 1
+    assert book.contacts[0].addr == PEER_B
+    assert book.last_active_peer == PEER_B
+    assert cb.remove_peer(book, PEER_A) is False
+
+
+def test_remove_peer_clears_last_active() -> None:
+    book = cb.ContactBook(contacts=[cb.ContactRecord(addr=PEER_A)], last_active_peer=PEER_A)
+    assert cb.remove_peer(book, PEER_A) is True
+    assert book.contacts == []
+    assert book.last_active_peer is None
+
+
+def test_remove_peer_idempotent_unknown() -> None:
+    book = cb.ContactBook(contacts=[cb.ContactRecord(addr=PEER_A)])
+    assert cb.remove_peer(book, PEER_B) is False
+    assert len(book.contacts) == 1
+
+
 def test_save_migrates_from_v1_file() -> None:
     with tempfile.TemporaryDirectory() as td:
         path = str(Path(td) / "p.contacts.json")
