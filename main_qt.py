@@ -3826,7 +3826,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._refresh_connection_buttons()
 
     def _update_peer_lock_indicator(self) -> None:
-        locked = bool(self.core.stored_peer)
+        # stored_peer в ядре появляется после async init_session; до этого читаем .dat (как сайдбар при старте).
+        locked = bool(
+            self.core.stored_peer or peek_persisted_stored_peer(self.profile)
+        )
         light = self.theme_id == "ligth"
         dpr = max(1.0, float(self.devicePixelRatioF()))
         pm = _peer_lock_indicator_pixmap(locked=locked, light_theme=light, dpr=dpr)
@@ -5391,6 +5394,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     async def start_core(self) -> None:
         await self.core.init_session()
+        QtCore.QTimer.singleShot(0, self._update_peer_lock_indicator)
 
     def _on_app_state_changed_clear_unread(
         self, state: QtCore.Qt.ApplicationState

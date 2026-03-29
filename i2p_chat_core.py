@@ -98,6 +98,8 @@ class FileTransferInfo:
     size: int
     received: int = 0
     is_sending: bool = False
+    # True только для Send Pic (G), не для Send File (F/D)
+    is_inline_image: bool = False
 
 
 @dataclass
@@ -108,7 +110,6 @@ class PeerTrustInfo:
     pinned: bool
     signing_key_hex: Optional[str] = None
     fingerprint_short: Optional[str] = None
-    is_inline_image: bool = False  # True только для Send Pic (G), не для Send File (F/D)
     rejected_by_peer: bool = False  # True если получатель отклонил входящий файл
 
 
