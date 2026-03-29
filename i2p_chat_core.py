@@ -2547,8 +2547,8 @@ class I2PChatCore:
                         last_connect_exc = e
                         is_first_attempt = attempt == 0
                         if is_first_attempt and _is_cant_reach_peer_error(e):
-                            self._emit_system(
-                                "Peer not reachable yet (tunnels warming up). Retrying once..."
+                            logger.info(
+                                "CantReachPeer on first connect attempt; retrying once after 2s"
                             )
                             await asyncio.sleep(2.0)
                             continue
