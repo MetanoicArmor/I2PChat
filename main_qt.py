@@ -627,6 +627,7 @@ THEMES: dict[str, dict[str, object]] = {
         "hint_muted": "#767d8b",
         "label_primary": "#444b58",
         "combo_arrow": "#8c8d94",
+        "chat_viewport_fade": "#f2f4f8",
     },
     "night": {
         "label": "night",
@@ -943,6 +944,8 @@ THEMES: dict[str, dict[str, object]] = {
         "hint_muted": "#a9b1c1",
         "label_primary": "#c6cfdf",
         "combo_arrow": "#9fa1b5",
+        # Линейная смесь rgba(34,37,45,0.68) (ChatSurface) над #101114 — как фон под прозрачным QListView.
+        "chat_viewport_fade": "#1c1f25",
     },
 }
 
@@ -1139,6 +1142,124 @@ class ChatListModel(QtCore.QAbstractListModel):
         return None
 
 
+_BAYER4: tuple[tuple[int, int, int, int], ...] = (
+    (0, 8, 2, 10),
+    (12, 4, 14, 6),
+    (3, 11, 1, 9),
+    (15, 7, 13, 5),
+)
+
+
+def _lerp_alpha_stops(t: float, stops: list[tuple[float, float]]) -> float:
+    """Кусочно-линейная интерполяция альфы 0..255; stops: (t∈[0,1], alpha)."""
+    if t <= stops[0][0]:
+        return stops[0][1]
+    for i in range(1, len(stops)):
+        t0, a0 = stops[i - 1]
+        t1, a1 = stops[i]
+        if t <= t1:
+            if t1 <= t0:
+                return a1
+            u = (t - t0) / (t1 - t0)
+            return a0 + (a1 - a0) * u
+    return stops[-1][1]
+
+
+class _ChatViewportEdgeFade(QtWidgets.QWidget):
+    """Полоса с градиентом к прозрачности — смягчает обрезку баблов у краёв viewport."""
+
+    # Крутой подъём альфы только у самого края — уже зона полупрозрачности (меньше бендинга и лишнего смешивания с контентом ленты).
+    _STOPS_TOP: list[tuple[float, float]] = [
+        (0.0, 255.0),
+        (0.05, 175.0),
+        (0.10, 55.0),
+        (0.13, 0.0),
+        (1.0, 0.0),
+    ]
+    _STOPS_BOTTOM: list[tuple[float, float]] = [
+        (0.0, 0.0),
+        (0.87, 0.0),
+        (0.93, 55.0),
+        (0.97, 175.0),
+        (1.0, 255.0),
+    ]
+
+    def __init__(self, parent: QtWidgets.QWidget, *, top: bool) -> None:
+        super().__init__(parent)
+        self._top = top
+        self._base = QtGui.QColor("#2a2d36")
+        self.setObjectName("ChatViewportEdgeFade")
+        self.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self._dither_key: Optional[tuple[int, int, bool, int, int, int]] = None
+        self._dither_buf: Optional[bytearray] = None
+        self._dither_img: Optional[QtGui.QImage] = None
+
+    def set_base_color(self, color: QtGui.QColor) -> None:
+        self._base = QtGui.QColor(color)
+        self._dither_key = None
+        self.update()
+
+    def _ideal_alpha(self, ty: float) -> float:
+        stops = self._STOPS_TOP if self._top else self._STOPS_BOTTOM
+        return _lerp_alpha_stops(ty, stops)
+
+    def _rebuild_dither_image(self, w: int, h: int) -> None:
+        stride = w * 4
+        buf = bytearray(stride * h)
+        r = int(self._base.red())
+        g = int(self._base.green())
+        b = int(self._base.blue())
+        denom = float(max(h - 1, 1))
+        # Лёгкий ordered dither по X/Y — снимает горизонтальный 8‑битный бендинг Qt-градиента.
+        d_scale = 0.55
+        for y in range(h):
+            ty = y / denom
+            ideal = self._ideal_alpha(ty)
+            y3 = y & 3
+            row = y * stride
+            for x in range(w):
+                d = (float(_BAYER4[y3][x & 3]) - 7.5) * d_scale
+                ai = int(round(ideal + d))
+                if ai < 0:
+                    ai = 0
+                elif ai > 255:
+                    ai = 255
+                o = row + x * 4
+                buf[o] = b
+                buf[o + 1] = g
+                buf[o + 2] = r
+                buf[o + 3] = ai
+        self._dither_buf = buf
+        self._dither_img = QtGui.QImage(
+            buf,
+            w,
+            h,
+            stride,
+            QtGui.QImage.Format.Format_ARGB32,
+        )
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        del event
+        w = max(0, self.width())
+        h = max(0, self.height())
+        if w == 0 or h == 0:
+            return
+        r = int(self._base.red())
+        g = int(self._base.green())
+        b = int(self._base.blue())
+        key = (w, h, self._top, r, g, b)
+        if self._dither_key != key:
+            self._rebuild_dither_image(w, h)
+            self._dither_key = key
+        if self._dither_img is None or self._dither_img.isNull():
+            return
+        p = QtGui.QPainter(self)
+        p.drawImage(0, 0, self._dither_img)
+
+
 class ChatListView(QtWidgets.QListView):
     """QListView для баблов чата.
 
@@ -1149,6 +1270,8 @@ class ChatListView(QtWidgets.QListView):
     cancelTransferRequested = QtCore.pyqtSignal()
     imageOpenRequested = QtCore.pyqtSignal(str)  # path to image
     replyRequested = QtCore.pyqtSignal(str)  # quoted block for compose field
+
+    _EDGE_FADE_PX = 44
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -1162,9 +1285,47 @@ class ChatListView(QtWidgets.QListView):
         self.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectionBehavior.SelectItems
         )
+        self._fade_top = _ChatViewportEdgeFade(self, top=True)
+        self._fade_bottom = _ChatViewportEdgeFade(self, top=False)
+        self._apply_edge_fade_theme_colors()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._layout_edge_fades()
+
+    def _apply_edge_fade_theme_colors(self) -> None:
+        theme = THEMES.get(self._theme_id, THEMES[THEME_DEFAULT])
+        raw = theme.get("chat_viewport_fade")
+        if isinstance(raw, str):
+            c = QtGui.QColor(raw)
+            if not c.isValid():
+                c = QtGui.QColor("#2a2d36")
+        else:
+            c = QtGui.QColor("#2a2d36")
+        self._fade_top.set_base_color(c)
+        self._fade_bottom.set_base_color(c)
+
+    def _layout_edge_fades(self) -> None:
+        vp = self.viewport()
+        g = vp.geometry()
+        if g.width() <= 0 or g.height() <= 0:
+            return
+        cap = max(12, (g.height() - 8) // 2)
+        h = min(self._EDGE_FADE_PX, cap)
+        self._fade_top.setGeometry(g.x(), g.y(), g.width(), h)
+        self._fade_bottom.setGeometry(
+            g.x(), g.y() + g.height() - h, g.width(), h
+        )
+        self._fade_top.raise_()
+        self._fade_bottom.raise_()
+        sb = self.verticalScrollBar()
+        if sb is not None:
+            self._fade_top.stackUnder(sb)
+            self._fade_bottom.stackUnder(sb)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
+        self._layout_edge_fades()
         self.doItemsLayout()
         self.viewport().update()
 
@@ -1183,6 +1344,8 @@ class ChatListView(QtWidgets.QListView):
 
     def set_theme(self, theme_id: str) -> None:
         self._theme_id = _resolve_theme(theme_id)
+        self._apply_edge_fade_theme_colors()
+        self._layout_edge_fades()
 
     def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:  # type: ignore[override]
         index = self.indexAt(event.pos())
