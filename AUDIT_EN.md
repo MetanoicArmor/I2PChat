@@ -1,36 +1,38 @@
 # Security Audit Report: I2PChat
 
-Audit date: 2026-03-28  
-Repository state: `d4ecd11`  
-Mode: full audit (protocol + cryptography + local persistence + UI + CI/release + supply chain)
+Audit date: 2026-03-29  
+Repository state: `fdb0211`  
+Mode: full audit (protocol + cryptography + local persistence + UI + CI/release + supply chain + secret scan)
 
 ## Executive Summary
 
-This is a fresh post-remediation audit after the latest hardening cycle.
+Full audit revision after contact-book / Saved peers UX work, release-process adjustments, and CI hardening visible on `main`.
 
 Confirmed findings:
 - Critical: 0
 - High: 0
 - Medium: 1
-- Low: 3
+- Low: 4
 
 Overall status:
 - Core secure-channel controls remain strong (signed handshake, HKDF key separation, HMAC + sequence integrity, anti-downgrade).
-- The previously open history and inline-image integrity items are fixed and covered by tests.
-- Remaining risks are mostly release/process hardening gaps rather than protocol breakage.
+- History and inline-image integrity remediations from prior audits remain in place with regression tests.
+- **Test gate** now runs the full **`pytest tests/`** suite in CI in addition to the fixed unittest list, improving coverage of helpers (contacts, drafts, notifications, routing).
+- **Gitleaks** runs on every push/PR; a repo-local **`.gitleaks.toml`** documents one path allowlist for a unit-test fixture (see A-05).
+- Remaining risks are still mostly **release/process** and **edge-case** hardening rather than protocol breakage.
 
 ## Scope and Methodology
 
 Reviewed components:
 - Protocol/runtime/crypto: `i2p_chat_core.py`, `protocol_codec.py`, `crypto.py`
 - Offline subsystem: `blindbox_client.py`, `blindbox_blob.py`, `blindbox_state.py`, `blindbox_local_replica.py`
-- UI/local storage: `main_qt.py`, `chat_history.py`
-- CI/release/supply-chain: `.github/workflows/*`, `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`, lockfiles
+- UI/local storage: `main_qt.py`, `chat_history.py`, `contact_book.py`, `compose_drafts.py`, `notification_prefs.py`, `unread_counters.py`
+- CI/release/supply-chain: `.github/workflows/*` (test-gate, security-audit, secret-scan), `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`, `requirements*.txt`, `flake.lock`, `.gitleaks.toml`
 
 Executed checks:
-- `python3 -m unittest tests.test_protocol_framing_vnext tests.test_sam_input_validation tests.test_asyncio_regression tests.test_chat_history tests.test_history_ui_guards tests.test_audit_remediation -v`
-  - Result: `OK (90 tests)`
-- Manual code review for trust boundaries, dataflow, local persistence, and release pipeline policy.
+- `python -m unittest tests.test_blindbox_state_wrap tests.test_asyncio_regression tests.test_blindbox_client tests.test_atomic_writes tests.test_chat_history tests.test_history_ui_guards tests.test_profile_import_overwrite tests.test_protocol_framing_vnext tests.test_sam_input_validation tests.test_audit_remediation`
+  - Result: **OK (120 tests)** (on auditor host)
+- Manual code review: trust boundaries, BlindBox/lock semantics, contact JSON validation, new GUI paths (Saved peers, dialogs), secret-scan policy.
 
 ## Findings (Current State)
 
@@ -47,92 +49,108 @@ Issue:
 - CI policy verifies signing-related tokens in scripts but does not verify that official release artifacts are always signed/notarized.
 
 Impact:
-- Runtime protocol security is not directly affected, but release authenticity assurance still depends on operator discipline and user verification behavior.
+- Runtime protocol security is not directly affected, but release authenticity assurance still depends on operator discipline and user verification.
 
 Recommendation:
 1. Enforce `I2PCHAT_REQUIRE_GPG=1` in official release jobs.
 2. Fail release jobs when detached signature generation fails.
-3. Add artifact-level verification in CI (for example, verify `.asc` for produced release artifacts) and maintain a clear end-user verification procedure.
+3. Add artifact-level verification in CI (e.g. verify `.asc` for produced artifacts) and maintain a clear end-user verification procedure.
 
 ---
 
-### [LOW] A-02: Inline image end marker branch still relies on truthy buffer check
+### [LOW] A-02: Inline image end marker branch still requires a truthy buffer
 
 Affected:
 - `i2p_chat_core.py` (`receive_loop`, branch `msg_type == "G"`, `body == "__IMG_END__"`)
 
 Issue:
-- The finalization branch currently requires both `self.inline_image_info` and `self.inline_image_buffer` to be truthy.
-- In edge cases with active transfer metadata but empty buffer, flow falls into a different error path instead of deterministic finalization handling.
+- Finalization still requires both `self.inline_image_info` and **truthy** `self.inline_image_buffer`.
+- If metadata is active but the buffer is empty, behavior may follow a less deterministic error path.
 
 Impact:
-- This remains fail-closed in typical attacks, but it is a brittle edge-case behavior and can produce ambiguous diagnostics.
+- Typically fail-closed; brittle edge-case diagnostics.
 
 Recommendation:
-1. Handle `__IMG_END__` whenever `inline_image_info` is present, independent of buffer truthiness.
-2. Apply deterministic size-based finalization logic for both empty and non-empty buffers.
+1. Handle `__IMG_END__` whenever `inline_image_info` is set, regardless of buffer truthiness.
+2. Unify size-based finalization for empty and non-empty buffers.
 
 ---
 
-### [LOW] A-03: Main test gate still omits some security-relevant test modules
+### [LOW] A-03: CI coverage vs optional GUI-only dependencies
 
 Affected:
-- `.github/workflows/test-gate.yml`
+- `.github/workflows/test-gate.yml` (now: unittest gate **+** `pytest tests/ -q`)
 
-Issue:
-- Gate coverage has improved and now includes history/audit suites, but some security-relevant modules are still outside the default gate.
+Status (improvement vs prior audit):
+- The gate **does** run the full pytest tree, covering `contact_book`, `compose_drafts`, `notification_prefs`, `send_retry_policy`, etc.
 
-Impact:
-- Regressions in non-gated suites may pass the main check if no broader test job runs in the same PR path.
+Residual:
+- Any test that **skips** when PyQt6 (or other GUI deps) is missing or unusable on the runner will not assert on that path in CI; smoke coverage for `main_qt` remains environment-dependent.
 
 Recommendation:
-1. Add a second mandatory “full unittest security” job, or expand main gate coverage further.
+1. Keep expanding headless/Qt-offscreen smoke where practical, or a dedicated optional job with a virtual display.
 
 ---
 
-### [LOW] A-04: `pip-audit` currently ignores one known vulnerability ID
+### [LOW] A-04: `pip-audit` ignores one known vulnerability ID
 
 Affected:
 - `.github/workflows/security-audit.yml`
 
 Issue:
-- Workflow currently uses `--ignore-vuln CVE-2026-4539` for Pygments while waiting for an upstream-fixed release.
+- Workflow uses `--ignore-vuln CVE-2026-4539` for Pygments while waiting for an upstream-fixed PyPI release.
 
 Impact:
-- This is a managed/explicit exception, but it weakens strict “no known vulns” guarantees until dependency update is available.
+- Managed exception; weakens strict “no known vulns” until removed.
 
 Recommendation:
-1. Remove ignore flag immediately when fixed package version is available.
-2. Track this exception with explicit expiry/review cadence.
+1. Remove the ignore when a fixed package version is available.
+2. Track with explicit review/expiry cadence.
+
+---
+
+### [LOW] A-05: Gitleaks path allowlist for a unit test file
+
+Affected:
+- `.gitleaks.toml` (allowlist: `tests/test_clear_locked_peer\.py`)
+
+Issue:
+- Prevents false positives on mock `.dat` first-line fixtures (`generic-api-key` rule). The allowlisted path is narrow.
+
+Impact:
+- Slightly lower automatic scrutiny for that file; acceptable if content remains non-secret test data only.
+
+Recommendation:
+1. Periodically review the file for new high-entropy literals.
+2. Prefer naming/structure that avoids `*KEY*` assignment patterns in tests when possible (already partially applied: `MOCK_DAT_LINE1`).
 
 ## Remediation Status of Previous Open Items
 
-Previously reported items closed in current code:
-- Inline image strict end-size integrity and no-ACK-on-mismatch.
-- History file peer identifier upgraded to full SHA-256 digest.
-- Decrypted history now validates embedded `peer` against expected peer.
-- GUI history save failures are logged and surfaced to user.
-- Main test gate includes `test_chat_history`, `test_history_ui_guards`, `test_audit_remediation`.
+Previously reported items still relevant:
+- **A-01, A-02, A-04** — unchanged disposition (see above).
+
+Improved since prior audit revision:
+- **Test gate breadth**: full `pytest tests/` in `test-gate.yml`.
+- **Secret scanning**: `secret-scan.yml` + gitleaks + `.gitleaks.toml` for documented exceptions.
+- **Contact book**: strict `normalize_peer_address` / host regex, `MAX_CONTACTS`, atomic JSON writes (`atomic_write_json`), v1→v2 migration tests (`tests/test_contact_book.py`).
+- **Lock UX**: `I2PChatCore.clear_locked_peer()` with tests (`tests/test_clear_locked_peer.py`); trust snapshot `get_peer_trust_info` tested (`tests/test_peer_trust_info.py`).
 
 ## Verified Security Strengths
 
-- Secure handshake flow with signed context-bound INIT/RESP payloads and TOFU pinning for persistent profiles.
-- HKDF-based session key separation (`k_enc` / `k_mac`) and strict HMAC integrity checks bound to message metadata.
-- Anti-downgrade behavior after handshake and strict sequence monotonicity enforcement.
-- Stronger transfer integrity on file and inline image completion paths (with regression coverage).
-- Hardened local encrypted history design:
-  - per-peer storage
-  - SecretBox encryption at rest
-  - atomic writes
-  - fail-closed on corruption/wrong key/peer mismatch
-- Improved CI gate coverage versus previous audit revision.
+- Secure handshake with signed INIT/RESP and TOFU pinning for persistent profiles.
+- HKDF session key separation (`k_enc` / `k_mac`), HMAC + strict sequencing, anti-downgrade after handshake.
+- Strong file/inline-image completion integrity paths (with regression tests).
+- Encrypted per-peer chat history: SecretBox, atomic writes, peer digest binding, fail-closed on mismatch/corruption.
+- SAM/input validation tests; protocol framing tests; BlindBox client/state tests.
+- Supply-chain governance job checks `i2plib/VENDORED_UPSTREAM.json` and `flake.lock` pin.
 
 ## Residual Operational Risks (By Design / Explicit Opt-In)
 
-- `default` profile remains transient by design (TOFU continuity is not persisted between restarts).
-- Local BlindBox insecure mode is still available only through explicit override and warning paths.
-- Release built-in BlindBox replica defaults may be suboptimal for strict privacy deployments; custom replica policy is recommended for hardened setups.
+- `default` profile remains transient (TOFU not persisted across restarts).
+- BlindBox insecure local mode only via explicit override and warnings.
+- Built-in BlindBox replica defaults may be inappropriate for strict privacy deployments; configure custom replicas for hardened setups.
+- **`*.contacts.json`** and **`*.compose_drafts.json`** store **unencrypted** local metadata (names, notes, message previews, draft text) under the profiles directory — protect the host disk/account; distinct from encrypted history blobs.
 
 ## Conclusion
 
-No Critical or High vulnerabilities were confirmed in the current codebase. The most important remaining issue is release-signing enforcement in official automation. Other active items are low-severity edge/process hardening opportunities.
+No Critical or High vulnerabilities were confirmed in the audited snapshot. The primary remaining issue is **enforcing release signing** in official automation. Other items are low-severity edge cases, dependency-exception tracking, and gitleaks allowlist hygiene. CI test and secret-scan posture improved versus the previous audit revision.
