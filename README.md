@@ -57,6 +57,7 @@ Backlog sync helper: `GITHUB_TOKEN=... ./scripts/sync_backlog.sh`
 - **Sound notifications** for incoming messages
 - **BlindBox (default-on for named profiles)** — offline message delivery
 - **Optional encrypted chat history** — per-peer local history (toggle **Chat history: ON/OFF** in the **⋯** menu); encrypted at rest with keys derived from your profile identity (see **§4.11** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md))
+- **Saved peers** — left sidebar **contact book** (per-profile `contacts.json`): quick switch between saved `.b32.i2p` contacts, optional name/note, unread hints, resize/collapse, and a context menu (edit, trust details, remove). See **§3.1** in the manuals.
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
 #### 📖 Manuals
@@ -106,6 +107,8 @@ Practical notes:
 ### 📸 Screenshots
 
 <p align="center">
+  <img src="screenshots/6.png" alt="I2PChat – Saved peers sidebar (contact book)" width="900" /><br>
+  <sub>Saved peers / contact book (left sidebar)</sub><br><br>
   <img src="screenshots/5.png" alt="I2PChat – received image and chat" width="900" /><br>
   <img src="screenshots/4.png" alt="I2PChat – chat and file transfer (sending)" width="900" />
 </p>

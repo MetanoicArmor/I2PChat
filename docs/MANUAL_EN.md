@@ -60,11 +60,24 @@ After you choose a profile, the main chat window opens:
   If you **narrow the window**, a shorter line is shown (including `Tx:<state>` and `BB:<state>`). **Hover** the status text for full diagnostics, current send route details, and BlindBox explanation.
   On important network/security changes and errors, the status row is temporarily expanded for readability, then returns to normal compact behavior.
 - **Theme switch** — to the right of the status row (sun/moon icon). Toggles `ligth` and `night`.
+- **Saved peers** — optional **left** sidebar with the per-profile contact book; details in **§3.1**.
 - **Chat area** — shows your and peer messages, system notices, and file transfer progress. You can select and copy message text (right‑click or context menu).
 - **Message input** — below the chat: type your text. **Enter** makes a new line, and sending a message uses **Shift+Enter** (also **Ctrl+Enter**, and on macOS **⌘+Enter**). Or use the send button. You can **paste a raster image** from the clipboard (**Ctrl+V** / **⌘V** or **Paste** in the field’s menu); it is sent like **Send picture** (PNG/JPEG/WebP).
 - **Actions bar** — at the bottom: peer address, connection buttons, and the **`⋯`** menu (see section 4).
 
 Use **Connect** for live chat and the first BlindBox bootstrap session. If BlindBox is already ready, sending text can go straight to the offline queue even without an active live connection.
+
+#### 3.1. Saved peers sidebar (contact book)
+
+The **Saved peers** strip on the **left** is your local **contact book** for the current profile. It is stored as `<profile>.contacts.json` in the profiles directory (together with `.dat`).
+
+<img src="../screenshots/6.png" alt="Main window with Saved peers sidebar open: contact list and chat" width="900" />
+
+- **Rows** — each contact shows a display name (or shortened `.b32.i2p`), a subtitle (last message preview or your note), and unread styling when that peer is not the active chat.
+- **Click** a row — sets the peer address field to that contact (same as typing the address) and syncs compose drafts; if the profile is **locked** to another peer, switching may be blocked (see status messages).
+- **◀ / ▶** — collapse or expand the sidebar; when the profile is **locked to a peer**, the strip may start **collapsed** to give more space to the chat.
+- **Drag** the narrow grip between the list and the chat to resize the strip (within min/max limits).
+- **Right‑click** a contact — **Edit name & note…** (local labels only), **Contact details…** (address, TOFU fingerprint, optional **Remove pin**), **Remove from saved peers…** (with options to also delete encrypted history, TOFU pin, profile lock, and BlindBox state file for that peer, where applicable).
 
 ### 4. Actions bar (connection and profiles)
 
