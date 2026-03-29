@@ -50,6 +50,26 @@ def _exception_user_message(exc: BaseException) -> str:
     return type(exc).__name__
 
 
+def _sam_stream_connect_hint(exc: BaseException) -> str:
+    """
+    Extra context for common SAM STREAM CONNECT/ACCEPT failures (empty str() on many).
+    InvalidId: router has no session with this nickname (lost session, wrong order, router restart).
+    CantReachPeer: destination known but not reachable (tunnels, offline, typo in b32).
+    """
+    if isinstance(exc, i2plib.InvalidId):
+        return (
+            "Hint: SAM no longer knows this STREAM session. Restart the I2P router (i2pd/Java I2P) "
+            "and I2PChat, wait until status shows Pending or Visible, then try Connect again. "
+            "Do not run two I2PChat instances on the same profile simultaneously."
+        )
+    if isinstance(exc, i2plib.CantReachPeer):
+        return (
+            "Hint: peer not reachable yet. Check the full 52-character .b32.i2p address, "
+            "ensure the other side is online with tunnels ready, wait 1–3 minutes, retry."
+        )
+    return ""
+
+
 DEFAULT_LOCAL_BLINDBOX_REPLICA = "127.0.0.1:19444"
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 BLINDBOX_LOCAL_WRAP_VERSION_LEGACY = 1
@@ -2568,7 +2588,10 @@ class I2PChatCore:
                 # Пустое сообщение у SAM-исключений (например CantReachPeer()) — только имя типа,
                 # без «CantReachPeer: CantReachPeer()».
                 detail = str(e).strip() or type(e).__name__
-                deferred_error = f"Connection failed: {detail}"
+                hint = _sam_stream_connect_hint(e)
+                deferred_error = (
+                    f"Connection failed: {detail}" + (f" {hint}" if hint else "")
+                )
                 deferred_system = "Waiting for incoming connections..."
         finally:
             self._outbound_connect_busy = False
