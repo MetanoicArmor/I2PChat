@@ -19,6 +19,7 @@ from chat_history import (
     delete_history,
     derive_history_key,
     load_history,
+    normalize_peer_addr,
     save_history,
 )
 
@@ -284,6 +285,14 @@ class ChatHistoryAtomicityTests(unittest.TestCase):
 
             still_there = load_history(td, "alice", PEER, IDENTITY_KEY)
             self.assertEqual(len(still_there), 3)
+
+
+class NormalizePeerAddrTests(unittest.TestCase):
+    def test_strip_lower(self) -> None:
+        self.assertEqual(
+            normalize_peer_addr("  AbCd.b32.I2p  "),
+            "abcd.b32.i2p",
+        )
 
 
 @unittest.skipUnless(crypto.NACL_AVAILABLE, "PyNaCl required")

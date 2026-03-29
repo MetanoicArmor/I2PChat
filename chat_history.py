@@ -43,8 +43,13 @@ DEFAULT_MAX_MESSAGES = 1000
 LEGACY_PEER_ID_HEX_LEN = 16
 
 
-def _normalize_peer_addr(peer_addr: str) -> str:
+def normalize_peer_addr(peer_addr: str) -> str:
+    """Нормализация адреса пира для ключей (история, черновики в UI)."""
     return peer_addr.strip().lower()
+
+
+def _normalize_peer_addr(peer_addr: str) -> str:
+    return normalize_peer_addr(peer_addr)
 
 
 @dataclass

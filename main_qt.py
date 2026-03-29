@@ -14,7 +14,13 @@ from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
 from blindbox_state import atomic_write_json
-from chat_history import HistoryEntry, delete_history, load_history, save_history
+from chat_history import (
+    HistoryEntry,
+    delete_history,
+    load_history,
+    normalize_peer_addr,
+    save_history,
+)
 from i2p_chat_core import (
     ChatMessage,
     FileTransferInfo,
@@ -841,6 +847,14 @@ def load_history_max_messages() -> int:
     if isinstance(val, int) and val > 0:
         return val
     return 1000
+
+
+COMPOSE_DRAFTS_MAX_KEYS = 100
+COMPOSE_DRAFTS_DEBOUNCE_MS = 1500
+
+
+def _compose_drafts_file_path(profile: str) -> str:
+    return os.path.join(get_profiles_dir(), f"{profile}.compose_drafts.json")
 
 
 @dataclass
@@ -2868,6 +2882,13 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._last_error_text: str = ""
         self._last_error_ts: float = 0.0
 
+        self._compose_drafts: dict[str, str] = {}
+        self._compose_draft_active_key: Optional[str] = None
+        self._compose_drafts_save_timer = QtCore.QTimer(self)
+        self._compose_drafts_save_timer.setSingleShot(True)
+        self._compose_drafts_save_timer.setInterval(COMPOSE_DRAFTS_DEBOUNCE_MS)
+        self._compose_drafts_save_timer.timeout.connect(self._flush_compose_drafts_to_disk)
+
         # Таймер для анимации прогресс-бара
         self._transfer_timer = QtCore.QTimer(self)
         self._transfer_timer.timeout.connect(self._animate_transfer)
@@ -2905,7 +2926,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         input_layout.setSpacing(6)
         self.input_edit = MessageInputEdit(self)
         self.input_edit.setPlaceholderText(
-            "Type message. Enter to send, Shift+Enter for new line."
+            "Type message. Enter = new line; Shift+Enter or Ctrl/⌘+Enter = send."
         )
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
@@ -2996,6 +3017,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
         self.addr_edit.textChanged.connect(lambda _t: self._refresh_connection_buttons())
+        self.addr_edit.editingFinished.connect(self._on_addr_editing_finished_for_drafts)
+        self.input_edit.textChanged.connect(self._on_compose_text_changed)
         self.more_actions_popup.add_action("Load profile (.dat)", self.on_load_profile_clicked)
         self.more_actions_popup.add_action("Send picture", self.on_send_pic_clicked)
         self.more_actions_popup.add_action("Send file", self.on_send_file_clicked)
@@ -3014,6 +3037,8 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         # ядро
         self.core = self._create_core(self.profile)
+        self._load_compose_drafts_from_disk()
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self._apply_theme(self.theme_id, persist=False)
         self.refresh_status_label()
         self._refresh_connection_buttons()
@@ -3440,6 +3465,7 @@ class ChatWindow(QtWidgets.QMainWindow):
     def handle_peer_changed(self, peer: Optional[str]) -> None:
         if peer:
             self.addr_edit.setText(peer)
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self.refresh_status_label()
         self._refresh_connection_buttons()
 
@@ -3825,9 +3851,13 @@ class ChatWindow(QtWidgets.QMainWindow):
         asyncio.create_task(self._send_text_ui_flow(text))
 
     async def _send_text_ui_flow(self, text: str) -> None:
+        draft_key = self._compose_peer_key_from_ui()
         result = await self.core.send_text(text)
         if result.accepted:
+            if draft_key:
+                self._compose_drafts.pop(draft_key, None)
             self.input_edit.clear()
+            self._schedule_compose_drafts_persist()
         else:
             # Keep text in the input when blocked (especially await-live-root),
             # so user can press Connect and retry without retyping.
@@ -3873,7 +3903,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             if self.core.conn is not None and self.core.handshake_complete:
                 retry = await self.core.send_text(text)
                 if retry.accepted:
+                    dk = self._compose_peer_key_from_ui()
+                    if dk:
+                        self._compose_drafts.pop(dk, None)
                     self.input_edit.clear()
+                    self._schedule_compose_drafts_persist()
                     self.handle_system("Auto-connect succeeded, message sent.")
                 else:
                     self.input_edit.setPlainText(text)
@@ -3902,6 +3936,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     self, "Connect", "Please enter peer address"
                 )
                 return
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         asyncio.create_task(self.core.connect_to_peer(addr))
         QtCore.QTimer.singleShot(0, self._refresh_connection_buttons)
 
@@ -3996,6 +4031,82 @@ class ChatWindow(QtWidgets.QMainWindow):
             or self.addr_edit.text().strip()
             or None
         )
+
+    def _compose_peer_key_from_ui(self) -> Optional[str]:
+        peer = self._current_history_peer()
+        if not peer:
+            return None
+        return normalize_peer_addr(peer)
+
+    def _merge_active_input_into_compose_drafts(self) -> None:
+        if self._compose_draft_active_key is not None:
+            self._compose_drafts[self._compose_draft_active_key] = self.input_edit.toPlainText()
+
+    def _load_compose_drafts_from_disk(self) -> None:
+        self._compose_drafts = {}
+        path = _compose_drafts_file_path(self.profile)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        raw = data.get("drafts")
+        if not isinstance(raw, dict):
+            return
+        for k, v in raw.items():
+            if isinstance(k, str) and isinstance(v, str):
+                self._compose_drafts[k] = v
+
+    def _flush_compose_drafts_to_disk(self) -> None:
+        self._merge_active_input_into_compose_drafts()
+        while len(self._compose_drafts) > COMPOSE_DRAFTS_MAX_KEYS:
+            del self._compose_drafts[next(iter(self._compose_drafts))]
+        try:
+            atomic_write_json(
+                _compose_drafts_file_path(self.profile),
+                {"version": 1, "drafts": dict(self._compose_drafts)},
+            )
+        except Exception:
+            logger.debug("failed to save compose drafts", exc_info=True)
+
+    def _schedule_compose_drafts_persist(self) -> None:
+        self._compose_drafts_save_timer.stop()
+        self._compose_drafts_save_timer.start()
+
+    @QtCore.pyqtSlot()
+    def _on_compose_text_changed(self) -> None:
+        if self._compose_draft_active_key is not None:
+            self._compose_drafts[self._compose_draft_active_key] = self.input_edit.toPlainText()
+        self._schedule_compose_drafts_persist()
+
+    @QtCore.pyqtSlot()
+    def _on_addr_editing_finished_for_drafts(self) -> None:
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+
+    def _sync_compose_draft_to_peer_key(self, new_key: Optional[str]) -> None:
+        if new_key == self._compose_draft_active_key:
+            return
+        orphan = ""
+        if self._compose_draft_active_key is None and new_key is not None:
+            orphan = self.input_edit.toPlainText()
+        if self._compose_draft_active_key is not None:
+            self._compose_drafts[self._compose_draft_active_key] = self.input_edit.toPlainText()
+        self._compose_draft_active_key = new_key
+        if new_key is None:
+            text = ""
+        else:
+            text = self._compose_drafts.get(new_key, "")
+            if not text.strip() and orphan:
+                text = orphan
+        self.input_edit.blockSignals(True)
+        self.input_edit.setPlainText(text)
+        cursor = self.input_edit.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        self.input_edit.setTextCursor(cursor)
+        self.input_edit.blockSignals(False)
+        self._schedule_compose_drafts_persist()
 
     def _try_load_history(self) -> None:
         if not self._history_enabled:
@@ -4203,11 +4314,15 @@ class ChatWindow(QtWidgets.QMainWindow):
     async def switch_profile(self, profile: str) -> None:
         """Переключиться на другой профиль (.dat)."""
         profile = ensure_valid_profile_name(profile)
+        self._flush_compose_drafts_to_disk()
         await self.core.shutdown()
         self.profile = profile
         clean_profile = self.profile.rstrip(" •")
         self.setWindowTitle(f"I2PChat @ {clean_profile}")
         self.core = self._create_core(self.profile)
+        self._load_compose_drafts_from_disk()
+        self._compose_draft_active_key = None
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self.refresh_status_label()
         self._refresh_connection_buttons()
         await self.core.init_session()
@@ -4308,6 +4423,8 @@ class ChatWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         """Останавливаем ядро и event loop при закрытии окна."""
         self._history_flush_timer.stop()
+        self._compose_drafts_save_timer.stop()
+        self._flush_compose_drafts_to_disk()
         self._save_history_if_needed()
 
         loop = asyncio.get_event_loop()
