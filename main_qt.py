@@ -14,6 +14,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
 from blindbox_state import atomic_write_json
+from compose_drafts import apply_compose_draft_peer_switch
 from chat_history import (
     HistoryEntry,
     delete_history,
@@ -4088,18 +4089,14 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _sync_compose_draft_to_peer_key(self, new_key: Optional[str]) -> None:
         if new_key == self._compose_draft_active_key:
             return
-        orphan = ""
-        if self._compose_draft_active_key is None and new_key is not None:
-            orphan = self.input_edit.toPlainText()
-        if self._compose_draft_active_key is not None:
-            self._compose_drafts[self._compose_draft_active_key] = self.input_edit.toPlainText()
-        self._compose_draft_active_key = new_key
-        if new_key is None:
-            text = ""
-        else:
-            text = self._compose_drafts.get(new_key, "")
-            if not text.strip() and orphan:
-                text = orphan
+        active, text, out = apply_compose_draft_peer_switch(
+            old_active_key=self._compose_draft_active_key,
+            new_key=new_key,
+            input_plain=self.input_edit.toPlainText(),
+            drafts=self._compose_drafts,
+        )
+        self._compose_drafts = out
+        self._compose_draft_active_key = active
         self.input_edit.blockSignals(True)
         self.input_edit.setPlainText(text)
         cursor = self.input_edit.textCursor()
