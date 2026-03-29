@@ -264,7 +264,9 @@ nix develop github:MetanoicArmor/I2PChat
 
 ### 📄 License
 
-See `LICENSE` for full license text.
+I2PChat is licensed under the **GNU Affero General Public License v3.0** (or any later version — see section 14 of the license). The full text is in [`LICENSE`](LICENSE).
+
+The vendored [`i2plib/`](i2plib/) package remains under the **MIT** license (see [`i2plib/__version__.py`](i2plib/__version__.py)).
 
 ### ☕ Buy me a coffee
 

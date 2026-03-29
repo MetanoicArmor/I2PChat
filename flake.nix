@@ -69,7 +69,7 @@
           meta = with lib; {
             description = "Secure peer-to-peer chat client for the I2P anonymity network";
             homepage = "https://github.com/MetanoicArmor/I2PChat";
-            license = licenses.mit;
+            license = licenses.agpl3Plus;
             platforms = platforms.linux ++ platforms.darwin;
             mainProgram = "i2pchat";
           };
