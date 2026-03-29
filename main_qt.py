@@ -392,6 +392,41 @@ THEMES: dict[str, dict[str, object]] = {
                 padding-right: 10px;
                 font-size: 12px;
             }
+            QScrollArea#ChatSearchHitsScroll {
+                background: transparent;
+                border: none;
+            }
+            QWidget#ChatSearchHitsInner {
+                background: transparent;
+            }
+            QPushButton#ChatSearchHitRow {
+                background: transparent;
+                border: none;
+                color: #1b4a2f;
+                font-size: 11px;
+                text-align: left;
+                padding: 5px 8px;
+                border-radius: 5px;
+            }
+            QPushButton#ChatSearchHitRow:hover {
+                background: rgba(10, 132, 255, 0.10);
+            }
+            QPushButton#ChatSearchHitRow[hitSelected="true"] {
+                background: rgba(10, 132, 255, 0.22);
+                color: #0d2e1c;
+            }
+            QFrame#ChatSearchHitsConsole QScrollBar:vertical {
+                background: transparent;
+                width: 6px;
+                margin: 0px;
+            }
+            QFrame#ChatSearchHitsConsole QScrollBar::handle:vertical {
+                background: rgba(60, 60, 67, 0.35);
+                min-height: 20px;
+                border-radius: 3px;
+            }
+            QFrame#ChatSearchHitsConsole QScrollBar::add-line:vertical,
+            QFrame#ChatSearchHitsConsole QScrollBar::sub-line:vertical { height: 0px; }
             QListView {
                 background: transparent;
                 border: none;
@@ -729,6 +764,41 @@ THEMES: dict[str, dict[str, object]] = {
                 padding-right: 10px;
                 font-size: 12px;
             }
+            QScrollArea#ChatSearchHitsScroll {
+                background: transparent;
+                border: none;
+            }
+            QWidget#ChatSearchHitsInner {
+                background: transparent;
+            }
+            QPushButton#ChatSearchHitRow {
+                background: transparent;
+                border: none;
+                color: #8fd99a;
+                font-size: 11px;
+                text-align: left;
+                padding: 5px 8px;
+                border-radius: 5px;
+            }
+            QPushButton#ChatSearchHitRow:hover {
+                background: rgba(48, 209, 88, 0.10);
+            }
+            QPushButton#ChatSearchHitRow[hitSelected="true"] {
+                background: rgba(48, 209, 88, 0.18);
+                color: #d8ffe0;
+            }
+            QFrame#ChatSearchHitsConsole QScrollBar:vertical {
+                background: transparent;
+                width: 6px;
+                margin: 0px;
+            }
+            QFrame#ChatSearchHitsConsole QScrollBar::handle:vertical {
+                background: rgba(255, 255, 255, 0.18);
+                min-height: 20px;
+                border-radius: 3px;
+            }
+            QFrame#ChatSearchHitsConsole QScrollBar::add-line:vertical,
+            QFrame#ChatSearchHitsConsole QScrollBar::sub-line:vertical { height: 0px; }
             QListView {
                 background: transparent;
                 border: none;
@@ -3530,6 +3600,51 @@ class _ContactsSidebarResizeGrip(QtWidgets.QWidget):
         super().mouseReleaseEvent(event)
 
 
+class ChatSearchHitsConsoleFrame(QtWidgets.QFrame):
+    """Консоль совпадений поиска: полупрозрачность и рамка через QPainter (QSS rgba на macOS часто без альфы)."""
+
+    def __init__(
+        self,
+        parent: Optional[QtWidgets.QWidget],
+        theme_id: str,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("ChatSearchHitsConsole")
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self._theme_id = _resolve_theme(theme_id)
+
+    def set_console_theme(self, theme_id: str) -> None:
+        self._theme_id = _resolve_theme(theme_id)
+        self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        w, h = self.width(), self.height()
+        if w < 3 or h < 3:
+            return
+        inset = 0.75
+        rect = QtCore.QRectF(inset, inset, w - 2 * inset, h - 2 * inset)
+        r = 10.0
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(rect, r, r)
+        if self._theme_id == "night":
+            fill = QtGui.QColor(18, 22, 28, 115)
+            stroke = QtGui.QColor(255, 255, 255, 82)
+        else:
+            fill = QtGui.QColor(232, 236, 244, 130)
+            stroke = QtGui.QColor(60, 60, 67, 110)
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        p.fillPath(path, fill)
+        border_pen = QtGui.QPen(stroke)
+        border_pen.setWidthF(1.35)
+        border_pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+        p.setPen(border_pen)
+        p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+
+
 class ChatWindow(QtWidgets.QMainWindow):
     # Ниже этого порога ширины лейбла статуса показывается сокращённая строка.
     _STATUS_LABEL_COMPACT_PX = 700
@@ -3551,6 +3666,8 @@ class ChatWindow(QtWidgets.QMainWindow):
     _CONTACTS_SIDEBAR_MIN_OPEN_PX = 160
     # Стартовая ширина до ручного ресайза: не шире этого (на широких окнах панель остаётся узкой).
     _CONTACTS_SIDEBAR_DEFAULT_OPEN_PX = 240
+    # Выезжающая панель совпадений поиска (рамка + список, анимация по maximumHeight).
+    _CHAT_SEARCH_CONSOLE_OPEN_H = 128
     # Верхняя граница ширины панели (как при перетаскивании разделителя).
     _CONTACTS_SIDEBAR_MAX_OPEN_PX = 520
     _CONTACTS_SIDEBAR_ANIM_MS = 200
@@ -3670,6 +3787,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._transfer_timer.timeout.connect(self._animate_transfer)
         self._transfer_timer.setInterval(50)
 
+        self._history_enabled = load_history_enabled()
+
         # основной чат
         self.chat_view = ChatListView(self)
         self.chat_view.setVerticalScrollMode(
@@ -3697,6 +3816,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._chat_search_match_rows: list[int] = []
         self._chat_search_cur: int = -1
         self._chat_search_sync_suppressed: bool = False
+        self._chat_search_console_anim: Optional[QtCore.QPropertyAnimation] = None
+        self._chat_search_hit_buttons: list[QtWidgets.QPushButton] = []
         self._chat_search_debounce = QtCore.QTimer(self)
         self._chat_search_debounce.setSingleShot(True)
         self._chat_search_debounce.setInterval(200)
@@ -3706,12 +3827,17 @@ class ChatWindow(QtWidgets.QMainWindow):
         # забирает горизонтальное растяжение (остаётся пустота справа от ◀▶).
         # ChatSurface: левый margin = col_left, правый = g — компенсируем здесь,
         # чтобы строка поиска визуально имела симметричные боковые отступы.
-        search_h = QtWidgets.QHBoxLayout()
+        self._chat_search_header = QtWidgets.QWidget(chat_surface)
+        _hdr_layout = QtWidgets.QVBoxLayout(self._chat_search_header)
+        _hdr_layout.setContentsMargins(0, 0, 0, 5)
+        _hdr_layout.setSpacing(0)
+        self._chat_search_row = QtWidgets.QWidget(self._chat_search_header)
+        search_h = QtWidgets.QHBoxLayout(self._chat_search_row)
         search_h.setContentsMargins(
             max(0, g - col_left), 0, 0, max(2, g // 2)
         )
         search_h.setSpacing(self._UI_GRID_PX)
-        self._chat_search_field_wrap = QtWidgets.QWidget(chat_surface)
+        self._chat_search_field_wrap = QtWidgets.QWidget(self._chat_search_row)
         self._chat_search_field_wrap.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Fixed,
@@ -3745,7 +3871,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         self._chat_search_status_label.hide()
         self._chat_search_field_wrap.installEventFilter(self)
-        self._chat_search_prev = QtWidgets.QPushButton("◀", chat_surface)
+        self._chat_search_prev = QtWidgets.QPushButton("◀", self._chat_search_row)
         self._chat_search_prev.setFixedWidth(36)
         self._chat_search_prev.setFixedHeight(_search_row_h)
         self._chat_search_prev.setSizePolicy(
@@ -3753,7 +3879,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
         self._chat_search_prev.setToolTip("Previous match")
-        self._chat_search_next = QtWidgets.QPushButton("▶", chat_surface)
+        self._chat_search_next = QtWidgets.QPushButton("▶", self._chat_search_row)
         self._chat_search_next.setFixedWidth(36)
         self._chat_search_next.setFixedHeight(_search_row_h)
         self._chat_search_next.setSizePolicy(
@@ -3765,23 +3891,73 @@ class ChatWindow(QtWidgets.QMainWindow):
         search_h.addWidget(self._chat_search_prev)
         search_h.addWidget(self._chat_search_next)
         search_h.setStretch(0, 1)
-        self._chat_search_list = QtWidgets.QListWidget(chat_surface)
-        self._chat_search_list.setMaximumHeight(100)
-        self._chat_search_list.setSizePolicy(
+        _hdr_layout.addWidget(self._chat_search_row)
+        self._chat_search_console = ChatSearchHitsConsoleFrame(
+            chat_surface, self.theme_id
+        )
+        self._chat_search_console.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self._chat_search_console.setMaximumHeight(0)
+        self._chat_search_console.hide()
+        _cs_lay = QtWidgets.QVBoxLayout(self._chat_search_console)
+        _cs_lay.setContentsMargins(8, 5, 8, 7)
+        _cs_lay.setSpacing(0)
+        # QListWidget = QAbstractItemView: на macOS даёт вертикальные «маски» как у ленты чата.
+        self._chat_search_scroll = QtWidgets.QScrollArea(self._chat_search_console)
+        self._chat_search_scroll.setObjectName("ChatSearchHitsScroll")
+        self._chat_search_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self._chat_search_scroll.setWidgetResizable(True)
+        self._chat_search_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._chat_search_scroll.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._chat_search_scroll.setMaximumHeight(
+            max(88, self._CHAT_SEARCH_CONSOLE_OPEN_H - 20)
+        )
+        self._chat_search_scroll.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Maximum,
         )
-        self._chat_search_list.setVerticalScrollBarPolicy(
-            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        self._chat_search_scroll.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True
         )
-        self._chat_search_list.hide()
-        self._chat_search_list.itemClicked.connect(self._on_chat_search_item_clicked)
-        self._chat_search_list.itemActivated.connect(self._on_chat_search_item_clicked)
+        _csv = self._chat_search_scroll.viewport()
+        _csv.setAutoFillBackground(False)
+        _csv.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        _hits_inner = QtWidgets.QWidget()
+        _hits_inner.setObjectName("ChatSearchHitsInner")
+        _hits_inner.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True
+        )
+        _hits_inner.setAutoFillBackground(False)
+        self._chat_search_hits_layout = QtWidgets.QVBoxLayout(_hits_inner)
+        self._chat_search_hits_layout.setContentsMargins(2, 2, 2, 2)
+        self._chat_search_hits_layout.setSpacing(3)
+        self._chat_search_scroll.setWidget(_hits_inner)
+        _hits_style = QtWidgets.QStyleFactory.create("Fusion")
+        if _hits_style is not None:
+            self._chat_search_scroll.setStyle(_hits_style)
+            _hits_inner.setStyle(_hits_style)
+        _fmono = QtGui.QFontDatabase.systemFont(
+            QtGui.QFontDatabase.SystemFont.FixedFont
+        )
+        if not QtGui.QFontInfo(_fmono).fixedPitch():
+            _fmono = QtGui.QFont("Consolas", 11)
+        if _fmono.pointSize() <= 0:
+            _fmono.setPointSize(11)
+        elif _fmono.pointSize() > 12:
+            _fmono.setPointSize(11)
+        self._chat_search_hits_font = _fmono
+        _cs_lay.addWidget(self._chat_search_scroll)
         self._chat_search_edit.textChanged.connect(self._schedule_chat_search_rebuild)
         self._chat_search_prev.clicked.connect(lambda: self._step_chat_search(-1))
         self._chat_search_next.clicked.connect(lambda: self._step_chat_search(1))
-        chat_surface_layout.addLayout(search_h)
-        chat_surface_layout.addWidget(self._chat_search_list)
+        chat_surface_layout.addWidget(self._chat_search_header)
+        chat_surface_layout.addWidget(self._chat_search_console)
         chat_surface_layout.addWidget(self.chat_view, 1)
 
         # панель ввода
@@ -4002,10 +4178,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_actions_popup.add_action("Forget pinned peer key", self.on_forget_pinned_peer_key_clicked)
         self.more_actions_popup.add_action("Copy my address", self.on_copy_my_addr_clicked)
         self.more_actions_popup.add_separator()
-        self._history_enabled = load_history_enabled()
         self._history_toggle_btn = self.more_actions_popup.add_action(
             self._history_toggle_label(), self._on_toggle_history_clicked,
         )
+        self._sync_chat_search_header_with_history()
         self.more_actions_popup.add_action("Clear history", self._on_clear_history_clicked)
         self.more_actions_popup.add_separator()
         self._notify_sound_enabled = load_notify_sound_enabled()
@@ -4619,15 +4795,124 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._sync_chat_search_after_model_change()
 
     def _schedule_chat_search_rebuild(self, _t: str = "") -> None:
+        if not self._history_enabled:
+            return
         self._chat_search_debounce.start()
 
+    def _sync_chat_search_header_with_history(self) -> None:
+        """Строка поиска по ленте показывается только при включённом сохранении истории."""
+        header = getattr(self, "_chat_search_header", None)
+        if header is None:
+            return
+        header.setVisible(self._history_enabled)
+        if not self._history_enabled:
+            self._chat_search_debounce.stop()
+            self._stop_chat_search_console_anim()
+            self._chat_search_console.hide()
+            self._chat_search_console.setMaximumHeight(0)
+            self._clear_chat_search_hit_rows()
+            self._chat_search_match_rows = []
+            self._chat_search_cur = -1
+            self._chat_search_edit.blockSignals(True)
+            self._chat_search_edit.clear()
+            self._chat_search_edit.blockSignals(False)
+            self._chat_search_status_label.clear()
+            self._chat_search_status_label.hide()
+            self._chat_search_edit.setTextMargins(
+                self._chat_search_lineedit_left_pad_px(), 0, 0, 0
+            )
+            self._chat_search_console_anim = None
+
+    def _stop_chat_search_console_anim(self) -> None:
+        anim = getattr(self, "_chat_search_console_anim", None)
+        if isinstance(anim, QtCore.QPropertyAnimation):
+            anim.stop()
+
+    def _run_chat_search_console_anim(
+        self,
+        start_h: int,
+        end_h: int,
+        *,
+        hide_on_finish: bool = False,
+    ) -> None:
+        frame = self._chat_search_console
+        self._stop_chat_search_console_anim()
+        anim = QtCore.QPropertyAnimation(frame, b"maximumHeight", self)
+        anim.setDuration(170)
+        anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+        anim.setStartValue(max(0, int(start_h)))
+        anim.setEndValue(max(0, int(end_h)))
+        if hide_on_finish:
+
+            def _on_done() -> None:
+                if getattr(self, "_chat_search_console_anim", None) is anim:
+                    self._chat_search_console_anim = None
+                frame.hide()
+                frame.setMaximumHeight(0)
+
+            anim.finished.connect(_on_done)
+        else:
+
+            def _on_done_open() -> None:
+                if getattr(self, "_chat_search_console_anim", None) is anim:
+                    self._chat_search_console_anim = None
+
+            anim.finished.connect(_on_done_open)
+        self._chat_search_console_anim = anim
+        anim.start()
+
+    def _close_chat_search_console(self) -> None:
+        frame = getattr(self, "_chat_search_console", None)
+        if frame is None:
+            return
+        self._stop_chat_search_console_anim()
+        h = int(frame.maximumHeight())
+        if not frame.isVisible() and h == 0:
+            return
+        if h <= 0 or not frame.isVisible():
+            frame.hide()
+            frame.setMaximumHeight(0)
+            return
+        self._run_chat_search_console_anim(h, 0, hide_on_finish=True)
+
+    def _open_chat_search_console(self) -> None:
+        frame = self._chat_search_console
+        open_h = self._CHAT_SEARCH_CONSOLE_OPEN_H
+        self._stop_chat_search_console_anim()
+        frame.show()
+        cur = int(frame.maximumHeight())
+        if cur >= open_h - 6:
+            frame.setMaximumHeight(open_h)
+            return
+        self._run_chat_search_console_anim(cur, open_h)
+
+    def _clear_chat_search_hit_rows(self) -> None:
+        lay = getattr(self, "_chat_search_hits_layout", None)
+        if lay is None:
+            self._chat_search_hit_buttons.clear()
+            return
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._chat_search_hit_buttons.clear()
+
     def _rebuild_chat_search_matches(self) -> None:
+        if not self._history_enabled:
+            self._chat_search_debounce.stop()
+            self._clear_chat_search_hit_rows()
+            self._chat_search_match_rows = []
+            self._chat_search_cur = -1
+            self._close_chat_search_console()
+            self._update_chat_search_chrome()
+            return
         q = self._chat_search_edit.text().strip().casefold()
-        self._chat_search_list.clear()
+        self._clear_chat_search_hit_rows()
         self._chat_search_match_rows = []
         self._chat_search_cur = -1
         if not q:
-            self._chat_search_list.hide()
+            self._close_chat_search_console()
             self._update_chat_search_chrome()
             return
         n = self.chat_model.rowCount()
@@ -4646,13 +4931,32 @@ class ChatWindow(QtWidgets.QMainWindow):
                     if (it.timestamp or it.sender)
                     else ""
                 )
-                lw_it = QtWidgets.QListWidgetItem(head + snippet)
-                lw_it.setData(QtCore.Qt.ItemDataRole.UserRole, row)
-                self._chat_search_list.addItem(lw_it)
-        if self._chat_search_match_rows:
-            self._chat_search_list.show()
+                label = head + snippet
+                btn = QtWidgets.QPushButton(label, self._chat_search_scroll.widget())
+                btn.setObjectName("ChatSearchHitRow")
+                btn.setFlat(True)
+                btn.setFont(self._chat_search_hits_font)
+                btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+                btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                btn.setSizePolicy(
+                    QtWidgets.QSizePolicy.Policy.Expanding,
+                    QtWidgets.QSizePolicy.Policy.Fixed,
+                )
+                btn.clicked.connect(
+                    lambda _checked=False, r=row: self._on_chat_search_hit_clicked(r)
+                )
+                self._chat_search_hits_layout.addWidget(btn)
+                self._chat_search_hit_buttons.append(btn)
+        n_matches = len(self._chat_search_match_rows)
+        if n_matches == 0:
+            self._close_chat_search_console()
+        elif n_matches == 1:
+            # Один результат: консоль только дублирует чат — прячем.
+            self._close_chat_search_console()
+            self._chat_search_cur = 0
+            self._scroll_chat_to_row(self._chat_search_match_rows[0])
         else:
-            self._chat_search_list.hide()
+            self._open_chat_search_console()
         self._update_chat_search_chrome()
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
@@ -4704,14 +5008,21 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._layout_chat_search_status_overlay()
         QtCore.QTimer.singleShot(0, self._layout_chat_search_status_overlay)
 
-    def _highlight_chat_search_list_selection(self) -> None:
-        if not (0 <= self._chat_search_cur < self._chat_search_list.count()):
-            return
-        it = self._chat_search_list.item(self._chat_search_cur)
-        if it is not None:
-            self._chat_search_list.setCurrentItem(it)
+    def _update_chat_search_hit_highlight(self) -> None:
+        for i, btn in enumerate(self._chat_search_hit_buttons):
+            sel = self._chat_search_cur == i
+            if btn.property("hitSelected") != sel:
+                btn.setProperty("hitSelected", sel)
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+        if 0 <= self._chat_search_cur < len(self._chat_search_hit_buttons):
+            self._chat_search_scroll.ensureWidgetVisible(
+                self._chat_search_hit_buttons[self._chat_search_cur]
+            )
 
     def _step_chat_search(self, delta: int) -> None:
+        if not self._history_enabled:
+            return
         rows = self._chat_search_match_rows
         if not rows:
             return
@@ -4722,24 +5033,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         r = rows[self._chat_search_cur]
         self._scroll_chat_to_row(r)
         self._update_chat_search_chrome()
-        self._highlight_chat_search_list_selection()
+        self._update_chat_search_hit_highlight()
 
-    def _on_chat_search_item_clicked(
-        self, item: Optional[QtWidgets.QListWidgetItem] = None
-    ) -> None:
-        if item is None:
-            return
-        row = item.data(QtCore.Qt.ItemDataRole.UserRole)
-        if row is None:
-            return
-        try:
-            r = int(row)
-        except (TypeError, ValueError):
-            return
-        if r in self._chat_search_match_rows:
-            self._chat_search_cur = self._chat_search_match_rows.index(r)
-        self._scroll_chat_to_row(r)
+    def _on_chat_search_hit_clicked(self, chat_row: int) -> None:
+        if chat_row in self._chat_search_match_rows:
+            self._chat_search_cur = self._chat_search_match_rows.index(chat_row)
+        self._scroll_chat_to_row(chat_row)
         self._update_chat_search_chrome()
+        self._update_chat_search_hit_highlight()
 
     def _scroll_chat_to_row(self, row: int) -> None:
         if row < 0 or row >= self.chat_model.rowCount():
@@ -5374,6 +5675,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.addr_edit.set_theme(self.theme_id)
         self._update_peer_lock_indicator()
         self._refresh_connection_buttons()
+        self._chat_search_console.set_console_theme(self.theme_id)
 
     @QtCore.pyqtSlot()
     def on_theme_switch_clicked(self) -> None:
@@ -6026,6 +6328,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._history_dirty = False
             self._history_loaded_for_peer = None
             self.handle_system("Chat history saving disabled.")
+        self._sync_chat_search_header_with_history()
 
     @QtCore.pyqtSlot()
     def _on_clear_history_clicked(self) -> None:
