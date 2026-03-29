@@ -4700,6 +4700,19 @@ class ChatWindow(QtWidgets.QMainWindow):
             try:
                 await self.core.shutdown()
             finally:
+                # Отменяем остальные задачи пока цикл ещё крутится; иначе в main()
+                # finally вызов run_until_complete после loop.stop() даёт RuntimeError
+                # с qasync/Qt («Event loop stopped before Future completed»).
+                me = asyncio.current_task()
+                pending = [
+                    t
+                    for t in asyncio.all_tasks(loop)
+                    if not t.done() and t is not me
+                ]
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
                 loop.stop()
 
         asyncio.ensure_future(_shutdown())
@@ -4792,11 +4805,6 @@ def main() -> None:
     try:
         loop.run_forever()
     finally:
-        pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
-        for task in pending:
-            task.cancel()
-        if pending:
-            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         loop.close()
 
 
