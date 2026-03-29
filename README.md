@@ -57,7 +57,7 @@ Backlog sync helper: `GITHUB_TOKEN=... ./scripts/sync_backlog.sh`
 - **Sound notifications** for incoming messages
 - **BlindBox (default-on for named profiles)** — offline message delivery
 - **Optional encrypted chat history** — per-peer local history (toggle **Chat history: ON/OFF** in the **⋯** menu); encrypted at rest with keys derived from your profile identity (see **§4.11** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md))
-- **Saved peers** — left sidebar **contact book** (per-profile `contacts.json`): quick switch between saved `.b32.i2p` contacts, optional name/note, unread hints, resize/collapse, and a context menu (edit, trust details, remove). See **§3.1** in the manuals.
+- **Contact book (Saved peers)** — left sidebar list backed by per-profile `contacts.json`: quick switch between saved `.b32.i2p` peers, optional display name/note, unread hints, resize/collapse, and a context menu (edit, trust details, remove). See **§3.1** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md).
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
 #### 📖 Manuals
