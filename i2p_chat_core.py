@@ -817,6 +817,10 @@ class I2PChatCore:
         self._blindbox_client: Optional[BlindBoxClient] = None
         self._blindbox_task: Optional[asyncio.Task[Any]] = None
         self._blindbox_runtime_lock = asyncio.Lock()
+        # Serializes encrypt+PUT+send_index bump: parallel sends reuse the same
+        # lookup_token (same index) but ciphertext differs (random nonce/padding)
+        # → PUT EXISTS verification mismatch on boxes.
+        self._blindbox_send_lock = asyncio.Lock()
         self._blindbox_state = BlindBoxState()
         self._blindbox_root_secret: Optional[bytes] = None
         self._blindbox_root_epoch: int = 0
@@ -2405,36 +2409,49 @@ class I2PChatCore:
         peer_id = self._blindbox_peer_id()
         if not peer_id:
             return False
-        try:
-            msg_id = self._allocate_msg_id()
-            frame = self._codec.encode("U", text.encode("utf-8"), msg_id=msg_id, flags=0)
-            keys = derive_blindbox_message_keys(
-                self._blindbox_root_secret,
-                self.my_dest.base32,
-                peer_id,
-                "send",
-                self._blindbox_state.send_index,
-                epoch=self._blindbox_root_epoch,
-            )
-            blob = encrypt_blindbox_blob(
-                frame,
-                keys.blob_key,
-                "send",
-                self._blindbox_state.send_index,
-                keys.state_tag,
-                padding_bucket=self._blindbox_padding_bucket,
-            )
-            await self._blindbox_client.put(keys.lookup_token, blob)
-            self._blindbox_state.send_index += 1
-            self._blindbox_state.updated_at = int(time.time())
-            self._save_blindbox_state()
-            self._emit_message("me", text)
-            return True
-        except Exception as e:
-            detail = _exception_user_message(e)
-            logger.warning("BlindBox send failed: %s", detail, exc_info=True)
-            self._emit_error(f"BlindBox send failed: {detail}")
-            return False
+
+        async with self._blindbox_send_lock:
+            if not self._blindbox_ready():
+                return False
+            if self._blindbox_root_secret is None:
+                return False
+            if not self.my_dest or self._blindbox_client is None:
+                return False
+            peer_id = self._blindbox_peer_id()
+            if not peer_id:
+                return False
+            try:
+                msg_id = self._allocate_msg_id()
+                frame = self._codec.encode(
+                    "U", text.encode("utf-8"), msg_id=msg_id, flags=0
+                )
+                keys = derive_blindbox_message_keys(
+                    self._blindbox_root_secret,
+                    self.my_dest.base32,
+                    peer_id,
+                    "send",
+                    self._blindbox_state.send_index,
+                    epoch=self._blindbox_root_epoch,
+                )
+                blob = encrypt_blindbox_blob(
+                    frame,
+                    keys.blob_key,
+                    "send",
+                    self._blindbox_state.send_index,
+                    keys.state_tag,
+                    padding_bucket=self._blindbox_padding_bucket,
+                )
+                await self._blindbox_client.put(keys.lookup_token, blob)
+                self._blindbox_state.send_index += 1
+                self._blindbox_state.updated_at = int(time.time())
+                self._save_blindbox_state()
+                self._emit_message("me", text)
+                return True
+            except Exception as e:
+                detail = _exception_user_message(e)
+                logger.warning("BlindBox send failed: %s", detail, exc_info=True)
+                self._emit_error(f"BlindBox send failed: {detail}")
+                return False
 
     def is_outbound_connect_busy(self) -> bool:
         """True, пока выполняется исходящий connect_to_peer (ожидание stream_connect)."""
