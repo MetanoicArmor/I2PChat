@@ -15,6 +15,7 @@ import qasync
 
 from blindbox_state import atomic_write_json
 from compose_drafts import apply_compose_draft_peer_switch
+from reply_format import format_reply_quote
 from status_presentation import build_status_presentation
 from unread_counters import (
     bump_unread_if_inactive,
@@ -880,6 +881,7 @@ class ChatItem:
     is_sending: bool = False
     image_path: Optional[str] = None  # путь к inline-изображению
     open_folder_path: Optional[str] = None  # для "File received" — открыть папку по клику
+    saved_file_path: Optional[str] = None  # абсолютный путь к полученному файлу на диске
     file_name: Optional[str] = None  # имя отправленного файла/картинки для ACK
     delivered: bool = False  # галочка доставки для отправленных картинок
 
@@ -930,6 +932,7 @@ class ChatListView(QtWidgets.QListView):
     """
     cancelTransferRequested = QtCore.pyqtSignal()
     imageOpenRequested = QtCore.pyqtSignal(str)  # path to image
+    replyRequested = QtCore.pyqtSignal(str)  # quoted block for compose field
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -959,6 +962,9 @@ class ChatListView(QtWidgets.QListView):
             text = item.text
         QtWidgets.QApplication.clipboard().setText(text)
 
+    def _copy_path(self, path: str) -> None:
+        QtWidgets.QApplication.clipboard().setText(path)
+
     def set_theme(self, theme_id: str) -> None:
         self._theme_id = _resolve_theme(theme_id)
 
@@ -982,13 +988,78 @@ class ChatListView(QtWidgets.QListView):
             return
         self._context_popup.clear_actions()
         self._context_popup.apply_theme(self._theme_id)
-        self._context_popup.add_action(
-            "Copy text", lambda i=index: self._copy_index_text(i, with_meta=False)
-        )
-        self._context_popup.add_action(
-            "Copy with timestamp", lambda i=index: self._copy_index_text(i, with_meta=True)
-        )
-        self._context_popup.show_at_global(event.globalPos())
+
+        def add_copy_text() -> None:
+            self._context_popup.add_action(
+                "Copy text", lambda i=index: self._copy_index_text(i, with_meta=False)
+            )
+
+        def add_copy_timestamp() -> None:
+            self._context_popup.add_action(
+                "Copy with timestamp", lambda i=index: self._copy_index_text(i, with_meta=True)
+            )
+
+        k = item.kind
+        if k == "image_inline" and item.image_path:
+            p = item.image_path
+            self._context_popup.add_action(
+                "Open",
+                lambda path=p: self.imageOpenRequested.emit(path),
+            )
+            self._context_popup.add_action(
+                "Copy path", lambda path=p: self._copy_path(path),
+            )
+            if item.text.strip():
+                add_copy_text()
+                add_copy_timestamp()
+        elif k == "success":
+            if item.saved_file_path and os.path.isfile(item.saved_file_path):
+                fp = item.saved_file_path
+                self._context_popup.add_action(
+                    "Open",
+                    lambda path=fp: QtGui.QDesktopServices.openUrl(
+                        QtCore.QUrl.fromLocalFile(path)
+                    ),
+                )
+                self._context_popup.add_action(
+                    "Copy path", lambda path=fp: self._copy_path(path),
+                )
+            if item.open_folder_path and os.path.isdir(item.open_folder_path):
+                folder = item.open_folder_path
+                self._context_popup.add_action(
+                    "Open folder",
+                    lambda d=folder: QtGui.QDesktopServices.openUrl(
+                        QtCore.QUrl.fromLocalFile(d)
+                    ),
+                )
+                self._context_popup.add_action(
+                    "Copy folder path", lambda d=folder: self._copy_path(d)
+                )
+            if item.text.strip():
+                add_copy_text()
+                add_copy_timestamp()
+        elif k in ("me", "peer"):
+            add_copy_text()
+            add_copy_timestamp()
+            if item.text.strip():
+                self._context_popup.add_action(
+                    "Reply",
+                    lambda it=item: self.replyRequested.emit(
+                        format_reply_quote(it.sender, it.text)
+                    ),
+                )
+        elif k == "transfer" and item.text.strip():
+            fn = item.text.strip()
+            self._context_popup.add_action(
+                "Copy filename", lambda name=fn: self._copy_path(name)
+            )
+        else:
+            if item.text.strip():
+                add_copy_text()
+                add_copy_timestamp()
+
+        if self._context_popup.surface_layout.count() > 0:
+            self._context_popup.show_at_global(event.globalPos())
 
     @QtCore.pyqtSlot()
     def _on_context_popup_closed(self) -> None:
@@ -3050,6 +3121,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_actions_popup.add_action("Clear history", self._on_clear_history_clicked)
         self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
         self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
+        self.chat_view.replyRequested.connect(self._on_reply_requested)
 
         # ядро
         self.core = self._create_core(self.profile)
@@ -3386,14 +3458,23 @@ class ChatWindow(QtWidgets.QMainWindow):
                     done_action = "sent" if info.is_sending else "received"
                     if done_action == "received":
                         downloads_dir = get_downloads_dir()
+                        saved_fp: Optional[str] = None
+                        abs_fn = os.path.abspath(info.filename)
+                        if os.path.isfile(abs_fn):
+                            saved_fp = abs_fn
+                        disp_name = os.path.basename(abs_fn)
                         self.chat_model.update_item(
                             self._transfer_row,
                             ChatItem(
                                 kind="success",
                                 timestamp="",
                                 sender="FILE",
-                                text=f"✔ File received: {info.filename} ({info.size:,} bytes). Open downloads folder",
+                                text=(
+                                    f"✔ File received: {disp_name} ({info.size:,} bytes). "
+                                    "Open downloads folder"
+                                ),
                                 open_folder_path=downloads_dir,
+                                saved_file_path=saved_fp,
                             ),
                         )
                     else:
@@ -4433,6 +4514,18 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.handle_error(err or "Invalid image from clipboard")
             return
         asyncio.create_task(self.core.send_image(path))
+
+    @QtCore.pyqtSlot(str)
+    def _on_reply_requested(self, block: str) -> None:
+        """Вставить цитату в поле ввода (конец черновика)."""
+        cur = self.input_edit.toPlainText()
+        sep = "\n\n" if cur.strip() else ""
+        self.input_edit.setPlainText(f"{cur}{sep}{block}")
+        cursor = self.input_edit.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        self.input_edit.setTextCursor(cursor)
+        self.input_edit.setFocus()
+        self._on_compose_text_changed()
 
     @QtCore.pyqtSlot(str)
     def on_image_open_requested(self, path: str) -> None:
