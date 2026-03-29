@@ -357,7 +357,7 @@ THEMES: dict[str, dict[str, object]] = {
             QMainWindow { background-color: #e6eaf2; }
             QWidget#ChatSurface {
                 background: #f2f4f8;
-                border: 1px solid #c5cdd9;
+                border: 1px solid #ffffff;
                 border-radius: 14px;
             }
             QLabel#ChatSearchStatusInline {
@@ -367,7 +367,7 @@ THEMES: dict[str, dict[str, object]] = {
                 font-size: 12px;
             }
             QListView {
-                background: #ffffff;
+                background: transparent;
                 border: none;
                 border-radius: 12px;
                 padding: %(ui_grid_px)dpx;
@@ -386,7 +386,7 @@ THEMES: dict[str, dict[str, object]] = {
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical { height: 0px; }
             QLineEdit, QPlainTextEdit {
-                background: #f5f6f8;
+                background: #ffffff;
                 border: none;
                 border-radius: 9px;
                 padding: 8px 10px;
@@ -401,7 +401,7 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QWidget#ComposeBar, QWidget#ActionToolbar {
                 background: #eaedf4;
-                border: 1px solid #cdd4e0;
+                border: 1px solid #ffffff;
                 border-radius: 10px;
             }
             QPushButton {
@@ -489,8 +489,8 @@ THEMES: dict[str, dict[str, object]] = {
                 background-color: #eef1f6;
             }
             QWidget#ContactsSidebar {
-                background: #ebecef;
-                border: 1px solid #d5d9e0;
+                background: #f2f4f8;
+                border: 1px solid #ffffff;
                 border-radius: 14px;
             }
             QLabel#ContactsSidebarTitle {
@@ -594,17 +594,17 @@ THEMES: dict[str, dict[str, object]] = {
         "bubbles": {
             "me_bg": "#2f92f0",
             "me_text": "#ffffff",
-            "peer_bg": "#e8ebf1",
+            "peer_bg": "#e2e6ef",
             "peer_text": "#1c1c1e",
-            "system_bg": "#eef1f6",
+            "system_bg": "#e8ecf3",
             "system_text": "#5f6673",
             "error_bg": "#f2d8d7",
             "error_text": "#7c302c",
             "success_bg": "#d7ebdc",
             "success_text": "#245039",
-            "file_bg": "#e4e8f0",
+            "file_bg": "#dde2ec",
             "file_text": "#1d1d1f",
-            "fallback_bg": "#e6eaf2",
+            "fallback_bg": "#dfe4ee",
             "fallback_text": "#1d1d1f",
             "transfer_send_bg": "#e5f0ff",
             "transfer_recv_bg": "#f1ecff",
@@ -616,10 +616,10 @@ THEMES: dict[str, dict[str, object]] = {
             "transfer_label": "#1d1d1f",
             "transfer_meta": "#5f6470",
             "cancel_text": "#0a84ff",
-            "image_placeholder_bg": "#d8dce5",
+            "image_placeholder_bg": "#d0d5e0",
             "image_placeholder_text": "#3a3a40",
             "image_me_bg": "#2f92f0",
-            "image_peer_bg": "#e0e3eb",
+            "image_peer_bg": "#d8dce6",
             "tick_success": "#124529",
             "tick_image": "#ffffff",
         },
