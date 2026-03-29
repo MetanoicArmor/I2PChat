@@ -14,7 +14,7 @@ if "PIL" not in sys.modules:
     sys.modules["PIL.Image"] = pil_image_module
 
 from i2p_chat_core import I2PChatCore
-from main_qt import _should_start_auto_connect_retry
+from send_retry_policy import should_start_auto_connect_retry
 
 DUMMY_DEST_B32 = "ffffffffffffffffffffffffffffffffffffffff.b32.i2p"
 STORED_PEER_1 = "gggggggggggggggggggggggggggggggggggggggg.b32.i2p"
@@ -126,7 +126,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     def test_auto_connect_retry_policy_is_single_attempt_with_cooldown(self) -> None:
         self.assertTrue(
-            _should_start_auto_connect_retry(
+            should_start_auto_connect_retry(
                 reason="send-failed",
                 has_running_task=False,
                 now_mono=20.0,
@@ -135,7 +135,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertTrue(
-            _should_start_auto_connect_retry(
+            should_start_auto_connect_retry(
                 reason="blindbox-await-root",
                 has_running_task=False,
                 now_mono=20.0,
@@ -144,7 +144,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertFalse(
-            _should_start_auto_connect_retry(
+            should_start_auto_connect_retry(
                 reason="blindbox-await-root",
                 has_running_task=True,
                 now_mono=20.0,
@@ -153,7 +153,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertFalse(
-            _should_start_auto_connect_retry(
+            should_start_auto_connect_retry(
                 reason="blindbox-await-root",
                 has_running_task=False,
                 now_mono=21.0,

@@ -16,6 +16,7 @@ import qasync
 from blindbox_state import atomic_write_json
 from compose_drafts import apply_compose_draft_peer_switch
 from reply_format import format_reply_quote
+from send_retry_policy import should_start_auto_connect_retry as _should_start_auto_connect_retry
 from status_presentation import build_status_presentation
 from notification_prefs import (
     notification_body_for_display,
@@ -214,28 +215,6 @@ def _delivery_status_bar_and_tooltip(state: str) -> tuple[str, str]:
             "BlindBox offline path is still initializing.",
         )
     return ("Send: unavailable", "Delivery route is currently unavailable.")
-
-
-def _should_start_auto_connect_retry(
-    *,
-    reason: str,
-    has_running_task: bool,
-    now_mono: float,
-    last_started_mono: float,
-    cooldown_sec: float = 6.0,
-) -> bool:
-    auto_connect_reasons = {
-        "blindbox-disabled",
-        "blindbox-await-root",
-        "blindbox-needs-boxes",
-        "transient-profile",
-        "send-failed",
-    }
-    if reason not in auto_connect_reasons:
-        return False
-    if has_running_task:
-        return False
-    return (now_mono - last_started_mono) >= cooldown_sec
 
 
 def _save_pasted_qimage_to_images_dir(image: QtGui.QImage) -> Optional[str]:
