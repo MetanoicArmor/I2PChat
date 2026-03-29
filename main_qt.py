@@ -3583,6 +3583,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         main_layout.setSpacing(self._UI_GRID_PX)
 
         self.more_actions_popup = ActionsPopup(self)
+        self.saved_peers_context_popup = ActionsPopup(self)
         self._more_actions_suppress_until_ms = 0
         self.more_actions_popup.closed.connect(self._on_more_actions_popup_closed)
 
@@ -4307,12 +4308,20 @@ class ChatWindow(QtWidgets.QMainWindow):
         if not isinstance(w, ContactRowWidget):
             return
         addr = w.contact_addr
-        menu = QtWidgets.QMenu(self)
-        menu.addAction("Edit name & note…", lambda a=addr: self._saved_peer_edit_name_note(a))
-        menu.addAction("Contact details…", lambda a=addr: self._saved_peer_contact_details(a))
-        menu.addSeparator()
-        menu.addAction("Remove from saved peers…", lambda a=addr: self._saved_peer_remove(a))
-        menu.exec(self.contacts_list.mapToGlobal(pos))
+        popup = self.saved_peers_context_popup
+        popup.clear_actions()
+        popup.apply_theme(self.theme_id)
+        popup.add_action(
+            "Edit name & note…", lambda a=addr: self._saved_peer_edit_name_note(a)
+        )
+        popup.add_action(
+            "Contact details…", lambda a=addr: self._saved_peer_contact_details(a)
+        )
+        popup.add_separator()
+        popup.add_action(
+            "Remove from saved peers…", lambda a=addr: self._saved_peer_remove(a)
+        )
+        popup.show_at_global(self.contacts_list.mapToGlobal(pos))
 
     def _saved_peer_edit_name_note(self, addr: str) -> None:
         norm = normalize_peer_address(addr)
@@ -5359,6 +5368,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             save_theme(self.theme_id)
         self._update_theme_switch_label()
         self.more_actions_popup.apply_theme(self.theme_id)
+        self.saved_peers_context_popup.apply_theme(self.theme_id)
         self.chat_view.set_theme(self.theme_id)
         self.input_edit.set_theme(self.theme_id)
         self.addr_edit.set_theme(self.theme_id)
