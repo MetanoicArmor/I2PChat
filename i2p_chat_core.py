@@ -68,6 +68,8 @@ class ChatMessage:
     kind: str  # "me", "peer", "system", "info", "error", "success", "disconnect", "help"
     text: str
     timestamp: datetime
+    # Адрес пира для kind=="peer" (как в current_peer_addr); для остальных видов — None.
+    source_peer: Optional[str] = None
 
 
 @dataclass
@@ -920,12 +922,22 @@ class I2PChatCore:
         if self.on_status:
             self.on_status(status)
 
-    def _emit_message(self, kind: str, text: str) -> None:
+    def _emit_message(
+        self, kind: str, text: str, source_peer: Optional[str] = None
+    ) -> None:
         if self.on_message:
-            msg = ChatMessage(kind=kind, text=text, timestamp=datetime.now(timezone.utc))
+            sp = source_peer if kind == "peer" else None
+            msg = ChatMessage(
+                kind=kind,
+                text=text,
+                timestamp=datetime.now(timezone.utc),
+                source_peer=sp,
+            )
             self.on_message(msg)
 
-    def _emit_notify(self, kind: str, text: str) -> None:
+    def _emit_notify(
+        self, kind: str, text: str, source_peer: Optional[str] = None
+    ) -> None:
         """
         Уведомление UI о новом сообщении для системных нотификаций.
 
@@ -934,7 +946,15 @@ class I2PChatCore:
         callback = getattr(self, "on_notify", None)
         if callback is not None:
             try:
-                callback(ChatMessage(kind=kind, text=text, timestamp=datetime.now(timezone.utc)))
+                sp = source_peer if kind == "peer" else None
+                callback(
+                    ChatMessage(
+                        kind=kind,
+                        text=text,
+                        timestamp=datetime.now(timezone.utc),
+                        source_peer=sp,
+                    )
+                )
             except Exception:
                 # Уведомления не должны ломать протокол even if UI callback fails.
                 pass
@@ -2395,8 +2415,9 @@ class I2PChatCore:
         if msg_type != "U":
             return False
         text = body.decode("utf-8", errors="strict")
-        self._emit_message("peer", text)
-        self._emit_notify("peer", text)
+        sp = (self.stored_peer or self.current_peer_addr or "").strip() or None
+        self._emit_message("peer", text, source_peer=sp)
+        self._emit_notify("peer", text, source_peer=sp)
         return True
 
     async def _send_text_via_blindbox(self, text: str) -> bool:
@@ -3669,21 +3690,9 @@ class I2PChatCore:
                 body = body_data.decode("utf-8")
 
                 if msg_type == "U":
-                    self._emit_message("peer", body)
-                    # Дополнительное уведомление UI о входящем сообщении от собеседника.
-                    notify_cb = getattr(self, "on_notify", None)
-                    if notify_cb is not None:
-                        try:
-                            notify_cb(
-                                ChatMessage(
-                                    kind="peer",
-                                    text=body,
-                                    timestamp=datetime.now(timezone.utc),
-                                )
-                            )
-                        except Exception:
-                            # Ошибка в уведомлении не должна рвать сетевой цикл.
-                            pass
+                    sp = self.current_peer_addr
+                    self._emit_message("peer", body, source_peer=sp)
+                    self._emit_notify("peer", body, source_peer=sp)
                     # Подтверждение доставки по MSG_ID (vNext)
                     if msg_id:
                         try:
@@ -3703,7 +3712,9 @@ class I2PChatCore:
                         if self.on_image_received:
                             self.on_image_received(img_text)
                         else:
-                            self._emit_message("peer", img_text)
+                            self._emit_message(
+                                "peer", img_text, source_peer=self.current_peer_addr
+                            )
                     else:
                         if len(self.image_buffer) < self.MAX_IMAGE_LINES:
                             self.image_buffer.append(body)

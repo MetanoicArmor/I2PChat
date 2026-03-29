@@ -15,6 +15,12 @@ import qasync
 
 from blindbox_state import atomic_write_json
 from compose_drafts import apply_compose_draft_peer_switch
+from status_presentation import build_status_presentation
+from unread_counters import (
+    bump_unread_if_inactive,
+    clear_unread_for_peer,
+    total_unread,
+)
 from chat_history import (
     HistoryEntry,
     delete_history,
@@ -195,6 +201,11 @@ def _delivery_status_bar_and_tooltip(state: str) -> tuple[str, str]:
         return (
             "Send: live only",
             "BlindBox is disabled by configuration (I2PCHAT_BLINDBOX_ENABLED=0).",
+        )
+    if state == "blindbox-initializing":
+        return (
+            "Send: offline starting",
+            "BlindBox offline path is still initializing.",
         )
     return ("Send: unavailable", "Delivery route is currently unavailable.")
 
@@ -2804,7 +2815,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         # если вдруг имя профиля уже содержит служебный маркер в конце (" •"),
         # аккуратно убираем его, чтобы заголовок не заканчивался кружком.
         clean_profile = self.profile.rstrip(" •")
-        self.setWindowTitle(f"I2PChat @ {clean_profile}")
+        self._window_title_base = f"I2PChat @ {clean_profile}"
+        self._unread_by_peer: dict[str, int] = {}
+        self._status_send_in_flight = False
+        self._status_technical_tooltip = ""
+        self.setWindowTitle(self._window_title_base)
         self.resize(900, 600)
 
         self._status_font_px = 10 if sys.platform == "win32" else 11
@@ -2998,7 +3013,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 QtWidgets.QStyle.StandardPixmap.SP_MessageBoxInformation
             )
         self.tray_icon.setIcon(icon)
-        self.tray_icon.setToolTip("I2PChat")
+        self._update_unread_chrome()
         self.tray_icon.show()
 
         # Звук уведомления: env (I2PCHAT_NOTIFY_SOUND) имеет приоритет над prefs.
@@ -3162,6 +3177,23 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._append_item(ChatItem(kind=kind, timestamp=ts, sender=sender, text=text))
         self.refresh_status_label()
         self._refresh_connection_buttons()
+        if kind == "peer" and msg.source_peer:
+            bump_unread_if_inactive(
+                self._unread_by_peer,
+                active_key=self._compose_peer_key_from_ui(),
+                msg_peer_key=normalize_peer_addr(msg.source_peer),
+            )
+            self._update_unread_chrome()
+
+    def _update_unread_chrome(self) -> None:
+        n = total_unread(self._unread_by_peer)
+        suffix = f" ({n})" if n else ""
+        self.setWindowTitle(self._window_title_base + suffix)
+        if self.tray_icon is not None:
+            if n:
+                self.tray_icon.setToolTip(f"{self._window_title_base} — {n} unread")
+            else:
+                self.tray_icon.setToolTip(self._window_title_base)
 
     @QtCore.pyqtSlot(object)
     def handle_notify(self, msg: ChatMessage) -> None:
@@ -3178,8 +3210,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         if msg.kind == "peer":
             preview = msg.text.replace("\n", " ")
             title = "New message"
-            if self.core.current_peer_addr:
-                clean_peer = self.core.current_peer_addr.replace(".b32.i2p", "")
+            peer_addr = msg.source_peer or self.core.current_peer_addr
+            if peer_addr:
+                clean_peer = peer_addr.replace(".b32.i2p", "")
                 if len(clean_peer) > 12:
                     clean_peer = f"{clean_peer[:6]}..{clean_peer[-6:]}"
                 title = f"New message from {clean_peer}"
@@ -3193,9 +3226,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         else:
             return
 
-        # Системное уведомление и звук показываем только если окно/приложение
-        # не активно (свернуто или в фоне). Если пользователь уже в окне,
-        # полагаемся на визуальный интерфейс без спама уведомлениями.
+        # Peer: не спамим, если фокус на этом же диалоге; иначе — тост даже при активном окне.
+        # connect: как раньше — только если окно не в фокусе.
         app = QtWidgets.QApplication.instance()
         is_app_active = (
             app is not None
@@ -3204,20 +3236,31 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         is_window_active = self.isActiveWindow() and not self.isMinimized()
 
-        if not (is_app_active and is_window_active):
-            # Показываем нативное уведомление через Qt (system tray / Notification Center).
-            if self.tray_icon is not None:
-                self.tray_icon.showMessage(
-                    title,
-                    preview,
-                    QtWidgets.QSystemTrayIcon.MessageIcon.Information,
-                    5000,
-                )
+        if msg.kind == "peer":
+            msg_key = (
+                normalize_peer_addr(msg.source_peer) if msg.source_peer else None
+            )
+            active = self._compose_peer_key_from_ui()
+            same_chat = (
+                msg_key is not None
+                and active is not None
+                and msg_key == active
+            )
+            if is_app_active and is_window_active and same_chat:
+                return
+        elif msg.kind == "connect":
+            if is_app_active and is_window_active:
+                return
 
-            self._play_notification_sound()
+        if self.tray_icon is not None:
+            self.tray_icon.showMessage(
+                title,
+                preview,
+                QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+                5000,
+            )
 
-        # Отдельный маркер в заголовке для непрочитанных больше не используем:
-        # основным индикатором служит само уведомление и содержимое чата.
+        self._play_notification_sound()
 
     @QtCore.pyqtSlot(str)
     def handle_system(self, text: str) -> None:
@@ -3435,6 +3478,14 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._transfer_is_image = False
         else:
             self._append_item(ChatItem(**item_kw))
+
+        if not is_from_me and self.core.current_peer_addr:
+            bump_unread_if_inactive(
+                self._unread_by_peer,
+                active_key=self._compose_peer_key_from_ui(),
+                msg_peer_key=normalize_peer_addr(self.core.current_peer_addr),
+            )
+            self._update_unread_chrome()
 
     @QtCore.pyqtSlot(str)
     def handle_image_delivered(self, filename: str) -> None:
@@ -3708,7 +3759,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             available,
         )
         self.status_label.setText(elided)
-        self.status_label.setToolTip("")
+        if self._status_event_text and forced_expanded:
+            self.status_label.setToolTip("")
+        else:
+            self.status_label.setToolTip(self._status_technical_tooltip)
 
     def refresh_status_label(self) -> None:
         """Обновить строку статуса с учётом профиля и persist-режима."""
@@ -3797,7 +3851,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             blindbox_hint = "BlindBox telemetry unavailable"
             bb_profile = "high"
             blindbox_epoch = "0"
-        blindbox_bar, _ = _blindbox_status_bar_and_tooltip(
+        blindbox_bar, blindbox_detail = _blindbox_status_bar_and_tooltip(
             enabled=bb_enabled,
             state=blindbox_state,
             sync=blindbox_sync,
@@ -3815,21 +3869,29 @@ class ChatWindow(QtWidgets.QMainWindow):
         stored_disp = _short_addr(stored)
         ack_part = f"ACKdrop:{ack_drop_total}" if ack_drop_total > 0 else "ACKdrop:0"
 
-        # Средняя строка в UI: BlindBox — короткая человекочитаемая фраза.
-        mode_tag = "P" if self.profile != "default" else "T"
-        status_line = (
-            f"Net:{status} | Prof:{self.profile} ({mode_tag}) | Link:{link_state} | "
-            f"Peer:{current_peer_disp} | St:{stored_disp} | Sec:{secure_state} | "
-            f"{delivery_bar} | {blindbox_bar} | {ack_part}"
+        pres = build_status_presentation(
+            network_status_raw=self._last_status,
+            connected=bool(self.core.conn),
+            handshake_complete=bool(self.core.handshake_complete),
+            outbound_connect_busy=bool(self.core.is_outbound_connect_busy()),
+            delivery_state=delivery_state,
+            send_in_flight=bool(self._status_send_in_flight),
+            profile_name=self.profile,
+            is_transient_profile=self.profile == "default",
+            peer_short=current_peer_disp,
+            stored_short=stored_disp,
+            link_state=link_state,
+            secure_state=secure_state,
+            delivery_bar=delivery_bar,
+            blindbox_bar=blindbox_bar,
+            blindbox_detail=blindbox_detail,
+            ack_part=ack_part,
         )
-        ack_compact = (
-            f" | {ack_part}" if ack_drop_total > 0 else ""
-        )
-        status_line_compact = (
-            f"Net:{status} | {link_state} | {current_peer_disp} | "
-            f"Sec:{secure_state} | Tx:{delivery_state} | BB:{blindbox_state}{ack_compact}"
-        )
-        self._set_status_text(status_line, status_line_compact)
+        primary_full = pres.primary_full
+        if ack_drop_total > 0:
+            primary_full = f"{primary_full} | {ack_part}"
+        self._status_technical_tooltip = pres.technical_detail
+        self._set_status_text(primary_full, pres.primary_short)
         current_signature = (status, link_state, secure_state, delivery_state)
         if (
             self._status_focus_signature is not None
@@ -3852,33 +3914,38 @@ class ChatWindow(QtWidgets.QMainWindow):
         asyncio.create_task(self._send_text_ui_flow(text))
 
     async def _send_text_ui_flow(self, text: str) -> None:
-        draft_key = self._compose_peer_key_from_ui()
-        result = await self.core.send_text(text)
-        if result.accepted:
-            if draft_key:
-                self._compose_drafts.pop(draft_key, None)
-            self.input_edit.clear()
-            self._schedule_compose_drafts_persist()
-        else:
-            # Keep text in the input when blocked (especially await-live-root),
-            # so user can press Connect and retry without retyping.
-            self.input_edit.setPlainText(text)
-            cursor = self.input_edit.textCursor()
-            cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
-            self.input_edit.setTextCursor(cursor)
-            self.input_edit.setFocus()
-            if _should_start_auto_connect_retry(
-                reason=result.reason,
-                has_running_task=self._auto_retry_send_task is not None,
-                now_mono=time.monotonic(),
-                last_started_mono=self._last_auto_retry_started_at,
-            ):
-                self._last_auto_retry_started_at = time.monotonic()
-                self._auto_retry_send_task = asyncio.create_task(
-                    self._auto_connect_and_retry_send(text)
-                )
+        self._status_send_in_flight = True
         self.refresh_status_label()
-        self._refresh_connection_buttons()
+        try:
+            draft_key = self._compose_peer_key_from_ui()
+            result = await self.core.send_text(text)
+            if result.accepted:
+                if draft_key:
+                    self._compose_drafts.pop(draft_key, None)
+                self.input_edit.clear()
+                self._schedule_compose_drafts_persist()
+            else:
+                # Keep text in the input when blocked (especially await-live-root),
+                # so user can press Connect and retry without retyping.
+                self.input_edit.setPlainText(text)
+                cursor = self.input_edit.textCursor()
+                cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+                self.input_edit.setTextCursor(cursor)
+                self.input_edit.setFocus()
+                if _should_start_auto_connect_retry(
+                    reason=result.reason,
+                    has_running_task=self._auto_retry_send_task is not None,
+                    now_mono=time.monotonic(),
+                    last_started_mono=self._last_auto_retry_started_at,
+                ):
+                    self._last_auto_retry_started_at = time.monotonic()
+                    self._auto_retry_send_task = asyncio.create_task(
+                        self._auto_connect_and_retry_send(text)
+                    )
+        finally:
+            self._status_send_in_flight = False
+            self.refresh_status_label()
+            self._refresh_connection_buttons()
 
     async def _auto_connect_and_retry_send(self, text: str) -> None:
         """Single-click flow: try live connect, then retry send once."""
@@ -4104,6 +4171,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.input_edit.setTextCursor(cursor)
         self.input_edit.blockSignals(False)
         self._schedule_compose_drafts_persist()
+        clear_unread_for_peer(self._unread_by_peer, active)
+        self._update_unread_chrome()
 
     def _try_load_history(self) -> None:
         if not self._history_enabled:
@@ -4146,6 +4215,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             ))
         self._history_loaded_for_peer = peer
         self._history_flush_timer.start()
+        clear_unread_for_peer(self._unread_by_peer, normalize_peer_addr(peer))
+        self._update_unread_chrome()
 
     def _save_history_if_needed(self) -> None:
         if not self._history_enabled or not self._history_dirty:
@@ -4315,11 +4386,13 @@ class ChatWindow(QtWidgets.QMainWindow):
         await self.core.shutdown()
         self.profile = profile
         clean_profile = self.profile.rstrip(" •")
-        self.setWindowTitle(f"I2PChat @ {clean_profile}")
+        self._window_title_base = f"I2PChat @ {clean_profile}"
+        self._unread_by_peer = {}
         self.core = self._create_core(self.profile)
         self._load_compose_drafts_from_disk()
         self._compose_draft_active_key = None
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+        self._update_unread_chrome()
         self.refresh_status_label()
         self._refresh_connection_buttons()
         await self.core.init_session()

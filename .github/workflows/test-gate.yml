@@ -37,3 +37,10 @@ jobs:
             tests.test_protocol_framing_vnext \
             tests.test_sam_input_validation \
             tests.test_audit_remediation
+
+      # Pytest suite (compose_drafts, unread_counters, image validation, etc.) is not
+      # unittest-discoverable; keep it in CI so UX/helper modules stay covered.
+      - name: Install pytest and run pytest suite
+        run: |
+          python -m pip install pytest
+          python -m pytest tests/ -q --tb=short
