@@ -24,7 +24,7 @@ from notification_prefs import (
     should_show_tray_message,
 )
 from unread_counters import (
-    bump_unread_if_inactive,
+    bump_unread_for_incoming_peer_message,
     clear_unread_for_peer,
     total_unread,
 )
@@ -3113,6 +3113,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._update_unread_chrome()
         self.tray_icon.show()
 
+        _app = QtWidgets.QApplication.instance()
+        if _app is not None:
+            _app.applicationStateChanged.connect(
+                self._on_app_state_changed_clear_unread
+            )
+
         # Звук уведомления: env (I2PCHAT_NOTIFY_SOUND) имеет приоритет над prefs.
         # Если путь не задан или недоступен, используем fallback на QApplication.beep().
         self.notify_sound_path: Optional[str] = None
@@ -3301,12 +3307,24 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.refresh_status_label()
         self._refresh_connection_buttons()
         if kind == "peer" and msg.source_peer:
-            bump_unread_if_inactive(
+            bump_unread_for_incoming_peer_message(
                 self._unread_by_peer,
                 active_key=self._compose_peer_key_from_ui(),
                 msg_peer_key=normalize_peer_addr(msg.source_peer),
+                chat_is_foreground=self._peer_chat_is_foreground(),
             )
             self._update_unread_chrome()
+
+    def _peer_chat_is_foreground(self) -> bool:
+        """True when the user is likely looking at the active chat (no unread bump for same peer)."""
+        app = QtWidgets.QApplication.instance()
+        is_app_active = (
+            app is not None
+            and app.applicationState()
+            == QtCore.Qt.ApplicationState.ApplicationActive
+        )
+        is_window_active = self.isActiveWindow() and not self.isMinimized()
+        return bool(is_app_active and is_window_active)
 
     def _update_unread_chrome(self) -> None:
         n = total_unread(self._unread_by_peer)
@@ -3630,10 +3648,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._append_item(ChatItem(**item_kw))
 
         if not is_from_me and self.core.current_peer_addr:
-            bump_unread_if_inactive(
+            bump_unread_for_incoming_peer_message(
                 self._unread_by_peer,
                 active_key=self._compose_peer_key_from_ui(),
                 msg_peer_key=normalize_peer_addr(self.core.current_peer_addr),
+                chat_is_foreground=self._peer_chat_is_foreground(),
             )
             self._update_unread_chrome()
 
@@ -4686,6 +4705,24 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     async def start_core(self) -> None:
         await self.core.init_session()
+
+    def _on_app_state_changed_clear_unread(
+        self, state: QtCore.Qt.ApplicationState
+    ) -> None:
+        if state != QtCore.Qt.ApplicationState.ApplicationActive:
+            return
+        QtCore.QTimer.singleShot(0, self._clear_unread_if_active_chat_visible)
+
+    def _clear_unread_if_active_chat_visible(self) -> None:
+        if not self._peer_chat_is_foreground():
+            return
+        clear_unread_for_peer(self._unread_by_peer, self._compose_peer_key_from_ui())
+        self._update_unread_chrome()
+
+    def changeEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
+        super().changeEvent(event)
+        if event.type() == QtCore.QEvent.Type.WindowActivate:
+            QtCore.QTimer.singleShot(0, self._clear_unread_if_active_chat_visible)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         """Останавливаем ядро и event loop при закрытии окна."""

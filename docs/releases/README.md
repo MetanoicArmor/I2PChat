@@ -25,6 +25,7 @@ Versioned release write-ups for I2PChat live in this directory (`docs/releases/`
 3. **Bump** repo version in root [`VERSION`](../../VERSION) when cutting the release.
 4. **Update** prebuilt download links in root [`README.md`](../../README.md) if artifact names include the version string.
 5. **Tag** `vX.Y.Z` on GitHub when binaries are published (optional but recommended).
+6. **Footer (required):** after the last section (including RU), append a horizontal rule `---` and the **Cross-platform** block below. Replace every `vX.Y.Z` with the real tag segment (e.g. `v0.6.5`) so filenames match [`README.md`](../../README.md) and published GitHub assets.
 
 ---
 
@@ -35,3 +36,26 @@ Versioned release write-ups for I2PChat live in this directory (`docs/releases/`
 3. **Поднять** [`VERSION`](../../VERSION) в корне репозитория.
 4. **Обновить** ссылки на сборки в [`README.md`](../../README.md), если в имени архива фигурирует версия.
 5. **Поставить** тег `vX.Y.Z` на GitHub после публикации артефактов (по желанию, но удобно).
+6. **Футер (обязательно):** после последнего блока (включая RU) добавить `---` и блок **Cross-platform** ниже. Во всех именах архивов подставить фактический суффикс `vX.Y.Z` (например `v0.6.5`), как в [`README.md`](../../README.md) и на странице релиза GitHub.
+
+---
+
+## Cross-platform footer (copy-paste)
+
+Use at the **end** of `RELEASE_X.Y.Z.md` (English block). Replace the placeholder `vX.Y.Z` in each zip name with the real suffix, e.g. `v0.6.5` for release **0.6.5** (must match [`README.md`](../../README.md) and uploaded assets).
+
+```markdown
+---
+
+### 🌐 Cross-platform I2P Chat Client
+
+**One app. Three platforms. No Python required.**
+
+| Platform | Download | Launch |
+|----------|----------|--------|
+| Windows | `I2PChat-windows-x64-vX.Y.Z.zip` | Unzip → run I2PChat.exe |
+| Linux | `I2PChat-linux-x86_64-vX.Y.Z.zip` | Unzip → chmod +x I2PChat.AppImage → run |
+| macOS | `I2PChat-macOS-arm64-vX.Y.Z.zip` | Unzip → open I2PChat.app |
+```
+
+Row order: **Windows → Linux → macOS**. When publishing the GitHub release, `gh release edit vX.Y.Z --notes-file docs/releases/RELEASE_X.Y.Z.md` keeps the page in sync with the repo.

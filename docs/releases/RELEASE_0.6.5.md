@@ -98,3 +98,15 @@ Patch в линейке **0.6.x**; протокол обычного online-ча
 ### Структура репозитория
 
 - Заметки к релизам собраны в **`docs/releases/`**; старые `RELEASE_*.md` из корня перенесены сюда.
+
+---
+
+### 🌐 Cross-platform I2P Chat Client
+
+**One app. Three platforms. No Python required.**
+
+| Platform | Download | Launch |
+|----------|----------|--------|
+| Windows | `I2PChat-windows-x64-v0.6.5.zip` | Unzip → run I2PChat.exe |
+| Linux | `I2PChat-linux-x86_64-v0.6.5.zip` | Unzip → chmod +x I2PChat.AppImage → run |
+| macOS | `I2PChat-macOS-arm64-v0.6.5.zip` | Unzip → open I2PChat.app |

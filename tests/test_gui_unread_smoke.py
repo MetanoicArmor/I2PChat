@@ -58,7 +58,9 @@ def test_unread_bump_when_message_peer_differs_from_addr_field(qapp: QApplicatio
     # Do not w.close(): closeEvent expects qasync loop + shutdown (see main_qt.ChatWindow).
 
 
-def test_unread_no_bump_when_active_peer_matches_message(qapp: QApplication) -> None:
+def test_unread_no_bump_when_active_peer_matches_message(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from main_qt import THEME_DEFAULT, ChatWindow
 
     w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
@@ -67,11 +69,31 @@ def test_unread_no_bump_when_active_peer_matches_message(qapp: QApplication) -> 
 
     w.addr_edit.setText(PEER_A)
     w._on_addr_editing_finished_for_drafts()
+    monkeypatch.setattr(w, "_peer_chat_is_foreground", lambda: True)
     w.handle_message(
         ChatMessage(kind="peer", text="hi", timestamp=ts, source_peer=PEER_A)
     )
     assert w.windowTitle() == base
     assert w.tray_icon.toolTip() == base
+
+
+def test_unread_bump_same_peer_when_not_foreground(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from main_qt import THEME_DEFAULT, ChatWindow
+
+    w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    base = w._window_title_base
+    ts = datetime.now(timezone.utc)
+
+    w.addr_edit.setText(PEER_A)
+    w._on_addr_editing_finished_for_drafts()
+    monkeypatch.setattr(w, "_peer_chat_is_foreground", lambda: False)
+    w.handle_message(
+        ChatMessage(kind="peer", text="hi", timestamp=ts, source_peer=PEER_A)
+    )
+    assert w.windowTitle() == f"{base} (1)"
+    assert "1 unread" in (w.tray_icon.toolTip() or "")
 
 
 def test_handle_notify_peer_same_chat_does_not_throw(qapp: QApplication) -> None:

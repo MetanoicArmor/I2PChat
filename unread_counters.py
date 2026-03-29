@@ -23,6 +23,26 @@ def bump_unread_if_inactive(
     counts[msg_peer_key] = counts.get(msg_peer_key, 0) + 1
 
 
+def bump_unread_for_incoming_peer_message(
+    counts: dict[str, int],
+    *,
+    active_key: Optional[str],
+    msg_peer_key: Optional[str],
+    chat_is_foreground: bool,
+) -> None:
+    """
+    Increment unread unless the user is clearly viewing this conversation right now.
+
+    Bumps when the message is from another peer than the active UI key, or when the
+    same peer sends while the window/app is not in the foreground (typical IM behavior).
+    """
+    if not msg_peer_key:
+        return
+    if msg_peer_key == active_key and chat_is_foreground:
+        return
+    counts[msg_peer_key] = counts.get(msg_peer_key, 0) + 1
+
+
 def clear_unread_for_peer(counts: dict[str, int], peer_key: Optional[str]) -> None:
     """Drop unread state for a peer when the user opens that conversation."""
     if peer_key is None:
