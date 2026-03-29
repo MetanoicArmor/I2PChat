@@ -123,3 +123,5 @@ These are intentionally left outside the pre-1.0 scope:
 
 Detailed issue-sized backlog items for the milestones above are collected in
 [`ISSUE_BACKLOG.md`](ISSUE_BACKLOG.md).
+
+Per-version release notes live under [`docs/releases/README.md`](docs/releases/README.md).

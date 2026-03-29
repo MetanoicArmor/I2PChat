@@ -123,3 +123,5 @@
 
 Детализированный backlog по задачам для этапов выше собран в
 [`ISSUE_BACKLOG_RU.md`](ISSUE_BACKLOG_RU.md).
+
+Заметки к релизам (по версиям): [`releases/README.md`](releases/README.md).
