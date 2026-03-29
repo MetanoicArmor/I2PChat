@@ -354,11 +354,17 @@ THEMES: dict[str, dict[str, object]] = {
             QPushButton#PrimaryButton:hover { background-color: #409cff; }
         """,
         "window_stylesheet": """
-            QMainWindow { background-color: #eceff4; }
+            QMainWindow { background-color: #e6eaf2; }
             QWidget#ChatSurface {
-                background: rgba(255, 255, 255, 0.92);
-                border: 1px solid #d6dce7;
+                background: #f2f4f8;
+                border: 1px solid #c5cdd9;
                 border-radius: 14px;
+            }
+            QLabel#ChatSearchStatusInline {
+                color: rgba(60, 60, 67, 0.55);
+                background: transparent;
+                padding-right: 10px;
+                font-size: 12px;
             }
             QListView {
                 background: #ffffff;
@@ -380,32 +386,35 @@ THEMES: dict[str, dict[str, object]] = {
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical { height: 0px; }
             QLineEdit, QPlainTextEdit {
-                background: #ffffff;
+                background: #f5f6f8;
                 border: none;
                 border-radius: 9px;
                 padding: 8px 10px;
                 color: #1d1d1f;
+            }
+            QLineEdit#PeerAddressEdit {
+                padding: 8px 10px 8px 8px;
             }
             QLineEdit:focus, QPlainTextEdit:focus {
                 background: #ffffff;
                 border: 1px solid #0a84ff;
             }
             QWidget#ComposeBar, QWidget#ActionToolbar {
-                background: rgba(255, 255, 255, 0.92);
-                border: none;
+                background: #eaedf4;
+                border: 1px solid #cdd4e0;
                 border-radius: 10px;
             }
             QPushButton {
-                background-color: #ffffff;
+                background-color: #f8f9fc;
                 border-radius: 9px;
                 padding: 8px 14px;
                 color: #20232b;
                 border: none;
             }
             QPushButton:hover {
-                background-color: #f6f8fc;
+                background-color: #f0f3f8;
             }
-            QPushButton:pressed { background-color: #edf1f8; }
+            QPushButton:pressed { background-color: #e4e9f2; }
             QPushButton#PrimaryActionButton {
                 background-color: #0a84ff;
                 color: #ffffff;
@@ -450,7 +459,7 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QPushButton#GhostActionButton:hover { background-color: #eef2f8; }
             QToolButton#MoreActionsButton {
-                background-color: #eef2f7;
+                background-color: #e2e7f0;
                 border: none;
                 border-radius: 9px;
                 color: #333845;
@@ -459,13 +468,13 @@ THEMES: dict[str, dict[str, object]] = {
                 min-width: 32px;
             }
             QToolButton#MoreActionsButton:hover {
-                background-color: #e1e7f0;
+                background-color: #d5dce8;
             }
             QToolButton#MoreActionsButton:pressed {
-                background-color: #d7e0ec;
+                background-color: #c9d2e0;
             }
             QToolButton#ThemeSwitchButton {
-                background-color: rgba(255, 255, 255, 0.85);
+                background-color: #f8f9fc;
                 border: none;
                 border-radius: 10px;
                 color: #525966;
@@ -477,11 +486,11 @@ THEMES: dict[str, dict[str, object]] = {
                 background-color: #ffffff;
             }
             QToolButton#ThemeSwitchButton:pressed {
-                background-color: #f1f4fa;
+                background-color: #eef1f6;
             }
             QWidget#ContactsSidebar {
-                background: rgba(255, 255, 255, 0.78);
-                border: 1px solid rgba(0, 0, 0, 0.08);
+                background: #ebecef;
+                border: 1px solid #d5d9e0;
                 border-radius: 14px;
             }
             QLabel#ContactsSidebarTitle {
@@ -518,7 +527,7 @@ THEMES: dict[str, dict[str, object]] = {
                 background: rgba(0, 0, 0, 0.06);
             }
             QPushButton#ContactsSidebarToggle {
-                background-color: rgba(255, 255, 255, 0.85);
+                background-color: #f8f9fc;
                 border: none;
                 border-radius: 10px;
                 color: #525966;
@@ -526,13 +535,14 @@ THEMES: dict[str, dict[str, object]] = {
                 font-weight: normal;
                 min-width: %(contacts_toggle_btn_width_px)spx;
                 max-width: %(contacts_toggle_btn_width_px)spx;
+                min-height: %(status_row_height_px)spx;
                 padding: 0px;
             }
             QPushButton#ContactsSidebarToggle:hover {
                 background-color: #ffffff;
             }
             QPushButton#ContactsSidebarToggle:pressed {
-                background-color: #f1f4fa;
+                background-color: #eef1f6;
             }
             QLabel#PeerLockIndicator {
                 min-width: 22px;
@@ -540,7 +550,7 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QLabel { color: #1d1d1f; }
             QLabel#StatusLabel {
-                background-color: rgba(255, 255, 255, 0.85);
+                background-color: #f8f9fc;
                 border: none;
                 border-radius: 10px;
                 padding: 0px %(ui_grid_px)dpx;
@@ -584,17 +594,17 @@ THEMES: dict[str, dict[str, object]] = {
         "bubbles": {
             "me_bg": "#2f92f0",
             "me_text": "#ffffff",
-            "peer_bg": "#eceef2",
+            "peer_bg": "#e8ebf1",
             "peer_text": "#1c1c1e",
-            "system_bg": "#f1f3f7",
+            "system_bg": "#eef1f6",
             "system_text": "#5f6673",
             "error_bg": "#f2d8d7",
             "error_text": "#7c302c",
             "success_bg": "#d7ebdc",
             "success_text": "#245039",
-            "file_bg": "#e4e8ef",
+            "file_bg": "#e4e8f0",
             "file_text": "#1d1d1f",
-            "fallback_bg": "#e2e6ee",
+            "fallback_bg": "#e6eaf2",
             "fallback_text": "#1d1d1f",
             "transfer_send_bg": "#e5f0ff",
             "transfer_recv_bg": "#f1ecff",
@@ -606,10 +616,10 @@ THEMES: dict[str, dict[str, object]] = {
             "transfer_label": "#1d1d1f",
             "transfer_meta": "#5f6470",
             "cancel_text": "#0a84ff",
-            "image_placeholder_bg": "#dadce4",
+            "image_placeholder_bg": "#d8dce5",
             "image_placeholder_text": "#3a3a40",
             "image_me_bg": "#2f92f0",
-            "image_peer_bg": "#e9e9ee",
+            "image_peer_bg": "#e0e3eb",
             "tick_success": "#124529",
             "tick_image": "#ffffff",
         },
@@ -676,6 +686,12 @@ THEMES: dict[str, dict[str, object]] = {
                 border: 1px solid #2f3541;
                 border-radius: 14px;
             }
+            QLabel#ChatSearchStatusInline {
+                color: rgba(245, 245, 247, 0.55);
+                background: transparent;
+                padding-right: 10px;
+                font-size: 12px;
+            }
             QListView {
                 background: transparent;
                 border: none;
@@ -700,6 +716,9 @@ THEMES: dict[str, dict[str, object]] = {
                 border-radius: 8px;
                 padding: 8px 10px;
                 color: #f5f5f7;
+            }
+            QLineEdit#PeerAddressEdit {
+                padding: 8px 10px 8px 8px;
             }
             QLineEdit:focus, QPlainTextEdit:focus {
                 background: rgba(255, 255, 255, 0.09);
@@ -833,6 +852,7 @@ THEMES: dict[str, dict[str, object]] = {
                 font-weight: normal;
                 min-width: %(contacts_toggle_btn_width_px)spx;
                 max-width: %(contacts_toggle_btn_width_px)spx;
+                min-height: %(status_row_height_px)spx;
                 padding: 0px;
             }
             QPushButton#ContactsSidebarToggle:hover {
@@ -1112,6 +1132,11 @@ class ChatListModel(QtCore.QAbstractListModel):
             self._items[row] = item
             index = self.index(row, 0)
             self.dataChanged.emit(index, index)
+
+    def item_at(self, row: int) -> Optional[ChatItem]:
+        if 0 <= row < len(self._items):
+            return self._items[row]
+        return None
 
 
 class ChatListView(QtWidgets.QListView):
@@ -3199,11 +3224,11 @@ class ChatWindow(QtWidgets.QMainWindow):
     _UI_GRID_PX = 8
     _UI_STRIP_VERTICAL_GAP_PX = _UI_GRID_PX
     _UI_STRIP_SIDE_GUTTER_PX = _UI_GRID_PX
-    # При свёрнутом сайдбаре зазор ◀ от края окна уже (нет щели у нулевой панели).
-    _CONTACTS_STRIP_EDGE_COLLAPSED_PX = 2
+    # Свёрнуто: 0 — левый край ◀ совпадает с левым краем колонки и строки статуса (см. main_layout).
+    _CONTACTS_STRIP_EDGE_COLLAPSED_PX = 0
     # Развёрнуто: половина grid слева от ◀ и как левый inset колонки чата (визуально ровно по бокам ◀).
     _CONTACTS_STRIP_EDGE_EXPANDED_PX = _UI_GRID_PX // 2
-    # Как у кнопки темы: квадрат со стороной = высота строки статуса.
+    # Ширина как у кнопки темы в строке статуса (квадрат _STATUS_ROW_HEIGHT_PX).
     _CONTACTS_TOGGLE_BTN_WIDTH_PX = _STATUS_ROW_HEIGHT_PX
     # Ближе к шагу сетки, чем 3px — визуально ровнее зазор ◀↔чат.
     _CONTACTS_RESIZE_GRIP_WIDTH_PX = 4
@@ -3347,13 +3372,102 @@ class ChatWindow(QtWidgets.QMainWindow):
         col_left = self._CONTACTS_STRIP_EDGE_EXPANDED_PX
         chat_surface_layout.setContentsMargins(col_left, g, g, g)
         chat_surface_layout.setSpacing(0)
-        chat_surface_layout.addWidget(self.chat_view)
+        self._chat_search_match_rows: list[int] = []
+        self._chat_search_cur: int = -1
+        self._chat_search_sync_suppressed: bool = False
+        self._chat_search_debounce = QtCore.QTimer(self)
+        self._chat_search_debounce.setSingleShot(True)
+        self._chat_search_debounce.setInterval(200)
+        self._chat_search_debounce.timeout.connect(self._rebuild_chat_search_matches)
+
+        # Вложенный QHBoxLayout + обёртка вокруг QLineEdit: на macOS поле часто не
+        # забирает горизонтальное растяжение (остаётся пустота справа от ◀▶).
+        # ChatSurface: левый margin = col_left, правый = g — компенсируем здесь,
+        # чтобы строка поиска визуально имела симметричные боковые отступы.
+        search_h = QtWidgets.QHBoxLayout()
+        search_h.setContentsMargins(
+            max(0, g - col_left), 0, 0, max(2, g // 2)
+        )
+        search_h.setSpacing(self._UI_GRID_PX)
+        self._chat_search_field_wrap = QtWidgets.QWidget(chat_surface)
+        self._chat_search_field_wrap.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        _wrap_lay = QtWidgets.QHBoxLayout(self._chat_search_field_wrap)
+        _wrap_lay.setContentsMargins(0, 0, 0, 0)
+        _wrap_lay.setSpacing(0)
+        self._chat_search_edit = QtWidgets.QLineEdit(self._chat_search_field_wrap)
+        self._chat_search_edit.setPlaceholderText("Search in this chat…")
+        self._chat_search_edit.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self._chat_search_edit.setMinimumWidth(0)
+        _search_fm = self._chat_search_edit.fontMetrics()
+        _search_row_h = max(34, _search_fm.height() + 14)
+        self._chat_search_edit.setMinimumHeight(_search_row_h)
+        self._chat_search_field_wrap.setMinimumHeight(_search_row_h)
+        self._chat_search_edit.setTextMargins(
+            self._chat_search_lineedit_left_pad_px(), 0, 0, 0
+        )
+        _wrap_lay.addWidget(self._chat_search_edit, 1)
+        # QLabel внутри полосы поиска: QAction+TrailingPosition на macOS часто не рисует текст.
+        self._chat_search_status_label = QtWidgets.QLabel("", self._chat_search_field_wrap)
+        self._chat_search_status_label.setObjectName("ChatSearchStatusInline")
+        self._chat_search_status_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self._chat_search_status_label.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self._chat_search_status_label.hide()
+        self._chat_search_field_wrap.installEventFilter(self)
+        self._chat_search_prev = QtWidgets.QPushButton("◀", chat_surface)
+        self._chat_search_prev.setFixedWidth(36)
+        self._chat_search_prev.setFixedHeight(_search_row_h)
+        self._chat_search_prev.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self._chat_search_prev.setToolTip("Previous match")
+        self._chat_search_next = QtWidgets.QPushButton("▶", chat_surface)
+        self._chat_search_next.setFixedWidth(36)
+        self._chat_search_next.setFixedHeight(_search_row_h)
+        self._chat_search_next.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self._chat_search_next.setToolTip("Next match")
+        search_h.addWidget(self._chat_search_field_wrap, 1)
+        search_h.addWidget(self._chat_search_prev)
+        search_h.addWidget(self._chat_search_next)
+        search_h.setStretch(0, 1)
+        self._chat_search_list = QtWidgets.QListWidget(chat_surface)
+        self._chat_search_list.setMaximumHeight(100)
+        self._chat_search_list.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Maximum,
+        )
+        self._chat_search_list.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._chat_search_list.hide()
+        self._chat_search_list.itemClicked.connect(self._on_chat_search_item_clicked)
+        self._chat_search_list.itemActivated.connect(self._on_chat_search_item_clicked)
+        self._chat_search_edit.textChanged.connect(self._schedule_chat_search_rebuild)
+        self._chat_search_prev.clicked.connect(lambda: self._step_chat_search(-1))
+        self._chat_search_next.clicked.connect(lambda: self._step_chat_search(1))
+        chat_surface_layout.addLayout(search_h)
+        chat_surface_layout.addWidget(self._chat_search_list)
+        chat_surface_layout.addWidget(self.chat_view, 1)
 
         # панель ввода
         input_container = QtWidgets.QWidget(self)
         input_container.setObjectName("ComposeBar")
         input_layout = QtWidgets.QHBoxLayout(input_container)
-        input_layout.setContentsMargins(col_left, g, g, g)
+        # Симметрично с правым краем (раньше слева был col_left — визуально уже).
+        input_layout.setContentsMargins(g, g, g, g)
         input_layout.setSpacing(self._UI_GRID_PX)
         self.input_edit = MessageInputEdit(self)
         self.input_edit.setPlaceholderText(
@@ -3382,6 +3496,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         actions_layout.setSpacing(self._UI_GRID_PX)
 
         self.addr_edit = AddressLineEdit(self)
+        self.addr_edit.setObjectName("PeerAddressEdit")
         self.addr_edit.setPlaceholderText("Peer .b32.i2p address")
         # Адрес — главный элемент панели действий
         self.addr_edit.setMinimumWidth(220)
@@ -3417,8 +3532,14 @@ class ChatWindow(QtWidgets.QMainWindow):
             btn.setFixedHeight(actions_fixed_height)
         self.more_toolbar_button.setFixedHeight(actions_fixed_height)
 
-        actions_layout.addWidget(self.peer_lock_label, 0)
-        actions_layout.addWidget(self.addr_edit, 1)
+        # Замок + адрес: половина сетки между ними (компромисс между 0 и полным _UI_GRID_PX).
+        _peer_addr_strip = QtWidgets.QWidget(actions_container)
+        _peer_addr_lay = QtWidgets.QHBoxLayout(_peer_addr_strip)
+        _peer_addr_lay.setContentsMargins(0, 0, 0, 0)
+        _peer_addr_lay.setSpacing(max(1, self._UI_GRID_PX // 2))
+        _peer_addr_lay.addWidget(self.peer_lock_label, 0)
+        _peer_addr_lay.addWidget(self.addr_edit, 1)
+        actions_layout.addWidget(_peer_addr_strip, 1)
         actions_layout.addWidget(self.connect_button)
         actions_layout.addWidget(self.disconnect_button)
         actions_layout.addWidget(self.more_toolbar_button)
@@ -3434,7 +3555,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         # 0: иначе QSplitter не даст ширину 0 при свёрнутой панели; минимум при открытии задаём в логике.
         self.contacts_sidebar.setMinimumWidth(0)
         sidebar_layout = QtWidgets.QVBoxLayout(self.contacts_sidebar)
-        sidebar_layout.setContentsMargins(g, g, g, g)
+        # Справа — как у гриппа ◀↔чат, чтобы зазор слева от кнопки не казался шире правого.
+        sidebar_layout.setContentsMargins(
+            g, g, self._CONTACTS_RESIZE_GRIP_WIDTH_PX, g
+        )
         sidebar_layout.setSpacing(self._UI_GRID_PX)
         contacts_title = QtWidgets.QLabel("Saved peers", self.contacts_sidebar)
         contacts_title.setObjectName("ContactsSidebarTitle")
@@ -3476,7 +3600,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.contacts_toggle_btn.setFlat(True)
         self.contacts_toggle_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.contacts_toggle_btn.setFixedWidth(self._CONTACTS_TOGGLE_BTN_WIDTH_PX)
-        self.contacts_toggle_btn.setMinimumHeight(1)
+        self.contacts_toggle_btn.setMinimumHeight(self._STATUS_ROW_HEIGHT_PX)
         self.contacts_toggle_btn.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Fixed,
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -3904,6 +4028,144 @@ class ChatWindow(QtWidgets.QMainWindow):
         if row >= 0:
             index = self.chat_model.index(row, 0)
             self.chat_view.scrollTo(index, QtWidgets.QAbstractItemView.ScrollHint.PositionAtBottom)
+        if not self._chat_search_sync_suppressed:
+            self._sync_chat_search_after_model_change()
+
+    def _schedule_chat_search_rebuild(self, _t: str = "") -> None:
+        self._chat_search_debounce.start()
+
+    def _rebuild_chat_search_matches(self) -> None:
+        q = self._chat_search_edit.text().strip().casefold()
+        self._chat_search_list.clear()
+        self._chat_search_match_rows = []
+        self._chat_search_cur = -1
+        if not q:
+            self._chat_search_list.hide()
+            self._update_chat_search_chrome()
+            return
+        n = self.chat_model.rowCount()
+        for row in range(n):
+            it = self.chat_model.item_at(row)
+            if it is None:
+                continue
+            blob = f"{it.timestamp} {it.sender} {it.text}".casefold()
+            if q in blob:
+                self._chat_search_match_rows.append(row)
+                snippet = (it.text or "").replace("\n", " ")
+                if len(snippet) > 100:
+                    snippet = snippet[:99] + "…"
+                head = (
+                    f"[{it.timestamp}] {it.sender}: "
+                    if (it.timestamp or it.sender)
+                    else ""
+                )
+                lw_it = QtWidgets.QListWidgetItem(head + snippet)
+                lw_it.setData(QtCore.Qt.ItemDataRole.UserRole, row)
+                self._chat_search_list.addItem(lw_it)
+        if self._chat_search_match_rows:
+            self._chat_search_list.show()
+        else:
+            self._chat_search_list.hide()
+        self._update_chat_search_chrome()
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if (
+            obj is getattr(self, "_chat_search_field_wrap", None)
+            and event.type() == QtCore.QEvent.Type.Resize
+        ):
+            self._layout_chat_search_status_overlay()
+        return super().eventFilter(obj, event)
+
+    def _chat_search_lineedit_left_pad_px(self) -> int:
+        return max(4, self._UI_GRID_PX // 2 + 2)
+
+    def _layout_chat_search_status_overlay(self) -> None:
+        edit = getattr(self, "_chat_search_edit", None)
+        lbl = getattr(self, "_chat_search_status_label", None)
+        wrap = getattr(self, "_chat_search_field_wrap", None)
+        if edit is None or lbl is None or wrap is None:
+            return
+        pad_l = self._chat_search_lineedit_left_pad_px()
+        if not lbl.isVisible() or not lbl.text():
+            edit.setTextMargins(pad_l, 0, 0, 0)
+            return
+        lbl.adjustSize()
+        pad_r = lbl.width() + 12
+        edit.setTextMargins(pad_l, 0, pad_r, 0)
+        eg = edit.geometry()
+        x = eg.x() + eg.width() - lbl.width() - 8
+        y = eg.y() + max(0, (eg.height() - lbl.height()) // 2)
+        lbl.move(x, y)
+        lbl.raise_()
+
+    def _update_chat_search_chrome(self) -> None:
+        edit = self._chat_search_edit
+        lbl = self._chat_search_status_label
+        total = len(self._chat_search_match_rows)
+        if not edit.text().strip():
+            lbl.clear()
+            lbl.hide()
+            edit.setTextMargins(self._chat_search_lineedit_left_pad_px(), 0, 0, 0)
+            return
+        if total == 0:
+            lbl.setText("No matches")
+        elif self._chat_search_cur >= 0:
+            lbl.setText(f"{self._chat_search_cur + 1}/{total}")
+        else:
+            lbl.setText(f"{total} match(es)")
+        lbl.show()
+        self._layout_chat_search_status_overlay()
+        QtCore.QTimer.singleShot(0, self._layout_chat_search_status_overlay)
+
+    def _highlight_chat_search_list_selection(self) -> None:
+        if not (0 <= self._chat_search_cur < self._chat_search_list.count()):
+            return
+        it = self._chat_search_list.item(self._chat_search_cur)
+        if it is not None:
+            self._chat_search_list.setCurrentItem(it)
+
+    def _step_chat_search(self, delta: int) -> None:
+        rows = self._chat_search_match_rows
+        if not rows:
+            return
+        if self._chat_search_cur < 0:
+            self._chat_search_cur = 0 if delta >= 0 else len(rows) - 1
+        else:
+            self._chat_search_cur = (self._chat_search_cur + delta) % len(rows)
+        r = rows[self._chat_search_cur]
+        self._scroll_chat_to_row(r)
+        self._update_chat_search_chrome()
+        self._highlight_chat_search_list_selection()
+
+    def _on_chat_search_item_clicked(
+        self, item: Optional[QtWidgets.QListWidgetItem] = None
+    ) -> None:
+        if item is None:
+            return
+        row = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if row is None:
+            return
+        try:
+            r = int(row)
+        except (TypeError, ValueError):
+            return
+        if r in self._chat_search_match_rows:
+            self._chat_search_cur = self._chat_search_match_rows.index(r)
+        self._scroll_chat_to_row(r)
+        self._update_chat_search_chrome()
+
+    def _scroll_chat_to_row(self, row: int) -> None:
+        if row < 0 or row >= self.chat_model.rowCount():
+            return
+        idx = self.chat_model.index(row, 0)
+        self.chat_view.scrollTo(
+            idx, QtWidgets.QAbstractItemView.ScrollHint.PositionAtCenter
+        )
+        self.chat_view.setCurrentIndex(idx)
+
+    def _sync_chat_search_after_model_change(self) -> None:
+        if self._chat_search_edit.text().strip():
+            self._rebuild_chat_search_matches()
 
     # ----- callbacks из ядра -----
 
@@ -5047,30 +5309,42 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._history_entries = list(entries)
         self._history_dirty = False
         if entries:
-            self._append_item(ChatItem(
-                kind="system", timestamp="", sender="",
-                text=f"--- {len(entries)} message(s) from history ---",
-            ))
-            for e in entries:
-                if e.kind == "me":
-                    sender = "Me"
-                elif e.kind == "peer":
-                    sender = self.profile if self.profile != "default" else "Peer"
-                else:
-                    continue
-                ts_display = ""
-                if e.ts:
-                    try:
-                        from datetime import datetime
-                        dt = datetime.fromisoformat(e.ts.replace("Z", "+00:00"))
-                        ts_display = dt.strftime("%H:%M:%S")
-                    except Exception:
-                        ts_display = e.ts[:8]
-                self._append_item(ChatItem(kind=e.kind, timestamp=ts_display, sender=sender, text=e.text))
-            self._append_item(ChatItem(
-                kind="system", timestamp="", sender="",
-                text="--- end of history ---",
-            ))
+            self._chat_search_sync_suppressed = True
+            try:
+                self._append_item(ChatItem(
+                    kind="system", timestamp="", sender="",
+                    text=f"--- {len(entries)} message(s) from history ---",
+                ))
+                for e in entries:
+                    if e.kind == "me":
+                        sender = "Me"
+                    elif e.kind == "peer":
+                        sender = self.profile if self.profile != "default" else "Peer"
+                    else:
+                        continue
+                    ts_display = ""
+                    if e.ts:
+                        try:
+                            from datetime import datetime
+                            dt = datetime.fromisoformat(e.ts.replace("Z", "+00:00"))
+                            ts_display = dt.strftime("%H:%M:%S")
+                        except Exception:
+                            ts_display = e.ts[:8]
+                    self._append_item(
+                        ChatItem(
+                            kind=e.kind,
+                            timestamp=ts_display,
+                            sender=sender,
+                            text=e.text,
+                        )
+                    )
+                self._append_item(ChatItem(
+                    kind="system", timestamp="", sender="",
+                    text="--- end of history ---",
+                ))
+            finally:
+                self._chat_search_sync_suppressed = False
+            self._sync_chat_search_after_model_change()
         self._history_loaded_for_peer = peer
         self._history_flush_timer.start()
         clear_unread_for_peer(self._unread_by_peer, normalize_peer_addr(peer))
