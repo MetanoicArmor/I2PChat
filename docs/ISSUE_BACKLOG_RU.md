@@ -119,6 +119,8 @@
 
 ## Milestone: 0.7.0 - Contacts and conversations
 
+*Состояние: пункты 7–12 закрыты в релизе **v0.7.0** (см. [`docs/releases/RELEASE_0.7.0.md`](releases/RELEASE_0.7.0.md)).*
+
 ### 7. Боковая панель контактов
 
 **Описание**

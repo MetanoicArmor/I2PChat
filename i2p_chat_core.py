@@ -98,6 +98,16 @@ class FileTransferInfo:
     size: int
     received: int = 0
     is_sending: bool = False
+
+
+@dataclass
+class PeerTrustInfo:
+    """Read-only TOFU trust snapshot for UI (signing key pin per peer)."""
+
+    peer_normalized: str
+    pinned: bool
+    signing_key_hex: Optional[str] = None
+    fingerprint_short: Optional[str] = None
     is_inline_image: bool = False  # True только для Send Pic (G), не для Send File (F/D)
     rejected_by_peer: bool = False  # True если получатель отклонил входящий файл
 
@@ -318,6 +328,60 @@ def ensure_valid_profile_name(name: str) -> str:
             "Invalid profile name. Allowed characters: a-z A-Z 0-9 . _ - (1..64 chars)."
         )
     return candidate
+
+
+def _peek_is_probable_peer_line(value: str) -> bool:
+    """Та же эвристика, что I2PChatCore._is_probable_peer_addr (без экземпляра ядра)."""
+    raw = (value or "").strip().lower()
+    if not raw:
+        return False
+    if raw.endswith(".b32.i2p"):
+        raw = raw[:-8]
+    return bool(re.fullmatch(r"[a-z2-7]{40,80}", raw))
+
+
+def peek_persisted_stored_peer(profile: str) -> Optional[str]:
+    """
+    Синхронно прочитать закреплённого пира из {profile}.dat до async-init ядра.
+
+    В GUI `core.stored_peer` появляется только после загрузки профиля в фоне;
+    для начальной вёрстки (свёрнутая боковая панель при Lock to peer) нужен этот peek.
+    """
+    try:
+        p = ensure_valid_profile_name(profile or "default")
+    except ValueError:
+        return None
+    if p == "default":
+        return None
+    key_file = os.path.join(get_profiles_dir(), f"{p}.dat")
+    if not os.path.isfile(key_file):
+        return None
+    try:
+        with open(key_file, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f.readlines() if line.strip()]
+    except OSError:
+        return None
+    stored_line: Optional[str] = None
+    if len(lines) > 1 and _peek_is_probable_peer_line(lines[1]):
+        stored_line = lines[1]
+    elif len(lines) > 0 and _peek_is_probable_peer_line(lines[0]):
+        stored_line = lines[0]
+    if not stored_line:
+        return None
+    raw = (stored_line or "").strip().lower()
+    if not raw:
+        return None
+    if any(ch in raw for ch in ("\r", "\n", "\x00", " ", "\t", "=")):
+        return None
+    if raw.endswith(".b32.i2p"):
+        host = raw[: -len(".b32.i2p")]
+    elif "." in raw:
+        return None
+    else:
+        host = raw
+    if not re.fullmatch(r"[a-z2-7]{40,80}", host):
+        return None
+    return host + ".b32.i2p"
 
 
 def _resolve_blindbox_privacy_profile(raw: str) -> str:
@@ -1555,6 +1619,29 @@ class I2PChatCore:
         if removed:
             self._save_trust_store()
         return removed
+
+    def get_peer_trust_info(self, peer_addr: str) -> Optional[PeerTrustInfo]:
+        """Trust pin state for a peer; None if the address string is invalid."""
+        try:
+            normalized = self._normalize_peer_addr(peer_addr)
+        except ValueError:
+            return None
+        if not normalized:
+            return None
+        hex_key = self.peer_trusted_signing_keys.get(normalized)
+        fp: Optional[str] = None
+        if hex_key:
+            try:
+                raw = bytes.fromhex(hex_key)
+                fp = self._fingerprint_pubkey(raw)
+            except ValueError:
+                fp = None
+        return PeerTrustInfo(
+            peer_normalized=normalized,
+            pinned=hex_key is not None,
+            signing_key_hex=hex_key,
+            fingerprint_short=fp,
+        )
 
     @staticmethod
     def _fingerprint_pubkey(pubkey: bytes) -> str:

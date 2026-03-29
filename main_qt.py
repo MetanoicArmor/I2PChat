@@ -40,6 +40,7 @@ from i2p_chat_core import (
     FileTransferInfo,
     I2PChatCore,
     ensure_valid_profile_name,
+    peek_persisted_stored_peer,
     get_downloads_dir,
     get_profiles_dir,
     get_images_dir,
@@ -48,6 +49,16 @@ from i2p_chat_core import (
     render_braille,
     render_bw,
     validate_image,
+)
+from contact_book import (
+    ContactBook,
+    ContactRecord,
+    load_book,
+    normalize_peer_address,
+    remember_peer,
+    save_book,
+    set_last_active_peer,
+    touch_peer_message_meta,
 )
 
 try:
@@ -96,6 +107,42 @@ def _resolve_local_asset(filename: str) -> Optional[str]:
 
 def _default_notify_sound_path() -> Optional[str]:
     return _resolve_local_asset(BUNDLED_NOTIFY_SOUND_REL)
+
+
+def _contacts_file_path(profile: str) -> str:
+    return os.path.join(get_profiles_dir(), f"{profile}.contacts.json")
+
+
+def _short_b32_display(addr: str) -> str:
+    clean = (addr or "").replace(".b32.i2p", "").strip()
+    if len(clean) > 12:
+        clean = f"{clean[:6]}..{clean[-6:]}"
+    return clean + ".b32.i2p"
+
+
+def _peer_lock_indicator_pixmap(
+    *, locked: bool, light_theme: bool, dpr: float = 1.0
+) -> QtGui.QPixmap:
+    dpr = max(1.0, float(dpr))
+    px = max(1, int(18 * dpr))
+    pm = QtGui.QPixmap(px, px)
+    pm.fill(QtCore.Qt.GlobalColor.transparent)
+    p = QtGui.QPainter(pm)
+    p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+    if locked:
+        pen = QtGui.QPen(QtGui.QColor(0, 150, 72) if light_theme else QtGui.QColor(80, 220, 120))
+    else:
+        pen = QtGui.QPen(QtGui.QColor(120, 128, 140) if light_theme else QtGui.QColor(150, 155, 170))
+    pen.setWidthF(max(1.2, 1.8 * dpr / 2))
+    p.setPen(pen)
+    p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+    scale = px / 18.0
+    p.scale(scale, scale)
+    p.drawArc(5, 3, 8, 7, 35 * 16, 110 * 16)
+    p.drawRoundedRect(4, 8, 10, 9, 2, 2)
+    p.end()
+    pm.setDevicePixelRatio(dpr)
+    return pm
 
 
 def _network_status_display(code: str) -> str:
@@ -317,7 +364,7 @@ THEMES: dict[str, dict[str, object]] = {
                 background: #ffffff;
                 border: none;
                 border-radius: 12px;
-                padding: 10px;
+                padding: %(ui_grid_px)dpx;
                 color: #1d1d1f;
             }
             QScrollBar:vertical {
@@ -423,8 +470,8 @@ THEMES: dict[str, dict[str, object]] = {
                 border-radius: 10px;
                 color: #525966;
                 padding: 0px;
-                min-width: 30px;
-                min-height: 30px;
+                min-width: %(status_row_height_px)spx;
+                min-height: %(status_row_height_px)spx;
             }
             QToolButton#ThemeSwitchButton:hover {
                 background-color: #ffffff;
@@ -432,12 +479,71 @@ THEMES: dict[str, dict[str, object]] = {
             QToolButton#ThemeSwitchButton:pressed {
                 background-color: #f1f4fa;
             }
+            QWidget#ContactsSidebar {
+                background: rgba(255, 255, 255, 0.78);
+                border: 1px solid rgba(0, 0, 0, 0.08);
+                border-radius: 14px;
+            }
+            QLabel#ContactsSidebarTitle {
+                color: #525966;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QListWidget#ContactsList {
+                background: transparent;
+                border: none;
+                outline: none;
+            }
+            QListWidget#ContactsList::item {
+                background: transparent;
+                padding: 0px;
+            }
+            QListWidget#ContactsList::item:selected {
+                background: rgba(10, 132, 255, 0.12);
+                border-radius: 8px;
+            }
+            QLabel#ContactRowTitle {
+                color: #1d1d1f;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QLabel#ContactRowSubtitle {
+                color: #6b7280;
+                font-size: 11px;
+            }
+            QWidget#ContactsResizeGrip {
+                background: transparent;
+            }
+            QWidget#ContactsResizeGrip:hover {
+                background: rgba(0, 0, 0, 0.06);
+            }
+            QPushButton#ContactsSidebarToggle {
+                background-color: rgba(255, 255, 255, 0.85);
+                border: none;
+                border-radius: 10px;
+                color: #525966;
+                font-size: %(status_font_px)spx;
+                font-weight: normal;
+                min-width: %(contacts_toggle_btn_width_px)spx;
+                max-width: %(contacts_toggle_btn_width_px)spx;
+                padding: 0px;
+            }
+            QPushButton#ContactsSidebarToggle:hover {
+                background-color: #ffffff;
+            }
+            QPushButton#ContactsSidebarToggle:pressed {
+                background-color: #f1f4fa;
+            }
+            QLabel#PeerLockIndicator {
+                min-width: 22px;
+                max-width: 22px;
+            }
             QLabel { color: #1d1d1f; }
             QLabel#StatusLabel {
                 background-color: rgba(255, 255, 255, 0.85);
                 border: none;
                 border-radius: 10px;
-                padding: 0px 10px;
+                padding: 0px %(ui_grid_px)dpx;
                 min-height: 30px;
                 color: #525966;
                 font-size: %(status_font_px)spx;
@@ -573,7 +679,7 @@ THEMES: dict[str, dict[str, object]] = {
             QListView {
                 background: transparent;
                 border: none;
-                padding: 8px;
+                padding: %(ui_grid_px)dpx;
                 color: #f5f5f7;
             }
             QScrollBar:vertical {
@@ -670,9 +776,9 @@ THEMES: dict[str, dict[str, object]] = {
                 border: none;
                 border-radius: 9px;
                 color: #c6cfdb;
-                padding: 2px;
-                min-width: 30px;
-                min-height: 30px;
+                padding: 0px;
+                min-width: %(status_row_height_px)spx;
+                min-height: %(status_row_height_px)spx;
             }
             QToolButton#ThemeSwitchButton:hover {
                 background-color: rgba(255, 255, 255, 0.14);
@@ -680,12 +786,71 @@ THEMES: dict[str, dict[str, object]] = {
             QToolButton#ThemeSwitchButton:pressed {
                 background-color: rgba(255, 255, 255, 0.18);
             }
+            QWidget#ContactsSidebar {
+                background: rgba(34, 37, 45, 0.72);
+                border: 1px solid #2f3541;
+                border-radius: 14px;
+            }
+            QLabel#ContactsSidebarTitle {
+                color: #9fa1b5;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QListWidget#ContactsList {
+                background: transparent;
+                border: none;
+                outline: none;
+            }
+            QListWidget#ContactsList::item {
+                background: transparent;
+                padding: 0px;
+            }
+            QListWidget#ContactsList::item:selected {
+                background: rgba(10, 132, 255, 0.22);
+                border-radius: 8px;
+            }
+            QLabel#ContactRowTitle {
+                color: #f5f5f7;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QLabel#ContactRowSubtitle {
+                color: #9fa1b5;
+                font-size: 11px;
+            }
+            QWidget#ContactsResizeGrip {
+                background: transparent;
+            }
+            QWidget#ContactsResizeGrip:hover {
+                background: rgba(255, 255, 255, 0.08);
+            }
+            QPushButton#ContactsSidebarToggle {
+                background-color: rgba(255, 255, 255, 0.06);
+                border: none;
+                border-radius: 10px;
+                color: #9fa1b5;
+                font-size: %(status_font_px)spx;
+                font-weight: normal;
+                min-width: %(contacts_toggle_btn_width_px)spx;
+                max-width: %(contacts_toggle_btn_width_px)spx;
+                padding: 0px;
+            }
+            QPushButton#ContactsSidebarToggle:hover {
+                background-color: rgba(255, 255, 255, 0.10);
+            }
+            QPushButton#ContactsSidebarToggle:pressed {
+                background-color: rgba(255, 255, 255, 0.14);
+            }
+            QLabel#PeerLockIndicator {
+                min-width: 22px;
+                max-width: 22px;
+            }
             QLabel { color: #f5f5f7; }
             QLabel#StatusLabel {
                 background-color: rgba(255, 255, 255, 0.06);
                 border: none;
                 border-radius: 10px;
-                padding: 0px 10px;
+                padding: 0px %(ui_grid_px)dpx;
                 min-height: 30px;
                 color: #9fa1b5;
                 font-size: %(status_font_px)spx;
@@ -2899,10 +3064,153 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         return ensure_valid_profile_name(text)
 
 
+class ContactRowWidget(QtWidgets.QWidget):
+    """Строка контакта в боковом списке (две строки: имя / превью)."""
+
+    activate = QtCore.pyqtSignal(str)
+
+    def __init__(self, record: ContactRecord, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self._addr = record.addr
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(2)
+        self._full_title = record.display_name.strip() or _short_b32_display(record.addr)
+        self._full_sub = (record.last_preview or record.note or "").strip()
+        self._title = QtWidgets.QLabel(self._full_title)
+        self._title.setObjectName("ContactRowTitle")
+        self._title.setWordWrap(False)
+        self._title.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.NoTextInteraction)
+        f = self._title.font()
+        f.setBold(True)
+        self._title.setFont(f)
+        sub_text = self._full_sub if self._full_sub else " "
+        self._subtitle = QtWidgets.QLabel(sub_text)
+        self._subtitle.setObjectName("ContactRowSubtitle")
+        self._subtitle.setWordWrap(False)
+        self._subtitle.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.NoTextInteraction)
+        sf = self._subtitle.font()
+        sf.setPointSize(max(9, sf.pointSize() - 1))
+        self._subtitle.setFont(sf)
+        layout.addWidget(self._title)
+        layout.addWidget(self._subtitle)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
+
+    @property
+    def contact_addr(self) -> str:
+        return self._addr
+
+    def _apply_elide(self) -> None:
+        w = max(1, self.width() - 20)
+        fm = self._title.fontMetrics()
+        self._title.setText(
+            fm.elidedText(self._full_title, QtCore.Qt.TextElideMode.ElideMiddle, w)
+        )
+        fm2 = self._subtitle.fontMetrics()
+        sub_text = self._full_sub if self._full_sub else " "
+        self._subtitle.setText(
+            fm2.elidedText(sub_text, QtCore.Qt.TextElideMode.ElideRight, w)
+        )
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def set_record(self, record: ContactRecord) -> None:
+        self._addr = record.addr
+        self._full_title = record.display_name.strip() or _short_b32_display(record.addr)
+        self._full_sub = (record.last_preview or record.note or "").strip()
+        self.updateGeometry()
+        self._apply_elide()
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.activate.emit(self._addr)
+        super().mouseReleaseEvent(event)
+
+
+class _ContactsSidebarResizeGrip(QtWidgets.QWidget):
+    """Узкая зона для изменения ширины первой панели QSplitter."""
+
+    def __init__(
+        self,
+        splitter: QtWidgets.QSplitter,
+        delta_sign: int,
+        parent: Optional[QtWidgets.QWidget] = None,
+        *,
+        host: Optional["ChatWindow"] = None,
+        strip_width_px: int = 6,
+    ) -> None:
+        super().__init__(parent)
+        self._splitter = splitter
+        self._host = host
+        self._delta_sign = 1 if delta_sign >= 0 else -1
+        self._dragging = False
+        self._start_global_x = 0
+        self._start_sidebar_w = 0
+        self.setObjectName("ContactsResizeGrip")
+        self.setFixedWidth(max(1, strip_width_px))
+        self.setCursor(QtCore.Qt.CursorShape.SizeHorCursor)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._start_global_x = int(event.globalPosition().x())
+            sizes = self._splitter.sizes()
+            self._start_sidebar_w = sizes[0] if sizes else 0
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if self._dragging:
+            dx = int(event.globalPosition().x()) - self._start_global_x
+            rmin = self._host._SPLITTER_RIGHT_MIN_PX if self._host else 200
+            mn = self._host._CONTACTS_SIDEBAR_MIN_OPEN_PX if self._host else 160
+            new_w = max(mn, min(520, self._start_sidebar_w + self._delta_sign * dx))
+            total = max(400, sum(self._splitter.sizes()) or self._splitter.width())
+            self._splitter.setSizes([new_w, max(rmin, total - new_w)])
+            if self._host is not None and new_w >= mn:
+                self._host._expand_contacts_sidebar_from_drag()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        self._dragging = False
+        if self._host is not None:
+            sizes = self._splitter.sizes()
+            if sizes and sizes[0] >= self._host._CONTACTS_SIDEBAR_MIN_OPEN_PX:
+                self._host._contacts_sidebar_width_saved = int(sizes[0])
+        super().mouseReleaseEvent(event)
+
+
 class ChatWindow(QtWidgets.QMainWindow):
     # Ниже этого порога ширины лейбла статуса показывается сокращённая строка.
     _STATUS_LABEL_COMPACT_PX = 700
     _STATUS_ROW_HEIGHT_PX = 30
+    # Иконка луны/солнца внутри кнопки темы (кнопка остаётся _STATUS_ROW_HEIGHT_PX).
+    _THEME_SWITCH_ICON_PX = 16
+    # Единый шаг сетки отступов (окно, блоки колонки чата, статус-бар, QSS списка).
+    _UI_GRID_PX = 8
+    _UI_STRIP_VERTICAL_GAP_PX = _UI_GRID_PX
+    _UI_STRIP_SIDE_GUTTER_PX = _UI_GRID_PX
+    # При свёрнутом сайдбаре зазор ◀ от края окна уже (нет щели у нулевой панели).
+    _CONTACTS_STRIP_EDGE_COLLAPSED_PX = 2
+    # Развёрнуто: половина grid слева от ◀ и как левый inset колонки чата (визуально ровно по бокам ◀).
+    _CONTACTS_STRIP_EDGE_EXPANDED_PX = _UI_GRID_PX // 2
+    # Как у кнопки темы: квадрат со стороной = высота строки статуса.
+    _CONTACTS_TOGGLE_BTN_WIDTH_PX = _STATUS_ROW_HEIGHT_PX
+    # Ближе к шагу сетки, чем 3px — визуально ровнее зазор ◀↔чат.
+    _CONTACTS_RESIZE_GRIP_WIDTH_PX = 4
+    _CONTACTS_SIDEBAR_MIN_OPEN_PX = 160
+    _CONTACTS_SIDEBAR_ANIM_MS = 200
+    _SPLITTER_RIGHT_MIN_PX = 200
+
     def __init__(self, profile: Optional[str] = None, theme_id: str = THEME_DEFAULT) -> None:
         super().__init__()
         self.profile = profile or "default"
@@ -2915,7 +3223,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._window_title_base = f"I2PChat @ {clean_profile}"
         self._unread_by_peer: dict[str, int] = {}
         self._status_send_in_flight = False
-        self._status_technical_tooltip = ""
         self.setWindowTitle(self._window_title_base)
         self.resize(900, 600)
 
@@ -2926,8 +3233,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
 
         main_layout = QtWidgets.QVBoxLayout(central)
-        main_layout.setContentsMargins(14, 10, 14, 10)
-        main_layout.setSpacing(10)
+        g = self._UI_GRID_PX
+        main_layout.setContentsMargins(g, g, g, g)
+        main_layout.setSpacing(self._UI_GRID_PX)
 
         self.more_actions_popup = ActionsPopup(self)
         self._more_actions_suppress_until_ms = 0
@@ -2947,6 +3255,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.status_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
+        # Горизонтальные поля плашки задаются в QSS (симметрично); indent не дублируем.
+        self.status_label.setIndent(0)
         self.status_label.setWordWrap(False)
         self.status_label.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Ignored,
@@ -2964,8 +3274,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.theme_switch_button.clicked.connect(self.on_theme_switch_clicked)
         self.status_row = QtWidgets.QWidget(self)
         status_row_layout = QtWidgets.QHBoxLayout(self.status_row)
+        # Горизонтальные поля только у main_layout; иначе статус «уезжает» вправо относительно сплиттера/сайдбара.
         status_row_layout.setContentsMargins(0, 0, 0, 0)
-        status_row_layout.setSpacing(6)
+        status_row_layout.setSpacing(self._UI_GRID_PX)
         status_row_layout.addWidget(self.status_label, 1)
         status_row_layout.addWidget(
             self.theme_switch_button,
@@ -3002,6 +3313,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._compose_drafts_save_timer.setInterval(COMPOSE_DRAFTS_DEBOUNCE_MS)
         self._compose_drafts_save_timer.timeout.connect(self._flush_compose_drafts_to_disk)
 
+        self._contact_book = ContactBook()
+        self._contacts_sidebar_collapsed = False
+        self._contacts_sidebar_width_saved = 280
+        self._contacts_sidebar_anim: Optional[QtCore.QVariantAnimation] = None
+
         # Таймер для анимации прогресс-бара
         self._transfer_timer = QtCore.QTimer(self)
         self._transfer_timer.timeout.connect(self._animate_transfer)
@@ -3027,7 +3343,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         chat_surface = QtWidgets.QWidget(self)
         chat_surface.setObjectName("ChatSurface")
         chat_surface_layout = QtWidgets.QVBoxLayout(chat_surface)
-        chat_surface_layout.setContentsMargins(6, 6, 6, 6)
+        g = self._UI_GRID_PX
+        col_left = self._CONTACTS_STRIP_EDGE_EXPANDED_PX
+        chat_surface_layout.setContentsMargins(col_left, g, g, g)
         chat_surface_layout.setSpacing(0)
         chat_surface_layout.addWidget(self.chat_view)
 
@@ -3035,8 +3353,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         input_container = QtWidgets.QWidget(self)
         input_container.setObjectName("ComposeBar")
         input_layout = QtWidgets.QHBoxLayout(input_container)
-        input_layout.setContentsMargins(8, 8, 8, 8)
-        input_layout.setSpacing(6)
+        input_layout.setContentsMargins(col_left, g, g, g)
+        input_layout.setSpacing(self._UI_GRID_PX)
         self.input_edit = MessageInputEdit(self)
         self.input_edit.setPlaceholderText(
             "Type message. Enter = new line; Shift+Enter or Ctrl/⌘+Enter = send."
@@ -3060,8 +3378,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         actions_container = QtWidgets.QWidget(self)
         actions_container.setObjectName("ActionToolbar")
         actions_layout = QtWidgets.QHBoxLayout(actions_container)
-        actions_layout.setContentsMargins(8, 8, 8, 8)
-        actions_layout.setSpacing(6)
+        actions_layout.setContentsMargins(col_left, g, g, g)
+        actions_layout.setSpacing(self._UI_GRID_PX)
 
         self.addr_edit = AddressLineEdit(self)
         self.addr_edit.setPlaceholderText("Peer .b32.i2p address")
@@ -3082,8 +3400,15 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_toolbar_button.setText("⋯")
         self.more_toolbar_button.clicked.connect(self.on_more_actions_clicked)
 
-        # Все элементы панели действий делаем одной высоты, чтобы ряд смотрелся ровно
-        actions_fixed_height = 34 if sys.platform == "darwin" else 36
+        # Одна «толщина» со строкой статуса и кнопкой темы (_STATUS_ROW_HEIGHT_PX).
+        actions_fixed_height = self._STATUS_ROW_HEIGHT_PX
+        self.peer_lock_label = QtWidgets.QLabel(self)
+        self.peer_lock_label.setObjectName("PeerLockIndicator")
+        self.peer_lock_label.setFixedSize(22, actions_fixed_height)
+        self.peer_lock_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.peer_lock_label.setScaledContents(False)
         self.addr_edit.setFixedHeight(actions_fixed_height)
         for btn in [
             self.connect_button,
@@ -3092,15 +3417,93 @@ class ChatWindow(QtWidgets.QMainWindow):
             btn.setFixedHeight(actions_fixed_height)
         self.more_toolbar_button.setFixedHeight(actions_fixed_height)
 
+        actions_layout.addWidget(self.peer_lock_label, 0)
         actions_layout.addWidget(self.addr_edit, 1)
         actions_layout.addWidget(self.connect_button)
         actions_layout.addWidget(self.disconnect_button)
         actions_layout.addWidget(self.more_toolbar_button)
 
+        self.contacts_splitter = QtWidgets.QSplitter(
+            QtCore.Qt.Orientation.Horizontal, self
+        )
+        self.contacts_splitter.setHandleWidth(0)
+        self.contacts_splitter.setChildrenCollapsible(False)
+
+        self.contacts_sidebar = QtWidgets.QWidget(self.contacts_splitter)
+        self.contacts_sidebar.setObjectName("ContactsSidebar")
+        # 0: иначе QSplitter не даст ширину 0 при свёрнутой панели; минимум при открытии задаём в логике.
+        self.contacts_sidebar.setMinimumWidth(0)
+        sidebar_layout = QtWidgets.QVBoxLayout(self.contacts_sidebar)
+        sidebar_layout.setContentsMargins(g, g, g, g)
+        sidebar_layout.setSpacing(self._UI_GRID_PX)
+        contacts_title = QtWidgets.QLabel("Saved peers", self.contacts_sidebar)
+        contacts_title.setObjectName("ContactsSidebarTitle")
+        contacts_title.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        contacts_title.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.contacts_list = QtWidgets.QListWidget(self.contacts_sidebar)
+        self.contacts_list.setObjectName("ContactsList")
+        self.contacts_list.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.contacts_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.contacts_list.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        sidebar_layout.addWidget(contacts_title)
+        sidebar_layout.addWidget(self.contacts_list, 1)
+
+        self.contacts_right_pack = QtWidgets.QWidget(self.contacts_splitter)
+        self.right_chat_column = QtWidgets.QWidget(self.contacts_right_pack)
+        right_column_layout = QtWidgets.QVBoxLayout(self.right_chat_column)
+        right_column_layout.setContentsMargins(0, 0, 0, 0)
+        right_column_layout.setSpacing(self._UI_GRID_PX)
+        right_column_layout.addWidget(chat_surface, 1)
+        right_column_layout.addWidget(input_container)
+        right_column_layout.addWidget(actions_container)
+
+        right_pack_layout = QtWidgets.QHBoxLayout(self.contacts_right_pack)
+        right_pack_layout.setContentsMargins(self._CONTACTS_STRIP_EDGE_COLLAPSED_PX, 0, 0, 0)
+        right_pack_layout.setSpacing(0)
+
+        self.contacts_toggle_btn = QtWidgets.QPushButton(self.contacts_right_pack)
+        self.contacts_toggle_btn.setObjectName("ContactsSidebarToggle")
+        self.contacts_toggle_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.contacts_toggle_btn.setFlat(True)
+        self.contacts_toggle_btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.contacts_toggle_btn.setFixedWidth(self._CONTACTS_TOGGLE_BTN_WIDTH_PX)
+        self.contacts_toggle_btn.setMinimumHeight(1)
+        self.contacts_toggle_btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.contacts_toggle_btn.setText("◀")
+        self.contacts_toggle_btn.setToolTip("Show or hide saved peers")
+        self.contacts_toggle_btn.clicked.connect(self._toggle_contacts_sidebar)
+
+        # Грипп между кнопкой и чатом (узкая полоса).
+        self._contacts_sidebar_resize_grip = _ContactsSidebarResizeGrip(
+            self.contacts_splitter,
+            1,
+            self.contacts_right_pack,
+            host=self,
+            strip_width_px=self._CONTACTS_RESIZE_GRIP_WIDTH_PX,
+        )
+        right_pack_layout.addWidget(self.contacts_toggle_btn)
+        right_pack_layout.addWidget(self._contacts_sidebar_resize_grip)
+        right_pack_layout.addWidget(self.right_chat_column, 1)
+
+        self.contacts_splitter.addWidget(self.contacts_sidebar)
+        self.contacts_splitter.addWidget(self.contacts_right_pack)
+        self.contacts_splitter.setStretchFactor(0, 0)
+        self.contacts_splitter.setStretchFactor(1, 1)
+
         main_layout.addWidget(self.status_row)
-        main_layout.addWidget(chat_surface, 1)
-        main_layout.addWidget(input_container)
-        main_layout.addWidget(actions_container)
+        main_layout.addWidget(self.contacts_splitter, 1)
 
         # системный трей/док‑иконка для показа нативных уведомлений от Qt
         self.tray_icon = QtWidgets.QSystemTrayIcon(self)
@@ -3136,6 +3539,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
         self.addr_edit.textChanged.connect(lambda _t: self._refresh_connection_buttons())
+        self.addr_edit.textChanged.connect(lambda _t: self._sync_contacts_list_selection())
         self.addr_edit.editingFinished.connect(self._on_addr_editing_finished_for_drafts)
         self.input_edit.textChanged.connect(self._on_compose_text_changed)
         self.more_actions_popup.add_action("Load profile (.dat)", self.on_load_profile_clicked)
@@ -3183,10 +3587,255 @@ class ChatWindow(QtWidgets.QMainWindow):
         # ядро
         self.core = self._create_core(self.profile)
         self._load_compose_drafts_from_disk()
+        self._load_contacts_book()
+        self._refresh_contacts_list()
+        self._apply_startup_peer_from_book()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self._apply_theme(self.theme_id, persist=False)
+        self._apply_contacts_sidebar_startup_state()
+        self._sync_contacts_right_pack_left_margin()
+        self._update_peer_lock_indicator()
         self.refresh_status_label()
         self._refresh_connection_buttons()
+        QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
+
+    def _load_contacts_book(self) -> None:
+        self._contact_book = load_book(_contacts_file_path(self.profile))
+
+    def _save_contacts_book(self) -> None:
+        save_book(_contacts_file_path(self.profile), self._contact_book)
+
+    def _stop_contacts_sidebar_animation(self) -> None:
+        if self._contacts_sidebar_anim is None:
+            return
+        self._contacts_sidebar_anim.stop()
+        self._contacts_sidebar_anim.deleteLater()
+        self._contacts_sidebar_anim = None
+
+    def _balance_contacts_splitter_initial(self) -> None:
+        total = max(400, self.contacts_splitter.width() or self.width() or 900)
+        if self._contacts_sidebar_collapsed or not self.contacts_sidebar.isVisible():
+            self.contacts_splitter.setSizes([0, total])
+            self._sync_contacts_right_pack_left_margin()
+            return
+        avail = max(0, total - self._SPLITTER_RIGHT_MIN_PX)
+        sw = min(
+            max(self._CONTACTS_SIDEBAR_MIN_OPEN_PX, int(self._contacts_sidebar_width_saved)),
+            avail,
+        )
+        self.contacts_splitter.setSizes([sw, total - sw])
+        self._sync_contacts_right_pack_left_margin()
+
+    def _sync_contacts_right_pack_left_margin(self) -> None:
+        lay = self.contacts_right_pack.layout()
+        if not isinstance(lay, QtWidgets.QHBoxLayout):
+            return
+        left = (
+            self._CONTACTS_STRIP_EDGE_COLLAPSED_PX
+            if self._contacts_sidebar_collapsed
+            else self._CONTACTS_STRIP_EDGE_EXPANDED_PX
+        )
+        m = lay.contentsMargins()
+        if m.left() == left:
+            return
+        lay.setContentsMargins(left, m.top(), m.right(), m.bottom())
+
+    def _apply_startup_peer_from_book(self) -> None:
+        if self.core.stored_peer:
+            return
+        lap = self._contact_book.last_active_peer
+        if lap and not self.addr_edit.text().strip():
+            self.addr_edit.setText(lap)
+
+    def _apply_contacts_sidebar_startup_state(self) -> None:
+        # stored_peer в ядре выставляется только в async init; до этого читаем .dat синхронно.
+        locked = bool(
+            self.core.stored_peer or peek_persisted_stored_peer(self.profile)
+        )
+        if locked:
+            self._set_contacts_sidebar_collapsed(True, animated=False)
+        else:
+            self._set_contacts_sidebar_collapsed(False, animated=False)
+
+    def _set_contacts_sidebar_collapsed(self, collapsed: bool, *, animated: bool) -> None:
+        self._stop_contacts_sidebar_animation()
+        sz = self.contacts_splitter.sizes()
+        tw = self.contacts_splitter.width()
+        total = tw if tw > 0 else max(400, sum(sz) if sz else 900)
+        rmin = self._SPLITTER_RIGHT_MIN_PX
+
+        if collapsed:
+            sw0 = int(sz[0]) if sz else 0
+            if sw0 <= 0:
+                self._contacts_sidebar_collapsed = True
+                self.contacts_toggle_btn.setText("▶")
+                self.contacts_sidebar.hide()
+                tot = max(rmin, self.contacts_splitter.width())
+                self.contacts_splitter.setSizes([0, tot])
+                self._sync_contacts_right_pack_left_margin()
+                return
+            self._contacts_sidebar_width_saved = max(self._CONTACTS_SIDEBAR_MIN_OPEN_PX, sw0)
+            self._contacts_sidebar_collapsed = True
+            self.contacts_toggle_btn.setText("▶")
+
+            def apply_collapse(sw_live: object) -> None:
+                sw_i = int(float(sw_live))
+                self.contacts_splitter.setSizes(
+                    [sw_i, max(rmin, total - sw_i)]
+                )
+
+            def finish_collapse() -> None:
+                self.contacts_sidebar.hide()
+                tot = max(rmin, self.contacts_splitter.width())
+                self.contacts_splitter.setSizes([0, tot])
+                self._contacts_sidebar_anim = None
+                self._sync_contacts_right_pack_left_margin()
+                QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
+
+            if not animated:
+                self.contacts_sidebar.hide()
+                tot = max(rmin, self.contacts_splitter.width())
+                self.contacts_splitter.setSizes([0, tot])
+                self._sync_contacts_right_pack_left_margin()
+                QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
+                return
+            self._sync_contacts_right_pack_left_margin()
+            anim_c = QtCore.QVariantAnimation(self)
+            anim_c.setDuration(self._CONTACTS_SIDEBAR_ANIM_MS)
+            anim_c.setStartValue(float(sw0))
+            anim_c.setEndValue(0.0)
+            anim_c.setEasingCurve(QtCore.QEasingCurve.Type.InOutCubic)
+            anim_c.valueChanged.connect(apply_collapse)
+            anim_c.finished.connect(finish_collapse)
+            self._contacts_sidebar_anim = anim_c
+            anim_c.start()
+            return
+
+        avail = max(0, total - rmin)
+        sw1 = min(
+            max(self._CONTACTS_SIDEBAR_MIN_OPEN_PX, int(self._contacts_sidebar_width_saved)),
+            avail,
+        )
+        self._contacts_sidebar_collapsed = False
+        self.contacts_toggle_btn.setText("◀")
+        self.contacts_sidebar.show()
+        self._sync_contacts_right_pack_left_margin()
+
+        def apply_expand(sw_live: object) -> None:
+            sw_i = int(float(sw_live))
+            self.contacts_splitter.setSizes([sw_i, max(rmin, total - sw_i)])
+
+        def finish_expand() -> None:
+            self.contacts_splitter.setSizes([sw1, max(rmin, total - sw1)])
+            self._contacts_sidebar_anim = None
+            self._sync_contacts_right_pack_left_margin()
+            QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
+
+        if not animated:
+            self.contacts_splitter.setSizes([sw1, max(rmin, total - sw1)])
+            self._sync_contacts_right_pack_left_margin()
+            QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
+            return
+        anim_e = QtCore.QVariantAnimation(self)
+        anim_e.setDuration(self._CONTACTS_SIDEBAR_ANIM_MS)
+        anim_e.setStartValue(0.0)
+        anim_e.setEndValue(float(sw1))
+        anim_e.setEasingCurve(QtCore.QEasingCurve.Type.InOutCubic)
+        anim_e.valueChanged.connect(apply_expand)
+        anim_e.finished.connect(finish_expand)
+        self._contacts_sidebar_anim = anim_e
+        apply_expand(0)
+        anim_e.start()
+
+    def _toggle_contacts_sidebar(self) -> None:
+        self._set_contacts_sidebar_collapsed(
+            not self._contacts_sidebar_collapsed, animated=True
+        )
+
+    def _expand_contacts_sidebar_from_drag(self) -> None:
+        if not self._contacts_sidebar_collapsed:
+            return
+        self._contacts_sidebar_collapsed = False
+        self.contacts_toggle_btn.setText("◀")
+        self.contacts_sidebar.show()
+        self._sync_contacts_right_pack_left_margin()
+
+    def _refresh_contacts_list(self) -> None:
+        self.contacts_list.clear()
+        for rec in self._contact_book.contacts:
+            item = QtWidgets.QListWidgetItem()
+            row = ContactRowWidget(rec)
+            row.activate.connect(self._on_contact_row_activated)
+            self.contacts_list.addItem(item)
+            self.contacts_list.setItemWidget(item, row)
+            hint = row.sizeHint()
+            item.setSizeHint(QtCore.QSize(hint.width(), max(56, hint.height())))
+        self._sync_contacts_list_selection()
+
+    def _peer_key_for_contact_selection(self) -> Optional[str]:
+        raw = (
+            (self.core.stored_peer or "").strip()
+            or (self.core.current_peer_addr or "").strip()
+            or self.addr_edit.text().strip()
+        )
+        if not raw:
+            return None
+        return normalize_peer_addr(raw)
+
+    def _sync_contacts_list_selection(self) -> None:
+        key = self._peer_key_for_contact_selection()
+        if not key:
+            self.contacts_list.clearSelection()
+            return
+        norm = normalize_peer_address(key)
+        target = norm or key
+        for i in range(self.contacts_list.count()):
+            it = self.contacts_list.item(i)
+            w = self.contacts_list.itemWidget(it)
+            if isinstance(w, ContactRowWidget) and normalize_peer_addr(
+                w.contact_addr
+            ) == normalize_peer_addr(target):
+                self.contacts_list.setCurrentRow(i)
+                return
+        self.contacts_list.clearSelection()
+
+    def _on_contact_row_activated(self, addr: str) -> None:
+        norm = normalize_peer_address(addr)
+        if not norm:
+            return
+        stored = normalize_peer_address(self.core.stored_peer or "")
+        if stored and norm != stored:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Saved peers",
+                "Профиль закреплён за другим пиром. Смена контакта из списка недоступна, "
+                "пока действует Lock to peer.",
+            )
+            return
+        self.addr_edit.setText(norm)
+        changed = False
+        if remember_peer(self._contact_book, norm):
+            changed = True
+        if set_last_active_peer(self._contact_book, norm):
+            changed = True
+        if changed:
+            self._save_contacts_book()
+        self._refresh_contacts_list()
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+        self.refresh_status_label()
+        self._refresh_connection_buttons()
+
+    def _update_peer_lock_indicator(self) -> None:
+        locked = bool(self.core.stored_peer)
+        light = self.theme_id == "ligth"
+        dpr = max(1.0, float(self.devicePixelRatioF()))
+        pm = _peer_lock_indicator_pixmap(locked=locked, light_theme=light, dpr=dpr)
+        self.peer_lock_label.setPixmap(pm)
+        self.peer_lock_label.setToolTip(
+            "Профиль закреплён за пиром (Lock to peer)"
+            if locked
+            else "Профиль не закреплён: можно выбрать любой контакт"
+        )
 
     def _peer_target_available(self) -> bool:
         return bool(self.addr_edit.text().strip()) or bool(self.core.stored_peer)
@@ -3307,6 +3956,18 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.refresh_status_label()
         self._refresh_connection_buttons()
         if kind == "peer" and msg.source_peer:
+            sp = normalize_peer_address(msg.source_peer)
+            if sp:
+                book_changed = False
+                if remember_peer(self._contact_book, sp):
+                    book_changed = True
+                ts_iso = msg.timestamp.isoformat()
+                preview = (text or "").replace("\n", " ")
+                if touch_peer_message_meta(self._contact_book, sp, preview, ts_iso):
+                    book_changed = True
+                if book_changed:
+                    self._save_contacts_book()
+                    self._refresh_contacts_list()
             bump_unread_for_incoming_peer_message(
                 self._unread_by_peer,
                 active_key=self._compose_peer_key_from_ui(),
@@ -3686,6 +4347,18 @@ class ChatWindow(QtWidgets.QMainWindow):
     def handle_peer_changed(self, peer: Optional[str]) -> None:
         if peer:
             self.addr_edit.setText(peer)
+            n = normalize_peer_address(peer)
+            if n:
+                changed = False
+                if remember_peer(self._contact_book, n):
+                    changed = True
+                if set_last_active_peer(self._contact_book, n):
+                    changed = True
+                if changed:
+                    self._save_contacts_book()
+                self._refresh_contacts_list()
+        else:
+            self._sync_contacts_list_selection()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self.refresh_status_label()
         self._refresh_connection_buttons()
@@ -3786,7 +4459,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         if icon_path:
             source = QtGui.QPixmap(icon_path)
             if not source.isNull():
-                icon_px = 16 if icon_name == "moon.png" else 18
+                icon_px = self._THEME_SWITCH_ICON_PX
                 dpr = max(1.0, self.devicePixelRatioF())
                 target_w = max(1, int(icon_px * dpr))
                 target_h = max(1, int(icon_px * dpr))
@@ -3823,7 +4496,13 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.theme_id = resolved
         self.theme = THEMES[self.theme_id]
         self.setStyleSheet(
-            str(self.theme["window_stylesheet"]) % {"status_font_px": self._status_font_px}
+            str(self.theme["window_stylesheet"])
+            % {
+                "status_font_px": self._status_font_px,
+                "status_row_height_px": self._STATUS_ROW_HEIGHT_PX,
+                "contacts_toggle_btn_width_px": self._CONTACTS_TOGGLE_BTN_WIDTH_PX,
+                "ui_grid_px": self._UI_GRID_PX,
+            }
         )
         delegate = self.chat_view.itemDelegate()
         if isinstance(delegate, ChatItemDelegate):
@@ -3840,6 +4519,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.chat_view.set_theme(self.theme_id)
         self.input_edit.set_theme(self.theme_id)
         self.addr_edit.set_theme(self.theme_id)
+        self._update_peer_lock_indicator()
         self._refresh_connection_buttons()
 
     @QtCore.pyqtSlot()
@@ -3928,10 +4608,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             available,
         )
         self.status_label.setText(elided)
-        if self._status_event_text and forced_expanded:
-            self.status_label.setToolTip("")
-        else:
-            self.status_label.setToolTip(self._status_technical_tooltip)
+        self.status_label.setToolTip("")
 
     def refresh_status_label(self) -> None:
         """Обновить строку статуса с учётом профиля и persist-режима."""
@@ -4034,7 +4711,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         delivery = self.core.get_delivery_telemetry()
         delivery_state = str(delivery.get("state", "unknown"))
         delivery_bar, _ = _delivery_status_bar_and_tooltip(delivery_state)
-        current_peer_disp = _short_addr(self.core.current_peer_addr)
+        peer_for_status = self.core.current_peer_addr or stored
+        current_peer_disp = _short_addr(peer_for_status)
         stored_disp = _short_addr(stored)
         ack_part = f"ACKdrop:{ack_drop_total}" if ack_drop_total > 0 else "ACKdrop:0"
 
@@ -4059,7 +4737,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         primary_full = pres.primary_full
         if ack_drop_total > 0:
             primary_full = f"{primary_full} | {ack_part}"
-        self._status_technical_tooltip = pres.technical_detail
         self._set_status_text(primary_full, pres.primary_short)
         current_signature = (status, link_state, secure_state, delivery_state)
         if (
@@ -4243,6 +4920,15 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.handle_system(
                 f"Identity {self.profile} is now locked to this peer."
             )
+            n = normalize_peer_address(self.core.current_peer_addr or "")
+            if n:
+                remember_peer(self._contact_book, n)
+                set_last_active_peer(self._contact_book, n)
+                self._save_contacts_book()
+                self._refresh_contacts_list()
+            self._set_contacts_sidebar_collapsed(True, animated=False)
+            QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
+            self._update_peer_lock_indicator()
             self.refresh_status_label()
         except Exception as e:  # pragma: no cover - GUI path
             self.handle_error(f"Failed to save: {e}")

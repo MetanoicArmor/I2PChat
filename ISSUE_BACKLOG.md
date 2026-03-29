@@ -114,6 +114,8 @@ Improve progress and error visibility for file and image sends.
 
 ## Milestone: 0.7.0 - Contacts and conversations
 
+*Status: issues 7–12 are implemented in **v0.7.0** (see [`docs/releases/RELEASE_0.7.0.md`](docs/releases/RELEASE_0.7.0.md)).*
+
 ### 7. Contacts sidebar
 
 **Description**

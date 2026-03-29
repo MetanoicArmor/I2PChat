@@ -4,7 +4,8 @@ Versioned release write-ups for I2PChat live in this directory (`docs/releases/`
 
 | Version | Notes |
 |--------|--------|
-| **0.6.5** | [RELEASE_0.6.5.md](RELEASE_0.6.5.md) — UX polish milestone (drafts, unread, status, context menu, notifications) |
+| **0.7.0** | [RELEASE_0.7.0.md](RELEASE_0.7.0.md) — contacts v2, previews, last active peer, in-chat search, trust card MVP |
+| 0.6.5 | [RELEASE_0.6.5.md](RELEASE_0.6.5.md) — UX polish milestone (drafts, unread, status, context menu, notifications) |
 | 0.6.4 | [RELEASE_0.6.4.md](RELEASE_0.6.4.md) |
 | 0.6.3 | [RELEASE_0.6.3.md](RELEASE_0.6.3.md) |
 | 0.6.2 | [RELEASE_0.6.2.md](RELEASE_0.6.2.md) |
