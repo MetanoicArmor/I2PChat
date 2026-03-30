@@ -1,5 +1,7 @@
 ## I2PChat GUI Buttons Guide
 
+This guide matches **I2PChat 1.0.0** (see [`VERSION`](../VERSION) at the repository root).
+
 ### Profile selection dialog
 
 When you start the GUI **without** passing a profile name, the profile chooser appears:
@@ -541,14 +543,13 @@ To reduce length-based traffic analysis, encrypted mode uses a padding profile:
 Override via environment variable:
 
 ```bash
-I2PCHAT_PADDING_PROFILE=off python -m i2pchat.gui.main_qt
+I2PCHAT_PADDING_PROFILE=off python -m i2pchat.gui
 ```
 
-Canonical developer entrypoints (from the repository root): `python -m i2pchat.gui`
-or `python -m i2pchat.run_gui` (same as the PyInstaller script
-[`i2pchat/run_gui.py`](../i2pchat/run_gui.py)), or directly `python -m i2pchat.gui.main_qt`.
-Application code lives only under `i2pchat/`; there are no flat root-level Python
-shims.
+Canonical entrypoints when running from source (repository root): `python -m i2pchat.gui`
+or `python -m i2pchat.run_gui` (same as the PyInstaller launcher
+[`i2pchat/run_gui.py`](../i2pchat/run_gui.py)). Application code lives only under
+`i2pchat/`; there are no flat root-level Python shims.
 
 Trade-off: more padding lowers metadata correlation but increases bandwidth use.
 
