@@ -1,10 +1,10 @@
-"""Unit tests for privacy_mode module (issue #23)."""
+"""Unit tests for i2pchat.presentation.privacy_mode (issue #23)."""
 
 from __future__ import annotations
 
 import unittest
 
-from privacy_mode import (
+from i2pchat.presentation.privacy_mode import (
     PrivacyState,
     activate_privacy_mode,
     deactivate_privacy_mode,
@@ -13,7 +13,10 @@ from privacy_mode import (
     set_lock_pin,
     verify_lock_pin,
 )
-from notification_prefs import notification_body_for_display, should_show_tray_message
+from i2pchat.presentation.notification_prefs import (
+    notification_body_for_display,
+    should_show_tray_message,
+)
 
 
 class TestPrivacyStateDefaults(unittest.TestCase):

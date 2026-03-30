@@ -1,7 +1,7 @@
 """
 Pure logic for privacy mode toggle and optional local lock/unlock flow.
 
-Qt layer in main_qt.py applies results; settings persisted in gui.json
+Qt layer in i2pchat/gui/main_qt.py applies results; settings persisted in gui.json
 under the `privacy_mode` key.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 

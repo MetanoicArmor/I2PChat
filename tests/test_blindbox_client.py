@@ -141,7 +141,7 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
                     "outbound.length": "2",
                 },
             )
-            with patch("blindbox_client.secrets.token_hex", return_value="cafebabe"):
+            with patch("i2pchat.blindbox.blindbox_client.secrets.token_hex", return_value="cafebabe"):
                 await client.start()
             await client.close()
             await asyncio.wait_for(done.wait(), timeout=1.0)
@@ -191,7 +191,7 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
                 sam_port=int(sam_port),
                 sam_options={"inbound.length": "2\nBAD=1"},
             )
-            with patch("blindbox_client.secrets.token_hex", return_value="cafebabe"):
+            with patch("i2pchat.blindbox.blindbox_client.secrets.token_hex", return_value="cafebabe"):
                 with self.assertRaises(ValueError):
                     await client.start()
             await client.close()

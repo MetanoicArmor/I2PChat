@@ -1,7 +1,7 @@
 """
 Pure logic for notification display flags (backlog: notification settings).
 
-Qt layer in main_qt.py applies results to tray toasts and sound playback.
+Qt layer in i2pchat/gui/main_qt.py applies results to tray toasts and sound playback.
 """
 
 from __future__ import annotations

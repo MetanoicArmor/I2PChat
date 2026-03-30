@@ -35,8 +35,8 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import List, Optional
 
-import crypto
-from chat_history import (
+from i2pchat import crypto
+from i2pchat.storage.chat_history import (
     HistoryEntry,
     _normalize_peer_addr,
     load_history,

@@ -16,32 +16,32 @@
 
 #### 1) Identity binding hardening (F‑01, High)
 
-- Verifies peer address ↔ destination binding via SAM lookup in `i2p_chat_core.py`.
+- Verifies peer address ↔ destination binding via SAM lookup in `i2pchat/core/i2p_chat_core.py`.
 - Stops trusting self-asserted network identity as a standalone security source.
 - Adds fail-closed behavior on `S` identity mismatch against the expected peer address.
 - Tracks a verified-binding state via `is_current_peer_verified_for_lock()`.
-- In `main_qt.py`, `Lock to peer` is allowed only after:
+- In `i2pchat/gui/main_qt.py`, `Lock to peer` is allowed only after:
   - a completed secure handshake, and
   - cryptographically verified identity binding.
 - TOFU dialog explicitly warns that identity is not out-of-band verified.
 
 #### 2) Profile path hardening (F‑02, Medium)
 
-- Introduces a strict profile-name whitelist in `i2p_chat_core.py`:
+- Introduces a strict profile-name whitelist in `i2pchat/core/i2p_chat_core.py`:
   - `^[A-Za-z0-9._-]{1,64}$`.
 - Adds `is_valid_profile_name()` / `ensure_valid_profile_name()` with fail-closed behavior.
 - Enforces confined profile paths for:
   - `.dat`;
   - `.trust.json`;
   - `.signing`.
-- Adds profile-name validation in `main_qt.py` for:
+- Adds profile-name validation in `i2pchat/gui/main_qt.py` for:
   - CLI arguments;
   - profile selection dialog;
   - `Load .dat` / `switch_profile`.
 
 #### 3) Safe handling of incoming file name collisions (F‑03, Medium)
 
-- Adds `allocate_unique_filename(...)` in `i2p_chat_core.py`.
+- Adds `allocate_unique_filename(...)` in `i2pchat/core/i2p_chat_core.py`.
 - Incoming file handling (`msg_type == "F"`) now uses deterministic renaming:
   - `name.ext`;
   - `name (1).ext`;
@@ -126,32 +126,32 @@
 
 #### 1) Усиление identity binding (F‑01, High)
 
-- В `i2p_chat_core.py` добавлена проверка соответствия адреса пира и destination через SAM‑lookup.
+- В `i2pchat/core/i2p_chat_core.py` добавлена проверка соответствия адреса пира и destination через SAM‑lookup.
 - Self-asserted identity из сети больше не используется как самостоятельный источник доверия.
 - Для `S`‑identity введён fail‑closed при несоответствии ожидаемого и полученного peer address.
 - Добавлен признак зафиксированного binding и метод `is_current_peer_verified_for_lock()`.
-- В `main_qt.py` `Lock to peer` теперь доступен только после:
+- В `i2pchat/gui/main_qt.py` `Lock to peer` теперь доступен только после:
   - завершённого secure handshake;
   - криптографически подтверждённого identity binding.
 - TOFU‑диалог явно предупреждает, что личность не подтверждена out‑of‑band.
 
 #### 2) Защита профилей от path traversal (F‑02, Medium)
 
-- В `i2p_chat_core.py` введён whitelist имён профилей:
+- В `i2pchat/core/i2p_chat_core.py` введён whitelist имён профилей:
   - `^[A-Za-z0-9._-]{1,64}$`.
 - Добавлены `is_valid_profile_name()` / `ensure_valid_profile_name()` с fail‑closed‑поведением.
 - Добавлен строгий path confinement для профильных файлов:
   - `.dat`;
   - `.trust.json`;
   - `.signing`.
-- В `main_qt.py` добавлена валидация имени профиля для:
+- В `i2pchat/gui/main_qt.py` добавлена валидация имени профиля для:
   - CLI‑аргумента;
   - диалога выбора профиля;
   - действий `Load .dat` / `switch_profile`.
 
 #### 3) Безопасные коллизии имён входящих файлов (F‑03, Medium)
 
-- В `i2p_chat_core.py` реализован `allocate_unique_filename(...)`.
+- В `i2pchat/core/i2p_chat_core.py` реализован `allocate_unique_filename(...)`.
 - При приёме файлов (`msg_type == "F"`) используется детерминированная уникализация:
   - `name.ext`;
   - `name (1).ext`;

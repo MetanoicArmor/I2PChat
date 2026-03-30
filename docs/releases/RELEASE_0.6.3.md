@@ -4,7 +4,7 @@
 
 ### What changed
 
-- **Inbound BlindBox root hardening:** added locked-peer match checks in inbound `BLINDBOX_ROOT` and `BLINDBOX_ROOT_ACK` handlers in `i2p_chat_core.py`.
+- **Inbound BlindBox root hardening:** added locked-peer match checks in inbound `BLINDBOX_ROOT` and `BLINDBOX_ROOT_ACK` handlers in `i2pchat/core/i2p_chat_core.py`.
 - **Safe behavior on peer mismatch:** when connected peer does not match locked peer, inbound root/root-ack no longer mutates persistent root state; root apply/commit is skipped and an explicit error is emitted.
 - **SAM SESSION CREATE path aligned with validators:** `BlindBoxClient.start()` now builds `SESSION CREATE` via `i2plib.sam.session_create(...)` instead of manual string interpolation.
 - **Validation now applies to this path too:** invalid SAM options/tokens on BlindBox start are rejected early by shared `i2plib/sam.py` validators.
@@ -37,7 +37,7 @@ Patch release for `v0.6.x` with no protocol format changes for normal chat flow.
 
 ### Что исправлено
 
-- **Hardening входящего BlindBox root:** в `i2p_chat_core.py` добавлены проверки совпадения с locked peer для входящих `BLINDBOX_ROOT` и `BLINDBOX_ROOT_ACK`.
+- **Hardening входящего BlindBox root:** в `i2pchat/core/i2p_chat_core.py` добавлены проверки совпадения с locked peer для входящих `BLINDBOX_ROOT` и `BLINDBOX_ROOT_ACK`.
 - **Безопасное поведение при mismatch:** если текущий peer не совпадает с locked peer, входящий root/root-ack больше не меняет persistent-state; применение/коммит root пропускаются с явной ошибкой.
 - **Выравнивание SAM SESSION CREATE с валидаторами:** в `BlindBoxClient.start()` ручная сборка `SESSION CREATE` заменена на `i2plib.sam.session_create(...)`.
 - **Валидация теперь покрывает и этот путь:** невалидные SAM options/tokens при старте BlindBox отклоняются заранее общими валидаторами из `i2plib/sam.py`.

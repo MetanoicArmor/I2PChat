@@ -15,7 +15,7 @@
 ### Blind Box servers (configuration)
 
 - Shared **Blind Box** endpoints (for delivery between different hosts) are configured with environment variables. The main list is **`I2PCHAT_BLINDBOX_REPLICAS`**. Defaults for a whole deployment can be set with **`I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`** or, for production, **`I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`**.
-- **Resolution order:** `I2PCHAT_BLINDBOX_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE` → built-in **`DEFAULT_RELEASE_BLINDBOX_ENDPOINTS`** in `i2p_chat_core.py`. To disable built-in defaults: **`I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`**.
+- **Resolution order:** `I2PCHAT_BLINDBOX_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE` → built-in **`DEFAULT_RELEASE_BLINDBOX_ENDPOINTS`** in `i2pchat/core/i2p_chat_core.py`. To disable built-in defaults: **`I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`**.
 - For **local development** or same-machine tests, optional **`I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1`** uses `127.0.0.1:19444` when a local Blind Box is already listening.
 
 ### Interface and behaviour
@@ -57,7 +57,7 @@ Live (in-tunnel) chat remains compatible with the current client generation. Bli
 ### Серверы Blind Box (настройка)
 
 - Список общих **Blind Box** (между разными машинами) задаётся переменными окружения. Основной список — **`I2PCHAT_BLINDBOX_REPLICAS`**. Для деплоя по умолчанию: **`I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`** или файл **`I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`**.
-- **Порядок:** `I2PCHAT_BLINDBOX_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE` → встроенный набор **`DEFAULT_RELEASE_BLINDBOX_ENDPOINTS`** в `i2p_chat_core.py`. Отключить встроенный набор: **`I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`**.
+- **Порядок:** `I2PCHAT_BLINDBOX_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS` → `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE` → встроенный набор **`DEFAULT_RELEASE_BLINDBOX_ENDPOINTS`** в `i2pchat/core/i2p_chat_core.py`. Отключить встроенный набор: **`I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`**.
 - Для **локальной разработки** и тестов на одной машине: **`I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1`** — `127.0.0.1:19444`, если локальный Blind Box уже слушает порт.
 
 ### Интерфейс и поведение

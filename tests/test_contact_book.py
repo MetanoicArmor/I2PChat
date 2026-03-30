@@ -6,7 +6,7 @@ import json
 import tempfile
 from pathlib import Path
 
-import contact_book as cb
+import i2pchat.storage.contact_book as cb
 
 
 PEER_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"

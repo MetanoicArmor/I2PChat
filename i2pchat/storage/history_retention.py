@@ -8,12 +8,11 @@ All destructive operations require confirmed=True to prevent accidental data los
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from chat_history import (
+from i2pchat.storage.chat_history import (
     DEFAULT_MAX_MESSAGES,
     HistoryEntry,
     load_history,

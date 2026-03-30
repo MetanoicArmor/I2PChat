@@ -1,13 +1,12 @@
 """
 Pure logic for file/media transfer retry policy and UX state labels.
 
-Qt layer in main_qt.py drives retry scheduling; this module is
+Qt layer in i2pchat/gui/main_qt.py drives retry scheduling; this module is
 intentionally UI-free so tests can validate semantics without PyQt6.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Optional
 

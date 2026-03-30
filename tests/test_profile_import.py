@@ -1,5 +1,5 @@
 """
-Tests for import_profile() in profile_export.py.
+Tests for import_profile() in i2pchat.storage.profile_export.
 Focuses on: conflict strategies, field validation, error messages, atomic behaviour.
 """
 
@@ -50,7 +50,7 @@ def _make_archive(
 
 class TestImportConflictStrategies(unittest.TestCase):
     def test_error_strategy_raises_when_dat_exists(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp)
@@ -61,7 +61,7 @@ class TestImportConflictStrategies(unittest.TestCase):
                 profile_export.import_profile(archive, "pw", dest, "error")
 
     def test_error_strategy_succeeds_when_no_conflict(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp)
@@ -70,7 +70,7 @@ class TestImportConflictStrategies(unittest.TestCase):
             self.assertEqual(name, "alice")
 
     def test_rename_strategy_suffixes_on_collision(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp)
@@ -82,7 +82,7 @@ class TestImportConflictStrategies(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(dest, "alice_1.dat")))
 
     def test_rename_strategy_increments_further(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp)
@@ -94,7 +94,7 @@ class TestImportConflictStrategies(unittest.TestCase):
             self.assertEqual(name, "alice_2")
 
     def test_rename_strategy_does_not_touch_original(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp)
@@ -108,7 +108,7 @@ class TestImportConflictStrategies(unittest.TestCase):
                 self.assertEqual(f.read(), sentinel)
 
     def test_overwrite_strategy_replaces_existing(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             dat = b"new-identity"
@@ -123,7 +123,7 @@ class TestImportConflictStrategies(unittest.TestCase):
                 self.assertEqual(f.read(), dat)
 
     def test_unknown_strategy_raises_value_error(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp)
@@ -133,7 +133,7 @@ class TestImportConflictStrategies(unittest.TestCase):
 
 class TestImportDataRestoration(unittest.TestCase):
     def test_dat_bytes_restored_exactly(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             original = b"line1\nline2-locked-peer\n"
@@ -144,7 +144,7 @@ class TestImportDataRestoration(unittest.TestCase):
                 self.assertEqual(f.read(), original)
 
     def test_contacts_json_restored_when_present(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             contacts = {"version": 2, "contacts": []}
@@ -157,7 +157,7 @@ class TestImportDataRestoration(unittest.TestCase):
                 self.assertEqual(json.load(f), contacts)
 
     def test_contacts_json_not_written_when_null(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp, contacts=None)
@@ -166,7 +166,7 @@ class TestImportDataRestoration(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(dest, f"{name}.contacts.json")))
 
     def test_gui_settings_not_restored_by_default(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp, gui_settings={"theme": "dark"})
@@ -175,7 +175,7 @@ class TestImportDataRestoration(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(dest, "gui.json")))
 
     def test_gui_settings_restored_when_flag_set(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp, gui_settings={"theme": "dark"})
@@ -187,7 +187,7 @@ class TestImportDataRestoration(unittest.TestCase):
                 self.assertEqual(json.load(f), {"theme": "dark"})
 
     def test_dat_file_permissions_are_600(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp)
@@ -197,7 +197,7 @@ class TestImportDataRestoration(unittest.TestCase):
             self.assertEqual(mode, "600")
 
     def test_returned_name_matches_written_dat(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp)
@@ -208,7 +208,7 @@ class TestImportDataRestoration(unittest.TestCase):
 
 class TestImportErrorMessages(unittest.TestCase):
     def test_wrong_password_mentions_password(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp, password="correct")
@@ -218,14 +218,14 @@ class TestImportErrorMessages(unittest.TestCase):
             self.assertIn("password", str(ctx.exception).lower())
 
     def test_missing_archive_raises_file_not_found(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(FileNotFoundError):
                 profile_export.import_profile("/no/such/file.i2pchat-profile", "pw", tmp)
 
     def test_truncated_archive_raises_value_error(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "bad.i2pchat-profile")
@@ -237,7 +237,7 @@ class TestImportErrorMessages(unittest.TestCase):
             self.assertIn("short", str(ctx.exception).lower())
 
     def test_wrong_magic_raises_value_error(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp)
@@ -251,7 +251,7 @@ class TestImportErrorMessages(unittest.TestCase):
             self.assertIn("magic", str(ctx.exception).lower())
 
     def test_version_mismatch_raises_value_error(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             archive = _make_archive(tmp)
@@ -267,7 +267,7 @@ class TestImportErrorMessages(unittest.TestCase):
 
     def test_missing_dat_content_field_raises(self) -> None:
         """Archive with payload missing dat_content should raise on validation."""
-        import profile_export
+        from i2pchat.storage import profile_export
         from nacl.pwhash import argon2id
         from nacl.secret import SecretBox
         import secrets as _secrets
@@ -288,7 +288,7 @@ class TestImportErrorMessages(unittest.TestCase):
             self.assertIn("dat_content", str(ctx.exception))
 
     def test_invalid_base64_dat_content_raises(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
         from nacl.pwhash import argon2id
         from nacl.secret import SecretBox
         import secrets as _secrets
@@ -319,7 +319,7 @@ class TestImportIsImmediatelyUsable(unittest.TestCase):
     """Imported profile must be readable without extra repair."""
 
     def test_imported_profile_dat_is_readable(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             original = b"identity-key-data\nlocked-peer\n"
@@ -332,7 +332,7 @@ class TestImportIsImmediatelyUsable(unittest.TestCase):
             self.assertEqual(content, original)
 
     def test_imported_contacts_is_valid_json(self) -> None:
-        import profile_export
+        from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
             contacts = {"version": 2, "contacts": []}

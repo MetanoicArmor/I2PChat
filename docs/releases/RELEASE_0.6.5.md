@@ -43,7 +43,7 @@
 
 ### Developer / CI
 
-- **`send_retry_policy.py`:** `should_start_auto_connect_retry` moved out of `main_qt.py` so `tests/test_send_text_routing.py` does not import PyQt6 on headless Linux (fixes missing `libEGL.so.1` in GitHub Actions pytest).
+- **`i2pchat/core/send_retry_policy.py`:** `should_start_auto_connect_retry` moved out of `i2pchat/gui/main_qt.py` so `tests/test_send_text_routing.py` does not import PyQt6 on headless Linux (fixes missing `libEGL.so.1` in GitHub Actions pytest).
 
 ### Tests (high level)
 
@@ -85,7 +85,7 @@ Patch release on the **0.6.x** line. No intentional breaking change to the norma
 
 ### Разработка / CI
 
-- **`send_retry_policy.py`** — политика авто-retry Connect вынесена из `main_qt.py`, чтобы pytest на Linux в CI не импортировал PyQt6 (ошибка `libEGL.so.1`).
+- **`i2pchat/core/send_retry_policy.py`** — политика авто-retry Connect вынесена из `i2pchat/gui/main_qt.py`, чтобы pytest на Linux в CI не импортировал PyQt6 (ошибка `libEGL.so.1`).
 
 ### Тесты
 

@@ -13,7 +13,7 @@
 
 #### 1) Замена MD5 на SHA-256 для suffix имён
 
-- В `i2p_chat_core.py` заменены обе точки генерации суффикса:
+- В `i2pchat/core/i2p_chat_core.py` заменены обе точки генерации суффикса:
   - при локальном сохранении отправляемого изображения;
   - при сохранении входящего inline-изображения.
 - Вместо `hashlib.md5(...).hexdigest()[:8]` используется:
@@ -76,7 +76,7 @@
 
 #### 1) MD5 replaced with SHA-256 suffixes
 
-- Updated both suffix generation points in `i2p_chat_core.py`:
+- Updated both suffix generation points in `i2pchat/core/i2p_chat_core.py`:
   - local copy name for outgoing images;
   - saved name for incoming inline images.
 - Replaced `hashlib.md5(...).hexdigest()[:8]` with:

@@ -1,11 +1,11 @@
-"""Unit tests for transfer_retry module (issue #25)."""
+"""Unit tests for i2pchat.core.transfer_retry (issue #25)."""
 
 from __future__ import annotations
 
 import math
 import unittest
 
-from transfer_retry import (
+from i2pchat.core.transfer_retry import (
     TRANSFER_STATE_COMPLETED,
     TRANSFER_STATE_FAILED,
     TRANSFER_STATE_PAUSED,

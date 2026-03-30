@@ -49,12 +49,10 @@
             runHook preInstall
             mkdir -p "$out/lib/i2pchat" "$out/bin"
 
-            shopt -s nullglob
-            for f in *.py; do
-              cp "$f" "$out/lib/i2pchat/"
-            done
             cp -r i2pchat "$out/lib/i2pchat/"
             cp -r i2plib "$out/lib/i2pchat/"
+            if [ -e run_gui.py ]; then cp run_gui.py "$out/lib/i2pchat/"; fi
+            if [ -e VERSION ]; then cp VERSION "$out/lib/i2pchat/"; fi
             if [ -d assets ]; then cp -r assets "$out/lib/i2pchat/"; fi
             if [ -e icon.png ]; then cp icon.png "$out/lib/i2pchat/"; fi
 

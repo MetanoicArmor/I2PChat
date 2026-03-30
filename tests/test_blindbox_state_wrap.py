@@ -16,7 +16,7 @@ if "PIL" not in sys.modules:
     sys.modules["PIL.Image"] = pil_image_module
 
 from i2pchat import crypto
-import i2p_chat_core as core_module
+import i2pchat.core.i2p_chat_core as core_module
 from i2pchat.storage.blindbox_state import BLINDBOX_STATE_V1
 from i2pchat.core.i2p_chat_core import (
     BLINDBOX_LOCAL_WRAP_VERSION_CURRENT,
@@ -154,7 +154,7 @@ class BlindBoxStateWrapTests(unittest.TestCase):
                         sort_keys=True,
                     )
 
-                with patch("i2p_chat_core.open", wraps=open) as mock_open:
+                with patch("i2pchat.core.i2p_chat_core.open", wraps=open) as mock_open:
                     core._load_blindbox_state()
                 load_calls = [
                     c

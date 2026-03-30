@@ -135,7 +135,7 @@ else:
 
 ### 4. Cryptography
 
-#### 4.1 New `crypto.py` module
+#### 4.1 New `i2pchat/crypto.py` module
 
 ```python
 # HMAC for integrity
@@ -215,7 +215,7 @@ if msg_type not in [...]:
 
 | File | Description |
 |------|-------------|
-| `crypto.py` | Crypto module (HMAC, encryption, DH) |
+| `i2pchat/crypto.py` | Crypto module (HMAC, encryption, DH) |
 
 ## Updated dependencies
 

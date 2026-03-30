@@ -3172,6 +3172,22 @@ class _ClickableFolderLabel(QtWidgets.QLabel):
         super().mousePressEvent(event)
 
 
+class _PeerLockIndicatorLabel(QtWidgets.QLabel):
+    """Иконка замка слева от поля адреса: клик = то же, что ⋯ → Lock to peer."""
+
+    clicked = QtCore.pyqtSignal()
+
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)
+
+
 def _popup_screen_for_anchor(anchor: QtWidgets.QWidget) -> Optional[QtGui.QScreen]:
     """Экран, на котором находится якорь (несколько мониторов); иначе primary."""
     if anchor.width() > 0 and anchor.height() > 0:
@@ -4214,7 +4230,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         # Одна «толщина» со строкой статуса и кнопкой темы (_STATUS_ROW_HEIGHT_PX).
         actions_fixed_height = self._STATUS_ROW_HEIGHT_PX
-        self.peer_lock_label = QtWidgets.QLabel(self)
+        self.peer_lock_label = _PeerLockIndicatorLabel(self)
         self.peer_lock_label.setObjectName("PeerLockIndicator")
         self.peer_lock_label.setFixedSize(22, actions_fixed_height)
         self.peer_lock_label.setAlignment(
@@ -4368,6 +4384,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.addr_edit.textChanged.connect(lambda _t: self._refresh_connection_buttons())
         self.addr_edit.textChanged.connect(lambda _t: self._sync_contacts_list_selection())
         self.addr_edit.textChanged.connect(lambda _t: self._update_peer_lock_indicator())
+        self.peer_lock_label.clicked.connect(self.on_lock_peer_clicked)
         self.addr_edit.editingFinished.connect(self._on_addr_editing_finished_for_drafts)
         self.input_edit.textChanged.connect(self._on_compose_text_changed)
         self.more_actions_popup.add_action("Load profile (.dat)", self.on_load_profile_clicked)
@@ -4955,9 +4972,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.peer_lock_label.setPixmap(pm)
         tooltip_lines = [
             (
-                "Profile is locked to one peer (Lock to peer)"
+                "Profile is locked to one peer (Lock to peer). Click for status."
                 if locked
-                else "Profile is not locked: you may select any saved contact"
+                else "Profile is not locked: you may select any saved contact. "
+                "Click to lock after a verified connection (same as ⋯ → Lock to peer)."
             )
         ]
         if info is not None:
@@ -6234,7 +6252,10 @@ class ChatWindow(QtWidgets.QMainWindow):
                             "(or unset I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS for release defaults)"
                         )
                     elif bb_replicas_source == "release-builtin":
-                        blindbox_hint = "using release built-in Blind Box pair (i2p_chat_core.py)"
+                        blindbox_hint = (
+                            "using release built-in Blind Box pair "
+                            "(DEFAULT_RELEASE_BLINDBOX_ENDPOINTS in i2pchat/core/i2p_chat_core.py)"
+                        )
                     elif bb_replicas_source == "local-auto":
                         blindbox_hint = (
                             "using local Blind Box fallback (single-host, "

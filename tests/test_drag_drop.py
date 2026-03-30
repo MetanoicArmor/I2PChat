@@ -1,4 +1,4 @@
-"""Unit tests for drag_drop module (issue #24)."""
+"""Unit tests for i2pchat.presentation.drag_drop (issue #24)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 
-from drag_drop import (
+from i2pchat.presentation.drag_drop import (
     REJECT,
     SEND_FILE,
     SEND_IMAGE,

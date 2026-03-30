@@ -1,7 +1,7 @@
 """
 Pure logic for when the UI may auto-retry outbound Connect after send failures.
 
-Qt layer in main_qt.py calls this; tests import without pulling PyQt6.
+Qt layer in i2pchat/gui/main_qt.py calls this; tests import without pulling PyQt6.
 """
 
 from __future__ import annotations

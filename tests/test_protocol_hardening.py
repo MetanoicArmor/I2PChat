@@ -24,8 +24,15 @@ if "PIL" not in sys.modules:
     sys.modules["PIL"] = pil_module
     sys.modules["PIL.Image"] = pil_image_module
 
-from protocol_codec import HEADER_STRUCT, HEADER_SIZE, MAGIC, PROTOCOL_VERSION, FLAG_ENCRYPTED, ProtocolCodec
-from i2p_chat_core import I2PChatCore
+from i2pchat.protocol.protocol_codec import (
+    HEADER_STRUCT,
+    HEADER_SIZE,
+    MAGIC,
+    PROTOCOL_VERSION,
+    FLAG_ENCRYPTED,
+    ProtocolCodec,
+)
+from i2pchat.core.i2p_chat_core import I2PChatCore
 
 
 class _Reader:
@@ -199,7 +206,7 @@ class TestMalformedHeaders(unittest.IsolatedAsyncioTestCase):
 
 class TestFileTransferHardening(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
         self._core_module = core_module
         self._originals = _patch_crypto(core_module)
         self._original_downloads = core_module.get_downloads_dir
@@ -333,7 +340,7 @@ class TestFileTransferHardening(unittest.IsolatedAsyncioTestCase):
 
 class TestImageTransferHardening(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
         self._core_module = core_module
         self._originals = _patch_crypto(core_module)
 

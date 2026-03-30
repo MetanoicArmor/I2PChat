@@ -270,7 +270,7 @@ def import_profile(
         FileExistsError: if conflict_strategy="error" and the profile already exists
         FileNotFoundError: if archive_path does not exist
     """
-    from i2p_chat_core import allocate_unique_profile_name
+    from i2pchat.core.i2p_chat_core import allocate_unique_profile_name
 
     if not os.path.exists(archive_path):
         raise FileNotFoundError(f"Archive not found: {archive_path}")

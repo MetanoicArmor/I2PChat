@@ -24,7 +24,7 @@ class ClearLockedPeerTests(unittest.TestCase):
             dat = os.path.join(td, "p.dat")
             with open(dat, "w", encoding="utf-8") as f:
                 f.write(f"{MOCK_DAT_LINE1}\n{PEER}\n")
-            with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+            with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):
                 core = I2PChatCore(profile="p", on_error=lambda _m: None)
                 core.stored_peer = PEER
                 core.my_dest = None
@@ -39,7 +39,7 @@ class ClearLockedPeerTests(unittest.TestCase):
             dat = os.path.join(td, "q.dat")
             with open(dat, "w", encoding="utf-8") as f:
                 f.write(f"{PEER}\n")
-            with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+            with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):
                 core = I2PChatCore(profile="q", on_error=lambda _m: None)
                 core.stored_peer = PEER
                 core.my_dest = None

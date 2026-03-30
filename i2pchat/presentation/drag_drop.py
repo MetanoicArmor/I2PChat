@@ -1,7 +1,7 @@
 """
 Pure validation/routing module for drag-and-drop file/image handling.
 
-Qt layer in main_qt.py wires dragEnterEvent / dropEvent; this module is
+Qt layer in i2pchat/gui/main_qt.py wires dragEnterEvent / dropEvent; this module is
 intentionally UI-free so tests can run without PyQt6.
 """
 

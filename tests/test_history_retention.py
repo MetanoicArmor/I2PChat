@@ -1,5 +1,5 @@
 """
-Tests for history_retention.py — history retention policy enforcement.
+Tests for i2pchat.storage.history_retention — history retention policy enforcement.
 """
 
 import secrets
@@ -7,9 +7,14 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
-import crypto
-from chat_history import DEFAULT_MAX_MESSAGES, HistoryEntry, load_history, save_history
-from history_retention import (
+from i2pchat import crypto
+from i2pchat.storage.chat_history import (
+    DEFAULT_MAX_MESSAGES,
+    HistoryEntry,
+    load_history,
+    save_history,
+)
+from i2pchat.storage.history_retention import (
     GUI_RETENTION_KEY,
     RetentionPolicy,
     apply_retention,

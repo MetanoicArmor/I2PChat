@@ -1,7 +1,7 @@
 """
 Pure logic for per-peer compose draft switches (GitHub issue #6).
 
-Qt layer in main_qt.py applies the returned text to QPlainTextEdit and persists drafts.
+Qt layer in i2pchat/gui/main_qt.py applies the returned text to QPlainTextEdit and persists drafts.
 """
 
 from __future__ import annotations

@@ -2,19 +2,19 @@
 import glob, os, sys
 
 _local_modules = [
-    os.path.splitext(f)[0]
-    for f in glob.glob('*.py')
-    if f != 'main_qt.py'
-] + [
     os.path.splitext(os.path.relpath(f, '.'))[0].replace(os.sep, '.')
     for f in glob.glob('i2pchat/**/*.py', recursive=True)
+    if not f.endswith('__init__.py')
+] + [
+    os.path.splitext(os.path.relpath(f, '.'))[0].replace(os.sep, '.')
+    for f in glob.glob('i2plib/**/*.py', recursive=True)
     if not f.endswith('__init__.py')
 ]
 
 _icon_file = 'i2pchat.ico' if sys.platform == 'win32' else 'icon.png'
 
 a = Analysis(
-    ['main_qt.py'],
+    ['run_gui.py'],
     pathex=[],
     binaries=[],
     datas=[

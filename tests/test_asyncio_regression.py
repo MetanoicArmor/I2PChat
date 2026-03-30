@@ -101,7 +101,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(legacy_core._codec.allow_legacy)  # noqa: SLF001
 
     def test_profile_paths_stay_within_profiles_dir(self) -> None:
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         original_get_profiles_dir = core_module.get_profiles_dir
         try:
@@ -116,7 +116,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             core_module.get_profiles_dir = original_get_profiles_dir  # type: ignore[assignment]
 
     def test_profile_paths_reject_symlink_targets(self) -> None:
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         original_get_profiles_dir = core_module.get_profiles_dir
         try:
@@ -152,7 +152,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         reader = _FakeReader(b"")
         writer = _FakeWriter()
 
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         original_stream_connect = core_module.i2plib.stream_connect
         original_nacl_available = core_module.crypto.NACL_AVAILABLE
@@ -219,7 +219,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         core._schedule_disconnect = _mark_disconnect  # type: ignore[method-assign]
 
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         original_nacl_available = core_module.crypto.NACL_AVAILABLE
         core_module.crypto.NACL_AVAILABLE = True
@@ -254,7 +254,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         errors: list[str] = []
         core = I2PChatCore(profile="alice", on_error=errors.append)
         core.stored_peer = LOCKED_B32
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         original_nacl_available = core_module.crypto.NACL_AVAILABLE
         core_module.crypto.NACL_AVAILABLE = True
@@ -508,7 +508,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_forget_pinned_peer_key_removes_normalized_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("i2p_chat_core.get_profiles_dir", return_value=tmpdir):
+            with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=tmpdir):
                 core = I2PChatCore(profile="alice")
                 core.peer_trusted_signing_keys[EXAMPLE_B32] = "ab" * 32
 

@@ -70,7 +70,7 @@ class _Writer:
 
 class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
     def _patch_crypto_identity(self):
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         original_crypto = (
             core_module.crypto.NACL_AVAILABLE,
@@ -100,7 +100,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         ) = original_crypto
 
     def _patch_crypto_identity_keep_mac(self):
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         original_crypto = (
             core_module.crypto.NACL_AVAILABLE,
@@ -216,7 +216,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             await codec.read_frame(_Reader(bad_legacy))
 
     async def test_msg_ack_clears_pending_text_ack_encrypted(self) -> None:
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         original_crypto = (
             core_module.crypto.NACL_AVAILABLE,
@@ -408,7 +408,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(core._total_pending_acks(), 0)
 
     async def test_msg_ack_with_session_context_mismatch_is_ignored(self) -> None:
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         original_crypto = (
             core_module.crypto.NACL_AVAILABLE,
@@ -464,7 +464,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             ) = original_crypto
 
     async def test_ack_telemetry_counts_context_mismatch(self) -> None:
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         original_crypto = (
             core_module.crypto.NACL_AVAILABLE,
@@ -597,7 +597,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             self._restore_crypto_identity(core_module, original_crypto)
 
     async def test_file_chunk_invalid_base64_is_rejected(self) -> None:
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         errors: list[str] = []
         original_get_downloads_dir = core_module.get_downloads_dir
@@ -633,7 +633,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             self._restore_crypto_identity(patched_module, original_crypto)
 
     async def test_file_chunk_oversize_is_rejected(self) -> None:
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         errors: list[str] = []
         original_get_downloads_dir = core_module.get_downloads_dir
@@ -670,7 +670,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             self._restore_crypto_identity(patched_module, original_crypto)
 
     async def test_file_end_without_full_payload_is_rejected(self) -> None:
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         errors: list[str] = []
         original_get_downloads_dir = core_module.get_downloads_dir
@@ -709,7 +709,7 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             self._restore_crypto_identity(patched_module, original_crypto)
 
     async def test_incoming_file_name_collision_is_renamed(self) -> None:
-        import i2p_chat_core as core_module
+        import i2pchat.core.i2p_chat_core as core_module
 
         errors: list[str] = []
         original_get_downloads_dir = core_module.get_downloads_dir

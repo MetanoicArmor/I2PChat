@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import unittest
 
-from send_retry_policy import should_start_auto_connect_retry
+from i2pchat.core.send_retry_policy import should_start_auto_connect_retry
 
 AUTO_CONNECT_REASONS = [
     "blindbox-disabled",

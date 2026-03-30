@@ -320,7 +320,10 @@ class ChatHistoryAtomicityTests(unittest.TestCase):
             original = load_history(td, "alice", PEER, IDENTITY_KEY)
             self.assertEqual(len(original), 3)
 
-            with patch("chat_history.atomic_write_bytes", side_effect=OSError("disk full")):
+            with patch(
+                "i2pchat.storage.chat_history.atomic_write_bytes",
+                side_effect=OSError("disk full"),
+            ):
                 with self.assertRaises(OSError):
                     save_history(td, "alice", PEER, _make_entries(10), IDENTITY_KEY)
 

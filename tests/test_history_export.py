@@ -1,5 +1,5 @@
 """
-Tests for history_export.py — encrypted chat history export/import.
+Tests for i2pchat.storage.history_export — encrypted chat history export/import.
 """
 
 import json
@@ -9,9 +9,9 @@ import struct
 import tempfile
 import unittest
 
-import crypto
-from chat_history import HistoryEntry, load_history, save_history
-from history_export import (
+from i2pchat import crypto
+from i2pchat.storage.chat_history import HistoryEntry, load_history, save_history
+from i2pchat.storage.history_export import (
     EXPORT_MAGIC,
     EXPORT_VERSION,
     EXPORT_HEADER_SIZE,

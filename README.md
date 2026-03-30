@@ -164,9 +164,8 @@ Recommended package-first entrypoint:
 python -m i2pchat.gui
 ```
 
-Compatibility note: legacy root launchers such as `python main_qt.py` remain in
-the repository as wrappers during the transition, but `i2pchat/...` is the
-canonical source tree.
+PyInstaller builds use [`run_gui.py`](run_gui.py) as the entry script (equivalent
+to `python -m i2pchat.gui.main_qt`). All modules live under `i2pchat/`.
 
 ### 🔧 Cross‑platform builds
 

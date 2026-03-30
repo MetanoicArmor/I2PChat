@@ -30,7 +30,7 @@ import pytest
 
 pytest.importorskip("PyQt6.QtWidgets", exc_type=ImportError)
 
-from PyQt6 import QtCore
+from PyQt6 import QtCore, QtGui
 from PyQt6.QtCore import QMimeData, QUrl
 from PyQt6.QtWidgets import QApplication
 
@@ -50,7 +50,7 @@ def qapp() -> QApplication:
 
 
 def test_unread_bump_when_message_peer_differs_from_addr_field(qapp: QApplication) -> None:
-    from main_qt import THEME_DEFAULT, ChatWindow
+    from i2pchat.gui.main_qt import THEME_DEFAULT, ChatWindow
 
     w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
     base = w._window_title_base
@@ -76,7 +76,7 @@ def test_unread_bump_when_message_peer_differs_from_addr_field(qapp: QApplicatio
 def test_unread_no_bump_when_active_peer_matches_message(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from main_qt import THEME_DEFAULT, ChatWindow
+    from i2pchat.gui.main_qt import THEME_DEFAULT, ChatWindow
 
     w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
     base = w._window_title_base
@@ -95,7 +95,7 @@ def test_unread_no_bump_when_active_peer_matches_message(
 def test_unread_bump_same_peer_when_not_foreground(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from main_qt import THEME_DEFAULT, ChatWindow
+    from i2pchat.gui.main_qt import THEME_DEFAULT, ChatWindow
 
     w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
     base = w._window_title_base
@@ -113,7 +113,7 @@ def test_unread_bump_same_peer_when_not_foreground(
 
 def test_handle_notify_peer_same_chat_does_not_throw(qapp: QApplication) -> None:
     """Sanity: notify path runs without exception (full toast behavior is OS-specific)."""
-    from main_qt import THEME_DEFAULT, ChatWindow
+    from i2pchat.gui.main_qt import THEME_DEFAULT, ChatWindow
 
     w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
     ts = datetime.now(timezone.utc)
@@ -140,7 +140,7 @@ def _patch_focused_chat_window(
 def test_handle_notify_same_chat_suppresses_tray_when_focused(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from main_qt import THEME_DEFAULT, ChatWindow
+    from i2pchat.gui.main_qt import THEME_DEFAULT, ChatWindow
 
     w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
     w._notify_quiet_mode = False
@@ -162,7 +162,7 @@ def test_handle_notify_cross_peer_shows_tray_when_focused(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Message for B while UI active key is A: not same_chat, tray path should run."""
-    from main_qt import THEME_DEFAULT, ChatWindow
+    from i2pchat.gui.main_qt import THEME_DEFAULT, ChatWindow
 
     w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
     w._notify_quiet_mode = False
@@ -185,11 +185,13 @@ def test_handle_notify_cross_peer_shows_tray_when_focused(
 
 
 def test_privacy_mode_toggle_enables_hidden_notifications(qapp: QApplication) -> None:
-    from main_qt import THEME_DEFAULT, ChatWindow
+    from i2pchat.gui.main_qt import THEME_DEFAULT, ChatWindow
 
     w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
     w._notify_hide_body = False
     w._notify_quiet_mode = False
+    # Ignore persisted gui.json so first toggle always enables privacy (ON path).
+    w._privacy_mode_enabled = False
 
     w._on_toggle_privacy_mode_clicked()
 
@@ -202,7 +204,7 @@ def test_privacy_mode_toggle_enables_hidden_notifications(qapp: QApplication) ->
 def test_message_input_drop_local_file_routes_to_sender(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    from main_qt import THEME_DEFAULT, ChatWindow
+    from i2pchat.gui.main_qt import THEME_DEFAULT, ChatWindow
 
     w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
     dropped = tmp_path / "note.txt"

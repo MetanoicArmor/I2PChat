@@ -75,7 +75,7 @@
 
 ## Изменения по файлам
 
-### `i2p_chat_core.py`
+### `i2pchat/core/i2p_chat_core.py`
 
 - Принудительный secure-mode handshake.
 - Handshake watchdog (`HANDSHAKE_TIMEOUT`).
@@ -86,13 +86,13 @@
 - TOFU pinning + загрузка/сохранение trust store.
 - Callback `on_trust_decision` для UI-подтверждения.
 
-### `crypto.py`
+### `i2pchat/crypto.py`
 
 - `compute_mac(...)` / `verify_mac(...)` расширены поддержкой `seq`.
 - Добавлена генерация пары ключей подписи handshake:
   - `generate_signing_keypair()`.
 
-### `main_qt.py`
+### `i2pchat/gui/main_qt.py`
 
 - Интегрирован callback `on_trust_decision`.
 - Добавлен GUI-обработчик `handle_trust_decision(...)` с `QMessageBox` для явного подтверждения TOFU.
@@ -110,7 +110,7 @@
 Проверка синтаксической корректности после изменений:
 
 ```bash
-python3 -m compileall i2p_chat_core.py crypto.py main_qt.py
+python3 -m compileall i2pchat/core/i2p_chat_core.py i2pchat/crypto.py i2pchat/gui/main_qt.py
 ```
 
 Результат: успешно.

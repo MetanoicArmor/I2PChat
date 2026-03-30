@@ -33,7 +33,7 @@ class AtomicWritesTests(unittest.TestCase):
 
     def test_trust_store_save_does_not_use_fixed_tmp_name(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+            with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):
                 core = I2PChatCore(profile="alice")
                 core.peer_trusted_signing_keys[VALID_PEER] = "a" * 64
                 core._save_trust_store()  # noqa: SLF001 - internal persistence behavior
@@ -43,7 +43,7 @@ class AtomicWritesTests(unittest.TestCase):
 
     def test_profile_dat_write_does_not_use_fixed_tmp_name(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+            with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):
                 core = I2PChatCore(profile="alice")
                 core._write_profile_dat("priv-key", VALID_PEER)  # noqa: SLF001
                 profile_path = os.path.join(td, "alice.dat")
@@ -60,7 +60,7 @@ class AtomicWritesTests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+                with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):
                     core = I2PChatCore(profile="alice")
                     core.stored_peer = VALID_PEER
                     core.current_peer_addr = VALID_PEER
@@ -87,7 +87,7 @@ class AtomicWritesTests(unittest.TestCase):
                         "_blindbox_encrypt_root_secret",
                         side_effect=lambda secret, peer_id: f"enc-{secret.hex()}-{peer_id}",
                     ):
-                        with patch("i2p_chat_core.atomic_write_json") as mock_write:
+                        with patch("i2pchat.core.i2p_chat_core.atomic_write_json") as mock_write:
                             core._save_blindbox_state()  # noqa: SLF001
 
                     mock_write.assert_called_once()
@@ -98,13 +98,13 @@ class AtomicWritesTests(unittest.TestCase):
 
     def test_profile_dat_fault_before_replace_keeps_old_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+            with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):
                 core = I2PChatCore(profile="alice")
                 profile_path = os.path.join(td, "alice.dat")
                 with open(profile_path, "w", encoding="utf-8") as f:
                     f.write("old-key\n")
 
-                with patch("blindbox_state.os.replace", side_effect=OSError("boom")):
+                with patch("i2pchat.storage.blindbox_state.os.replace", side_effect=OSError("boom")):
                     with self.assertRaises(OSError):
                         core._write_profile_dat("new-key", VALID_PEER)  # noqa: SLF001
 
@@ -127,15 +127,15 @@ class AtomicWritesTests(unittest.TestCase):
         if not crypto.NACL_AVAILABLE:
             self.skipTest("PyNaCl is required for signing seed persistence test")
         with tempfile.TemporaryDirectory() as td:
-            with patch("i2p_chat_core.get_profiles_dir", return_value=td):
+            with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):
                 core = I2PChatCore(profile="alice")
-                with patch("i2p_chat_core._try_keyring_get", return_value=""):
-                    with patch("i2p_chat_core._try_keyring_set", return_value=False):
+                with patch("i2pchat.core.i2p_chat_core._try_keyring_get", return_value=""):
+                    with patch("i2pchat.core.i2p_chat_core._try_keyring_set", return_value=False):
                         with patch(
-                            "i2p_chat_core.crypto.generate_signing_keypair",
+                            "i2pchat.core.i2p_chat_core.crypto.generate_signing_keypair",
                             return_value=(b"A" * 32, b"B" * 32),
                         ):
-                            with patch("i2p_chat_core.atomic_write_text") as mock_write:
+                            with patch("i2pchat.core.i2p_chat_core.atomic_write_text") as mock_write:
                                 core._ensure_local_signing_key()  # noqa: SLF001
                 mock_write.assert_called_once()
                 self.assertTrue(mock_write.call_args.args[0].endswith("alice.signing"))
