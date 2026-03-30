@@ -442,8 +442,8 @@ Originally derived from [`termchat-i2p-python`](http://git.community.i2p/stan/te
 
 ### Audit / Аудит
 
-[![English audit](https://img.shields.io/badge/🔍%20Audit-EN-green.svg)](AUDIT_EN.md)
-[![Русский аудит](https://img.shields.io/badge/🔍%20Аудит-RU-orange.svg)](AUDIT_RU.md)
+[![English audit](https://img.shields.io/badge/🔍%20Audit-EN-green.svg)](docs/AUDIT_EN.md)
+[![Русский аудит](https://img.shields.io/badge/🔍%20Аудит-RU-orange.svg)](docs/AUDIT_RU.md)
 
 ---
 

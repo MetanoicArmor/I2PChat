@@ -34,7 +34,7 @@ Work tracked from the security audit (**M-05** intentionally deferred):
 - **Privacy:** sensitive UI/log paths use **basename only** where applicable.
 - **Windows:** if a desktop toast is unavailable, the **console fallback** prints only a generic notify line—**not** the incoming message body—so chat text does not end up in terminal logs (`notifications.py`).
 
-Full detail: **`AUDIT_EN.md`**, **`AUDIT_RU.md`**, **`REMEDIATION_PLAN.md`**.
+Full detail: **`docs/AUDIT_EN.md`**, **`docs/AUDIT_RU.md`**, **`REMEDIATION_PLAN.md`**.
 
 ### Compatibility
 
@@ -76,7 +76,7 @@ Live (in-tunnel) chat remains compatible with the current client generation. Bli
 - **Приватность:** в чувствительных местах в UI/логах — **только basename** путей.
 - **Windows:** если toast недоступен, **фоллбэк в консоль** пишет только нейтральную строку, **без текста входящего сообщения** (`notifications.py`), чтобы переписка не светилась в логе терминала.
 
-Подробно: **`AUDIT_EN.md`**, **`AUDIT_RU.md`**, **`REMEDIATION_PLAN.md`**.
+Подробно: **`docs/AUDIT_EN.md`**, **`docs/AUDIT_RU.md`**, **`REMEDIATION_PLAN.md`**.
 
 ### Совместимость
 

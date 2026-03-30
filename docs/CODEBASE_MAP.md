@@ -97,6 +97,7 @@ PyInstaller uses [`run_gui.py`](../i2pchat/run_gui.py) as the analyzed script (s
 - `build-linux.sh`, `build-macos.sh`, `build-windows.ps1` - release packaging
 - `flake.nix` - Nix packaging / dev shell
 - `docs/PROTOCOL.md` - network protocol reference
+- `docs/AUDIT_EN.md`, `docs/AUDIT_RU.md` - security audit reports (EN / RU)
 
 ## Reading order for new contributors
 
