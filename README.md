@@ -26,9 +26,6 @@
 [![Roadmap RU](https://img.shields.io/badge/🗺️%20Roadmap-RU-red.svg)](docs/ROADMAP_RU.md)
 [![Issue Backlog EN](https://img.shields.io/badge/📝%20Issue%20Backlog-EN-blueviolet.svg)](docs/ISSUE_BACKLOG.md)
 [![Issue Backlog RU](https://img.shields.io/badge/📝%20Issue%20Backlog-RU-orange.svg)](docs/ISSUE_BACKLOG_RU.md)
-[![GitHub Backlog Sync](https://img.shields.io/badge/🔐%20GitHub%20Backlog%20Sync-PAT%20Guide-brightgreen.svg)](docs/GITHUB_BACKLOG_SYNC.md)
-
-Backlog sync helper: `GITHUB_TOKEN=... ./scripts/sync_backlog.sh`
 
 ---
 
@@ -234,7 +231,6 @@ Practical notes:
 
 <p align="center">
   <img src="screenshots/6.png" alt="I2PChat – Saved peers sidebar (contact book)" width="900" /><br>
-  <sub>Saved peers / contact book (left sidebar)</sub><br><br>
   <img src="screenshots/5.png" alt="I2PChat – received image and chat" width="900" /><br>
   <img src="screenshots/4.png" alt="I2PChat – chat and file transfer (sending)" width="900" />
 </p>
