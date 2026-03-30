@@ -1,6 +1,6 @@
 ## I2PChat GUI Buttons Guide
 
-This guide matches **I2PChat 1.0.0** (see [`VERSION`](../VERSION) at the repository root).
+This guide matches **I2PChat 1.0.1** (see [`VERSION`](../VERSION) at the repository root).
 
 ### Profile selection dialog
 

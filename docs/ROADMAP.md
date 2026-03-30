@@ -1,6 +1,6 @@
 # I2PChat Roadmap
 
-Current repository version: `1.0.0`
+Current repository version: `1.0.1`
 
 This roadmap is organized by product milestones rather than calendar time.
 The main goal is to improve daily usability first, then strengthen dialog
