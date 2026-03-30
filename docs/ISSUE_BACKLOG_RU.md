@@ -341,6 +341,8 @@
 
 ## Milestone: 0.9.0 - Portability, privacy, hardening
 
+*Состояние: пункты 19–26 закрыты в релизе **v1.0.0** (см. [`docs/releases/RELEASE_1.0.0.md`](releases/RELEASE_1.0.0.md)).*
+
 ### 19. Зашифрованный экспорт профиля
 
 **Описание**

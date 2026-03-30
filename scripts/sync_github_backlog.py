@@ -80,7 +80,11 @@ MILESTONES = [
     },
     {
         "title": "0.9.0 - Portability, privacy, hardening",
-        "description": "Backup, portability, privacy controls, and reliability work ahead of 1.0.",
+        "description": "Backup, portability, privacy controls, and reliability work completed before 1.0.",
+    },
+    {
+        "title": "1.0.0 - Stable niche release",
+        "description": "Stable privacy-focused release with backup/restore, retention, privacy mode, and hardened reliability coverage.",
     },
 ]
 
