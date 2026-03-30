@@ -3926,6 +3926,15 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._history_flush_timer.setInterval(60_000)
         self._history_flush_timer.timeout.connect(self._flush_history)
         self._privacy_mode_enabled = load_privacy_mode_enabled()
+        # Privacy mode задаёт hide_body + quiet (focused); отдельных пунктов меню больше нет.
+        if not self._privacy_mode_enabled:
+            if load_notify_hide_body() or load_notify_quiet_mode():
+                self._privacy_mode_enabled = True
+                save_privacy_mode_enabled(True)
+        self._notify_hide_body = bool(self._privacy_mode_enabled)
+        self._notify_quiet_mode = bool(self._privacy_mode_enabled)
+        save_notify_hide_body(self._notify_hide_body)
+        save_notify_quiet_mode(self._notify_quiet_mode)
 
         # диагностическая строка статуса
         self.status_label = QtWidgets.QLabel("Status: initializing", self)
@@ -4421,30 +4430,20 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._privacy_mode_toggle_btn = self.more_actions_popup.add_action(
             self._privacy_mode_toggle_label(), self._on_toggle_privacy_mode_clicked
         )
+        self._privacy_mode_toggle_btn.setToolTip(
+            "When ON: tray toasts hide message text (title may still name the peer); "
+            "while this window is focused, tray toasts and notification sounds are suppressed "
+            "(including for other chats). Notification sound item only controls sound when "
+            "Privacy mode is OFF or the window is not focused."
+        )
         self.more_actions_popup.add_separator()
         self._notify_sound_enabled = load_notify_sound_enabled()
-        self._notify_hide_body = load_notify_hide_body()
-        self._notify_quiet_mode = load_notify_quiet_mode()
         self._notify_sound_toggle_btn = self.more_actions_popup.add_action(
             self._notify_sound_toggle_label(),
             self._on_toggle_notify_sound_clicked,
         )
         self._notify_sound_toggle_btn.setToolTip(
             "When off, notification sounds are never played (custom sound path is kept)."
-        )
-        self._notify_hide_body_toggle_btn = self.more_actions_popup.add_action(
-            self._notify_hide_body_toggle_label(),
-            self._on_toggle_notify_hide_body_clicked,
-        )
-        self._notify_hide_body_toggle_btn.setToolTip(
-            "When on, the tray message hides the message text; the title may still name the peer."
-        )
-        self._notify_quiet_toggle_btn = self.more_actions_popup.add_action(
-            self._notify_quiet_toggle_label(),
-            self._on_toggle_notify_quiet_clicked,
-        )
-        self._notify_quiet_toggle_btn.setToolTip(
-            "While the app window is focused, suppress tray toasts and sounds (other chats included)."
         )
         self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
         self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
@@ -6763,16 +6762,6 @@ class ChatWindow(QtWidgets.QMainWindow):
             else "Notification sound: OFF"
         )
 
-    def _notify_hide_body_toggle_label(self) -> str:
-        return (
-            "Hide message in notifications: ON"
-            if self._notify_hide_body
-            else "Hide message in notifications: OFF"
-        )
-
-    def _notify_quiet_toggle_label(self) -> str:
-        return "Quiet mode (focused): ON" if self._notify_quiet_mode else "Quiet mode (focused): OFF"
-
     def _privacy_mode_toggle_label(self) -> str:
         return "Privacy mode: ON" if self._privacy_mode_enabled else "Privacy mode: OFF"
 
@@ -6781,18 +6770,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._notify_sound_enabled = not self._notify_sound_enabled
         save_notify_sound_enabled(self._notify_sound_enabled)
         self._notify_sound_toggle_btn.setText(self._notify_sound_toggle_label())
-
-    @QtCore.pyqtSlot()
-    def _on_toggle_notify_hide_body_clicked(self) -> None:
-        self._notify_hide_body = not self._notify_hide_body
-        save_notify_hide_body(self._notify_hide_body)
-        self._notify_hide_body_toggle_btn.setText(self._notify_hide_body_toggle_label())
-
-    @QtCore.pyqtSlot()
-    def _on_toggle_notify_quiet_clicked(self) -> None:
-        self._notify_quiet_mode = not self._notify_quiet_mode
-        save_notify_quiet_mode(self._notify_quiet_mode)
-        self._notify_quiet_toggle_btn.setText(self._notify_quiet_toggle_label())
 
     @QtCore.pyqtSlot()
     def _on_toggle_privacy_mode_clicked(self) -> None:
@@ -6804,11 +6781,16 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._notify_quiet_mode = True
             save_notify_hide_body(True)
             save_notify_quiet_mode(True)
-            self._notify_hide_body_toggle_btn.setText(self._notify_hide_body_toggle_label())
-            self._notify_quiet_toggle_btn.setText(self._notify_quiet_toggle_label())
-            self.handle_system("Privacy mode enabled: notification previews hidden, focused toasts muted.")
+            self.handle_system(
+                "Privacy mode ON: tray hides message text; while this window is focused, "
+                "no tray toasts or notification sounds."
+            )
         else:
-            self.handle_system("Privacy mode disabled.")
+            self._notify_hide_body = False
+            self._notify_quiet_mode = False
+            save_notify_hide_body(False)
+            save_notify_quiet_mode(False)
+            self.handle_system("Privacy mode OFF.")
 
     @QtCore.pyqtSlot()
     def _configure_history_retention(self) -> None:

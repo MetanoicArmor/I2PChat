@@ -101,9 +101,7 @@ The actions bar is located **at the bottom of the window**, below the message in
   - **Clear history**;
   - **History retention…**;
   - **Privacy mode: ON/OFF**;
-  - **Notification sound: ON/OFF**;
-  - **Hide message in notifications: ON/OFF**;
-  - **Quiet mode (focused): ON/OFF**.
+  - **Notification sound: ON/OFF**.
 
 All controls in the bar have the same height and are laid out in a single row.
 
@@ -125,10 +123,8 @@ Clicking the **`⋯`** button opens a popup menu with profile and connection act
 - **Chat history: ON/OFF** — enable/disable local history persistence (see section 4.11); the menu label reflects the current state.
 - **Clear history** — delete the local history file for the current peer.
 - **History retention…** — configure maximum messages per peer and maximum age in days before encrypted history is persisted.
-- **Privacy mode: ON/OFF** — quick preset that tightens local privacy (hidden notification previews and related quiet behaviour); label shows current state.
-- **Notification sound: ON/OFF** — enable or mute the incoming-message sound path (custom sound path is kept when off).
-- **Hide message in notifications: ON/OFF** — when on, tray toasts omit message body text (title may still name the peer).
-- **Quiet mode (focused): ON/OFF** — while the window is focused, suppress tray toasts and sounds (including for other chats).
+- **Privacy mode: ON/OFF** — when ON: tray toasts omit message body text (title may still name the peer); while this window is focused, tray toasts and notification sounds are suppressed (including for other chats). When OFF, those behaviours are disabled. Label shows current state.
+- **Notification sound: ON/OFF** — enable or mute the incoming-message sound path when it would otherwise play (custom sound path is kept when off; Privacy mode can still mute sound while the window is focused).
 
 #### 4.2. Peer address field
 
@@ -399,7 +395,7 @@ sound notifications (`QSoundEffect`) for incoming messages.
 
 #### 5.2. Sound notifications
 
-- The **`⋯`** menu exposes **Notification sound**, **Hide message in notifications**, and **Quiet mode (focused)** toggles alongside the behaviour described below.
+- The **`⋯`** menu exposes **Privacy mode** and **Notification sound** toggles alongside the behaviour described below.
 
 - If the `QtMultimedia` module is available:
   - a `QSoundEffect` instance is created;

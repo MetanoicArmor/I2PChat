@@ -9,12 +9,12 @@ Manual QA checklist (two peers, notifications / 0.6.5 behavior)
 2. Put I2PChat in the background (another app focused). Receive a message for peer B
    (e.g. offline/BlindBox delivery for B, or connect to B after switching): expect tray title
    to reference B and window title suffix ``(N)`` for unread.
-3. Focus I2PChat with Quiet mode OFF: while viewing chat A, a new message for A should not
+3. Focus I2PChat with Privacy mode OFF: while viewing chat A, a new message for A should not
    toast (same chat). Switch the address field to B; behavior should follow B as active key.
-4. Turn Quiet mode ON (focused): expect no tray toasts and no notification sound while the
-   window is focused, for any peer.
-5. Turn Quiet mode OFF, minimize the window, receive a message for the connected peer:
-   expect tray toast and sound according to sound / hide-body toggles.
+4. Turn Privacy mode ON: expect no tray toasts and no notification sound while the window is
+   focused, for any peer (and hidden message body in tray when toasts do show).
+5. Turn Privacy mode OFF, minimize the window, receive a message for the connected peer:
+   expect tray toast and sound according to the Notification sound toggle.
 """
 
 from __future__ import annotations
