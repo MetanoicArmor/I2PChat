@@ -34,7 +34,7 @@ from PyQt6 import QtCore
 from PyQt6.QtCore import QMimeData, QUrl
 from PyQt6.QtWidgets import QApplication
 
-from i2p_chat_core import ChatMessage
+from i2pchat.core.i2p_chat_core import ChatMessage
 
 
 PEER_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"

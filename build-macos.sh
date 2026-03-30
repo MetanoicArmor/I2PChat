@@ -65,7 +65,7 @@ print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
 PY
 
 echo "==> Проверяю синтаксис ключевых модулей"
-"${PYTHON_CMD}" -m compileall *.py
+"${PYTHON_CMD}" -m compileall *.py i2pchat
 
 echo "==> Собираю GUI (PyInstaller I2PChat.spec)"
 rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"

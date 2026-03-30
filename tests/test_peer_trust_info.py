@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("i2plib")
 
-from i2p_chat_core import I2PChatCore
+from i2pchat.core.i2p_chat_core import I2PChatCore
 
 VALID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
 

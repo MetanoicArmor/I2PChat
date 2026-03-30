@@ -3,7 +3,7 @@ import socket
 import unittest
 from unittest.mock import patch
 
-from blindbox_client import BlindBoxClient
+from i2pchat.blindbox.blindbox_client import BlindBoxClient
 from i2plib.sam import session_create
 
 

@@ -5,7 +5,7 @@ import unittest
 class HistoryUiGuardsTests(unittest.TestCase):
     def _main_qt_source(self) -> str:
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        path = os.path.join(root, "main_qt.py")
+        path = os.path.join(root, "i2pchat", "gui", "main_qt.py")
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
 

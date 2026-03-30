@@ -11,7 +11,7 @@ from unittest.mock import patch
 if importlib.util.find_spec("i2plib") is None:
     raise unittest.SkipTest("i2plib not installed")
 
-from i2p_chat_core import I2PChatCore
+from i2pchat.core.i2p_chat_core import I2PChatCore
 
 PEER = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
 # First line of .dat (mock identity blob); avoid *KEY* name — gitleaks generic-api-key false positive.

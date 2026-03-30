@@ -1,6 +1,6 @@
 import unittest
 
-from message_delivery import (
+from i2pchat.protocol.message_delivery import (
     DELIVERY_STATE_DELIVERED,
     DELIVERY_STATE_FAILED,
     DELIVERY_STATE_QUEUED,

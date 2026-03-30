@@ -53,6 +53,7 @@
             for f in *.py; do
               cp "$f" "$out/lib/i2pchat/"
             done
+            cp -r i2pchat "$out/lib/i2pchat/"
             cp -r i2plib "$out/lib/i2pchat/"
             if [ -d assets ]; then cp -r assets "$out/lib/i2pchat/"; fi
             if [ -e icon.png ]; then cp icon.png "$out/lib/i2pchat/"; fi
@@ -99,7 +100,7 @@
           shellHook = ''
             export QT_PLUGIN_PATH="${qtPluginPath}"
             echo "I2PChat development shell"
-            echo "Run: python main_qt.py"
+            echo "Run: python -m i2pchat.gui.main_qt"
           '';
         };
       }

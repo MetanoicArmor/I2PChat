@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from notification_prefs import (
+from i2pchat.presentation.notification_prefs import (
     NotifyKind,
     notification_body_for_display,
     should_play_notification_sound,

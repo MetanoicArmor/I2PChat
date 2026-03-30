@@ -54,7 +54,7 @@ Write-Host "==> Check PyNaCl (required for secure protocol)"
 Invoke-NativeChecked $PythonExe @("-c", "import nacl; from nacl.secret import SecretBox")
 
 Write-Host "==> Compile security-critical modules"
-Invoke-NativeChecked $PythonExe @("-m", "compileall", "i2p_chat_core.py", "crypto.py", "main_qt.py")
+Invoke-NativeChecked $PythonExe @("-m", "compileall", "i2pchat\core\i2p_chat_core.py", "i2pchat\crypto.py", "i2pchat\gui\main_qt.py")
 
 Write-Host "==> Build GUI I2PChat.exe using spec file"
 if (Test-Path "dist\I2PChat") { Remove-Item -Recurse -Force "dist\I2PChat" }

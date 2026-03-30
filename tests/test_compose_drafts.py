@@ -2,7 +2,7 @@
 
 import unittest
 
-from compose_drafts import apply_compose_draft_peer_switch
+from i2pchat.presentation.compose_drafts import apply_compose_draft_peer_switch
 
 
 class ApplyComposeDraftPeerSwitchTests(unittest.TestCase):

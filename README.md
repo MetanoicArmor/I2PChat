@@ -80,6 +80,9 @@ Traffic is a **byte stream** over **I2P SAM** (one TCP session to the router). A
 - After the secure handshake, payloads are **encrypted** (`FLAGS` marks it): each body is **sequence (8 B) + ciphertext + MAC** (NaCl SecretBox + HMAC over metadata).
 - **Message IDs** and **sequence numbers** tie frames to ordering and replay protection; see also [padding](#protocol-metadata-and-padding-profile) below.
 
+For a developer-oriented specification with framing, handshake, ACK, transfer,
+BlindBox, and code-map sections, see [**docs/PROTOCOL.md**](docs/PROTOCOL.md).
+
 ### 📬 BlindBox
 
 BlindBox is your “send now, deliver later” mode for text messages.
@@ -152,7 +155,7 @@ rm -rf .venv
 Run the application:
 
 ```bash
-python main_qt.py
+python -m i2pchat.gui.main_qt
 ```
 
 ### 🔧 Cross‑platform builds
@@ -247,7 +250,7 @@ To reduce traffic-shape leakage, encrypted payloads use a padding profile:
 You can override the profile with:
 
 ```bash
-I2PCHAT_PADDING_PROFILE=off python main_qt.py
+I2PCHAT_PADDING_PROFILE=off python -m i2pchat.gui.main_qt
 ```
 
 Trade-off: stronger padding reduces length correlation but increases bandwidth.

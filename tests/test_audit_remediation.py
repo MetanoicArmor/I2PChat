@@ -14,15 +14,15 @@ def _read(rel_path: str) -> str:
 
 class AuditRemediationPolicyTests(unittest.TestCase):
     def test_handshake_uses_hkdf_key_separation(self) -> None:
-        crypto_content = _read("crypto.py")
-        core_content = _read("i2p_chat_core.py")
+        crypto_content = _read("i2pchat/crypto.py")
+        core_content = _read("i2pchat/core/i2p_chat_core.py")
         self.assertIn("def derive_handshake_subkeys(", crypto_content)
         self.assertIn("hkdf_extract(", crypto_content)
         self.assertIn("hkdf_expand(", crypto_content)
         self.assertIn("self.shared_key, self.shared_mac_key = self._compute_session_subkeys(", core_content)
 
     def test_padding_profile_balanced_is_default(self) -> None:
-        content = _read("i2p_chat_core.py")
+        content = _read("i2pchat/core/i2p_chat_core.py")
         self.assertIn('PADDING_PROFILE_BALANCED = "balanced"', content)
         self.assertIn('PADDING_BALANCED_BLOCK = 128', content)
         self.assertIn('os.environ.get(\n            "I2PCHAT_PADDING_PROFILE", PADDING_PROFILE_BALANCED\n        )', content)
@@ -101,21 +101,21 @@ class AuditRemediationPolicyTests(unittest.TestCase):
         self.assertIn("pull_request:", content)
 
     def test_gui_open_image_has_path_confinement(self) -> None:
-        content = _read("main_qt.py")
+        content = _read("i2pchat/gui/main_qt.py")
         self.assertIn("if not _is_path_within_directory(path, get_images_dir()):", content)
         self.assertIn("real_path = os.path.realpath(path)", content)
         self.assertIn("if not os.path.isfile(real_path):", content)
         self.assertIn("QtCore.QUrl.fromLocalFile(real_path)", content)
 
     def test_load_pixmap_no_exists_then_open_pattern(self) -> None:
-        content = _read("main_qt.py")
+        content = _read("i2pchat/gui/main_qt.py")
         self.assertNotIn("if not os.path.exists(path):", content)
         self.assertIn("if not _is_path_within_directory(real_path, get_images_dir()):", content)
         self.assertIn("pixmap = QtGui.QPixmap(real_path)", content)
 
     def test_linux_helpers_use_absolute_paths(self) -> None:
-        gui_content = _read("main_qt.py")
-        notif_content = _read("notifications.py")
+        gui_content = _read("i2pchat/gui/main_qt.py")
+        notif_content = _read("i2pchat/platform/notifications.py")
 
         self.assertIn('canberra_path = shutil.which("canberra-gtk-play")', gui_content)
         self.assertIn('paplay_path = shutil.which("paplay")', gui_content)

@@ -24,9 +24,9 @@
 ## Scope и методология
 
 Проверенные компоненты:
-- Протокол/runtime/криптография: `i2p_chat_core.py`, `protocol_codec.py`, `crypto.py`
-- Offline: `blindbox_client.py`, `blindbox_blob.py`, `blindbox_state.py`, `blindbox_local_replica.py`
-- UI/локальное хранение: `main_qt.py`, `chat_history.py`, `contact_book.py`, `compose_drafts.py`, `notification_prefs.py`, `unread_counters.py`
+- Протокол/runtime/криптография: `i2pchat/core/i2p_chat_core.py`, `i2pchat/protocol/protocol_codec.py`, `i2pchat/crypto.py`
+- Offline: `i2pchat/blindbox/blindbox_client.py`, `i2pchat/blindbox/blindbox_blob.py`, `i2pchat/storage/blindbox_state.py`, `i2pchat/blindbox/blindbox_local_replica.py`
+- UI/локальное хранение: `i2pchat/gui/main_qt.py`, `i2pchat/storage/chat_history.py`, `i2pchat/storage/contact_book.py`, `i2pchat/presentation/compose_drafts.py`, `i2pchat/presentation/notification_prefs.py`, `i2pchat/presentation/unread_counters.py`
 - CI/release/supply-chain: `.github/workflows/*` (test-gate, security-audit, secret-scan), `build-*.sh` / `build-windows.ps1`, `requirements*.txt`, `flake.lock`, `.gitleaks.toml`
 
 Выполненные проверки:
@@ -59,7 +59,7 @@
 ### [LOW] A-02: Ветвь `__IMG_END__` для inline-image всё ещё требует truthy буфер
 
 Затронуто:
-- `i2p_chat_core.py` (`receive_loop`, `msg_type == "G"`, `body == "__IMG_END__"`)
+- `i2pchat/core/i2p_chat_core.py` (`receive_loop`, `msg_type == "G"`, `body == "__IMG_END__"`)
 
 Суть:
 - Финализация требует и `inline_image_info`, и **truthy** `inline_image_buffer`.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from i2p_chat_core import ChatMessage
+from i2pchat.core.i2p_chat_core import ChatMessage
 
 
 def test_chat_message_source_peer_defaults_to_none() -> None:

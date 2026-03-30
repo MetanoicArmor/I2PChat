@@ -1,6 +1,6 @@
 import unittest
 
-from blindbox_diagnostics import build_blindbox_diagnostics_text
+from i2pchat.blindbox.blindbox_diagnostics import build_blindbox_diagnostics_text
 
 
 class BlindBoxDiagnosticsTests(unittest.TestCase):

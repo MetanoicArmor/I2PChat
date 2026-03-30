@@ -1,4 +1,4 @@
-from status_presentation import (
+from i2pchat.presentation.status_presentation import (
     build_status_presentation,
     chat_session_label,
     delivery_route_label,

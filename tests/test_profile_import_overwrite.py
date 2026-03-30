@@ -4,7 +4,7 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from i2p_chat_core import allocate_unique_profile_name, import_profile_dat_atomic
+from i2pchat.core.i2p_chat_core import allocate_unique_profile_name, import_profile_dat_atomic
 
 
 class ProfileImportSafetyTests(unittest.TestCase):

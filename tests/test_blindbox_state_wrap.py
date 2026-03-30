@@ -15,10 +15,10 @@ if "PIL" not in sys.modules:
     sys.modules["PIL"] = pil_module
     sys.modules["PIL.Image"] = pil_image_module
 
-import crypto
+from i2pchat import crypto
 import i2p_chat_core as core_module
-from blindbox_state import BLINDBOX_STATE_V1
-from i2p_chat_core import (
+from i2pchat.storage.blindbox_state import BLINDBOX_STATE_V1
+from i2pchat.core.i2p_chat_core import (
     BLINDBOX_LOCAL_WRAP_VERSION_CURRENT,
     BLINDBOX_LOCAL_WRAP_VERSION_LEGACY,
     I2PChatCore,

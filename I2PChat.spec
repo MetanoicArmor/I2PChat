@@ -5,6 +5,10 @@ _local_modules = [
     os.path.splitext(f)[0]
     for f in glob.glob('*.py')
     if f != 'main_qt.py'
+] + [
+    os.path.splitext(os.path.relpath(f, '.'))[0].replace(os.sep, '.')
+    for f in glob.glob('i2pchat/**/*.py', recursive=True)
+    if not f.endswith('__init__.py')
 ]
 
 _icon_file = 'i2pchat.ico' if sys.platform == 'win32' else 'icon.png'

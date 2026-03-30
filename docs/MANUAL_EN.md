@@ -521,7 +521,7 @@ To reduce length-based traffic analysis, encrypted mode uses a padding profile:
 Override via environment variable:
 
 ```bash
-I2PCHAT_PADDING_PROFILE=off python main_qt.py
+I2PCHAT_PADDING_PROFILE=off python i2pchat/gui/main_qt.py
 ```
 
 Trade-off: more padding lowers metadata correlation but increases bandwidth use.

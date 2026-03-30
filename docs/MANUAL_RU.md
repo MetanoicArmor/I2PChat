@@ -523,7 +523,7 @@ padding:
 Переопределение профиля через переменную окружения:
 
 ```bash
-I2PCHAT_PADDING_PROFILE=off python main_qt.py
+I2PCHAT_PADDING_PROFILE=off python3 -m i2pchat.gui.main_qt
 ```
 
 Компромисс: больше padding -> меньше сигналов для traffic analysis, но выше
