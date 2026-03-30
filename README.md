@@ -35,6 +35,7 @@ Backlog sync helper: `GITHUB_TOKEN=... ./scripts/sync_backlog.sh`
 ### 📑 Table of contents
 
 - [✨ Features](#-features)
+- [🧠 Core architecture](#-core-architecture)
 - [🔌 Protocol overview](#-protocol-overview)
 - [📬 BlindBox in short](#-blindbox-in-short)
 - [📸 Screenshots](#-screenshots)
@@ -65,6 +66,128 @@ Backlog sync helper: `GITHUB_TOKEN=... ./scripts/sync_backlog.sh`
 - **English manual**: [**docs/MANUAL_EN.md**](docs/MANUAL_EN.md)
 - **Русский мануал**: [**docs/MANUAL_RU.md**](docs/MANUAL_RU.md)
 - BlindBox design notes: [**RELEASE_0.6.0.md**](docs/releases/RELEASE_0.6.0.md)
+
+### 🧠 Core architecture
+
+The runtime is built around one shared async engine — `I2PChatCore` — with thin UI adapters on top and protocol / crypto / BlindBox services below:
+
+```mermaid
+flowchart TB
+    subgraph Entry["UI / entrypoints"]
+        run["python -m i2pchat.gui
+i2pchat/run_gui.py"]
+        qt["PyQt6 GUI
+i2pchat/gui/main_qt.py
+ChatWindow + qasync event loop"]
+        tui["Textual TUI
+i2pchat/gui/chat_python.py"]
+        present["Presentation helpers
+i2pchat/presentation/*
+status / drafts / replies / unread / notification policy"]
+        guiStore["GUI-side persistence
+chat_history.py
+contact_book.py
+profile_backup.py"]
+        run --> qt
+        qt --> present
+        qt --> guiStore
+        tui -->|"commands + callbacks"| core
+        qt -->|"commands + callbacks"| core
+    end
+
+    subgraph CoreRuntime["Shared async core"]
+        core["i2pchat/core/i2p_chat_core.py
+I2PChatCore
+• profile/session bootstrap
+• accept/connect orchestration
+• secure handshake + TOFU pinning
+• send/receive loops
+• ACK tracking + delivery telemetry
+• text / file / image flows
+• BlindBox root exchange"]
+        retry["Retry helpers
+send_retry_policy.py
+transfer_retry.py"]
+        core --> retry
+    end
+
+    subgraph ProtocolSecurity["Protocol + security"]
+        codec["Framing codec
+protocol/protocol_codec.py
+vNext header / flags / msg_id / len"]
+        delivery["Delivery state model
+protocol/message_delivery.py
+sending / queued / delivered / failed"]
+        crypto["i2pchat/crypto.py
+X25519 + Ed25519
+HKDF
+SecretBox + HMAC"]
+    end
+
+    subgraph BlindBox["Offline delivery subsystem"]
+        bbclient["blindbox_client.py
+quorum PUT / GET
+SAM or direct TCP"]
+        bbkeys["blindbox_key_schedule.py
+lookup / blob / state keys"]
+        bbblob["blindbox_blob.py
+encrypted padded offline blob"]
+        bbstate["storage/blindbox_state.py
+send_index / recv window / consumed set"]
+        bblocal["blindbox_local_replica.py
+optional local BlindBox"]
+    end
+
+    subgraph Transport["Network / external boundary"]
+        i2plib["Vendored i2plib
+SESSION CREATE
+STREAM CONNECT / ACCEPT
+DEST LOOKUP"]
+        sam["I2P router
+SAM API"]
+        peer["Remote peer
+live secure chat stream"]
+        boxes["BlindBox replicas
+I2P or loopback endpoints"]
+    end
+
+    subgraph ProfileState["Profile / local identity"]
+        profile["Profile files + secure keyring
+profile .dat
+stored peer lock
+trust store
+signing seed"]
+    end
+
+    profile -->|"load / save identity,
+trust pins, peer lock"| core
+    core -->|"encode / decode frames"| codec
+    core -->|"derive UI delivery semantics"| delivery
+    core -->|"handshake, encryption,
+MAC, replay checks"| crypto
+    core -->|"queue offline text,
+root rotation, polling"| bbclient
+    core -->|"derive per-message keys"| bbkeys
+    bbkeys --> bbblob
+    core -->|"persist offline counters
+and root metadata"| bbstate
+    core -.->|"optional local fallback"| bblocal
+    bbclient -->|"stores / fetches blobs"| bbblob
+    bbclient <-->|"SAM streams or TCP"| i2plib
+    i2plib <--> sam
+    sam <--> peer
+    bbclient <--> boxes
+    core -->|"status / message / file /
+delivery callbacks"| qt
+```
+
+Runtime in practice:
+
+1. **Startup**: `main_qt.py` creates `ChatWindow`, then `start_core()` calls `I2PChatCore.init_session()`, which loads or creates the profile identity, opens the long-lived SAM session, warms up tunnels, and starts `accept_loop()` / `tunnel_watcher()`.
+2. **Live chat path**: `connect_to_peer()` or `accept_loop()` establishes an I2P stream; `I2PChatCore` runs the plaintext handshake boundary, verifies/pins the peer signing key (TOFU), derives session subkeys, then switches to encrypted vNext frames through `ProtocolCodec` + `crypto`.
+3. **Delivery tracking**: each outgoing text / file / image gets a `MSG_ID` and ACK context; `message_delivery.py` turns low-level outcomes into UI states (`sending`, `queued`, `delivered`, `failed`).
+4. **Offline path (BlindBox)**: when no live secure session is available, `send_text()` can route through BlindBox — derive deterministic lookup/blob keys, encrypt a padded blob, PUT it to one or more BlindBox replicas, and later poll / decrypt GET results back into the chat stream.
+5. **UI responsibility split**: `I2PChatCore` stays UI-agnostic and emits callbacks only; the Qt layer renders chat, status and notifications, while GUI-side storage modules persist chat history, contacts, drafts and backup/export data.
 
 ### 🔌 Protocol overview
 
