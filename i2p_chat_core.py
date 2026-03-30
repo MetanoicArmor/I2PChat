@@ -113,6 +113,8 @@ class FileTransferInfo:
     is_inline_image: bool = False
     rejected_by_peer: bool = False
     source_path: Optional[str] = None
+    # Ключи для transfer_retry / UX: connection_lost, peer_rejected, user_cancelled, …
+    failure_reason: Optional[str] = None
 
 
 @dataclass
@@ -3093,12 +3095,23 @@ class I2PChatCore:
                 received=-1,
                 is_sending=True,
                 source_path=path,
+                failure_reason="connection_lost",
             )
             self._emit_file_event(info)
             self._emit_error(f"File transfer interrupted: connection lost")
             
         except Exception as e:
             rejected = "rejected" in str(e).lower()
+            cancelled = "cancelled" in str(e).lower()
+            fr: Optional[str]
+            if cancelled:
+                fr = "user_cancelled"
+            elif rejected:
+                fr = "peer_rejected"
+            elif "timeout" in str(e).lower():
+                fr = "timeout"
+            else:
+                fr = "connection_lost"
             info = FileTransferInfo(
                 filename=filename,
                 size=filesize,
@@ -3106,6 +3119,7 @@ class I2PChatCore:
                 is_sending=True,
                 rejected_by_peer=rejected,
                 source_path=path,
+                failure_reason=fr,
             )
             self._emit_file_event(info)
             if rejected:
@@ -3258,12 +3272,17 @@ class I2PChatCore:
                     is_sending=True,
                     is_inline_image=True,
                     source_path=path,
+                    failure_reason="connection_lost",
                 )
             )
             self._emit_error(f"Image transfer interrupted: connection lost")
             return None
             
         except Exception as e:
+            cancelled = "cancelled" in str(e).lower()
+            fr = "user_cancelled" if cancelled else (
+                "timeout" if "timeout" in str(e).lower() else "connection_lost"
+            )
             self._emit_file_event(
                 FileTransferInfo(
                     filename=filename,
@@ -3272,6 +3291,7 @@ class I2PChatCore:
                     is_sending=True,
                     is_inline_image=True,
                     source_path=path,
+                    failure_reason=fr,
                 )
             )
             self._emit_error(f"Image transfer failed: {e}")

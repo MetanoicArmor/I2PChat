@@ -329,7 +329,7 @@ Allow users to retry failed sends in a controlled and understandable way.
 
 ## Milestone: 0.9.0 - Portability, privacy, hardening
 
-*Status: issues 19–26 are implemented in **v1.0.0** (see [`docs/releases/RELEASE_1.0.0.md`](docs/releases/RELEASE_1.0.0.md)).*
+*Status: issues **19–26** are shipped as the **v0.9.0** portability/privacy slice and included in the **v1.0.0** stable line ([`docs/releases/RELEASE_0.9.0.md`](docs/releases/RELEASE_0.9.0.md), [`docs/releases/RELEASE_1.0.0.md`](docs/releases/RELEASE_1.0.0.md)).*
 
 ### 19. Encrypted profile export
 

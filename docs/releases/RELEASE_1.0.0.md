@@ -88,6 +88,8 @@ Result during release prep:
 ### Repository layout
 
 - Release notes live under **`docs/releases/`**.
+- Feature-level notes for the **0.9.0** slice: [RELEASE_0.9.0.md](RELEASE_0.9.0.md).
+- **Release integrity:** ship official binaries with `I2PCHAT_REQUIRE_GPG=1` and publish `SHA256SUMS` + `SHA256SUMS.asc` (see root [README.md](../../README.md) *Verify release artifacts*).
 
 ---
 
@@ -179,6 +181,8 @@ Result during release prep:
 ### Структура репозитория
 
 - Описания релизов находятся в **`docs/releases/`**.
+- Детали вехи **0.9.0**: [RELEASE_0.9.0.md](RELEASE_0.9.0.md).
+- **Целостность сборок:** для официальных бинарников задайте `I2PCHAT_REQUIRE_GPG=1` и публикуйте `SHA256SUMS` и `SHA256SUMS.asc` рядом с архивами (см. [README.md](../../README.md), раздел *Verify release artifacts*).
 
 ---
 

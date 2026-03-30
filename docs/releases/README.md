@@ -4,7 +4,8 @@ Versioned release write-ups for I2PChat live in this directory (`docs/releases/`
 
 | Version | Notes |
 |--------|--------|
-| **1.0.0** | [RELEASE_1.0.0.md](RELEASE_1.0.0.md) — backup/restore, history retention, privacy mode, drag-and-drop attachments, reliability hardening |
+| **1.0.0** | [RELEASE_1.0.0.md](RELEASE_1.0.0.md) — stable niche milestone; backup/restore, retention, privacy mode, drag-and-drop, reliability |
+| **0.9.0** | [RELEASE_0.9.0.md](RELEASE_0.9.0.md) — profile/history backup, retention UI, privacy/PIN, DnD, transfer auto-retry (feature slice before 1.0.0 tag) |
 | **0.8.0** | [RELEASE_0.8.0.md](RELEASE_0.8.0.md) — delivery states, trust/key-change flows, BlindBox diagnostics, retry failed sends |
 | **0.7.0** | [RELEASE_0.7.0.md](RELEASE_0.7.0.md) — contacts v2, previews, last active peer, in-chat search, trust card MVP |
 | 0.6.5 | [RELEASE_0.6.5.md](RELEASE_0.6.5.md) — UX polish milestone (drafts, unread, status, context menu, notifications) |

@@ -16,7 +16,10 @@ def notification_body_for_display(
     kind: NotifyKind,
     preview: str,
     hide_body: bool,
+    privacy_active: bool = False,
 ) -> str:
+    if privacy_active:
+        return ""
     if not hide_body:
         return preview
     if kind == "peer":
@@ -39,7 +42,10 @@ def should_show_tray_message(
     quiet_mode: bool,
     is_app_active: bool,
     is_window_active: bool,
+    privacy_active: bool = False,
 ) -> bool:
+    if privacy_active:
+        return False
     return not should_suppress_for_quiet_focus(
         quiet_mode=quiet_mode,
         is_app_active=is_app_active,

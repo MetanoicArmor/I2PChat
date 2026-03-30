@@ -223,6 +223,8 @@ Build-time controls:
 - `I2PCHAT_REQUIRE_GPG=1` — fail build if GPG signing is unavailable or fails;
 - `I2PCHAT_GPG_KEY_ID=<keyid>` — select a specific key for detached signature.
 
+**Official release builds** should set `I2PCHAT_REQUIRE_GPG=1` so unsigned archives are not produced silently; publish `SHA256SUMS` and `SHA256SUMS.asc` next to each asset.
+
 Verification example:
 
 ```bash

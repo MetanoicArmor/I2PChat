@@ -17,6 +17,21 @@ import qasync
 from blindbox_state import atomic_write_json
 from blindbox_diagnostics import build_blindbox_diagnostics_text
 from compose_drafts import apply_compose_draft_peer_switch
+from drag_drop import (
+    REJECT as _DROP_REJECT,
+    SEND_FILE as _DROP_SEND_FILE,
+    SEND_IMAGE as _DROP_SEND_IMAGE,
+    classify_drop,
+    validate_drop_file,
+    validate_drop_image,
+)
+from history_export import (
+    CONFLICT_MERGE,
+    CONFLICT_REPLACE,
+    CONFLICT_SKIP,
+    export_history,
+    import_history,
+)
 from message_delivery import (
     DELIVERY_STATE_DELIVERED,
     DELIVERY_STATE_FAILED,
@@ -24,13 +39,34 @@ from message_delivery import (
     delivery_state_label,
     normalize_loaded_delivery_state,
 )
+from profile_export import export_profile, import_profile
 from reply_format import format_reply_quote
 from send_retry_policy import should_start_auto_connect_retry as _should_start_auto_connect_retry
+from transfer_retry import (
+    TransferRetryPolicy,
+    should_retry_transfer,
+    transfer_failure_reason,
+)
 from status_presentation import build_status_presentation
+from history_retention import (
+    GUI_RETENTION_KEY,
+    RetentionPolicy,
+    apply_retention,
+    enforce_retention_all,
+    policy_from_gui_settings,
+)
 from notification_prefs import (
     notification_body_for_display,
     should_play_notification_sound,
     should_show_tray_message,
+)
+from privacy_mode import (
+    PrivacyState,
+    activate_privacy_mode,
+    deactivate_privacy_mode,
+    privacy_state_from_dict,
+    privacy_state_to_dict,
+    set_lock_pin,
 )
 from unread_counters import (
     bump_unread_for_incoming_peer_message,
@@ -38,9 +74,7 @@ from unread_counters import (
     total_unread,
 )
 from chat_history import (
-    DEFAULT_HISTORY_RETENTION_DAYS,
     HistoryEntry,
-    apply_history_retention,
     delete_history,
     list_history_file_paths,
     load_history,
@@ -1186,6 +1220,35 @@ def save_notify_quiet_mode(quiet: bool) -> None:
     _save_ui_prefs(data)
 
 
+_PRIVACY_MODE_KEY = "privacy_mode"
+
+
+def load_privacy_state() -> PrivacyState:
+    data = _load_ui_prefs()
+    raw = data.get(_PRIVACY_MODE_KEY)
+    if isinstance(raw, dict):
+        return privacy_state_from_dict(raw)
+    return PrivacyState()
+
+
+def save_privacy_state(state: PrivacyState) -> None:
+    data = _load_ui_prefs()
+    data[_PRIVACY_MODE_KEY] = privacy_state_to_dict(state)
+    _save_ui_prefs(data)
+
+
+def save_history_retention_prefs(
+    max_age_days: Optional[int],
+    max_messages: Optional[int],
+) -> None:
+    data = _load_ui_prefs()
+    payload: dict[str, object] = {"max_age_days": max_age_days}
+    if max_messages is not None:
+        payload["max_messages"] = max_messages
+    data[GUI_RETENTION_KEY] = payload
+    _save_ui_prefs(data)
+
+
 def load_history_enabled() -> bool:
     data = _load_ui_prefs()
     val = data.get("history_enabled")
@@ -1212,35 +1275,6 @@ def save_history_max_messages(max_messages: int) -> None:
         raise ValueError("history_max_messages must be positive")
     data = _load_ui_prefs()
     data["history_max_messages"] = value
-    _save_ui_prefs(data)
-
-
-def load_history_retention_days() -> int:
-    data = _load_ui_prefs()
-    val = data.get("history_retention_days")
-    if isinstance(val, int):
-        return max(0, val)
-    return DEFAULT_HISTORY_RETENTION_DAYS
-
-
-def save_history_retention_days(days: int) -> None:
-    value = max(0, int(days))
-    data = _load_ui_prefs()
-    data["history_retention_days"] = value
-    _save_ui_prefs(data)
-
-
-def load_privacy_mode_enabled() -> bool:
-    data = _load_ui_prefs()
-    return data.get("privacy_mode_enabled") is True
-
-
-def save_privacy_mode_enabled(enabled: bool) -> None:
-    data = _load_ui_prefs()
-    if enabled:
-        data["privacy_mode_enabled"] = True
-    else:
-        data.pop("privacy_mode_enabled", None)
     _save_ui_prefs(data)
 
 
@@ -1480,11 +1514,13 @@ class ChatListView(QtWidgets.QListView):
     imageOpenRequested = QtCore.pyqtSignal(str)  # path to image
     replyRequested = QtCore.pyqtSignal(str)  # quoted block for compose field
     retryRequested = QtCore.pyqtSignal(int)
+    fileDropRequested = QtCore.pyqtSignal(str, str)  # path, kind: file | image
 
     _EDGE_FADE_PX = 44
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
+        self.setAcceptDrops(True)
         self.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.DefaultContextMenu)
         self._theme_id = THEME_DEFAULT
         self._context_popup: Optional["ActionsPopup"] = None
@@ -1539,6 +1575,47 @@ class ChatListView(QtWidgets.QListView):
         self._layout_edge_fades()
         self.doItemsLayout()
         self.viewport().update()
+
+    def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:  # type: ignore[override]
+        md = event.mimeData()
+        if md.hasUrls():
+            urls = [u.toLocalFile() for u in md.urls()]
+            mimes = [str(x) for x in md.formats()]
+            if classify_drop(mimes, urls) != _DROP_REJECT:
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dragMoveEvent(self, event: QtGui.QDragMoveEvent) -> None:  # type: ignore[override]
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event: QtGui.QDropEvent) -> None:  # type: ignore[override]
+        md = event.mimeData()
+        if not md.hasUrls():
+            event.ignore()
+            return
+        urls = [u.toLocalFile() for u in md.urls()]
+        mimes = [str(x) for x in md.formats()]
+        action = classify_drop(mimes, urls)
+        if action == _DROP_REJECT:
+            event.ignore()
+            return
+        path = urls[0]
+        if action == _DROP_SEND_IMAGE:
+            ok, err = validate_drop_image(path)
+            kind = "image"
+        else:
+            ok, err = validate_drop_file(path)
+            kind = "file"
+        if not ok:
+            win = self.window()
+            handler = getattr(win, "handle_error", None)
+            if callable(handler):
+                handler(err or "Drop rejected")
+            event.ignore()
+            return
+        self.fileDropRequested.emit(path, kind)
+        event.acceptProposedAction()
 
     def _copy_index_text(self, index: QtCore.QModelIndex, with_meta: bool = False) -> None:
         item = index.data(QtCore.Qt.ItemDataRole.DisplayRole)
@@ -3903,7 +3980,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._history_flush_timer = QtCore.QTimer(self)
         self._history_flush_timer.setInterval(60_000)
         self._history_flush_timer.timeout.connect(self._flush_history)
-        self._privacy_mode_enabled = load_privacy_mode_enabled()
 
         # диагностическая строка статуса
         self.status_label = QtWidgets.QLabel("Status: initializing", self)
@@ -3981,6 +4057,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._transfer_timer.setInterval(50)
 
         self._history_enabled = load_history_enabled()
+        self._privacy_state = load_privacy_state()
+        self._transfer_retry_policy = TransferRetryPolicy()
+        self._transfer_auto_retry_attempt = 0
+        self._transfer_retry_from_auto = False
 
         # основной чат
         self.chat_view = ChatListView(self)
@@ -4365,6 +4445,19 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.addr_edit.editingFinished.connect(self._on_addr_editing_finished_for_drafts)
         self.input_edit.textChanged.connect(self._on_compose_text_changed)
         self.more_actions_popup.add_action("Load profile (.dat)", self.on_load_profile_clicked)
+        self.more_actions_popup.add_action(
+            "Export profile backup…", self.on_export_profile_backup_clicked
+        )
+        self.more_actions_popup.add_action(
+            "Import profile backup…", self.on_import_profile_backup_clicked
+        )
+        self.more_actions_popup.add_action(
+            "Export chat history…", self.on_export_history_clicked
+        )
+        self.more_actions_popup.add_action(
+            "Import chat history…", self.on_import_history_clicked
+        )
+        self.more_actions_popup.add_separator()
         self.more_actions_popup.add_action("Send picture", self.on_send_pic_clicked)
         self.more_actions_popup.add_action("Send file", self.on_send_file_clicked)
         self.more_actions_popup.add_action(
@@ -4392,12 +4485,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         self._sync_chat_search_header_with_history()
         self.more_actions_popup.add_action("Clear history", self._on_clear_history_clicked)
-        self.more_actions_popup.add_action(
-            "History retention…", self._configure_history_retention
-        )
-        self._privacy_mode_toggle_btn = self.more_actions_popup.add_action(
-            self._privacy_mode_toggle_label(), self._on_toggle_privacy_mode_clicked
-        )
         self.more_actions_popup.add_separator()
         self._notify_sound_enabled = load_notify_sound_enabled()
         self._notify_hide_body = load_notify_hide_body()
@@ -4423,10 +4510,26 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._notify_quiet_toggle_btn.setToolTip(
             "While the app window is focused, suppress tray toasts and sounds (other chats included)."
         )
+        self._privacy_toggle_btn = self.more_actions_popup.add_action(
+            self._privacy_toggle_label(),
+            self._on_toggle_privacy_mode_clicked,
+        )
+        self._privacy_toggle_btn.setToolTip(
+            "When on, tray notifications are suppressed and message previews are hidden."
+        )
+        self.more_actions_popup.add_action(
+            "Privacy lock (PIN)…",
+            self._on_privacy_lock_settings_clicked,
+        )
+        self.more_actions_popup.add_action(
+            "History retention…",
+            self._on_history_retention_settings_clicked,
+        )
         self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
         self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
         self.chat_view.replyRequested.connect(self._on_reply_requested)
         self.chat_view.retryRequested.connect(self._on_retry_requested)
+        self.chat_view.fileDropRequested.connect(self._on_chat_file_dropped)
 
         # ядро
         self.core = self._create_core(self.profile)
@@ -5515,15 +5618,18 @@ class ChatWindow(QtWidgets.QMainWindow):
             if is_app_active and is_window_active:
                 return
 
+        _priv_on = self._privacy_state.active and self._privacy_state.hide_notifications
         body = notification_body_for_display(
             kind=notify_kind,
             preview=preview,
             hide_body=self._notify_hide_body,
+            privacy_active=_priv_on,
         )
         if should_show_tray_message(
             quiet_mode=self._notify_quiet_mode,
             is_app_active=is_app_active,
             is_window_active=is_window_active,
+            privacy_active=_priv_on,
         ):
             if self.tray_icon is not None:
                 self.tray_icon.showMessage(
@@ -5533,11 +5639,14 @@ class ChatWindow(QtWidgets.QMainWindow):
                     5000,
                 )
 
-        if should_play_notification_sound(
-            sound_enabled=self._notify_sound_enabled,
-            quiet_mode=self._notify_quiet_mode,
-            is_app_active=is_app_active,
-            is_window_active=is_window_active,
+        if (
+            not _priv_on
+            and should_play_notification_sound(
+                sound_enabled=self._notify_sound_enabled,
+                quiet_mode=self._notify_quiet_mode,
+                is_app_active=is_app_active,
+                is_window_active=is_window_active,
+            )
         ):
             self._play_notification_sound()
 
@@ -5576,6 +5685,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             # Только Send Pic (G) помечен как inline image; Send File (F/D) — обычный файл
             is_image = getattr(info, "is_inline_image", False)
 
+            if not self._transfer_retry_from_auto:
+                self._transfer_auto_retry_attempt = 0
+            self._transfer_retry_from_auto = False
+
             # Создаём сообщение прогресса в чате (для картинок — "Uploading/Receiving image")
             self._transfer_is_image = is_image
             self._append_item(
@@ -5612,11 +5725,23 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Ошибка передачи (received=-1)
         if info.received < 0:
             self._transfer_timer.stop()
+            fr = getattr(info, "failure_reason", None) or (
+                "peer_rejected" if getattr(info, "rejected_by_peer", False) else None
+            )
+            if not fr:
+                fr = "connection_lost"
             if self._transfer_row is not None:
-                if getattr(info, "rejected_by_peer", False):
+                if getattr(info, "rejected_by_peer", False) or fr == "peer_rejected":
                     err_text = f"Receiver rejected the file: {info.filename}"
                 else:
-                    err_text = f"Transfer failed: {info.filename}"
+                    err_text = f"{transfer_failure_reason(fr)} — {info.filename}"
+                can_retry_manual = bool(
+                    info.is_sending
+                    and info.source_path
+                    and not info.rejected_by_peer
+                    and fr != "peer_rejected"
+                    and fr != "user_cancelled"
+                )
                 self.chat_model.update_item(
                     self._transfer_row,
                     ChatItem(
@@ -5627,7 +5752,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                         delivery_state=DELIVERY_STATE_FAILED,
                         delivery_hint=err_text,
                         delivery_reason="send-failed" if info.is_sending else "transfer-failed",
-                        retryable=bool(info.is_sending and info.source_path),
+                        retryable=can_retry_manual,
                         retry_kind=(
                             "image"
                             if info.is_sending and self._transfer_is_image and info.source_path
@@ -5638,6 +5763,32 @@ class ChatWindow(QtWidgets.QMainWindow):
                         retry_source_path=info.source_path,
                     ),
                 )
+                if (
+                    info.is_sending
+                    and info.source_path
+                    and fr not in ("peer_rejected", "user_cancelled")
+                    and not info.rejected_by_peer
+                ):
+                    self._transfer_auto_retry_attempt += 1
+                    retry_now, delay_sec = should_retry_transfer(
+                        self._transfer_auto_retry_attempt,
+                        fr,
+                        self._transfer_retry_policy,
+                    )
+                    if retry_now:
+                        self._transfer_retry_from_auto = True
+                        path = info.source_path
+                        is_img = self._transfer_is_image
+
+                        def _auto_retry_send() -> None:
+                            if is_img:
+                                asyncio.create_task(self.core.send_image(path))
+                            else:
+                                asyncio.create_task(self.core.send_file(path))
+
+                        QtCore.QTimer.singleShot(
+                            max(0, int(delay_sec * 1000)), _auto_retry_send
+                        )
                 self._transfer_row = None
             self._transfer_is_image = False
             return
@@ -5645,6 +5796,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Завершение передачи
         if info.received >= info.size:
             self._transfer_timer.stop()
+            self._transfer_auto_retry_attempt = 0
             if self._transfer_row is not None:
                 if self._transfer_is_image:
                     # Сначала показываем 100%, потом заменим на превью в handle_inline_image_received
@@ -6605,16 +6757,35 @@ class ChatWindow(QtWidgets.QMainWindow):
         entries = load_history(
             self.core.get_profiles_dir(), self.core.profile, peer, identity_key,
         )
-        self._history_entries = list(entries)
+        policy = policy_from_gui_settings(_load_ui_prefs())
+        pruned = apply_retention(list(entries), policy)
+        if len(pruned) < len(entries):
+            try:
+                if pruned:
+                    save_history(
+                        self.core.get_profiles_dir(),
+                        self.core.profile,
+                        peer,
+                        pruned,
+                        identity_key,
+                        max_messages=load_history_max_messages(),
+                    )
+                else:
+                    delete_history(
+                        self.core.get_profiles_dir(), self.core.profile, peer
+                    )
+            except Exception as e:
+                logger.warning("Retention on load failed: %s", e, exc_info=True)
+        self._history_entries = list(pruned)
         self._history_dirty = False
-        if entries:
+        if pruned:
             self._chat_search_sync_suppressed = True
             try:
                 self._append_item(ChatItem(
                     kind="system", timestamp="", sender="",
-                    text=f"--- {len(entries)} message(s) from history ---",
+                    text=f"--- {len(pruned)} message(s) from history ---",
                 ))
-                for e in entries:
+                for e in pruned:
                     if e.kind == "me":
                         sender = "Me"
                     elif e.kind == "peer":
@@ -6671,18 +6842,20 @@ class ChatWindow(QtWidgets.QMainWindow):
         identity_key = self.core.get_identity_key_bytes()
         if not identity_key:
             return
-        entries, _ = apply_history_retention(
-            self._history_entries,
-            max_messages=load_history_max_messages(),
-            max_age_days=load_history_retention_days(),
-        )
-        if entries:
+        cap = load_history_max_messages()
+        prefs = _load_ui_prefs()
+        policy = policy_from_gui_settings(prefs)
+        if policy.max_messages is not None:
+            cap = max(cap, int(policy.max_messages))
+        entries = self._history_entries[-cap:]
+        to_save = apply_retention(list(entries), policy)
+        if to_save:
             try:
                 save_history(
                     self.core.get_profiles_dir(),
                     self.core.profile,
                     peer,
-                    entries,
+                    to_save,
                     identity_key,
                     max_messages=load_history_max_messages(),
                 )
@@ -6721,9 +6894,6 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _notify_quiet_toggle_label(self) -> str:
         return "Quiet mode (focused): ON" if self._notify_quiet_mode else "Quiet mode (focused): OFF"
 
-    def _privacy_mode_toggle_label(self) -> str:
-        return "Privacy mode: ON" if self._privacy_mode_enabled else "Privacy mode: OFF"
-
     @QtCore.pyqtSlot()
     def _on_toggle_notify_sound_clicked(self) -> None:
         self._notify_sound_enabled = not self._notify_sound_enabled
@@ -6742,61 +6912,195 @@ class ChatWindow(QtWidgets.QMainWindow):
         save_notify_quiet_mode(self._notify_quiet_mode)
         self._notify_quiet_toggle_btn.setText(self._notify_quiet_toggle_label())
 
-    @QtCore.pyqtSlot()
-    def _on_toggle_privacy_mode_clicked(self) -> None:
-        self._privacy_mode_enabled = not self._privacy_mode_enabled
-        save_privacy_mode_enabled(self._privacy_mode_enabled)
-        self._privacy_mode_toggle_btn.setText(self._privacy_mode_toggle_label())
-        if self._privacy_mode_enabled:
-            self._notify_hide_body = True
-            self._notify_quiet_mode = True
-            save_notify_hide_body(True)
-            save_notify_quiet_mode(True)
-            self._notify_hide_body_toggle_btn.setText(self._notify_hide_body_toggle_label())
-            self._notify_quiet_toggle_btn.setText(self._notify_quiet_toggle_label())
-            self.handle_system("Privacy mode enabled: notification previews hidden, focused toasts muted.")
-        else:
-            self.handle_system("Privacy mode disabled.")
+    def _privacy_toggle_label(self) -> str:
+        return "Privacy mode: ON" if self._privacy_state.active else "Privacy mode: OFF"
 
     @QtCore.pyqtSlot()
-    def _configure_history_retention(self) -> None:
-        current_limit = load_history_max_messages()
-        limit, ok = QtWidgets.QInputDialog.getInt(
-            self,
-            "History retention",
-            "Max saved messages per peer:",
-            current_limit,
-            1,
-            100000,
-            50,
+    def _on_toggle_privacy_mode_clicked(self) -> None:
+        if self._privacy_state.active:
+            pin: Optional[str] = None
+            if self._privacy_state.lock_enabled and self._privacy_state.lock_hash:
+                text, ok = QtWidgets.QInputDialog.getText(
+                    self,
+                    "Exit privacy mode",
+                    "Enter PIN to turn off privacy mode:",
+                    QtWidgets.QLineEdit.EchoMode.Password,
+                )
+                if not ok:
+                    return
+                pin = text
+            new_state, ok_deact = deactivate_privacy_mode(self._privacy_state, pin_if_locked=pin)
+            if not ok_deact:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Privacy mode",
+                    "Incorrect PIN — privacy mode stays on.",
+                )
+                return
+            self._privacy_state = new_state
+        else:
+            self._privacy_state = activate_privacy_mode(self._privacy_state)
+        save_privacy_state(self._privacy_state)
+        self._privacy_toggle_btn.setText(self._privacy_toggle_label())
+
+    @QtCore.pyqtSlot()
+    def _on_privacy_lock_settings_clicked(self) -> None:
+        box = QtWidgets.QDialog(self)
+        box.setWindowTitle("Privacy lock (PIN)")
+        lay = QtWidgets.QVBoxLayout(box)
+        info = QtWidgets.QLabel(
+            "Optional PIN required to exit privacy mode. Stored as a slow hash locally."
         )
-        if not ok:
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        pin1 = QtWidgets.QLineEdit()
+        pin1.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        pin1.setPlaceholderText("New PIN (empty = clear lock)")
+        lay.addWidget(pin1)
+        pin2 = QtWidgets.QLineEdit()
+        pin2.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        pin2.setPlaceholderText("Confirm PIN")
+        lay.addWidget(pin2)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Save
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        lay.addWidget(buttons)
+        buttons.accepted.connect(box.accept)
+        buttons.rejected.connect(box.reject)
+        _apply_dialog_theme_sheet(box, self.theme_id)
+        if box.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
-        current_days = load_history_retention_days()
-        days, ok = QtWidgets.QInputDialog.getInt(
-            self,
-            "History retention",
-            "Max age in days (0 = keep by count only):",
-            current_days,
-            0,
-            3650,
-            1,
-        )
-        if not ok:
+        a = pin1.text().strip()
+        b = pin2.text().strip()
+        if not a and not b:
+            self._privacy_state.lock_enabled = False
+            self._privacy_state.lock_hash = None
+            save_privacy_state(self._privacy_state)
+            self.handle_system("Privacy lock cleared.")
             return
-        save_history_max_messages(limit)
-        save_history_retention_days(days)
-        retained, _ = apply_history_retention(
-            self._history_entries,
-            max_messages=limit,
-            max_age_days=days,
+        if a != b:
+            QtWidgets.QMessageBox.warning(box, "Privacy lock", "PINs do not match.")
+            return
+        try:
+            h = set_lock_pin(a)
+        except ValueError as e:
+            QtWidgets.QMessageBox.warning(box, "Privacy lock", str(e))
+            return
+        self._privacy_state.lock_enabled = True
+        self._privacy_state.lock_hash = h
+        save_privacy_state(self._privacy_state)
+        self.handle_system("Privacy lock PIN updated.")
+
+    @QtCore.pyqtSlot()
+    def _on_history_retention_settings_clicked(self) -> None:
+        prefs = _load_ui_prefs()
+        policy = policy_from_gui_settings(prefs)
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("History retention")
+        v = QtWidgets.QVBoxLayout(dlg)
+        age_check = QtWidgets.QCheckBox("Limit messages older than (days):")
+        age_spin = QtWidgets.QSpinBox()
+        age_spin.setRange(1, 36500)
+        if policy.max_age_days is not None:
+            age_check.setChecked(True)
+            age_spin.setValue(int(policy.max_age_days))
+        v.addWidget(age_check)
+        v.addWidget(age_spin)
+        v.addWidget(QtWidgets.QLabel("Max messages per peer (after age filter):"))
+        count_spin = QtWidgets.QSpinBox()
+        count_spin.setRange(100, 500_000)
+        count_spin.setValue(
+            int(policy.max_messages or load_history_max_messages())
         )
-        if len(retained) != len(self._history_entries):
-            self._history_entries = retained
-            self._history_dirty = True
-        self.handle_system(
-            f"History retention updated: {limit} messages per peer, {days} day(s) max age."
+        v.addWidget(count_spin)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Save
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
+        apply_all_btn = QtWidgets.QPushButton("Apply to all chats…")
+        v.addWidget(apply_all_btn)
+        v.addWidget(buttons)
+
+        def _persist_from_ui() -> tuple[Optional[int], int]:
+            max_age: Optional[int] = (
+                int(age_spin.value()) if age_check.isChecked() else None
+            )
+            max_msg = int(count_spin.value())
+            return max_age, max_msg
+
+        def _do_save() -> None:
+            max_age, max_msg = _persist_from_ui()
+            save_history_retention_prefs(max_age, max_msg)
+
+        def _apply_all_chats() -> None:
+            max_age, max_msg = _persist_from_ui()
+            if max_age is None and max_msg >= 500_000:
+                QtWidgets.QMessageBox.information(
+                    dlg,
+                    "History retention",
+                    "Choose stricter limits before purging all chats.",
+                )
+                return
+            confirm = QtWidgets.QMessageBox.question(
+                dlg,
+                "Apply retention",
+                "This permanently removes older messages from all saved peer histories "
+                "according to the policy. Continue?",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if confirm != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            _do_save()
+            id_key = self.core.get_identity_key_bytes()
+            if not id_key:
+                QtWidgets.QMessageBox.warning(
+                    dlg, "History retention", "No identity loaded for this profile."
+                )
+                return
+            pol = RetentionPolicy(
+                max_age_days=max_age,
+                max_messages=max_msg,
+            )
+            peers = [normalize_peer_address(c.addr) for c in self._contact_book.contacts]
+            cur = self._current_history_peer()
+            if cur and normalize_peer_address(cur) not in peers:
+                peers.append(normalize_peer_address(cur))
+            results = enforce_retention_all(
+                self.profile,
+                id_key,
+                pol,
+                self.core.get_profiles_dir(),
+                peers,
+                confirmed=True,
+            )
+            removed = sum(results.values())
+            QtWidgets.QMessageBox.information(
+                dlg,
+                "History retention",
+                f"Removed {removed} message(s) across peers.",
+            )
+            self._history_loaded_for_peer = None
+            self._try_load_history()
+
+        apply_all_btn.clicked.connect(_apply_all_chats)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        _apply_dialog_theme_sheet(dlg, self.theme_id)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            _do_save()
+
+    @QtCore.pyqtSlot(str, str)
+    def _on_chat_file_dropped(self, path: str, kind: str) -> None:
+        if not self.core.conn or not self.core.handshake_complete:
+            self.handle_error("Connect to a peer before sending files or images.")
+            return
+        if kind == "image":
+            asyncio.create_task(self.core.send_image(path))
+        else:
+            asyncio.create_task(self.core.send_file(path))
 
     def _prompt_backup_passphrase(self, *, title: str, confirm: bool) -> Optional[str]:
         password, ok = QtWidgets.QInputDialog.getText(
@@ -7044,6 +7348,75 @@ class ChatWindow(QtWidgets.QMainWindow):
         layout.addLayout(row)
         dlg.exec()
 
+    def _prompt_password(
+        self,
+        *,
+        title: str,
+        label: str,
+        confirm: bool = False,
+    ) -> Optional[str]:
+        password, ok = QtWidgets.QInputDialog.getText(
+            self,
+            title,
+            label,
+            QtWidgets.QLineEdit.EchoMode.Password,
+        )
+        if not ok or not password:
+            return None
+        if not confirm:
+            return password
+        confirm_pw, ok2 = QtWidgets.QInputDialog.getText(
+            self,
+            title,
+            "Confirm password:",
+            QtWidgets.QLineEdit.EchoMode.Password,
+        )
+        if not ok2:
+            return None
+        if password != confirm_pw:
+            QtWidgets.QMessageBox.warning(
+                self,
+                title,
+                "Passwords do not match.",
+            )
+            return None
+        return password
+
+    def _prompt_choice(
+        self,
+        *,
+        title: str,
+        label: str,
+        items: list[str],
+        current: int = 0,
+    ) -> Optional[str]:
+        choice, ok = QtWidgets.QInputDialog.getItem(
+            self,
+            title,
+            label,
+            items,
+            current,
+            False,
+        )
+        if not ok or not choice:
+            return None
+        return str(choice)
+
+    def _known_history_peers(self) -> list[str]:
+        peers: list[str] = []
+
+        def add(raw: str) -> None:
+            norm = normalize_peer_address(raw)
+            if norm and norm not in peers:
+                peers.append(norm)
+
+        for rec in self._contact_book.contacts:
+            add(rec.addr)
+        add(self.core.current_peer_addr or "")
+        add(self.core.stored_peer or "")
+        add(self.addr_edit.text().strip())
+        return peers
+
     @QtCore.pyqtSlot()
     def on_forget_pinned_peer_key_clicked(self) -> None:
         peer_addr = (
@@ -7105,6 +7478,233 @@ class ChatWindow(QtWidgets.QMainWindow):
                 return
 
         asyncio.create_task(self.switch_profile(target_base))
+
+    @QtCore.pyqtSlot()
+    def on_export_profile_backup_clicked(self) -> None:
+        password = self._prompt_password(
+            title="Export profile backup",
+            label="Password for the encrypted backup:",
+            confirm=True,
+        )
+        if not password:
+            return
+        default_path = os.path.join(
+            get_profiles_dir(), f"{self.profile}.i2pchat-profile"
+        )
+        out_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export profile backup",
+            default_path,
+            "I2PChat profile backup (*.i2pchat-profile)",
+        )
+        if not out_path:
+            return
+        try:
+            final_path, warning = export_profile(
+                self.profile,
+                password,
+                get_profiles_dir(),
+                include_gui_settings=True,
+                output_path=out_path,
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Export profile backup",
+                f"Failed to export profile backup:\n{e}",
+            )
+            return
+        QtWidgets.QMessageBox.information(
+            self,
+            "Export profile backup",
+            f"Backup created:\n{final_path}\n\n{warning}",
+        )
+
+    @QtCore.pyqtSlot()
+    def on_import_profile_backup_clicked(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Import profile backup",
+            get_profiles_dir(),
+            "I2PChat profile backup (*.i2pchat-profile)",
+        )
+        if not path:
+            return
+        password = self._prompt_password(
+            title="Import profile backup",
+            label="Password used for the backup:",
+        )
+        if not password:
+            return
+        strategy = self._prompt_choice(
+            title="Import profile backup",
+            label="If the profile already exists:",
+            items=["rename", "error", "overwrite"],
+            current=0,
+        )
+        if not strategy:
+            return
+        restore_gui = (
+            QtWidgets.QMessageBox.question(
+                self,
+                "Import profile backup",
+                "Restore GUI settings from the backup too?",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.Yes,
+            )
+            == QtWidgets.QMessageBox.StandardButton.Yes
+        )
+        try:
+            final_name = import_profile(
+                path,
+                password,
+                get_profiles_dir(),
+                strategy,  # type: ignore[arg-type]
+                restore_gui_settings=restore_gui,
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Import profile backup",
+                f"Failed to import profile backup:\n{e}",
+            )
+            return
+        switch_now = (
+            QtWidgets.QMessageBox.question(
+                self,
+                "Import profile backup",
+                f"Imported profile '{final_name}'.\n\nSwitch to it now?",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.Yes,
+            )
+            == QtWidgets.QMessageBox.StandardButton.Yes
+        )
+        if switch_now:
+            asyncio.create_task(self.switch_profile(final_name))
+
+    @QtCore.pyqtSlot()
+    def on_export_history_clicked(self) -> None:
+        identity_key = self.core.get_identity_key_bytes()
+        if not identity_key:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Export chat history",
+                "Identity key is not available yet. Open a profile first.",
+            )
+            return
+        peers = self._known_history_peers()
+        if not peers:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Export chat history",
+                "No known peers with local history context were found.",
+            )
+            return
+        password = self._prompt_password(
+            title="Export chat history",
+            label="Password for the encrypted history archive:",
+            confirm=True,
+        )
+        if not password:
+            return
+        default_path = os.path.join(get_profiles_dir(), f"{self.profile}.history.i2hx")
+        out_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export chat history",
+            default_path,
+            "I2PChat history archive (*.i2hx)",
+        )
+        if not out_path:
+            return
+        try:
+            export_history(
+                self.profile,
+                identity_key,
+                peers,
+                password,
+                out_path,
+                self.core.get_profiles_dir(),
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Export chat history",
+                f"Failed to export chat history:\n{e}",
+            )
+            return
+        QtWidgets.QMessageBox.information(
+            self,
+            "Export chat history",
+            f"Encrypted history archive created:\n{out_path}\n\nPeers included: {len(peers)}",
+        )
+
+    @QtCore.pyqtSlot()
+    def on_import_history_clicked(self) -> None:
+        identity_key = self.core.get_identity_key_bytes()
+        if not identity_key:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Import chat history",
+                "Identity key is not available yet. Open a profile first.",
+            )
+            return
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Import chat history",
+            get_profiles_dir(),
+            "I2PChat history archive (*.i2hx)",
+        )
+        if not path:
+            return
+        password = self._prompt_password(
+            title="Import chat history",
+            label="Password used for the history archive:",
+        )
+        if not password:
+            return
+        strategy = self._prompt_choice(
+            title="Import chat history",
+            label="How to handle existing local history:",
+            items=[CONFLICT_MERGE, CONFLICT_REPLACE, CONFLICT_SKIP],
+            current=0,
+        )
+        if not strategy:
+            return
+        try:
+            results = import_history(
+                path,
+                password,
+                identity_key,
+                self.core.get_profiles_dir(),
+                strategy,
+                profile_name=self.profile,
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Import chat history",
+                f"Failed to import chat history:\n{e}",
+            )
+            return
+        changed = False
+        for peer_addr, count in results.items():
+            if count <= 0:
+                continue
+            if remember_peer(self._contact_book, peer_addr):
+                changed = True
+        if changed:
+            self._save_contacts_book()
+        self._refresh_contacts_list()
+        self._history_loaded_for_peer = None
+        self._try_load_history()
+        imported_peers = sum(1 for count in results.values() if count > 0)
+        QtWidgets.QMessageBox.information(
+            self,
+            "Import chat history",
+            f"Imported history for {imported_peers} peer(s) into profile '{self.profile}'.",
+        )
 
     async def switch_profile(self, profile: str) -> None:
         """Переключиться на другой профиль (.dat)."""
