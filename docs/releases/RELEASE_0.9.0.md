@@ -17,10 +17,12 @@
 
 ### Developer / modules
 
-- [`profile_export.py`](../../profile_export.py), [`history_export.py`](../../history_export.py)
-- [`history_retention.py`](../../history_retention.py), [`privacy_mode.py`](../../privacy_mode.py)
-- [`drag_drop.py`](../../drag_drop.py), [`transfer_retry.py`](../../transfer_retry.py)
-- [`main_qt.py`](../../main_qt.py), [`i2p_chat_core.py`](../../i2p_chat_core.py) (`failure_reason` on transfers)
+- Legacy release note names in this section refer to the pre-package layout.
+- Current canonical implementation paths:
+  - [`i2pchat/gui/main_qt.py`](../../i2pchat/gui/main_qt.py)
+  - [`i2pchat/core/i2p_chat_core.py`](../../i2pchat/core/i2p_chat_core.py)
+  - [`i2pchat/presentation/notification_prefs.py`](../../i2pchat/presentation/notification_prefs.py)
+  - [`i2pchat/presentation/unread_counters.py`](../../i2pchat/presentation/unread_counters.py)
 
 ### Compatibility
 

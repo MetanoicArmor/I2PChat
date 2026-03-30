@@ -101,6 +101,9 @@ python main_qt.py
 python chat-python.py
 ```
 
+These root files are wrappers. The canonical implementation lives under the
+package paths above.
+
 ## Tests and tooling
 
 - `tests/` - unit, regression, and GUI smoke tests
