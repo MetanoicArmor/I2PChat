@@ -34,6 +34,11 @@ class HistoryUiGuardsTests(unittest.TestCase):
         self.assertIn("Warning: failed to save chat history:", src)
         self.assertIn("self._history_save_error_reported", src)
 
+    def test_gui_timestamps_use_utc_helper_not_local_strftime(self) -> None:
+        src = self._main_qt_source()
+        self.assertIn("def _utc_hms_now() -> str:", src)
+        self.assertNotIn('time.strftime("%H:%M:%S")', src)
+
 
 if __name__ == "__main__":
     unittest.main()

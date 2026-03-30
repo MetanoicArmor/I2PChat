@@ -8,6 +8,7 @@ import subprocess
 import shutil
 import sys
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field, replace
 from typing import Callable, List, Optional
 
@@ -124,6 +125,11 @@ def _resolve_local_asset(filename: str) -> Optional[str]:
         if os.path.isfile(path):
             return path
     return None
+
+
+def _utc_hms_now() -> str:
+    """Compact UTC time label for GUI timestamps."""
+    return datetime.now(timezone.utc).strftime("%H:%M:%S")
 
 
 def _default_notify_sound_path() -> Optional[str]:
@@ -5064,7 +5070,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._append_item(
             ChatItem(
                 kind="me",
-                timestamp=time.strftime("%H:%M:%S"),
+                timestamp=_utc_hms_now(),
                 sender="Me",
                 text=text,
                 delivery_state=DELIVERY_STATE_FAILED,
@@ -5621,7 +5627,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     self._transfer_row,
                     ChatItem(
                         kind="me" if info.is_sending else "error",
-                        timestamp=time.strftime("%H:%M:%S") if info.is_sending else "",
+                        timestamp=_utc_hms_now() if info.is_sending else "",
                         sender="Me" if info.is_sending else ("IMAGE" if self._transfer_is_image else "FILE"),
                         text=err_text,
                         delivery_state=DELIVERY_STATE_FAILED,
@@ -5686,7 +5692,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                             self._transfer_row,
                             ChatItem(
                                 kind="success",
-                                timestamp=time.strftime("%H:%M:%S"),
+                                timestamp=_utc_hms_now(),
                                 sender="FILE",
                                 text=(
                                     f"✔ File received: {disp_name} ({info.size:,} bytes). "
@@ -5701,7 +5707,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                             self._transfer_row,
                             ChatItem(
                                 kind="success",
-                                timestamp=time.strftime("%H:%M:%S"),
+                                timestamp=_utc_hms_now(),
                                 sender="FILE",
                                 text=f"File sent: {info.filename} ({info.size:,} bytes)",
                                 file_name=info.filename,
@@ -5759,7 +5765,7 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str, bool)
     def handle_inline_image_received(self, path: str, is_from_me: bool, sent_filename: Optional[str] = None) -> None:
         """Обработчик для inline-изображений (PNG/JPEG/WebP). sent_filename — для галочки доставки."""
-        ts = time.strftime("%H:%M:%S")
+        ts = _utc_hms_now()
         if is_from_me:
             sender = "Me"
         else:
