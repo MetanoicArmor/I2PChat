@@ -4541,6 +4541,23 @@ class ChatWindow(QtWidgets.QMainWindow):
         if lap and not self.addr_edit.text().strip():
             self.addr_edit.setText(lap)
 
+    def _apply_peer_address_after_profile_switch(self) -> None:
+        """После смены профиля выставить адрес пира из .dat / contact book.
+
+        `refresh_status_label` заполняет поле только если addr_edit пустой; при переключении
+        профиля иначе остаётся адрес предыдущего профиля — не обновляются lock UI и Saved peers.
+        """
+        sp = (self.core.stored_peer or "").strip()
+        if sp:
+            self.addr_edit.setText(sp)
+            return
+        lap = (self._contact_book.last_active_peer or "").strip()
+        if lap:
+            n = normalize_peer_address(lap)
+            self.addr_edit.setText(n or lap)
+            return
+        self.addr_edit.clear()
+
     def _apply_contacts_sidebar_startup_state(self) -> None:
         # stored_peer в ядре выставляется только в async init; до этого читаем .dat синхронно.
         locked = bool(
@@ -4651,7 +4668,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._sync_contacts_right_pack_left_margin()
 
     def _refresh_contacts_list(self) -> None:
-        self.contacts_list.clear()
+        # clear() с setItemWidget иногда оставляет «залипшие» строки на некоторых стеках Qt;
+        # takeItem снимает строки явно.
+        self.contacts_list.setUpdatesEnabled(False)
+        try:
+            while self.contacts_list.count() > 0:
+                self.contacts_list.takeItem(self.contacts_list.count() - 1)
+        finally:
+            self.contacts_list.setUpdatesEnabled(True)
         locked_peer = normalize_peer_address(self.core.stored_peer or "")
         for rec in self._contact_book.contacts:
             item = QtWidgets.QListWidgetItem()
@@ -4669,6 +4693,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             hint = row.sizeHint()
             item.setSizeHint(QtCore.QSize(hint.width(), max(56, hint.height())))
         self._sync_contacts_list_selection()
+        self.contacts_list.viewport().update()
 
     def _peer_key_for_contact_selection(self) -> Optional[str]:
         raw = (
@@ -6916,7 +6941,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.handle_system(
             f"Profile backup imported as '{summary.target_profile}' ({summary.restored_files} file(s))."
         )
-        asyncio.create_task(self.switch_profile(summary.target_profile))
+        self._run_switch_profile_task(summary.target_profile)
 
     @QtCore.pyqtSlot()
     def _export_history_backup(self) -> None:
@@ -7131,33 +7156,82 @@ class ChatWindow(QtWidgets.QMainWindow):
                 )
                 return
 
-        asyncio.create_task(self.switch_profile(target_base))
+        # Следующий кадр: гарантируем активный qasync-цикл и избегаем re-entrancy из меню.
+        QtCore.QTimer.singleShot(
+            0, lambda p=target_base: self._run_switch_profile_task(p)
+        )
+
+    def _run_switch_profile_task(self, profile_name: str) -> None:
+        async def _run() -> None:
+            try:
+                await self.switch_profile(profile_name)
+            except Exception as e:  # pragma: no cover - GUI path
+                logger.exception("switch_profile failed")
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Load .dat",
+                    f"Не удалось переключить профиль:\n{type(e).__name__}: {e}",
+                )
+
+        try:
+            asyncio.get_event_loop().create_task(_run())
+        except RuntimeError:
+            logger.exception("switch_profile: no asyncio event loop")
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Load .dat",
+                "Нет активного asyncio-цикла (qasync). Перезапустите приложение.",
+            )
+
+    def _deferred_saved_peers_refresh_after_switch(self) -> None:
+        """Повторная синхронизация Saved peers со следующим тиком event loop (обход залипания Qt)."""
+        try:
+            self._load_contacts_book()
+            self._ensure_stored_peer_in_contact_book()
+            self._refresh_contacts_list()
+            self._sync_contacts_list_selection()
+            self._update_peer_lock_indicator()
+        except Exception:
+            logger.exception("deferred saved peers refresh after profile switch")
 
     async def switch_profile(self, profile: str) -> None:
         """Переключиться на другой профиль (.dat)."""
         profile = ensure_valid_profile_name(profile)
+        logger.info("switch_profile: -> %r", profile)
         self._flush_compose_drafts_to_disk()
+        self._save_history_if_needed()
+        self._history_flush_timer.stop()
         await self.core.shutdown()
+        self._history_loaded_for_peer = None
+        self._history_entries = []
+        self._history_dirty = False
+        self.chat_model.clear_items()
         self.profile = profile
         clean_profile = self.profile.rstrip(" •")
         self._window_title_base = f"I2PChat @ {clean_profile}"
         self._unread_by_peer = {}
         self.core = self._create_core(self.profile)
+        # До init_session() accept_loop не крутится; иначе handle_peer_changed во время
+        # await внутри init_session сохранит в файл НОВОГО профиля ещё СТАРУЮ книгу в памяти.
+        self._load_contacts_book()
         self._load_compose_drafts_from_disk()
         self._compose_draft_active_key = None
-        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self._update_unread_chrome()
         self.refresh_status_label()
         self._refresh_connection_buttons()
         await self.core.init_session()
+        # После init — снова с диска (возможны записи книги во время длинной инициализации).
         self._load_contacts_book()
         self._ensure_stored_peer_in_contact_book()
+        self._apply_peer_address_after_profile_switch()
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self._refresh_contacts_list()
         self._apply_contacts_sidebar_startup_state()
         self._sync_contacts_list_selection()
         self._update_peer_lock_indicator()
         self.refresh_status_label()
         self._refresh_connection_buttons()
+        QtCore.QTimer.singleShot(0, self._deferred_saved_peers_refresh_after_switch)
         QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
 
     @QtCore.pyqtSlot()
