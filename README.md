@@ -164,8 +164,10 @@ Recommended package-first entrypoint:
 python -m i2pchat.gui
 ```
 
-PyInstaller builds use [`run_gui.py`](run_gui.py) as the entry script (equivalent
-to `python -m i2pchat.gui.main_qt`). All modules live under `i2pchat/`.
+The same code path is available as `python -m i2pchat.run_gui` (matches [`i2pchat/run_gui.py`](i2pchat/run_gui.py), the PyInstaller analyzed script). Prefer `-m` from the repo root; running the `.py` file directly can break package imports.
+
+PyInstaller builds use [`i2pchat/run_gui.py`](i2pchat/run_gui.py) as the entry script (equivalent
+to `python -m i2pchat.gui` / `python -m i2pchat.gui.main_qt`). All modules live under `i2pchat/`.
 
 ### 🔧 Cross‑platform builds
 

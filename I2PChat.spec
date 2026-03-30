@@ -14,7 +14,7 @@ _local_modules = [
 _icon_file = 'i2pchat.ico' if sys.platform == 'win32' else 'icon.png'
 
 a = Analysis(
-    ['run_gui.py'],
+    ['i2pchat/run_gui.py'],
     pathex=[],
     binaries=[],
     datas=[
