@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from i2p_chat_core import detect_inline_image_format, validate_image
+from i2pchat.core.i2p_chat_core import detect_inline_image_format, validate_image
 
 
 def test_detect_inline_image_format() -> None:

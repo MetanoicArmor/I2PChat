@@ -2,8 +2,8 @@ import secrets
 import tempfile
 import unittest
 
-import crypto
-from chat_history import HistoryEntry, load_history, save_history
+from i2pchat import crypto
+from i2pchat.storage.chat_history import HistoryEntry, load_history, save_history
 
 
 IDENTITY_KEY = secrets.token_bytes(32)

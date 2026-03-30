@@ -3,10 +3,10 @@ import secrets
 import tempfile
 import unittest
 
-import crypto
-from chat_history import HistoryEntry, load_history, save_history
-from contact_book import save_book, ContactBook, ContactRecord
-from profile_backup import (
+from i2pchat import crypto
+from i2pchat.storage.chat_history import HistoryEntry, load_history, save_history
+from i2pchat.storage.contact_book import save_book, ContactBook, ContactRecord
+from i2pchat.storage.profile_backup import (
     BackupError,
     export_history_bundle,
     export_profile_bundle,

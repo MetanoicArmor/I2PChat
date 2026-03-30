@@ -2,7 +2,7 @@ import asyncio
 import socket
 import unittest
 
-from blindbox_local_replica import (
+from i2pchat.blindbox.blindbox_local_replica import (
     BLINDBOX_LOCAL_REPLICA_MAGIC,
     BlindBoxLocalReplicaServer,
     _probe_existing_local_replica,

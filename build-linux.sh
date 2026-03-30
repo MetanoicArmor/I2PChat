@@ -60,8 +60,8 @@ except Exception as exc:
 print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
 PY
 
-# Быстрая проверка синтаксиса критичных модулей протокола
-python -m compileall *.py
+# Быстрая проверка синтаксиса критичных модулей и пакета
+python -m compileall *.py i2pchat
 
 # 1) сборка PyInstaller с использованием spec файла (включает crypto модули)
 rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"

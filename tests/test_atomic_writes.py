@@ -6,7 +6,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from blindbox_state import BlindBoxState, save_blindbox_state
+from i2pchat.storage.blindbox_state import BlindBoxState, save_blindbox_state
 
 # test environment may not have Pillow installed
 if "PIL" not in sys.modules:
@@ -17,8 +17,8 @@ if "PIL" not in sys.modules:
     sys.modules["PIL"] = pil_module
     sys.modules["PIL.Image"] = pil_image_module
 
-from i2p_chat_core import I2PChatCore
-import crypto
+from i2pchat.core.i2p_chat_core import I2PChatCore
+from i2pchat import crypto
 
 VALID_PEER = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
 
@@ -114,9 +114,9 @@ class AtomicWritesTests(unittest.TestCase):
     def test_target_files_no_longer_build_path_plus_dot_tmp(self) -> None:
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         targets = [
-            os.path.join(base, "blindbox_state.py"),
-            os.path.join(base, "i2p_chat_core.py"),
-            os.path.join(base, "main_qt.py"),
+            os.path.join(base, "i2pchat", "storage", "blindbox_state.py"),
+            os.path.join(base, "i2pchat", "core", "i2p_chat_core.py"),
+            os.path.join(base, "i2pchat", "gui", "main_qt.py"),
         ]
         for path in targets:
             with open(path, "r", encoding="utf-8") as f:

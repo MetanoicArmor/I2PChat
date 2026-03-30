@@ -1,4 +1,4 @@
-from unread_counters import (
+from i2pchat.presentation.unread_counters import (
     bump_unread_for_incoming_peer_message,
     bump_unread_if_inactive,
     clear_unread_for_peer,

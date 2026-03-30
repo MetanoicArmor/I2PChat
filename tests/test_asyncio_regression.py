@@ -18,8 +18,8 @@ if "PIL" not in sys.modules:
     sys.modules["PIL"] = pil_module
     sys.modules["PIL.Image"] = pil_image_module
 
-from i2p_chat_core import I2PChatCore
-from protocol_codec import ProtocolCodec
+from i2pchat.core.i2p_chat_core import I2PChatCore
+from i2pchat.protocol.protocol_codec import ProtocolCodec
 
 LOCAL_B32 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
 PEER_B32 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"

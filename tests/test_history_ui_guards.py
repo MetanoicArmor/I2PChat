@@ -5,7 +5,7 @@ import unittest
 class HistoryUiGuardsTests(unittest.TestCase):
     def _main_qt_source(self) -> str:
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        path = os.path.join(root, "main_qt.py")
+        path = os.path.join(root, "i2pchat", "gui", "main_qt.py")
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
 
@@ -33,6 +33,11 @@ class HistoryUiGuardsTests(unittest.TestCase):
         src = self._main_qt_source()
         self.assertIn("Warning: failed to save chat history:", src)
         self.assertIn("self._history_save_error_reported", src)
+
+    def test_gui_timestamps_use_utc_helper_not_local_strftime(self) -> None:
+        src = self._main_qt_source()
+        self.assertIn("def _utc_hms_now() -> str:", src)
+        self.assertNotIn('time.strftime("%H:%M:%S")', src)
 
 
 if __name__ == "__main__":

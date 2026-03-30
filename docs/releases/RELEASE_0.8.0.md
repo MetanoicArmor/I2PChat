@@ -22,10 +22,10 @@
 
 ### Developer / modules
 
-- [`message_delivery.py`](../../message_delivery.py) — delivery state labels and helpers.  
-- [`i2p_chat_core.py`](../../i2p_chat_core.py) — send results, ACK / text delivery callbacks, trust callbacks.  
-- [`main_qt.py`](../../main_qt.py) — `ChatItem.delivery_state`, delegate rendering, history persistence of delivery fields, telemetry wiring.  
-- [`blindbox_diagnostics.py`](../../blindbox_diagnostics.py), [`send_retry_policy.py`](../../send_retry_policy.py).
+- [`i2pchat/protocol/message_delivery.py`](../../i2pchat/protocol/message_delivery.py) — delivery state labels and helpers.  
+- [`i2pchat/core/i2p_chat_core.py`](../../i2pchat/core/i2p_chat_core.py) — send results, ACK / text delivery callbacks, trust callbacks.  
+- [`i2pchat/gui/main_qt.py`](../../i2pchat/gui/main_qt.py) — `ChatItem.delivery_state`, delegate rendering, history persistence of delivery fields, telemetry wiring.  
+- [`i2pchat/blindbox/blindbox_diagnostics.py`](../../i2pchat/blindbox/blindbox_diagnostics.py), [`i2pchat/core/send_retry_policy.py`](../../i2pchat/core/send_retry_policy.py).
 
 ### Backlog coverage (issues 13–18)
 

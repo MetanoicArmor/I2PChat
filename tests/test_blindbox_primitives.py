@@ -2,10 +2,10 @@ import os
 import tempfile
 import unittest
 
-import crypto
-from blindbox_blob import decrypt_blindbox_blob, encrypt_blindbox_blob
-from blindbox_key_schedule import derive_blindbox_message_keys
-from blindbox_state import BlindBoxState, load_blindbox_state, save_blindbox_state
+from i2pchat import crypto
+from i2pchat.blindbox.blindbox_blob import decrypt_blindbox_blob, encrypt_blindbox_blob
+from i2pchat.blindbox.blindbox_key_schedule import derive_blindbox_message_keys
+from i2pchat.storage.blindbox_state import BlindBoxState, load_blindbox_state, save_blindbox_state
 
 
 class BlindBoxKeyScheduleTests(unittest.TestCase):

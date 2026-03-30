@@ -1,4 +1,4 @@
-from reply_format import format_reply_quote
+from i2pchat.presentation.reply_format import format_reply_quote
 
 
 def test_format_reply_quote_multiline() -> None:

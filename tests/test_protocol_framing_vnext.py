@@ -7,7 +7,7 @@ import time
 import types
 import unittest
 
-from protocol_codec import HEADER_STRUCT, MAGIC, FLAG_ENCRYPTED, ProtocolCodec
+from i2pchat.protocol.protocol_codec import HEADER_STRUCT, MAGIC, FLAG_ENCRYPTED, ProtocolCodec
 
 # test environment may not have Pillow installed
 if "PIL" not in sys.modules:
@@ -18,7 +18,7 @@ if "PIL" not in sys.modules:
     sys.modules["PIL"] = pil_module
     sys.modules["PIL.Image"] = pil_image_module
 
-from i2p_chat_core import I2PChatCore
+from i2pchat.core.i2p_chat_core import I2PChatCore
 
 PEER_CTX_A = "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk.b32.i2p"
 PEER_CTX_B = "llllllllllllllllllllllllllllllllllllllll.b32.i2p"

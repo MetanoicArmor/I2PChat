@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 
-import crypto
-from chat_history import (
+from i2pchat import crypto
+from i2pchat.storage.chat_history import (
     DEFAULT_MAX_MESSAGES,
     DEFAULT_HISTORY_RETENTION_DAYS,
     HEADER_SIZE,

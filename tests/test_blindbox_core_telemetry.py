@@ -14,7 +14,7 @@ if "PIL" not in sys.modules:
     sys.modules["PIL"] = pil_module
     sys.modules["PIL.Image"] = pil_image_module
 
-from i2p_chat_core import I2PChatCore
+from i2pchat.core.i2p_chat_core import I2PChatCore
 
 
 class BlindBoxCoreTelemetryTests(unittest.TestCase):
