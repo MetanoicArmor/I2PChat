@@ -89,11 +89,19 @@ The actions bar is located **at the bottom of the window**, below the message in
   - **Load profile (.dat)**;
   - **Send picture**;
   - **Send file**;
+  - **BlindBox diagnostics**;
+  - **Export profile backup…** / **Import profile backup…**;
+  - **Export history backup…** / **Import history backup…**;
   - **Lock to peer**;
   - **Forget pinned peer key**;
-  - **Copy my address**.
-  - **Chat history: ON/OFF**;
-  - **Clear history**.
+  - **Copy my address**;
+  - **Chat history: ON/OFF** (label shows the current state);
+  - **Clear history**;
+  - **History retention…**;
+  - **Privacy mode: ON/OFF**;
+  - **Notification sound: ON/OFF**;
+  - **Hide message in notifications: ON/OFF**;
+  - **Quiet mode (focused): ON/OFF**.
 
 All controls in the bar have the same height and are laid out in a single row.
 
@@ -101,16 +109,24 @@ All controls in the bar have the same height and are laid out in a single row.
 
 Clicking the **`⋯`** button opens a popup menu with profile and connection actions:
 
-<img src="../screenshots/2.png" alt="More actions menu (⋯): profile actions, sending, peer lock, chat history ON/OFF and clear" width="320" />
+<img src="../screenshots/2.png" alt="More actions menu (⋯): load profile, send picture/file, BlindBox diagnostics, profile and history backup, lock and trust, history and privacy, notification toggles" width="320" />
 
 - **Load profile (.dat)** — open a file dialog to load a profile from a `.dat` file.
 - **Send picture** — send an image file to the connected peer.
 - **Send file** — send any file to the connected peer.
+- **BlindBox diagnostics** — opens a textual summary of BlindBox/offline routing and replica health (complements the status row and section 4.9).
+- **Export profile backup…** / **Import profile backup…** — password-protected bundles of the current profile (`.dat` and supported sidecar data); import avoids name collisions by choosing a free profile name when needed.
+- **Export history backup…** / **Import history backup…** — export or restore encrypted per-peer history files only; the import flow asks whether to overwrite matching files or add only missing ones.
 - **Lock to peer** — bind the current profile to the connected peer (see section 4.7).
 - **Forget pinned peer key** — remove the saved TOFU signing-key pin for the current peer (see section 4.10).
 - **Copy my address** — copy your I2P destination to the clipboard.
-- **Chat history: ON/OFF** — enable/disable local history persistence (see section 4.11).
+- **Chat history: ON/OFF** — enable/disable local history persistence (see section 4.11); the menu label reflects the current state.
 - **Clear history** — delete the local history file for the current peer.
+- **History retention…** — configure maximum messages per peer and maximum age in days before encrypted history is persisted.
+- **Privacy mode: ON/OFF** — quick preset that tightens local privacy (hidden notification previews and related quiet behaviour); label shows current state.
+- **Notification sound: ON/OFF** — enable or mute the incoming-message sound path (custom sound path is kept when off).
+- **Hide message in notifications: ON/OFF** — when on, tray toasts omit message body text (title may still name the peer).
+- **Quiet mode (focused): ON/OFF** — while the window is focused, suppress tray toasts and sounds (including for other chats).
 
 #### 4.2. Peer address field
 
@@ -349,6 +365,8 @@ Control from the `⋯` menu:
   - `OFF` — new messages are not captured and not written to history.
 - **Clear history**:
   - removes the history file for the current peer.
+- **History retention…**:
+  - opens a dialog to cap how many messages per peer are kept and how old they may be (days); `0` days means “limit by count only”.
 
 Runtime behavior:
 
@@ -378,6 +396,8 @@ sound notifications (`QSoundEffect`) for incoming messages.
 - For incoming connections, a notification **Incoming connection** is shown with the peer address (when available).
 
 #### 5.2. Sound notifications
+
+- The **`⋯`** menu exposes **Notification sound**, **Hide message in notifications**, and **Quiet mode (focused)** toggles alongside the behaviour described below.
 
 - If the `QtMultimedia` module is available:
   - a `QSoundEffect` instance is created;
