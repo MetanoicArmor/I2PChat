@@ -130,6 +130,6 @@ These are intentionally left outside the pre-1.0 scope:
 ## Tracking
 
 Detailed issue-sized backlog items for the milestones above are collected in
-[`docs/ISSUE_BACKLOG.md`](docs/ISSUE_BACKLOG.md).
+[`ISSUE_BACKLOG.md`](ISSUE_BACKLOG.md).
 
-Per-version release notes live under [`docs/releases/README.md`](docs/releases/README.md).
+Per-version release notes live under [`releases/README.md`](releases/README.md).

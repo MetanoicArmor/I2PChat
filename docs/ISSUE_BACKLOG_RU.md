@@ -1,8 +1,8 @@
 # I2PChat: backlog задач
 
 Этот документ содержит backlog уровня issue, согласованный с
-[`ROADMAP.md`](../ROADMAP.md) и русской версией roadmap:
-[`docs/ROADMAP_RU.md`](ROADMAP_RU.md).
+[`ROADMAP.md`](ROADMAP.md) и русской версией roadmap:
+[`ROADMAP_RU.md`](ROADMAP_RU.md).
 
 Текст каждого пункта подготовлен так, чтобы его можно было почти без правок
 переносить в GitHub Issue.

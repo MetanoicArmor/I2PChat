@@ -1,7 +1,7 @@
 # I2PChat Issue Backlog
 
 This document collects issue-sized backlog items aligned with the roadmap in
-[`ROADMAP.md`](../ROADMAP.md). The text is written so each section can be copied
+[`ROADMAP.md`](ROADMAP.md). The text is written so each section can be copied
 into a GitHub issue with minimal editing.
 
 ## Milestone: 0.6.5 - UX polish
