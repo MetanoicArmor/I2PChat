@@ -20,7 +20,6 @@ def should_start_auto_connect_retry(
         "blindbox-await-root",
         "blindbox-needs-boxes",
         "transient-profile",
-        "send-failed",
     }
     if reason not in auto_connect_reasons:
         return False

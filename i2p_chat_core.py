@@ -30,6 +30,11 @@ from blindbox_state import (
     atomic_write_json,
     atomic_write_text,
 )
+from message_delivery import (
+    DELIVERY_STATE_DELIVERED,
+    DELIVERY_STATE_FAILED,
+    delivery_lifecycle_from_send_result,
+)
 from protocol_codec import (
     ENCRYPTED_TRAILER_SIZE,
     FLAG_ENCRYPTED,
@@ -90,6 +95,12 @@ class ChatMessage:
     timestamp: datetime
     # Адрес пира для kind=="peer" (как в current_peer_addr); для остальных видов — None.
     source_peer: Optional[str] = None
+    message_id: Optional[str] = None
+    delivery_state: Optional[str] = None
+    delivery_route: Optional[str] = None
+    delivery_hint: str = ""
+    delivery_reason: str = ""
+    retryable: bool = False
 
 
 @dataclass
@@ -100,6 +111,8 @@ class FileTransferInfo:
     is_sending: bool = False
     # True только для Send Pic (G), не для Send File (F/D)
     is_inline_image: bool = False
+    rejected_by_peer: bool = False
+    source_path: Optional[str] = None
 
 
 @dataclass
@@ -129,6 +142,9 @@ class SendTextResult:
     accepted: bool
     reason: str = ""
     hint: str = ""
+    message_id: Optional[str] = None
+    delivery_state: Optional[str] = None
+    retryable: bool = False
 
 
 def _is_host_port_replica(value: str) -> bool:
@@ -196,6 +212,7 @@ PeerChangedCallback = Callable[[Optional[str]], Any]
 FileEventCallback = Callable[[FileTransferInfo], Any]
 SimpleCallback = Callable[[str], Any]
 TrustDecisionCallback = Callable[[str, str, str], bool]
+TrustMismatchDecisionCallback = Callable[[str, str, str, str, str], bool]
 FileOfferCallback = Callable[[str, int], Any]
 
 
@@ -665,9 +682,11 @@ class I2PChatCore:
         on_file_offer: Optional[FileOfferCallback] = None,
         on_image_received: Optional[Callable[[str], Any]] = None,
         on_inline_image_received: Optional[Callable[..., Any]] = None,
+        on_text_delivered: Optional[Callable[[str], Any]] = None,
         on_image_delivered: Optional[Callable[[str], Any]] = None,
         on_file_delivered: Optional[Callable[[str], Any]] = None,
         on_trust_decision: Optional[TrustDecisionCallback] = None,
+        on_trust_mismatch_decision: Optional[TrustMismatchDecisionCallback] = None,
         legacy_compat: bool = False,
     ) -> None:
         self.sam_address = sam_address
@@ -682,9 +701,11 @@ class I2PChatCore:
         self.on_file_offer = on_file_offer
         self.on_image_received = on_image_received
         self.on_inline_image_received = on_inline_image_received
+        self.on_text_delivered = on_text_delivered
         self.on_image_delivered = on_image_delivered
         self.on_file_delivered = on_file_delivered
         self.on_trust_decision = on_trust_decision
+        self.on_trust_mismatch_decision = on_trust_mismatch_decision
         self.legacy_compat = legacy_compat
         self._trust_auto = (
             os.environ.get("I2PCHAT_TRUST_AUTO", "").strip().lower() in TRUTHY_ENV_VALUES
@@ -1008,7 +1029,17 @@ class I2PChatCore:
             self.on_status(status)
 
     def _emit_message(
-        self, kind: str, text: str, source_peer: Optional[str] = None
+        self,
+        kind: str,
+        text: str,
+        source_peer: Optional[str] = None,
+        *,
+        message_id: Optional[str] = None,
+        delivery_state: Optional[str] = None,
+        delivery_route: Optional[str] = None,
+        delivery_hint: str = "",
+        delivery_reason: str = "",
+        retryable: bool = False,
     ) -> None:
         if self.on_message:
             sp = source_peer if kind == "peer" else None
@@ -1017,6 +1048,12 @@ class I2PChatCore:
                 text=text,
                 timestamp=datetime.now(timezone.utc),
                 source_peer=sp,
+                message_id=message_id,
+                delivery_state=delivery_state,
+                delivery_route=delivery_route,
+                delivery_hint=delivery_hint,
+                delivery_reason=delivery_reason,
+                retryable=retryable,
             )
             self.on_message(msg)
 
@@ -1829,6 +1866,39 @@ class I2PChatCore:
         loop.call_soon(_ask_user)
         return await decision_future
 
+    async def _request_trust_mismatch_decision(
+        self,
+        peer_addr: str,
+        old_fingerprint: str,
+        new_fingerprint: str,
+        old_signing_key_hex: str,
+        new_signing_key_hex: str,
+    ) -> bool:
+        if self.on_trust_mismatch_decision is None:
+            return False
+        loop = asyncio.get_running_loop()
+        decision_future: asyncio.Future[bool] = loop.create_future()
+
+        def _ask_user() -> None:
+            try:
+                approved = bool(
+                    self.on_trust_mismatch_decision(
+                        peer_addr,
+                        old_fingerprint,
+                        new_fingerprint,
+                        old_signing_key_hex,
+                        new_signing_key_hex,
+                    )
+                )
+            except Exception as e:
+                logger.warning("Trust mismatch callback failed: %s", e)
+                approved = False
+            if not decision_future.done():
+                decision_future.set_result(approved)
+
+        loop.call_soon(_ask_user)
+        return await decision_future
+
     async def _pin_or_verify_peer_signing_key(self, peer_addr: str, verify_key: bytes) -> bool:
         peer_addr = self._normalize_peer_addr(peer_addr)
         if not peer_addr:
@@ -1871,13 +1941,37 @@ class I2PChatCore:
             )
             return True
         if pinned_hex != current_hex:
+            try:
+                old_fp = self._fingerprint_pubkey(bytes.fromhex(pinned_hex))
+            except Exception:
+                old_fp = pinned_hex[:16]
+            if self.on_trust_mismatch_decision is not None:
+                if self.conn is not None and not self.handshake_complete:
+                    self._start_handshake_watchdog(self.conn)
+                self._emit_system("Trusted key changed. Waiting for user decision...")
+                approved = await self._request_trust_mismatch_decision(
+                    peer_addr,
+                    old_fp,
+                    fp,
+                    pinned_hex,
+                    current_hex,
+                )
+                if approved:
+                    self.peer_trusted_signing_keys[peer_addr] = current_hex
+                    self._save_trust_store()
+                    self._emit_system(
+                        f"Updated trusted signing key {old_fp} → {fp} for {peer_addr[:20]}..."
+                    )
+                    self._emit_system(
+                        "Verify the new fingerprint out-of-band before continuing to rely on this peer."
+                    )
+                    return True
             self._emit_error(
                 f"Peer signing key mismatch for {peer_addr[:20]}... "
                 f"(expected {pinned_hex[:16]}, got {current_hex[:16]})"
             )
             self._emit_system(
-                "Уверен, что у peer новый ключ? Нажимай Forget pinned peer key. "
-                "Не уверен? Не нажимай."
+                "Trusted key change was not approved. Session remains blocked until you explicitly trust the new key."
             )
             return False
         return True
@@ -2561,27 +2655,27 @@ class I2PChatCore:
         self._emit_notify("peer", text, source_peer=sp)
         return True
 
-    async def _send_text_via_blindbox(self, text: str) -> bool:
+    async def _send_text_via_blindbox(self, text: str) -> Optional[int]:
         if not self._blindbox_ready():
-            return False
+            return None
         if self._blindbox_root_secret is None:
-            return False
+            return None
         if not self.my_dest or self._blindbox_client is None:
-            return False
+            return None
         peer_id = self._blindbox_peer_id()
         if not peer_id:
-            return False
+            return None
 
         async with self._blindbox_send_lock:
             if not self._blindbox_ready():
-                return False
+                return None
             if self._blindbox_root_secret is None:
-                return False
+                return None
             if not self.my_dest or self._blindbox_client is None:
-                return False
+                return None
             peer_id = self._blindbox_peer_id()
             if not peer_id:
-                return False
+                return None
             try:
                 msg_id = self._allocate_msg_id()
                 frame = self._codec.encode(
@@ -2607,13 +2701,22 @@ class I2PChatCore:
                 self._blindbox_state.send_index += 1
                 self._blindbox_state.updated_at = int(time.time())
                 self._save_blindbox_state()
-                self._emit_message("me", text)
-                return True
+                self._emit_message(
+                    "me",
+                    text,
+                    message_id=str(msg_id),
+                    delivery_state="queued",
+                    delivery_route="offline-queued",
+                    delivery_hint="Message queued for offline delivery.",
+                    delivery_reason="blindbox-ready",
+                    retryable=False,
+                )
+                return msg_id
             except Exception as e:
                 detail = _exception_user_message(e)
                 logger.warning("BlindBox send failed: %s", detail, exc_info=True)
                 self._emit_error(f"BlindBox send failed: {detail}")
-                return False
+                return None
 
     def is_outbound_connect_busy(self) -> bool:
         """True, пока выполняется исходящий connect_to_peer (ожидание stream_connect)."""
@@ -2725,35 +2828,68 @@ class I2PChatCore:
 
     async def send_text(self, text: str) -> SendTextResult:
         if not text:
-            return SendTextResult(
+            lifecycle = delivery_lifecycle_from_send_result(
                 route="blocked",
                 accepted=False,
                 reason="empty-text",
                 hint="Message is empty.",
             )
+            return SendTextResult(
+                route="blocked",
+                accepted=False,
+                reason="empty-text",
+                hint="Message is empty.",
+                delivery_state=lifecycle.state,
+                retryable=lifecycle.retryable,
+            )
         if not self.conn or not self.handshake_complete:
             sent_offline = await self._send_text_via_blindbox(text)
-            if not sent_offline:
+            if sent_offline is None:
                 reason, hint = self._offline_send_block_feedback()
                 self._emit_error(hint)
-                return SendTextResult(
+                lifecycle = delivery_lifecycle_from_send_result(
                     route="blocked",
                     accepted=False,
                     reason=reason,
                     hint=hint,
                 )
-            return SendTextResult(
+                return SendTextResult(
+                    route="blocked",
+                    accepted=False,
+                    reason=reason,
+                    hint=hint,
+                    delivery_state=lifecycle.state,
+                    retryable=lifecycle.retryable,
+                )
+            lifecycle = delivery_lifecycle_from_send_result(
                 route="offline-queued",
                 accepted=True,
                 reason="blindbox-ready",
                 hint="Message queued for offline delivery.",
             )
+            return SendTextResult(
+                route="offline-queued",
+                accepted=True,
+                reason="blindbox-ready",
+                hint="Message queued for offline delivery.",
+                message_id=str(sent_offline),
+                delivery_state=lifecycle.state,
+                retryable=lifecycle.retryable,
+            )
         if not self._require_secure_channel():
+            lifecycle = delivery_lifecycle_from_send_result(
+                route="blocked",
+                accepted=False,
+                reason="secure-channel-not-ready",
+                hint="Secure channel is not ready.",
+            )
             return SendTextResult(
                 route="blocked",
                 accepted=False,
                 reason="secure-channel-not-ready",
                 hint="Secure channel is not ready.",
+                delivery_state=lifecycle.state,
+                retryable=lifecycle.retryable,
             )
         try:
             _, writer = self.conn
@@ -2768,21 +2904,47 @@ class I2PChatCore:
                 token=text[:128],
                 ack_kind="msg",
             )
-            self._emit_message("me", text)
-            return SendTextResult(
+            lifecycle = delivery_lifecycle_from_send_result(
                 route="online-live",
                 accepted=True,
                 reason="live-session",
                 hint="Message sent over live secure session.",
             )
+            self._emit_message(
+                "me",
+                text,
+                message_id=str(msg_id),
+                delivery_state=lifecycle.state,
+                delivery_route="online-live",
+                delivery_hint=lifecycle.hint,
+                delivery_reason=lifecycle.reason,
+                retryable=lifecycle.retryable,
+            )
+            return SendTextResult(
+                route="online-live",
+                accepted=True,
+                reason="live-session",
+                hint="Message sent over live secure session.",
+                message_id=str(msg_id),
+                delivery_state=lifecycle.state,
+                retryable=lifecycle.retryable,
+            )
         except Exception as e:
             self._emit_error(f"Failed to send message: {e}")
             self._schedule_disconnect()
+            lifecycle = delivery_lifecycle_from_send_result(
+                route="blocked",
+                accepted=False,
+                reason="send-failed",
+                hint=str(e),
+            )
             return SendTextResult(
                 route="blocked",
                 accepted=False,
                 reason="send-failed",
                 hint=str(e),
+                delivery_state=lifecycle.state,
+                retryable=lifecycle.retryable,
             )
 
     async def _send_abort_file(self) -> None:
@@ -2859,7 +3021,13 @@ class I2PChatCore:
                 ack_kind="file",
             )
 
-            info = FileTransferInfo(filename=filename, size=filesize, received=0, is_sending=True)
+            info = FileTransferInfo(
+                filename=filename,
+                size=filesize,
+                received=0,
+                is_sending=True,
+                source_path=path,
+            )
             self._emit_file_event(info)
 
             sent = 0
@@ -2889,13 +3057,25 @@ class I2PChatCore:
                     step = 4096 if filesize <= 65536 else 65536
                     first_chunk_done = sent <= 4096 and sent > 0
                     if first_chunk_done or sent % step < len(chunk) or sent == filesize:
-                        info = FileTransferInfo(filename=filename, size=filesize, received=sent, is_sending=True)
+                        info = FileTransferInfo(
+                            filename=filename,
+                            size=filesize,
+                            received=sent,
+                            is_sending=True,
+                            source_path=path,
+                        )
                         self._emit_file_event(info)
 
             writer.write(self.frame_message("E", ""))
             await writer.drain()
 
-            info = FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True)
+            info = FileTransferInfo(
+                filename=filename,
+                size=filesize,
+                received=filesize,
+                is_sending=True,
+                source_path=path,
+            )
             self._emit_file_event(info)
             
             # Перезапуск receive_loop если он был прерван timeout'ом во время передачи
@@ -2907,7 +3087,13 @@ class I2PChatCore:
                     pass
             
         except (ConnectionError, ConnectionResetError, BrokenPipeError, OSError) as e:
-            info = FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True)
+            info = FileTransferInfo(
+                filename=filename,
+                size=filesize,
+                received=-1,
+                is_sending=True,
+                source_path=path,
+            )
             self._emit_file_event(info)
             self._emit_error(f"File transfer interrupted: connection lost")
             
@@ -2919,6 +3105,7 @@ class I2PChatCore:
                 received=-1,
                 is_sending=True,
                 rejected_by_peer=rejected,
+                source_path=path,
             )
             self._emit_file_event(info)
             if rejected:
@@ -2984,7 +3171,16 @@ class I2PChatCore:
             self._emit_system(f"Sending image: {filename} ({filesize} bytes)")
             
             # Прогресс загрузки в UI (is_inline_image — чтобы GUI заменил виджет на превью, не «File sent»)
-            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=0, is_sending=True, is_inline_image=True))
+            self._emit_file_event(
+                FileTransferInfo(
+                    filename=filename,
+                    size=filesize,
+                    received=0,
+                    is_sending=True,
+                    is_inline_image=True,
+                    source_path=path,
+                )
+            )
             
             # Отправляем заголовок: G + filename|size
             header = f"{filename}|{filesize}"
@@ -3018,14 +3214,32 @@ class I2PChatCore:
                     
                     sent += len(chunk)
                     if sent - last_emit_sent >= 65536:
-                        self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=sent, is_sending=True, is_inline_image=True))
+                        self._emit_file_event(
+                            FileTransferInfo(
+                                filename=filename,
+                                size=filesize,
+                                received=sent,
+                                is_sending=True,
+                                is_inline_image=True,
+                                source_path=path,
+                            )
+                        )
                         last_emit_sent = sent
             
             # Отправляем маркер завершения
             writer.write(self.frame_message("G", "__IMG_END__"))
             await writer.drain()
             
-            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=filesize, is_sending=True, is_inline_image=True))
+            self._emit_file_event(
+                FileTransferInfo(
+                    filename=filename,
+                    size=filesize,
+                    received=filesize,
+                    is_sending=True,
+                    is_inline_image=True,
+                    source_path=path,
+                )
+            )
             
             # Уведомляем UI об отправленном изображении (filename для галочки доставки)
             self._emit_inline_image(local_path, is_from_me=True, sent_filename=filename)
@@ -3036,12 +3250,30 @@ class I2PChatCore:
             return local_path
             
         except (ConnectionError, ConnectionResetError, BrokenPipeError, OSError) as e:
-            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True, is_inline_image=True))
+            self._emit_file_event(
+                FileTransferInfo(
+                    filename=filename,
+                    size=filesize,
+                    received=-1,
+                    is_sending=True,
+                    is_inline_image=True,
+                    source_path=path,
+                )
+            )
             self._emit_error(f"Image transfer interrupted: connection lost")
             return None
             
         except Exception as e:
-            self._emit_file_event(FileTransferInfo(filename=filename, size=filesize, received=-1, is_sending=True, is_inline_image=True))
+            self._emit_file_event(
+                FileTransferInfo(
+                    filename=filename,
+                    size=filesize,
+                    received=-1,
+                    is_sending=True,
+                    is_inline_image=True,
+                    source_path=path,
+                )
+            )
             self._emit_error(f"Image transfer failed: {e}")
             return None
         finally:
@@ -4178,6 +4410,8 @@ class I2PChatCore:
                                         f"MSG_ACK id={ack_id}",
                                     )
                                 else:
+                                    if self.on_text_delivered:
+                                        self.on_text_delivered(str(ack_id))
                                     self._pending_text_acks.pop(ack_id, None)
                             except Exception:
                                 self._record_ack_drop("invalid_format", "MSG_ACK parse failed")
@@ -4463,5 +4697,3 @@ def render_braille(path: str) -> List[str]:
             row_chars.append(cell_to_braille(cx, cy))
         lines.append("".join(row_chars).rstrip())
     return lines
-
-

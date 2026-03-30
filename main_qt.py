@@ -15,7 +15,15 @@ from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
 from blindbox_state import atomic_write_json
+from blindbox_diagnostics import build_blindbox_diagnostics_text
 from compose_drafts import apply_compose_draft_peer_switch
+from message_delivery import (
+    DELIVERY_STATE_DELIVERED,
+    DELIVERY_STATE_FAILED,
+    DELIVERY_STATE_QUEUED,
+    delivery_state_label,
+    normalize_loaded_delivery_state,
+)
 from reply_format import format_reply_quote
 from send_retry_policy import should_start_auto_connect_retry as _should_start_auto_connect_retry
 from status_presentation import build_status_presentation
@@ -1210,6 +1218,33 @@ class ChatItem:
     saved_file_path: Optional[str] = None  # абсолютный путь к полученному файлу на диске
     file_name: Optional[str] = None  # имя отправленного файла/картинки для ACK
     delivered: bool = False  # галочка доставки для отправленных картинок
+    message_id: Optional[str] = None
+    delivery_state: Optional[str] = None
+    delivery_route: Optional[str] = None
+    delivery_hint: str = ""
+    delivery_reason: str = ""
+    retryable: bool = False
+    retry_kind: Optional[str] = None
+    retry_source_path: Optional[str] = None
+
+
+def _chat_item_delivery_state(item: ChatItem) -> Optional[str]:
+    state = (item.delivery_state or "").strip().lower()
+    if state:
+        return state
+    if item.delivered:
+        return DELIVERY_STATE_DELIVERED
+    return None
+
+
+def _chat_item_delivery_meta_text(item: ChatItem) -> str:
+    state = _chat_item_delivery_state(item)
+    label = delivery_state_label(state)
+    if not item.timestamp:
+        return label
+    if label:
+        return f"{item.timestamp} · {label}"
+    return item.timestamp
 
 
 class ChatListModel(QtCore.QAbstractListModel):
@@ -1247,6 +1282,13 @@ class ChatListModel(QtCore.QAbstractListModel):
             self._items[row] = item
             index = self.index(row, 0)
             self.dataChanged.emit(index, index)
+
+    def remove_item(self, row: int) -> None:
+        if not (0 <= row < len(self._items)):
+            return
+        self.beginRemoveRows(QtCore.QModelIndex(), row, row)
+        self._items.pop(row)
+        self.endRemoveRows()
 
     def item_at(self, row: int) -> Optional[ChatItem]:
         if 0 <= row < len(self._items):
@@ -1389,6 +1431,7 @@ class ChatListView(QtWidgets.QListView):
     cancelTransferRequested = QtCore.pyqtSignal()
     imageOpenRequested = QtCore.pyqtSignal(str)  # path to image
     replyRequested = QtCore.pyqtSignal(str)  # quoted block for compose field
+    retryRequested = QtCore.pyqtSignal(int)
 
     _EDGE_FADE_PX = 44
 
@@ -1398,6 +1441,7 @@ class ChatListView(QtWidgets.QListView):
         self._theme_id = THEME_DEFAULT
         self._context_popup: Optional["ActionsPopup"] = None
         self._context_popup_suppress_until_ms = 0
+        self.setMouseTracking(True)
         self.setSelectionMode(
             QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -1546,6 +1590,10 @@ class ChatListView(QtWidgets.QListView):
                         format_reply_quote(it.sender, it.text)
                     ),
                 )
+            if item.retryable:
+                self._context_popup.add_action(
+                    "Retry", lambda r=index.row(): self.retryRequested.emit(r)
+                )
         elif k == "transfer" and item.text.strip():
             fn = item.text.strip()
             self._context_popup.add_action(
@@ -1555,6 +1603,17 @@ class ChatListView(QtWidgets.QListView):
             if item.text.strip():
                 add_copy_text()
                 add_copy_timestamp()
+            if item.retryable:
+                self._context_popup.add_action(
+                    "Retry", lambda r=index.row(): self.retryRequested.emit(r)
+                )
+
+        detail = (item.delivery_hint or item.delivery_reason or "").strip()
+        if detail:
+            self._context_popup.add_action(
+                "Copy delivery details",
+                lambda text=detail: QtWidgets.QApplication.clipboard().setText(text),
+            )
 
         if self._context_popup.surface_layout.count() > 0:
             self._context_popup.show_at_global(event.globalPos())
@@ -1572,6 +1631,21 @@ class ChatListView(QtWidgets.QListView):
                 self._copy_index_text(index, with_meta=False)
                 return
         super().keyPressEvent(event)
+
+    def viewportEvent(self, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if event.type() == QtCore.QEvent.Type.ToolTip:
+            help_event = event
+            if isinstance(help_event, QtGui.QHelpEvent):
+                index = self.indexAt(help_event.pos())
+                if index.isValid():
+                    item = index.data(QtCore.Qt.ItemDataRole.DisplayRole)
+                    if isinstance(item, ChatItem):
+                        detail = (item.delivery_hint or item.delivery_reason or "").strip()
+                        if detail:
+                            QtWidgets.QToolTip.showText(help_event.globalPos(), detail, self)
+                            return True
+            QtWidgets.QToolTip.hideText()
+        return super().viewportEvent(event)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         index = self.indexAt(event.pos())
@@ -1812,9 +1886,15 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         else:
             bubble_rect = QtCore.QRectF(rect.left(), rect.top(), bubble_width, rect.height())
 
+        delivery_state = _chat_item_delivery_state(item)
+
         if item.kind in {"me", "image_braille", "image_bw"}:
-            bg_color = self._c("me_bg", "#3a7afe")
-            text_color = self._c("me_text", "#ffffff")
+            if delivery_state == DELIVERY_STATE_FAILED:
+                bg_color = self._c("me_failed_bg", "#7a2f2f")
+                text_color = self._c("me_failed_text", "#f8f8f2")
+            else:
+                bg_color = self._c("me_bg", "#3a7afe")
+                text_color = self._c("me_text", "#ffffff")
         elif item.kind == "peer":
             bg_color = self._c("peer_bg", "#7c3aed")
             text_color = self._c("peer_text", "#f8f8f2")
@@ -1825,8 +1905,12 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             bg_color = self._c("error_bg", "#ff5555")
             text_color = self._c("error_text", "#f8f8f2")
         elif item.kind == "success":
-            bg_color = self._c("success_bg", "#50fa7b")
-            text_color = self._c("success_text", "#282a36")
+            if delivery_state == DELIVERY_STATE_FAILED:
+                bg_color = self._c("success_failed_bg", "#7a2f2f")
+                text_color = self._c("success_failed_text", "#f8f8f2")
+            else:
+                bg_color = self._c("success_bg", "#50fa7b")
+                text_color = self._c("success_text", "#282a36")
         elif item.kind == "file":
             bg_color = self._c("file_bg", "#6272a4")
             text_color = self._c("file_text", "#f8f8f2")
@@ -1882,7 +1966,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         )
         painter.drawText(text_area, full_text, text_option)
 
-        if ts_rect is not None and item.timestamp:
+        meta_text = _chat_item_delivery_meta_text(item)
+        if ts_rect is not None and meta_text:
             ts_font = QtGui.QFont(base_font)
             ts_font.setPointSize(max(base_font.pointSize() - 1, 6))
             painter.setFont(ts_font)
@@ -1890,6 +1975,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             # Цвет штампа делаем чуть темнее текста для контраста на ярком фоне
             if item.kind == "success":
                 ts_color = self._c("tick_success", "#15542d")
+            elif delivery_state == DELIVERY_STATE_FAILED:
+                ts_color = QtGui.QColor("#ffd6d6")
             elif item.kind in {"me", "image_braille", "image_bw"}:
                 ts_color = QtGui.QColor("#d0e2ff")
             else:
@@ -1904,7 +1991,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                     QtCore.Qt.AlignmentFlag.AlignRight
                     | QtCore.Qt.AlignmentFlag.AlignVCenter
                 ),
-                item.timestamp,
+                meta_text,
             )
 
         # Галочки доставки для «File sent» — тёмный цвет как у текста, хорошо читается на зелёном
@@ -1922,7 +2009,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 24,
                 18,
             )
-            ticks = "✓✓" if getattr(item, "delivered", False) else "✓"
+            ticks = "✓✓" if _chat_item_delivery_state(item) == DELIVERY_STATE_DELIVERED else "✓"
             painter.setPen(self._c("tick_success", "#282a36"))
             painter.drawText(
                 tick_rect,
@@ -2230,7 +2317,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 24,
                 18,
             )
-            ticks = "✓✓" if item.delivered else "✓"
+            ticks = "✓✓" if _chat_item_delivery_state(item) == DELIVERY_STATE_DELIVERED else "✓"
             # Тень, чтобы галочки были видны на белой картинке
             painter.setPen(QtGui.QColor(0, 0, 0, 160))
             painter.drawText(
@@ -3379,13 +3466,16 @@ class ContactRowWidget(QtWidgets.QWidget):
     def __init__(self, record: ContactRecord, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._addr = record.addr
+        self._badges = ""
+        self._display_name = record.display_name.strip()
+        self._base_sub = (record.last_preview or record.note or "").strip()
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(2)
         self._full_title = record.display_name.strip() or _contact_row_address_title(
             record.addr
         )
-        self._full_sub = (record.last_preview or record.note or "").strip()
+        self._full_sub = self._base_sub
         self._title = QtWidgets.QLabel(self._full_title)
         self._title.setObjectName("ContactRowTitle")
         self._title.setWordWrap(False)
@@ -3408,19 +3498,20 @@ class ContactRowWidget(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
-        self._sync_row_tooltip(record.display_name)
+        self._sync_row_tooltip()
 
     @property
     def contact_addr(self) -> str:
         return self._addr
 
-    def _sync_row_tooltip(self, display_name: str = "") -> None:
+    def _sync_row_tooltip(self) -> None:
         addr = (self._addr or "").strip()
-        name = (display_name or "").strip()
+        name = self._display_name
+        badge_text = f"\n{self._badges}" if self._badges else ""
         if name:
-            self.setToolTip(f"{name}\n{addr}")
+            self.setToolTip(f"{name}\n{addr}{badge_text}")
         else:
-            self.setToolTip(addr)
+            self.setToolTip(f"{addr}{badge_text}")
 
     def _apply_elide(self) -> None:
         w = max(1, self.width() - 20)
@@ -3440,12 +3531,29 @@ class ContactRowWidget(QtWidgets.QWidget):
 
     def set_record(self, record: ContactRecord) -> None:
         self._addr = record.addr
+        self._display_name = record.display_name.strip()
+        self._base_sub = (record.last_preview or record.note or "").strip()
         self._full_title = record.display_name.strip() or _contact_row_address_title(
             record.addr
         )
-        self._full_sub = (record.last_preview or record.note or "").strip()
-        self._sync_row_tooltip(record.display_name)
+        self._full_sub = self._base_sub
+        self._sync_row_tooltip()
         self.updateGeometry()
+        self._apply_elide()
+
+    def set_status_badges(self, *, pinned: bool, locked: bool) -> None:
+        bits: list[str] = []
+        if pinned:
+            bits.append("Pinned key")
+        if locked:
+            bits.append("Locked")
+        self._badges = " · ".join(bits)
+        sub_text = self._base_sub
+        if self._badges:
+            self._full_sub = f"{sub_text} · {self._badges}" if sub_text else self._badges
+        else:
+            self._full_sub = sub_text
+        self._sync_row_tooltip()
         self._apply_elide()
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
@@ -4168,11 +4276,15 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
         self.addr_edit.textChanged.connect(lambda _t: self._refresh_connection_buttons())
         self.addr_edit.textChanged.connect(lambda _t: self._sync_contacts_list_selection())
+        self.addr_edit.textChanged.connect(lambda _t: self._update_peer_lock_indicator())
         self.addr_edit.editingFinished.connect(self._on_addr_editing_finished_for_drafts)
         self.input_edit.textChanged.connect(self._on_compose_text_changed)
         self.more_actions_popup.add_action("Load profile (.dat)", self.on_load_profile_clicked)
         self.more_actions_popup.add_action("Send picture", self.on_send_pic_clicked)
         self.more_actions_popup.add_action("Send file", self.on_send_file_clicked)
+        self.more_actions_popup.add_action(
+            "BlindBox diagnostics", self._show_blindbox_diagnostics
+        )
         self.more_actions_popup.add_separator()
         self.more_actions_popup.add_action("Lock to peer", self.on_lock_peer_clicked)
         self.more_actions_popup.add_action("Forget pinned peer key", self.on_forget_pinned_peer_key_clicked)
@@ -4211,6 +4323,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
         self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
         self.chat_view.replyRequested.connect(self._on_reply_requested)
+        self.chat_view.retryRequested.connect(self._on_retry_requested)
 
         # ядро
         self.core = self._create_core(self.profile)
@@ -4413,9 +4526,17 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _refresh_contacts_list(self) -> None:
         self.contacts_list.clear()
+        locked_peer = normalize_peer_address(self.core.stored_peer or "")
         for rec in self._contact_book.contacts:
             item = QtWidgets.QListWidgetItem()
             row = ContactRowWidget(rec)
+            info = self.core.get_peer_trust_info(rec.addr)
+            row.set_status_badges(
+                pinned=bool(info and info.pinned),
+                locked=bool(
+                    locked_peer and normalize_peer_address(rec.addr) == locked_peer
+                ),
+            )
             row.activate.connect(self._on_contact_row_activated)
             self.contacts_list.addItem(item)
             self.contacts_list.setItemWidget(item, row)
@@ -4459,8 +4580,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(
                 self,
                 "Saved peers",
-                "Профиль закреплён за другим пиром. Смена контакта из списка недоступна, "
-                "пока действует Lock to peer.",
+                "This profile is locked to a different peer. You cannot switch contacts "
+                "from the list while Lock to peer is in effect.",
             )
             return
         self.addr_edit.setText(norm)
@@ -4717,15 +4838,24 @@ class ChatWindow(QtWidgets.QMainWindow):
         locked = bool(
             self.core.stored_peer or peek_persisted_stored_peer(self.profile)
         )
+        peer_raw = self.addr_edit.text().strip() or (self.core.current_peer_addr or "")
+        info = self.core.get_peer_trust_info(peer_raw) if peer_raw else None
         light = self.theme_id == "ligth"
         dpr = max(1.0, float(self.devicePixelRatioF()))
         pm = _peer_lock_indicator_pixmap(locked=locked, light_theme=light, dpr=dpr)
         self.peer_lock_label.setPixmap(pm)
-        self.peer_lock_label.setToolTip(
-            "Профиль закреплён за пиром (Lock to peer)"
-            if locked
-            else "Профиль не закреплён: можно выбрать любой контакт"
-        )
+        tooltip_lines = [
+            (
+                "Profile is locked to one peer (Lock to peer)"
+                if locked
+                else "Profile is not locked: you may select any saved contact"
+            )
+        ]
+        if info is not None:
+            tooltip_lines.append(
+                "TOFU pin: present" if info.pinned else "TOFU pin: not stored"
+            )
+        self.peer_lock_label.setToolTip("\n".join(tooltip_lines))
 
     def _peer_target_available(self) -> bool:
         return bool(self.addr_edit.text().strip()) or bool(self.core.stored_peer)
@@ -4793,6 +4923,55 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.chat_view.scrollTo(index, QtWidgets.QAbstractItemView.ScrollHint.PositionAtBottom)
         if not self._chat_search_sync_suppressed:
             self._sync_chat_search_after_model_change()
+
+    def _remove_item(self, row: int) -> None:
+        self.chat_model.remove_item(row)
+        if not self._chat_search_sync_suppressed:
+            self._sync_chat_search_after_model_change()
+
+    def _update_history_delivery_state(
+        self,
+        message_id: str,
+        *,
+        delivery_state: str,
+        delivery_hint: str = "",
+        delivery_reason: str = "",
+        retryable: Optional[bool] = None,
+    ) -> None:
+        if not message_id:
+            return
+        updated = False
+        for idx in range(len(self._history_entries) - 1, -1, -1):
+            entry = self._history_entries[idx]
+            if entry.message_id != message_id:
+                continue
+            self._history_entries[idx] = replace(
+                entry,
+                delivery_state=delivery_state,
+                delivery_hint=delivery_hint or entry.delivery_hint,
+                delivery_reason=delivery_reason or entry.delivery_reason,
+                retryable=entry.retryable if retryable is None else retryable,
+            )
+            updated = True
+            break
+        if updated:
+            self._history_dirty = True
+
+    def _append_failed_text_message(self, text: str, *, reason: str, hint: str) -> None:
+        self._append_item(
+            ChatItem(
+                kind="me",
+                timestamp=time.strftime("%H:%M:%S"),
+                sender="Me",
+                text=text,
+                delivery_state=DELIVERY_STATE_FAILED,
+                delivery_route="blocked",
+                delivery_hint=hint,
+                delivery_reason=reason,
+                retryable=(reason == "send-failed"),
+                retry_kind="text",
+            )
+        )
 
     def _schedule_chat_search_rebuild(self, _t: str = "") -> None:
         if not self._history_enabled:
@@ -5088,7 +5267,17 @@ class ChatWindow(QtWidgets.QMainWindow):
         if kind in ("me", "peer") and self._history_enabled:
             ts_iso = msg.timestamp.isoformat()
             self._history_entries.append(
-                HistoryEntry(kind=kind, text=text, ts=ts_iso)
+                HistoryEntry(
+                    kind=kind,
+                    text=text,
+                    ts=ts_iso,
+                    message_id=msg.message_id,
+                    delivery_state=msg.delivery_state,
+                    delivery_route=msg.delivery_route,
+                    delivery_hint=msg.delivery_hint,
+                    delivery_reason=msg.delivery_reason,
+                    retryable=msg.retryable,
+                )
             )
             max_messages = load_history_max_messages()
             if len(self._history_entries) > max_messages:
@@ -5105,7 +5294,21 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._history_dirty = False
             self._history_flush_timer.stop()
 
-        self._append_item(ChatItem(kind=kind, timestamp=ts, sender=sender, text=text))
+        self._append_item(
+            ChatItem(
+                kind=kind,
+                timestamp=ts,
+                sender=sender,
+                text=text,
+                message_id=msg.message_id,
+                delivery_state=msg.delivery_state,
+                delivery_route=msg.delivery_route,
+                delivery_hint=msg.delivery_hint,
+                delivery_reason=msg.delivery_reason,
+                retryable=msg.retryable,
+                retry_kind="text" if kind == "me" and msg.retryable else None,
+            )
+        )
         self.refresh_status_label()
         self._refresh_connection_buttons()
         if kind == "peer" and msg.source_peer:
@@ -5314,10 +5517,22 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self.chat_model.update_item(
                     self._transfer_row,
                     ChatItem(
-                        kind="error",
-                        timestamp="",
-                        sender="IMAGE" if self._transfer_is_image else "FILE",
+                        kind="me" if info.is_sending else "error",
+                        timestamp=time.strftime("%H:%M:%S") if info.is_sending else "",
+                        sender="Me" if info.is_sending else ("IMAGE" if self._transfer_is_image else "FILE"),
                         text=err_text,
+                        delivery_state=DELIVERY_STATE_FAILED,
+                        delivery_hint=err_text,
+                        delivery_reason="send-failed" if info.is_sending else "transfer-failed",
+                        retryable=bool(info.is_sending and info.source_path),
+                        retry_kind=(
+                            "image"
+                            if info.is_sending and self._transfer_is_image and info.source_path
+                            else "file"
+                            if info.is_sending and info.source_path
+                            else None
+                        ),
+                        retry_source_path=info.source_path,
                     ),
                 )
                 self._transfer_row = None
@@ -5368,7 +5583,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                             self._transfer_row,
                             ChatItem(
                                 kind="success",
-                                timestamp="",
+                                timestamp=time.strftime("%H:%M:%S"),
                                 sender="FILE",
                                 text=(
                                     f"✔ File received: {disp_name} ({info.size:,} bytes). "
@@ -5383,11 +5598,15 @@ class ChatWindow(QtWidgets.QMainWindow):
                             self._transfer_row,
                             ChatItem(
                                 kind="success",
-                                timestamp="",
+                                timestamp=time.strftime("%H:%M:%S"),
                                 sender="FILE",
                                 text=f"File sent: {info.filename} ({info.size:,} bytes)",
                                 file_name=info.filename,
                                 is_sending=True,
+                                delivery_state="sending",
+                                delivery_hint="Waiting for peer delivery ACK.",
+                                delivery_reason="awaiting-ack",
+                                retry_source_path=info.source_path,
                             ),
                         )
                     self._transfer_row = None
@@ -5437,7 +5656,7 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str, bool)
     def handle_inline_image_received(self, path: str, is_from_me: bool, sent_filename: Optional[str] = None) -> None:
         """Обработчик для inline-изображений (PNG/JPEG/WebP). sent_filename — для галочки доставки."""
-        ts = ""
+        ts = time.strftime("%H:%M:%S")
         if is_from_me:
             sender = "Me"
         else:
@@ -5450,6 +5669,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             is_sending=is_from_me,
             image_path=path,
             file_name=sent_filename if is_from_me else None,
+            delivery_state="sending" if is_from_me else None,
+            delivery_hint="Waiting for peer delivery ACK." if is_from_me else "",
+            delivery_reason="awaiting-ack" if is_from_me else "",
         )
         if self._transfer_row is not None and self._transfer_is_image:
             self.chat_model.update_item(
@@ -5471,13 +5693,50 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._update_unread_chrome()
 
     @QtCore.pyqtSlot(str)
+    def handle_text_delivered(self, message_id: str) -> None:
+        if not message_id:
+            return
+        for row in range(self.chat_model.rowCount()):
+            idx = self.chat_model.index(row, 0)
+            item = idx.data(QtCore.Qt.ItemDataRole.DisplayRole)
+            if (
+                isinstance(item, ChatItem)
+                and item.kind == "me"
+                and item.message_id == message_id
+            ):
+                self.chat_model.update_item(
+                    row,
+                    replace(
+                        item,
+                        delivered=True,
+                        delivery_state=DELIVERY_STATE_DELIVERED,
+                        retryable=False,
+                    ),
+                )
+                break
+        self._update_history_delivery_state(
+            message_id,
+            delivery_state=DELIVERY_STATE_DELIVERED,
+            delivery_hint="Message delivered by peer ACK.",
+            retryable=False,
+        )
+
+    @QtCore.pyqtSlot(str)
     def handle_image_delivered(self, filename: str) -> None:
         """Галочка доставки: адресат получил картинку с этим именем."""
         for row in range(self.chat_model.rowCount()):
             idx = self.chat_model.index(row, 0)
             item = idx.data(QtCore.Qt.ItemDataRole.DisplayRole)
             if isinstance(item, ChatItem) and item.kind == "image_inline" and item.is_sending and item.file_name == filename:
-                self.chat_model.update_item(row, replace(item, delivered=True))
+                self.chat_model.update_item(
+                    row,
+                    replace(
+                        item,
+                        delivered=True,
+                        delivery_state=DELIVERY_STATE_DELIVERED,
+                        retryable=False,
+                    ),
+                )
                 return
 
     @QtCore.pyqtSlot(str)
@@ -5493,7 +5752,15 @@ class ChatWindow(QtWidgets.QMainWindow):
             if not item_name:
                 continue
             if item_name == name or os.path.basename(item_name) == name:
-                self.chat_model.update_item(row, replace(item, delivered=True))
+                self.chat_model.update_item(
+                    row,
+                    replace(
+                        item,
+                        delivered=True,
+                        delivery_state=DELIVERY_STATE_DELIVERED,
+                        retryable=False,
+                    ),
+                )
                 return
 
     @QtCore.pyqtSlot(object)
@@ -5528,9 +5795,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_file_offer=self.ask_incoming_file_accept,
             on_image_received=self.handle_image_received,
             on_inline_image_received=self.handle_inline_image_received,
+            on_text_delivered=self.handle_text_delivered,
             on_image_delivered=self.handle_image_delivered,
             on_file_delivered=self.handle_file_delivered,
             on_trust_decision=self.handle_trust_decision,
+            on_trust_mismatch_decision=self.handle_trust_mismatch_decision,
             legacy_compat=os.environ.get("I2PCHAT_LEGACY_COMPAT", "").strip().lower() in {"1", "true", "yes", "on"},
         )
         # динамически навешиваем колбэк уведомлений,
@@ -5723,6 +5992,37 @@ class ChatWindow(QtWidgets.QMainWindow):
         answer = QtWidgets.QMessageBox.question(
             self,
             "Trust on First Use (TOFU)",
+            msg,
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        return answer == QtWidgets.QMessageBox.StandardButton.Yes
+
+    def handle_trust_mismatch_decision(
+        self,
+        peer_addr: str,
+        old_fingerprint: str,
+        new_fingerprint: str,
+        old_signing_key_hex: str,
+        new_signing_key_hex: str,
+    ) -> bool:
+        short_addr = (peer_addr or "").strip()
+        if len(short_addr) > 40:
+            short_addr = f"{short_addr[:18]}...{short_addr[-18:]}"
+        msg = (
+            "Trusted peer signing key changed.\n\n"
+            f"Peer: {short_addr}\n"
+            f"Previously trusted fingerprint: {old_fingerprint}\n"
+            f"New fingerprint: {new_fingerprint}\n"
+            f"Old key prefix: {(old_signing_key_hex or '')[:24]}...\n"
+            f"New key prefix: {(new_signing_key_hex or '')[:24]}...\n\n"
+            "Only trust the new key if you have verified the change out-of-band.\n"
+            "Trust and replace the pinned key?"
+        )
+        answer = QtWidgets.QMessageBox.warning(
+            self,
+            "Trusted key changed",
             msg,
             QtWidgets.QMessageBox.StandardButton.Yes
             | QtWidgets.QMessageBox.StandardButton.No,
@@ -5933,6 +6233,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                 cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
                 self.input_edit.setTextCursor(cursor)
                 self.input_edit.setFocus()
+                if result.delivery_state == DELIVERY_STATE_FAILED:
+                    self._append_failed_text_message(
+                        text,
+                        reason=result.reason,
+                        hint=result.hint or "Message send failed.",
+                    )
                 if _should_start_auto_connect_retry(
                     reason=result.reason,
                     has_running_task=self._auto_retry_send_task is not None,
@@ -6220,12 +6526,25 @@ class ChatWindow(QtWidgets.QMainWindow):
                             ts_display = dt.strftime("%H:%M:%S")
                         except Exception:
                             ts_display = e.ts[:8]
+                    loaded_state = normalize_loaded_delivery_state(e.delivery_state)
+                    can_retry = bool(
+                        e.kind == "me"
+                        and loaded_state == DELIVERY_STATE_FAILED
+                        and e.retryable
+                    )
                     self._append_item(
                         ChatItem(
                             kind=e.kind,
                             timestamp=ts_display,
                             sender=sender,
                             text=e.text,
+                            message_id=e.message_id,
+                            delivery_state=loaded_state,
+                            delivery_route=e.delivery_route,
+                            delivery_hint=e.delivery_hint,
+                            delivery_reason=e.delivery_reason,
+                            retryable=can_retry,
+                            retry_kind="text" if can_retry else None,
                         )
                     )
                 self._append_item(ChatItem(
@@ -6348,6 +6667,45 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.handle_system("History cleared for this peer.")
         else:
             self.handle_system("No saved history found for this peer.")
+
+    def _show_blindbox_diagnostics(self) -> None:
+        delivery = self.core.get_delivery_telemetry()
+        blindbox = self.core.get_blindbox_telemetry()
+        ack = self.core.get_ack_telemetry()
+        selected_peer = (
+            self.addr_edit.text().strip()
+            or self.core.current_peer_addr
+            or self.core.stored_peer
+            or ""
+        )
+        text = build_blindbox_diagnostics_text(
+            profile=self.profile,
+            selected_peer=selected_peer,
+            delivery=delivery,
+            blindbox=blindbox,
+            ack=ack,
+        )
+        dlg = QtWidgets.QDialog(self)
+        _apply_dialog_theme_sheet(dlg, self.theme_id)
+        dlg.setWindowTitle("BlindBox diagnostics")
+        dlg.resize(700, 520)
+        layout = QtWidgets.QVBoxLayout(dlg)
+        intro = QtWidgets.QLabel(
+            "Read-only diagnostics for offline / delayed delivery readiness.", dlg
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        editor = QtWidgets.QPlainTextEdit(dlg)
+        editor.setReadOnly(True)
+        editor.setPlainText(text)
+        layout.addWidget(editor, 1)
+        row = QtWidgets.QHBoxLayout()
+        row.addStretch(1)
+        close_btn = QtWidgets.QPushButton("Close", dlg)
+        close_btn.clicked.connect(dlg.accept)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+        dlg.exec()
 
     @QtCore.pyqtSlot()
     def on_forget_pinned_peer_key_clicked(self) -> None:
@@ -6486,6 +6844,23 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.input_edit.setTextCursor(cursor)
         self.input_edit.setFocus()
         self._on_compose_text_changed()
+
+    @QtCore.pyqtSlot(int)
+    def _on_retry_requested(self, row: int) -> None:
+        item = self.chat_model.item_at(row)
+        if item is None or not item.retryable:
+            return
+        if item.retry_kind == "text":
+            self._remove_item(row)
+            asyncio.create_task(self._send_text_ui_flow(item.text))
+            return
+        if item.retry_kind == "file" and item.retry_source_path:
+            self._remove_item(row)
+            asyncio.create_task(self.core.send_file(item.retry_source_path))
+            return
+        if item.retry_kind == "image" and item.retry_source_path:
+            self._remove_item(row)
+            asyncio.create_task(self.core.send_image(item.retry_source_path))
 
     @QtCore.pyqtSlot(str)
     def on_image_open_requested(self, path: str) -> None:
@@ -6685,4 +7060,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

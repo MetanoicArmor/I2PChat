@@ -48,6 +48,9 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.accepted)
         self.assertEqual(result.route, "online-live")
         self.assertEqual(result.reason, "live-session")
+        self.assertEqual(result.delivery_state, "sending")
+        self.assertFalse(result.retryable)
+        self.assertIsNotNone(result.message_id)
 
     async def test_send_text_queues_offline_when_blindbox_ready(self) -> None:
         with patch.dict(
@@ -61,11 +64,13 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             core = I2PChatCore(profile="alice")
             core.stored_peer = STORED_PEER_1
             core.my_dest = _DummyDest()
-            core._send_text_via_blindbox = AsyncMock(return_value=True)  # type: ignore[method-assign]
+            core._send_text_via_blindbox = AsyncMock(return_value=41)  # type: ignore[method-assign]
             result = await core.send_text("hello-offline")
             self.assertTrue(result.accepted)
             self.assertEqual(result.route, "offline-queued")
             self.assertEqual(result.reason, "blindbox-ready")
+            self.assertEqual(result.delivery_state, "queued")
+            self.assertEqual(result.message_id, "41")
 
     async def test_send_text_blocked_requires_connect_for_initial_root(self) -> None:
         with patch.dict(
@@ -80,11 +85,12 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             core.stored_peer = STORED_PEER_2
             core.my_dest = _DummyDest()
             core._blindbox_root_secret = None
-            core._send_text_via_blindbox = AsyncMock(return_value=False)  # type: ignore[method-assign]
+            core._send_text_via_blindbox = AsyncMock(return_value=None)  # type: ignore[method-assign]
             result = await core.send_text("hello-await-root")
             self.assertFalse(result.accepted)
             self.assertEqual(result.reason, "blindbox-await-root")
             self.assertIn("Connect once", result.hint)
+            self.assertEqual(result.delivery_state, "failed")
 
     async def test_send_text_blocked_when_blindbox_disabled(self) -> None:
         with patch.dict(
@@ -97,10 +103,11 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
         ):
             core = I2PChatCore(profile="alice")
             core.stored_peer = STORED_PEER_3
-            core._send_text_via_blindbox = AsyncMock(return_value=False)  # type: ignore[method-assign]
+            core._send_text_via_blindbox = AsyncMock(return_value=None)  # type: ignore[method-assign]
             result = await core.send_text("hello-disabled")
             self.assertFalse(result.accepted)
             self.assertEqual(result.reason, "blindbox-disabled")
+            self.assertEqual(result.delivery_state, "failed")
 
     def test_delivery_telemetry_states(self) -> None:
         with patch.dict(
@@ -125,7 +132,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_auto_connect_retry_policy_is_single_attempt_with_cooldown(self) -> None:
-        self.assertTrue(
+        self.assertFalse(
             should_start_auto_connect_retry(
                 reason="send-failed",
                 has_running_task=False,

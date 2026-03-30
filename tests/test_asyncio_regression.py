@@ -519,7 +519,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
                 with open(core._trust_store_path(), "r", encoding="utf-8") as f:
                     self.assertEqual(f.read().strip(), "{}")
 
-    async def test_signing_key_mismatch_emits_forget_pin_hint(self) -> None:
+    async def test_signing_key_mismatch_emits_explicit_rejection_message(self) -> None:
         errors: list[str] = []
         systems: list[str] = []
         core = I2PChatCore(profile="alice", on_error=errors.append, on_system=systems.append)
@@ -533,9 +533,40 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(ok)
         self.assertTrue(any("Peer signing key mismatch" in msg for msg in errors), errors)
         self.assertTrue(
-            any("Forget pinned peer key" in msg for msg in systems),
+            any("not approved" in msg for msg in systems),
             systems,
         )
+
+    async def test_signing_key_mismatch_can_replace_pin_when_user_approves(self) -> None:
+        systems: list[str] = []
+        decisions: list[tuple[str, str, str, str, str]] = []
+
+        def trust_mismatch_cb(
+            peer: str,
+            old_fp: str,
+            new_fp: str,
+            old_key: str,
+            new_key: str,
+        ) -> bool:
+            decisions.append((peer, old_fp, new_fp, old_key, new_key))
+            return True
+
+        core = I2PChatCore(
+            profile="alice",
+            on_system=systems.append,
+            on_trust_mismatch_decision=trust_mismatch_cb,
+        )
+        core.peer_trusted_signing_keys[EXAMPLE_B32] = "11" * 32
+
+        ok = await core._pin_or_verify_peer_signing_key(
+            EXAMPLE_B32,
+            b"\x22" * 32,
+        )
+
+        self.assertTrue(ok)
+        self.assertEqual(core.peer_trusted_signing_keys[EXAMPLE_B32], "22" * 32)
+        self.assertEqual(len(decisions), 1)
+        self.assertTrue(any("Updated trusted signing key" in msg for msg in systems))
 
 
 if __name__ == "__main__":

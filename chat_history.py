@@ -36,7 +36,7 @@ from blindbox_state import atomic_write_bytes
 logger = logging.getLogger("i2pchat.history")
 
 HISTORY_MAGIC = b"I2CH"
-HISTORY_VERSION = 1
+HISTORY_VERSION = 2
 HEADER_SIZE = 4 + 2 + 32  # magic + version + salt
 SALT_SIZE = 32
 DEFAULT_MAX_MESSAGES = 1000
@@ -57,6 +57,12 @@ class HistoryEntry:
     kind: str
     text: str
     ts: str  # ISO-8601 UTC
+    message_id: Optional[str] = None
+    delivery_state: Optional[str] = None
+    delivery_route: Optional[str] = None
+    delivery_hint: str = ""
+    delivery_reason: str = ""
+    retryable: bool = False
 
 
 def _safe_peer_id(peer_addr: str) -> str:
@@ -118,10 +124,21 @@ def _entries_to_json(
     truncated_at: Optional[str],
 ) -> bytes:
     obj = {
-        "version": 1,
+        "version": HISTORY_VERSION,
         "peer": peer_addr.strip().lower(),
         "messages": [
-            {"kind": e.kind, "text": e.text, "ts": e.ts} for e in entries
+            {
+                "kind": e.kind,
+                "text": e.text,
+                "ts": e.ts,
+                "message_id": e.message_id,
+                "delivery_state": e.delivery_state,
+                "delivery_route": e.delivery_route,
+                "delivery_hint": e.delivery_hint,
+                "delivery_reason": e.delivery_reason,
+                "retryable": bool(e.retryable),
+            }
+            for e in entries
         ],
         "truncated_at": truncated_at,
     }
@@ -130,17 +147,26 @@ def _entries_to_json(
 
 def _json_to_entries(data: bytes) -> tuple[str, List[HistoryEntry], Optional[str]]:
     obj = json.loads(data.decode("utf-8"))
-    if obj.get("version") != 1:
+    version = int(obj.get("version", 1))
+    if version not in {1, HISTORY_VERSION}:
         raise ValueError("Unsupported history format version")
     peer = str(obj.get("peer", ""))
     messages = obj.get("messages", [])
     entries = []
     for m in messages:
-        entries.append(HistoryEntry(
-            kind=str(m.get("kind", "peer")),
-            text=str(m.get("text", "")),
-            ts=str(m.get("ts", "")),
-        ))
+        entries.append(
+            HistoryEntry(
+                kind=str(m.get("kind", "peer")),
+                text=str(m.get("text", "")),
+                ts=str(m.get("ts", "")),
+                message_id=str(m.get("message_id", "")) or None,
+                delivery_state=str(m.get("delivery_state", "")) or None,
+                delivery_route=str(m.get("delivery_route", "")) or None,
+                delivery_hint=str(m.get("delivery_hint", "")),
+                delivery_reason=str(m.get("delivery_reason", "")),
+                retryable=bool(m.get("retryable", False)),
+            )
+        )
     truncated_at = obj.get("truncated_at")
     if truncated_at is not None:
         truncated_at = str(truncated_at)
