@@ -98,6 +98,7 @@ PyInstaller uses [`run_gui.py`](../i2pchat/run_gui.py) as the analyzed script (s
 - `flake.nix` - Nix packaging / dev shell
 - `docs/PROTOCOL.md` - network protocol reference
 - `docs/AUDIT_EN.md`, `docs/AUDIT_RU.md` - security audit reports (EN / RU)
+- `docs/ISSUE_BACKLOG.md`, `docs/ISSUE_BACKLOG_RU.md` - issue backlog (EN / RU)
 
 ## Reading order for new contributors
 

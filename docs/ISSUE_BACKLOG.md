@@ -1,7 +1,7 @@
 # I2PChat Issue Backlog
 
 This document collects issue-sized backlog items aligned with the roadmap in
-[`ROADMAP.md`](ROADMAP.md). The text is written so each section can be copied
+[`ROADMAP.md`](../ROADMAP.md). The text is written so each section can be copied
 into a GitHub issue with minimal editing.
 
 ## Milestone: 0.6.5 - UX polish
@@ -114,7 +114,7 @@ Improve progress and error visibility for file and image sends.
 
 ## Milestone: 0.7.0 - Contacts and conversations
 
-*Status: issues 7–12 are implemented in **v0.7.0** (see [`docs/releases/RELEASE_0.7.0.md`](docs/releases/RELEASE_0.7.0.md)).*
+*Status: issues 7–12 are implemented in **v0.7.0** (see [`releases/RELEASE_0.7.0.md`](releases/RELEASE_0.7.0.md)).*
 
 *Implementation note (post–v0.7.0 tag): **Saved peers** list context menu — **Edit name & note…**, **Contact details…** (address, TOFU, remove pin), **Remove from saved peers…** (optional: encrypted history, pin, profile lock, BlindBox state file); core adds `clear_locked_peer()`, `contact_book` adds `remove_peer()`.*
 
@@ -329,7 +329,7 @@ Allow users to retry failed sends in a controlled and understandable way.
 
 ## Milestone: 0.9.0 - Portability, privacy, hardening
 
-*Status: issues **19–26** are shipped as the **v0.9.0** portability/privacy slice and included in the **v1.0.0** stable line ([`docs/releases/RELEASE_0.9.0.md`](docs/releases/RELEASE_0.9.0.md), [`docs/releases/RELEASE_1.0.0.md`](docs/releases/RELEASE_1.0.0.md)).*
+*Status: issues **19–26** are shipped as the **v0.9.0** portability/privacy slice and included in the **v1.0.0** stable line ([`releases/RELEASE_0.9.0.md`](releases/RELEASE_0.9.0.md), [`releases/RELEASE_1.0.0.md`](releases/RELEASE_1.0.0.md)).*
 
 ### 19. Encrypted profile export
 

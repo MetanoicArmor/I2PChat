@@ -16,7 +16,7 @@ They create labels, milestones, and issues from the roadmap/backlog planning doc
   - `0.8.0 - Trust, delivery, offline clarity`
   - `0.9.0 - Portability, privacy, hardening`
   - `1.0.0 - Stable niche release`
-- issue drafts from `ISSUE_BACKLOG.md`
+- issue drafts from `docs/ISSUE_BACKLOG.md`
 
 The script is idempotent for bundled titles:
 - existing labels are reused;
