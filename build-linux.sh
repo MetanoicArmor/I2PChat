@@ -60,10 +60,10 @@ except Exception as exc:
 print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
 PY
 
-# Быстрая проверка синтаксиса критичных модулей и пакета
-python -m compileall *.py i2pchat
+# Быстрая проверка синтаксиса пакетов и вспомогательных скриптов (без glob *.py в корне)
+python -m compileall i2pchat i2plib scripts make_icon.py
 
-# 1) сборка PyInstaller с использованием spec файла (включает crypto модули)
+# 1) сборка PyInstaller с использованием spec файла (анализирует i2pchat/run_gui.py и зависимости)
 rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"
 pyinstaller --clean -y I2PChat.spec
 

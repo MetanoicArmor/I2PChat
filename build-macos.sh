@@ -64,8 +64,8 @@ except Exception as exc:
 print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
 PY
 
-echo "==> Проверяю синтаксис ключевых модулей"
-"${PYTHON_CMD}" -m compileall *.py i2pchat
+echo "==> Проверяю синтаксис пакетов и вспомогательных скриптов"
+"${PYTHON_CMD}" -m compileall i2pchat i2plib scripts make_icon.py
 
 echo "==> Собираю GUI (PyInstaller I2PChat.spec)"
 rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"
