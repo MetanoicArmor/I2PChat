@@ -58,6 +58,10 @@ credentials.json
 *.keystore
 config.local.*
 
+# Local agent / workflow artifacts (never push)
+.omx/
+.omc/
+
 # IDE / editor (Cursor — не пушить)
 .cursor/
 .idea/
