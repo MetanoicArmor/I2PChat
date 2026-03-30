@@ -62,7 +62,6 @@
 
 - **English manual**: [**docs/MANUAL_EN.md**](docs/MANUAL_EN.md)
 - **Русский мануал**: [**docs/MANUAL_RU.md**](docs/MANUAL_RU.md)
-- BlindBox design notes: [**RELEASE_0.6.0.md**](docs/releases/RELEASE_0.6.0.md)
 
 ### 🧠 Core architecture
 
