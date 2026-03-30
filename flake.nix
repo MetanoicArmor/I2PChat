@@ -59,11 +59,13 @@
             if [ -e icon.png ]; then cp icon.png "$out/lib/i2pchat/"; fi
 
             makeWrapper ${pythonEnv}/bin/python "$out/bin/i2pchat" \
-              --add-flags "$out/lib/i2pchat/main_qt.py" \
+              --add-flags "-m i2pchat.gui" \
+              --prefix PYTHONPATH : "$out/lib/i2pchat" \
               --prefix QT_PLUGIN_PATH : "${qtPluginPath}"
 
             makeWrapper ${pythonEnv}/bin/python "$out/bin/i2pchat-tui" \
-              --add-flags "$out/lib/i2pchat/chat-python.py"
+              --add-flags "-m i2pchat.gui.chat_python" \
+              --prefix PYTHONPATH : "$out/lib/i2pchat"
             runHook postInstall
           '';
 

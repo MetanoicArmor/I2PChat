@@ -158,6 +158,16 @@ Run the application:
 python -m i2pchat.gui.main_qt
 ```
 
+Recommended package-first entrypoint:
+
+```bash
+python -m i2pchat.gui
+```
+
+Compatibility note: legacy root launchers such as `python main_qt.py` remain in
+the repository as wrappers during the transition, but `i2pchat/...` is the
+canonical source tree.
+
 ### 🔧 Cross‑platform builds
 
 The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  

@@ -521,8 +521,12 @@ To reduce length-based traffic analysis, encrypted mode uses a padding profile:
 Override via environment variable:
 
 ```bash
-I2PCHAT_PADDING_PROFILE=off python i2pchat/gui/main_qt.py
+I2PCHAT_PADDING_PROFILE=off python -m i2pchat.gui.main_qt
 ```
+
+Canonical developer entrypoint: `python -m i2pchat.gui.main_qt`. The repository
+still keeps root launchers for compatibility during the migration to the package
+layout.
 
 Trade-off: more padding lowers metadata correlation but increases bandwidth use.
 
