@@ -64,16 +64,10 @@ roadmap:
 
 ### Validation
 
-Validated in this repository revision with:
+Validated before tagging `v1.0.0` with:
 
-- `python3 -m unittest tests.test_chat_history tests.test_chat_history_v2 tests.test_profile_import_overwrite tests.test_profile_backup`
-- `python3 -m pytest tests/ -q --tb=short`
-
-Result during release prep:
-
-- **228 passed**
-- **1 skipped** (GUI smoke in the cloud container because a system Qt runtime
-  library, `libEGL.so.1`, is absent there)
+- `python -m unittest` — the same fixed module list as `.github/workflows/test-gate.yml` (blindbox, protocol framing, chat history, SAM validation, audit remediation, …): **125 tests**, OK.
+- `python -m pytest tests/ -q --tb=short`: **432 passed**, **64** subtests (typical developer host); some GUI-focused tests **skip** on headless runners without a usable Qt stack (e.g. missing `libEGL.so.1` on Linux CI).
 
 ### Compatibility
 
@@ -156,16 +150,10 @@ Result during release prep:
 
 ### Проверки
 
-Во время подготовки релиза проверялись:
+Перед тегом `v1.0.0` прогонялись:
 
-- `python3 -m unittest tests.test_chat_history tests.test_chat_history_v2 tests.test_profile_import_overwrite tests.test_profile_backup`
-- `python3 -m pytest tests/ -q --tb=short`
-
-Результат:
-
-- **228 passed**
-- **1 skipped** (GUI smoke в cloud-контейнере из-за отсутствующей системной Qt
-  библиотеки `libEGL.so.1`)
+- `python -m unittest` — тот же фиксированный набор модулей, что в `.github/workflows/test-gate.yml` (blindbox, framing истории, валидация SAM, audit remediation и т.д.): **125 tests**, OK.
+- `python -m pytest tests/ -q --tb=short`: **432 passed**, **64** subtests (типичная dev-машина); часть GUI-тестов **skip** на headless без нормального Qt (например нет `libEGL.so.1` в Linux CI).
 
 ### Совместимость
 
