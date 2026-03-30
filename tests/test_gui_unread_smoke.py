@@ -28,9 +28,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-pytest.importorskip("PyQt6.QtWidgets")
+pytest.importorskip("PyQt6.QtWidgets", exc_type=ImportError)
 
 from PyQt6 import QtCore
+from PyQt6.QtCore import QMimeData, QUrl
 from PyQt6.QtWidgets import QApplication
 
 from i2p_chat_core import ChatMessage
@@ -181,3 +182,44 @@ def test_handle_notify_cross_peer_shows_tray_when_focused(
     title = args[0]
     assert "New message" in title
     assert "bbbbbb" in title
+
+
+def test_privacy_mode_toggle_enables_hidden_notifications(qapp: QApplication) -> None:
+    from main_qt import THEME_DEFAULT, ChatWindow
+
+    w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    w._notify_hide_body = False
+    w._notify_quiet_mode = False
+
+    w._on_toggle_privacy_mode_clicked()
+
+    assert w._privacy_mode_enabled is True
+    assert w._notify_hide_body is True
+    assert w._notify_quiet_mode is True
+    assert w._privacy_mode_toggle_btn.text() == "Privacy mode: ON"
+
+
+def test_message_input_drop_local_file_routes_to_sender(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from main_qt import THEME_DEFAULT, ChatWindow
+
+    w = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    dropped = tmp_path / "note.txt"
+    dropped.write_text("hello", encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr(w, "_send_local_path", lambda path: calls.append(path))
+
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(dropped))])
+    event = QtGui.QDropEvent(
+        QtCore.QPointF(5, 5),
+        QtCore.Qt.DropAction.CopyAction,
+        mime,
+        QtCore.Qt.MouseButton.LeftButton,
+        QtCore.Qt.KeyboardModifier.NoModifier,
+    )
+
+    w.input_edit.dropEvent(event)
+
+    assert calls == [str(dropped)]

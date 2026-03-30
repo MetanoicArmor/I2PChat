@@ -1,6 +1,6 @@
 # I2PChat Roadmap
 
-Current repository version: `0.7.0`
+Current repository version: `1.0.0`
 
 This roadmap is organized by product milestones rather than calendar time.
 The main goal is to improve daily usability first, then strengthen dialog
@@ -91,7 +91,7 @@ Planned focus areas:
 
 Release outcome:
 
-- users can back up and restore important data safely;
+- users can export and restore profile/state backups through encrypted bundles;
 - local privacy controls become stronger;
 - reliability improves ahead of `1.0.0`.
 
@@ -109,6 +109,14 @@ Minimum expected state:
 - usable offline delivery diagnostics;
 - practical backup and restore paths;
 - better reliability coverage for protocol and transfers.
+
+Release outcome:
+
+- profile backups and history backups can be exported and restored in encrypted form;
+- local history retention is configurable by count and age;
+- privacy mode is available as a quick local safeguard;
+- drag-and-drop attachments match existing send actions;
+- pre-1.0 reliability coverage is strong enough for a stable niche release.
 
 ## Post-1.0 candidates
 

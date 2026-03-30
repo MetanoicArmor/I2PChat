@@ -5,10 +5,12 @@ import secrets
 import struct
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 import crypto
 from chat_history import (
     DEFAULT_MAX_MESSAGES,
+    DEFAULT_HISTORY_RETENTION_DAYS,
     HEADER_SIZE,
     HISTORY_MAGIC,
     HISTORY_VERSION,
@@ -16,8 +18,11 @@ from chat_history import (
     _derive_file_key,
     _legacy_safe_peer_id,
     _safe_peer_id,
+    apply_history_retention,
     delete_history,
     derive_history_key,
+    list_history_file_names,
+    list_history_file_paths,
     load_history,
     normalize_peer_addr,
     save_history,
@@ -141,6 +146,25 @@ class ChatHistoryFIFOTests(unittest.TestCase):
             loaded = load_history(td, "alice", PEER, IDENTITY_KEY)
             self.assertEqual(len(loaded), 10)
             self.assertEqual(loaded[0].text, "msg-10")
+
+    def test_apply_history_retention_by_age_and_count(self) -> None:
+        now = datetime(2026, 3, 30, tzinfo=timezone.utc)
+        entries = [
+            HistoryEntry(kind="me", text="old", ts="2026-01-01T00:00:00Z"),
+            HistoryEntry(kind="peer", text="mid", ts="2026-03-01T00:00:00Z"),
+            HistoryEntry(kind="me", text="new", ts="2026-03-29T00:00:00Z"),
+        ]
+        retained, truncated_at = apply_history_retention(
+            entries,
+            max_messages=1,
+            max_age_days=20,
+            now_utc=now,
+        )
+        self.assertEqual([item.text for item in retained], ["new"])
+        self.assertEqual(truncated_at, "2026-01-01T00:00:00Z")
+
+    def test_default_history_retention_days_constant_is_positive(self) -> None:
+        self.assertGreater(DEFAULT_HISTORY_RETENTION_DAYS, 0)
 
 
 @unittest.skipUnless(crypto.NACL_AVAILABLE, "PyNaCl required")
@@ -266,6 +290,23 @@ class ChatHistoryPeerIsolationTests(unittest.TestCase):
 
             loaded = load_history(td, "alice", PEER, IDENTITY_KEY)
             self.assertEqual([x.text for x in loaded], ["legacy"])
+
+    def test_list_history_file_helpers_only_return_matching_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            save_history(td, "alice", PEER, _make_entries(1), IDENTITY_KEY)
+            save_history(
+                td,
+                "bob",
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p",
+                _make_entries(1),
+                IDENTITY_KEY,
+            )
+            names = list_history_file_names(td, "alice")
+            paths = list_history_file_paths(td, "alice")
+            self.assertEqual(len(names), 1)
+            self.assertEqual(len(paths), 1)
+            self.assertTrue(names[0].startswith("alice.history."))
+            self.assertTrue(paths[0].endswith(names[0]))
 
 
 @unittest.skipUnless(crypto.NACL_AVAILABLE, "PyNaCl required")

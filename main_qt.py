@@ -38,11 +38,21 @@ from unread_counters import (
     total_unread,
 )
 from chat_history import (
+    DEFAULT_HISTORY_RETENTION_DAYS,
     HistoryEntry,
+    apply_history_retention,
     delete_history,
+    list_history_file_paths,
     load_history,
     normalize_peer_addr,
     save_history,
+)
+from profile_backup import (
+    BackupError,
+    export_history_bundle,
+    export_profile_bundle,
+    import_history_bundle,
+    import_profile_bundle,
 )
 from i2p_chat_core import (
     ChatMessage,
@@ -1194,6 +1204,44 @@ def load_history_max_messages() -> int:
     if isinstance(val, int) and val > 0:
         return val
     return 1000
+
+
+def save_history_max_messages(max_messages: int) -> None:
+    value = int(max_messages)
+    if value < 1:
+        raise ValueError("history_max_messages must be positive")
+    data = _load_ui_prefs()
+    data["history_max_messages"] = value
+    _save_ui_prefs(data)
+
+
+def load_history_retention_days() -> int:
+    data = _load_ui_prefs()
+    val = data.get("history_retention_days")
+    if isinstance(val, int):
+        return max(0, val)
+    return DEFAULT_HISTORY_RETENTION_DAYS
+
+
+def save_history_retention_days(days: int) -> None:
+    value = max(0, int(days))
+    data = _load_ui_prefs()
+    data["history_retention_days"] = value
+    _save_ui_prefs(data)
+
+
+def load_privacy_mode_enabled() -> bool:
+    data = _load_ui_prefs()
+    return data.get("privacy_mode_enabled") is True
+
+
+def save_privacy_mode_enabled(enabled: bool) -> None:
+    data = _load_ui_prefs()
+    if enabled:
+        data["privacy_mode_enabled"] = True
+    else:
+        data.pop("privacy_mode_enabled", None)
+    _save_ui_prefs(data)
 
 
 COMPOSE_DRAFTS_MAX_KEYS = 100
@@ -2460,6 +2508,7 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
         self._theme_id = THEME_DEFAULT
         self._context_popup: Optional["ActionsPopup"] = None
         self._context_popup_suppress_until_ms = 0
+        self.setAcceptDrops(True)
 
     def canPaste(self) -> bool:  # type: ignore[override]
         mime = QtWidgets.QApplication.clipboard().mimeData()
@@ -2500,6 +2549,41 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
                     self.imagePasteReady.emit(fpath)
                     return
         super().insertFromMimeData(source)
+
+    def _local_urls_from_mime(self, source: QtGui.QMimeData) -> list[str]:
+        paths: list[str] = []
+        if not source.hasUrls():
+            return paths
+        for url in source.urls():
+            if url.isLocalFile():
+                path = url.toLocalFile()
+                if path:
+                    paths.append(path)
+        return paths
+
+    def dragEnterEvent(self, event: QtGui.QDragEnterEvent) -> None:  # type: ignore[override]
+        paths = self._local_urls_from_mime(event.mimeData())
+        if paths:
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event: QtGui.QDragMoveEvent) -> None:  # type: ignore[override]
+        paths = self._local_urls_from_mime(event.mimeData())
+        if paths:
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QtGui.QDropEvent) -> None:  # type: ignore[override]
+        paths = self._local_urls_from_mime(event.mimeData())
+        if paths:
+            parent = self.window()
+            if isinstance(parent, ChatWindow):
+                parent._send_local_path(paths[0])
+                event.acceptProposedAction()
+                return
+        super().dropEvent(event)
 
     def set_theme(self, theme_id: str) -> None:
         self._theme_id = _resolve_theme(theme_id)
@@ -3819,6 +3903,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._history_flush_timer = QtCore.QTimer(self)
         self._history_flush_timer.setInterval(60_000)
         self._history_flush_timer.timeout.connect(self._flush_history)
+        self._privacy_mode_enabled = load_privacy_mode_enabled()
 
         # диагностическая строка статуса
         self.status_label = QtWidgets.QLabel("Status: initializing", self)
@@ -4285,6 +4370,18 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_actions_popup.add_action(
             "BlindBox diagnostics", self._show_blindbox_diagnostics
         )
+        self.more_actions_popup.add_action(
+            "Export profile backup…", self._export_profile_backup
+        )
+        self.more_actions_popup.add_action(
+            "Import profile backup…", self._import_profile_backup
+        )
+        self.more_actions_popup.add_action(
+            "Export history backup…", self._export_history_backup
+        )
+        self.more_actions_popup.add_action(
+            "Import history backup…", self._import_history_backup
+        )
         self.more_actions_popup.add_separator()
         self.more_actions_popup.add_action("Lock to peer", self.on_lock_peer_clicked)
         self.more_actions_popup.add_action("Forget pinned peer key", self.on_forget_pinned_peer_key_clicked)
@@ -4295,6 +4392,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         self._sync_chat_search_header_with_history()
         self.more_actions_popup.add_action("Clear history", self._on_clear_history_clicked)
+        self.more_actions_popup.add_action(
+            "History retention…", self._configure_history_retention
+        )
+        self._privacy_mode_toggle_btn = self.more_actions_popup.add_action(
+            self._privacy_mode_toggle_label(), self._on_toggle_privacy_mode_clicked
+        )
         self.more_actions_popup.add_separator()
         self._notify_sound_enabled = load_notify_sound_enabled()
         self._notify_hide_body = load_notify_hide_body()
@@ -6568,7 +6671,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         identity_key = self.core.get_identity_key_bytes()
         if not identity_key:
             return
-        entries = self._history_entries[-load_history_max_messages():]
+        entries, _ = apply_history_retention(
+            self._history_entries,
+            max_messages=load_history_max_messages(),
+            max_age_days=load_history_retention_days(),
+        )
         if entries:
             try:
                 save_history(
@@ -6614,6 +6721,9 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _notify_quiet_toggle_label(self) -> str:
         return "Quiet mode (focused): ON" if self._notify_quiet_mode else "Quiet mode (focused): OFF"
 
+    def _privacy_mode_toggle_label(self) -> str:
+        return "Privacy mode: ON" if self._privacy_mode_enabled else "Privacy mode: OFF"
+
     @QtCore.pyqtSlot()
     def _on_toggle_notify_sound_clicked(self) -> None:
         self._notify_sound_enabled = not self._notify_sound_enabled
@@ -6631,6 +6741,233 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._notify_quiet_mode = not self._notify_quiet_mode
         save_notify_quiet_mode(self._notify_quiet_mode)
         self._notify_quiet_toggle_btn.setText(self._notify_quiet_toggle_label())
+
+    @QtCore.pyqtSlot()
+    def _on_toggle_privacy_mode_clicked(self) -> None:
+        self._privacy_mode_enabled = not self._privacy_mode_enabled
+        save_privacy_mode_enabled(self._privacy_mode_enabled)
+        self._privacy_mode_toggle_btn.setText(self._privacy_mode_toggle_label())
+        if self._privacy_mode_enabled:
+            self._notify_hide_body = True
+            self._notify_quiet_mode = True
+            save_notify_hide_body(True)
+            save_notify_quiet_mode(True)
+            self._notify_hide_body_toggle_btn.setText(self._notify_hide_body_toggle_label())
+            self._notify_quiet_toggle_btn.setText(self._notify_quiet_toggle_label())
+            self.handle_system("Privacy mode enabled: notification previews hidden, focused toasts muted.")
+        else:
+            self.handle_system("Privacy mode disabled.")
+
+    @QtCore.pyqtSlot()
+    def _configure_history_retention(self) -> None:
+        current_limit = load_history_max_messages()
+        limit, ok = QtWidgets.QInputDialog.getInt(
+            self,
+            "History retention",
+            "Max saved messages per peer:",
+            current_limit,
+            1,
+            100000,
+            50,
+        )
+        if not ok:
+            return
+        current_days = load_history_retention_days()
+        days, ok = QtWidgets.QInputDialog.getInt(
+            self,
+            "History retention",
+            "Max age in days (0 = keep by count only):",
+            current_days,
+            0,
+            3650,
+            1,
+        )
+        if not ok:
+            return
+        save_history_max_messages(limit)
+        save_history_retention_days(days)
+        retained, _ = apply_history_retention(
+            self._history_entries,
+            max_messages=limit,
+            max_age_days=days,
+        )
+        if len(retained) != len(self._history_entries):
+            self._history_entries = retained
+            self._history_dirty = True
+        self.handle_system(
+            f"History retention updated: {limit} messages per peer, {days} day(s) max age."
+        )
+
+    def _prompt_backup_passphrase(self, *, title: str, confirm: bool) -> Optional[str]:
+        password, ok = QtWidgets.QInputDialog.getText(
+            self,
+            title,
+            "Backup passphrase:",
+            QtWidgets.QLineEdit.EchoMode.Password,
+        )
+        if not ok:
+            return None
+        secret = password.strip()
+        if not secret:
+            QtWidgets.QMessageBox.warning(self, title, "Passphrase must not be empty.")
+            return None
+        if confirm:
+            second, ok = QtWidgets.QInputDialog.getText(
+                self,
+                title,
+                "Confirm passphrase:",
+                QtWidgets.QLineEdit.EchoMode.Password,
+            )
+            if not ok:
+                return None
+            if secret != second:
+                QtWidgets.QMessageBox.warning(self, title, "Passphrases do not match.")
+                return None
+        return secret
+
+    def _send_local_path(self, path: str) -> None:
+        low = path.lower()
+        if low.endswith((".png", ".jpg", ".jpeg", ".webp")):
+            ok, err, _ = validate_image(path)
+            if not ok:
+                self.handle_error(err or "Invalid image file")
+                return
+            asyncio.create_task(self.core.send_image(path))
+            return
+        asyncio.create_task(self.core.send_file(path))
+
+    @QtCore.pyqtSlot()
+    def _export_profile_backup(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export profile backup",
+            os.path.join(get_profiles_dir(), f"{self.profile}.i2pchat-profile-backup"),
+            "I2PChat backup (*.i2pchat-profile-backup);;All Files (*)",
+        )
+        if not path:
+            return
+        passphrase = self._prompt_backup_passphrase(title="Export profile backup", confirm=True)
+        if passphrase is None:
+            return
+        try:
+            summary = export_profile_bundle(
+                path,
+                self.core.get_profiles_dir(),
+                self.profile,
+                passphrase,
+                include_history=True,
+            )
+        except BackupError as exc:
+            QtWidgets.QMessageBox.critical(self, "Export profile backup", str(exc))
+            return
+        self.handle_system(
+            f"Profile backup exported: {summary.file_count} file(s), {summary.history_files} history file(s)."
+        )
+
+    @QtCore.pyqtSlot()
+    def _import_profile_backup(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Import profile backup",
+            get_profiles_dir(),
+            "I2PChat backup (*.i2pchat-profile-backup);;All Files (*)",
+        )
+        if not path:
+            return
+        passphrase = self._prompt_backup_passphrase(title="Import profile backup", confirm=False)
+        if passphrase is None:
+            return
+        try:
+            summary = import_profile_bundle(
+                path,
+                self.core.get_profiles_dir(),
+                passphrase,
+            )
+        except BackupError as exc:
+            QtWidgets.QMessageBox.critical(self, "Import profile backup", str(exc))
+            return
+        self.handle_system(
+            f"Profile backup imported as '{summary.target_profile}' ({summary.restored_files} file(s))."
+        )
+        asyncio.create_task(self.switch_profile(summary.target_profile))
+
+    @QtCore.pyqtSlot()
+    def _export_history_backup(self) -> None:
+        history_files = list_history_file_paths(self.core.get_profiles_dir(), self.profile)
+        if not history_files:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Export history backup",
+                "No saved history files were found for the current profile.",
+            )
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export history backup",
+            os.path.join(get_profiles_dir(), f"{self.profile}.i2pchat-history-backup"),
+            "I2PChat history backup (*.i2pchat-history-backup);;All Files (*)",
+        )
+        if not path:
+            return
+        passphrase = self._prompt_backup_passphrase(title="Export history backup", confirm=True)
+        if passphrase is None:
+            return
+        try:
+            summary = export_history_bundle(
+                path,
+                self.core.get_profiles_dir(),
+                self.profile,
+                passphrase,
+            )
+        except BackupError as exc:
+            QtWidgets.QMessageBox.critical(self, "Export history backup", str(exc))
+            return
+        self.handle_system(
+            f"History backup exported: {summary.history_files} history file(s)."
+        )
+
+    @QtCore.pyqtSlot()
+    def _import_history_backup(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Import history backup",
+            get_profiles_dir(),
+            "I2PChat history backup (*.i2pchat-history-backup);;All Files (*)",
+        )
+        if not path:
+            return
+        passphrase = self._prompt_backup_passphrase(title="Import history backup", confirm=False)
+        if passphrase is None:
+            return
+        overwrite = (
+            QtWidgets.QMessageBox.question(
+                self,
+                "Import history backup",
+                "Overwrite existing history files for matching peers?\n\n"
+                "Choose Yes to overwrite, No to keep existing files and import only missing ones.",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No
+                | QtWidgets.QMessageBox.StandardButton.Cancel,
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+        )
+        if overwrite == QtWidgets.QMessageBox.StandardButton.Cancel:
+            return
+        conflict_mode = "overwrite" if overwrite == QtWidgets.QMessageBox.StandardButton.Yes else "skip"
+        try:
+            summary = import_history_bundle(
+                path,
+                self.core.get_profiles_dir(),
+                self.profile,
+                passphrase,
+                conflict_mode=conflict_mode,
+            )
+        except BackupError as exc:
+            QtWidgets.QMessageBox.critical(self, "Import history backup", str(exc))
+            return
+        self.handle_system(
+            f"History backup imported: restored {summary.restored_files}, skipped {summary.skipped_files}."
+        )
 
     @QtCore.pyqtSlot()
     def _on_toggle_history_clicked(self) -> None:

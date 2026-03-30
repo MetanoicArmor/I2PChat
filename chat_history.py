@@ -27,6 +27,7 @@ import logging
 import os
 import secrets
 import struct
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -40,6 +41,7 @@ HISTORY_VERSION = 2
 HEADER_SIZE = 4 + 2 + 32  # magic + version + salt
 SALT_SIZE = 32
 DEFAULT_MAX_MESSAGES = 1000
+DEFAULT_HISTORY_RETENTION_DAYS = 30
 LEGACY_PEER_ID_HEX_LEN = 16
 
 
@@ -118,6 +120,89 @@ def _derive_file_key(profile_key: bytes, salt: bytes, peer_addr: str) -> bytes:
     return crypto.hkdf_expand(prk, b"I2PCHAT-HISTORY|file-key|" + peer_id, 32)
 
 
+def list_history_file_names(profiles_dir: str, profile: str) -> list[str]:
+    prefix = f"{profile}.history."
+    try:
+        names = [
+            name
+            for name in os.listdir(profiles_dir)
+            if name.startswith(prefix) and name.endswith(".enc")
+        ]
+    except FileNotFoundError:
+        return []
+    return sorted(names)
+
+
+def list_history_file_paths(profiles_dir: str, profile: str) -> list[str]:
+    return [os.path.join(profiles_dir, name) for name in list_history_file_names(profiles_dir, profile)]
+
+
+def list_history_files(profiles_dir: str, profile: str) -> list[str]:
+    """Absolute paths to encrypted history files for a profile."""
+    return list_history_file_paths(profiles_dir, profile)
+
+
+def _parse_history_entry_ts(raw_ts: str) -> Optional[datetime]:
+    value = (raw_ts or "").strip()
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def apply_history_retention(
+    entries: List[HistoryEntry],
+    *,
+    max_messages: int = DEFAULT_MAX_MESSAGES,
+    max_age_days: int = 0,
+    now_utc: Optional[datetime] = None,
+) -> tuple[List[HistoryEntry], Optional[str]]:
+    retained = list(entries)
+    truncated_at: Optional[str] = None
+    if max_age_days > 0:
+        ref_now = now_utc or datetime.now(timezone.utc)
+        cutoff = ref_now - timedelta(days=max_age_days)
+        kept: list[HistoryEntry] = []
+        dropped_first_ts: Optional[str] = None
+        for entry in retained:
+            dt = _parse_history_entry_ts(entry.ts)
+            if dt is not None and dt < cutoff:
+                if dropped_first_ts is None:
+                    dropped_first_ts = entry.ts
+                continue
+            kept.append(entry)
+        if dropped_first_ts:
+            truncated_at = dropped_first_ts
+        retained = kept
+    if max_messages > 0 and len(retained) > max_messages:
+        cutoff_idx = len(retained) - max_messages
+        dropped = retained[:cutoff_idx]
+        if dropped:
+            truncated_at = dropped[0].ts
+        retained = retained[-max_messages:]
+    return retained, truncated_at
+
+
+def apply_history_retention_policy(
+    entries: List[HistoryEntry],
+    *,
+    max_messages: int = DEFAULT_MAX_MESSAGES,
+    max_age_days: int = 0,
+    now_utc: Optional[datetime] = None,
+) -> tuple[List[HistoryEntry], Optional[str]]:
+    return apply_history_retention(
+        entries,
+        max_messages=max_messages,
+        max_age_days=max_age_days,
+        now_utc=now_utc,
+    )
+
+
 def _entries_to_json(
     peer_addr: str,
     entries: List[HistoryEntry],
@@ -180,6 +265,7 @@ def save_history(
     entries: List[HistoryEntry],
     identity_key: bytes,
     max_messages: int = DEFAULT_MAX_MESSAGES,
+    max_age_days: int = 0,
 ) -> None:
     """Encrypt and atomically write chat history for a peer."""
     if not entries:
@@ -199,10 +285,11 @@ def save_history(
     if salt is None:
         salt = secrets.token_bytes(SALT_SIZE)
 
-    truncated_at: Optional[str] = None
-    if len(entries) > max_messages:
-        truncated_at = entries[-max_messages - 1].ts if len(entries) > max_messages else None
-        entries = entries[-max_messages:]
+    entries, truncated_at = apply_history_retention(
+        entries,
+        max_messages=max_messages,
+        max_age_days=max_age_days,
+    )
 
     profile_key = derive_history_key(identity_key)
     file_key = _derive_file_key(profile_key, salt, peer_addr)
