@@ -14,7 +14,9 @@ def win_rounded_window_region(width: int, height: int, radius: float) -> QtGui.Q
     path.addRoundedRect(
         QtCore.QRectF(0, 0, float(width), float(height)), radius, radius
     )
-    return QtGui.QRegion(path.toFillPolygon())
+    # PyQt6: toFillPolygon() → QPolygonF; QRegion ожидает QPolygon (целочисленный).
+    poly_f = path.toFillPolygon()
+    return QtGui.QRegion(poly_f.toPolygon())
 
 
 def apply_win_popup_rounded_mask(widget: QtWidgets.QWidget, radius: float) -> None:
