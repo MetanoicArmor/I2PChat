@@ -71,6 +71,12 @@ from i2pchat.core.i2p_chat_core import (
     validate_image,
 )
 from .compose_input import ComposeInputWrapper
+from .fluent_message_render import (
+    fluent_emoji_paths_cached,
+    emoji_inline_px,
+    line_horizontal_advance_fluent,
+    make_message_qtextdocument,
+)
 from i2pchat.storage.contact_book import (
     ContactBook,
     ContactRecord,
@@ -1872,13 +1878,19 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         self._pixmap_cache[real_path] = pixmap
         return pixmap
 
-    def _text_max_line_advance(self, text: str, metrics: QtGui.QFontMetrics) -> int:
-        """Макс. ширина среди явных строк (по \\n); для одной строки = её длина."""
+    def _text_max_line_advance(self, text: str, font: QtGui.QFont) -> int:
+        """Макс. ширина среди явных строк (по \\n); эмодзи из Fluent — как картинки фикс. ширины."""
+        metrics = QtGui.QFontMetrics(font)
+        paths = fluent_emoji_paths_cached()
+        px = emoji_inline_px(metrics)
         if not text:
             return int(metrics.horizontalAdvance(" "))
         best = 0
         for line in text.split("\n"):
-            w = int(metrics.horizontalAdvance(line if line else " "))
+            if paths:
+                w = line_horizontal_advance_fluent(line, metrics, paths, px)
+            else:
+                w = int(metrics.horizontalAdvance(line if line else " "))
             best = max(best, w)
         return best if best > 0 else int(metrics.horizontalAdvance(" "))
 
@@ -1890,8 +1902,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         - для одной короткой строки — минимум ~40% (визуально «таблетка»)
         - для многострочных сообщений — не растягиваем до 40%: только контент + небольшой пол
         """
-        metrics = QtGui.QFontMetrics(font)
-        content_px = self._text_max_line_advance(text, metrics) + self.PADDING_X * 4
+        content_px = self._text_max_line_advance(text, font) + self.PADDING_X * 4
         max_w = int(cell_width * 0.75)
         multiline = "\n" in (text or "")
         if multiline:
@@ -2013,13 +2024,20 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             text_area = inner_rect
             ts_rect = None
 
-        text_option = QtGui.QTextOption()
-        # Адреса и ключи приходят без пробелов, поэтому разрешаем перенос в любой точке
-        text_option.setWrapMode(QtGui.QTextOption.WrapMode.WrapAnywhere)
-        text_option.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        paths = fluent_emoji_paths_cached()
+        doc = make_message_qtextdocument(
+            full_text,
+            base_font,
+            text_color,
+            float(text_area.width()),
+            paths,
         )
-        painter.drawText(text_area, full_text, text_option)
+        painter.save()
+        painter.translate(text_area.left(), text_area.top())
+        tw, th = int(text_area.width()), int(text_area.height())
+        painter.setClipRect(0, 0, tw, th)
+        doc.drawContents(painter, QtCore.QRect(0, 0, tw, th))
+        painter.restore()
 
         meta_text = _chat_item_delivery_meta_text(item)
         if ts_rect is not None and meta_text:
@@ -2478,15 +2496,11 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         text = item.text or " "
 
-        # Используем QTextDocument с WrapAnywhere, чтобы корректно посчитать
-        # высоту многострочного текста (списки, длинные строки и т.п.).
-        doc = QtGui.QTextDocument()
-        doc.setDefaultFont(font)
-        doc.setPlainText(text)
-        text_option = QtGui.QTextOption()
-        text_option.setWrapMode(QtGui.QTextOption.WrapMode.WrapAnywhere)
-        doc.setDefaultTextOption(text_option)
-        doc.setTextWidth(float(available_width))
+        paths = fluent_emoji_paths_cached()
+        dummy_color = QtGui.QColor("#000000")
+        doc = make_message_qtextdocument(
+            text, font, dummy_color, float(available_width), paths
+        )
         text_height = doc.size().height()
 
         # Высота самого бабла оставляем приблизительно как раньше —
