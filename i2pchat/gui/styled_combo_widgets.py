@@ -10,7 +10,10 @@ from typing import List, Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from i2pchat.gui.popup_geometry import global_position_popup_below_anchor
+from i2pchat.gui.popup_geometry import (
+    apply_win_popup_rounded_mask,
+    global_position_popup_below_anchor,
+)
 
 
 def theme_for_styled_combo(theme_id: Optional[str]) -> str:
@@ -211,6 +214,8 @@ class RoundedVerticalScrollbar(QtWidgets.QWidget):
 
 class ProfileComboPopup(QtWidgets.QFrame):
     itemChosen = QtCore.pyqtSignal(str)
+    # Синхронно с #ProfileComboPopupSurface border-radius в apply_theme
+    _WIN_OUTER_RADIUS = 12.0
 
     def __init__(
         self,
@@ -219,11 +224,13 @@ class ProfileComboPopup(QtWidgets.QFrame):
         minimum_popup_width: int = 264,
     ) -> None:
         super().__init__(parent)
+        self._win_menu_chrome = sys.platform.startswith("win")
         popup_flags = QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
-        if sys.platform.startswith("win"):
-            popup_flags |= QtCore.Qt.WindowType.NoDropShadowWindowHint
         self.setWindowFlags(popup_flags)
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        if self._win_menu_chrome:
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        else:
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setObjectName("ProfileComboPopupWindow")
         self.setMinimumWidth(max(200, int(minimum_popup_width)))
 
@@ -250,6 +257,20 @@ class ProfileComboPopup(QtWidgets.QFrame):
 
         self._custom_scrollbar = RoundedVerticalScrollbar(self.list.verticalScrollBar(), self.surface)
         inner.addWidget(self._custom_scrollbar, 0)
+
+    def _apply_win_popup_mask(self) -> None:
+        if not self._win_menu_chrome:
+            return
+        apply_win_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._apply_win_popup_mask()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        if self._win_menu_chrome:
+            QtCore.QTimer.singleShot(0, self._apply_win_popup_mask)
 
     def _on_item_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
         self.itemChosen.emit(item.text())
@@ -291,6 +312,7 @@ class ProfileComboPopup(QtWidgets.QFrame):
         self.list.updateGeometry()
         self.setFixedWidth(max(anchor.width(), self.minimumWidth()))
         self.adjustSize()
+        self._apply_win_popup_mask()
         vsb = self.list.verticalScrollBar()
         self._custom_scrollbar.setVisible(vsb.maximum() > 0)
         w, h = self.width(), self.height()
@@ -303,15 +325,8 @@ class ProfileComboPopup(QtWidgets.QFrame):
         self._custom_scrollbar.update()
 
     def apply_theme(self, theme_id: str) -> None:
-        if theme_id == "night":
-            self.setStyleSheet(
-                """
-                #ProfileComboPopupWindow { background: transparent; }
-                #ProfileComboPopupSurface {
-                    background: rgba(28, 31, 40, 0.98);
-                    border: none;
-                    border-radius: 12px;
-                }
+        night = theme_id == "night"
+        list_night = """
                 QListWidget#ProfileComboPopupList QScrollBar:vertical {
                     background: transparent;
                     width: 6px;
@@ -371,20 +386,7 @@ class ProfileComboPopup(QtWidgets.QFrame):
                     background: rgba(255, 255, 255, 0.10);
                 }
                 """
-            )
-            self._custom_scrollbar.set_colors(
-                thumb=QtGui.QColor(255, 255, 255, 51),
-                track=QtGui.QColor(0, 0, 0, 0),
-            )
-        else:
-            self.setStyleSheet(
-                """
-                #ProfileComboPopupWindow { background: transparent; }
-                #ProfileComboPopupSurface {
-                    background: #f6f7fa;
-                    border: none;
-                    border-radius: 12px;
-                }
+        list_light = """
                 QListWidget#ProfileComboPopupList QScrollBar:vertical {
                     background: transparent;
                     width: 6px;
@@ -444,11 +446,69 @@ class ProfileComboPopup(QtWidgets.QFrame):
                     background: #e8eef8;
                 }
                 """
+        if self._win_menu_chrome:
+            if night:
+                shell = """
+                #ProfileComboPopupWindow {
+                    background: #1c1f28;
+                    border: 1px solid #4a5060;
+                    border-radius: 12px;
+                }
+                #ProfileComboPopupSurface {
+                    background: transparent;
+                    border: none;
+                    border-radius: 12px;
+                }
+                """
+            else:
+                shell = """
+                #ProfileComboPopupWindow {
+                    background: #f6f7fa;
+                    border: 1px solid #c4c4c4;
+                    border-radius: 12px;
+                }
+                #ProfileComboPopupSurface {
+                    background: transparent;
+                    border: none;
+                    border-radius: 12px;
+                }
+                """
+            self.setStyleSheet(shell + (list_night if night else list_light))
+        elif night:
+            self.setStyleSheet(
+                """
+                #ProfileComboPopupWindow { background: transparent; }
+                #ProfileComboPopupSurface {
+                    background: rgba(28, 31, 40, 0.98);
+                    border: none;
+                    border-radius: 12px;
+                }
+                """
+                + list_night
             )
+        else:
+            self.setStyleSheet(
+                """
+                #ProfileComboPopupWindow { background: transparent; }
+                #ProfileComboPopupSurface {
+                    background: #f6f7fa;
+                    border: none;
+                    border-radius: 12px;
+                }
+                """
+                + list_light
+            )
+        if night:
+            self._custom_scrollbar.set_colors(
+                thumb=QtGui.QColor(255, 255, 255, 51),
+                track=QtGui.QColor(0, 0, 0, 0),
+            )
+        else:
             self._custom_scrollbar.set_colors(
                 thumb=QtGui.QColor(60, 60, 67, 72),
                 track=QtGui.QColor(0, 0, 0, 0),
             )
+        self._apply_win_popup_mask()
 
 
 class ProfileComboBox(QtWidgets.QComboBox):

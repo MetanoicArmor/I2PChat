@@ -1,0 +1,55 @@
+import os
+import tempfile
+import unittest
+
+from i2pchat.storage.profile_blindbox_replicas import (
+    load_profile_blindbox_replicas_list,
+    normalize_replica_endpoints,
+    profile_blindbox_replicas_path,
+    save_profile_blindbox_replicas_list,
+)
+
+
+class ProfileBlindboxReplicasTests(unittest.TestCase):
+    def test_normalize_dedupes_and_trims(self) -> None:
+        self.assertEqual(
+            normalize_replica_endpoints([" a.b32.i2p:1 ", "a.b32.i2p:1", "b:2"]),
+            ["a.b32.i2p:1", "b:2"],
+        )
+
+    def test_normalize_skips_hash_comment_lines(self) -> None:
+        self.assertEqual(
+            normalize_replica_endpoints(
+                ["# note", "  # indented", "x.b32.i2p:1", "# trailing dup ignored"]
+            ),
+            ["x.b32.i2p:1"],
+        )
+
+    def test_roundtrip_save_load(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            p = profile_blindbox_replicas_path(td, "myprof")
+            self.assertTrue(p.endswith("myprof.blindbox_replicas.json"))
+            save_profile_blindbox_replicas_list(
+                td,
+                "myprof",
+                ["x.b32.i2p:19444", "127.0.0.1:19444"],
+            )
+            self.assertTrue(os.path.isfile(p))
+            loaded = load_profile_blindbox_replicas_list(td, "myprof")
+            self.assertEqual(
+                loaded,
+                ["x.b32.i2p:19444", "127.0.0.1:19444"],
+            )
+
+    def test_load_missing_returns_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(load_profile_blindbox_replicas_list(td, "nope"), [])
+
+    def test_default_profile_path_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(ValueError):
+                profile_blindbox_replicas_path(td, "default")
+
+
+if __name__ == "__main__":
+    unittest.main()

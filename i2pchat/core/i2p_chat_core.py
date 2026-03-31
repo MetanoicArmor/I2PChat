@@ -30,6 +30,11 @@ from i2pchat.storage.blindbox_state import (
     atomic_write_json,
     atomic_write_text,
 )
+from i2pchat.storage.profile_blindbox_replicas import (
+    load_profile_blindbox_replicas_list,
+    normalize_replica_endpoints,
+    save_profile_blindbox_replicas_list,
+)
 from i2pchat.protocol.message_delivery import (
     DELIVERY_STATE_DELIVERED,
     DELIVERY_STATE_FAILED,
@@ -80,8 +85,13 @@ TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 BLINDBOX_LOCAL_WRAP_VERSION_LEGACY = 1
 BLINDBOX_LOCAL_WRAP_VERSION_CURRENT = 2
 
-# Официальный набор из двух Blind Box для готовых релизов I2PChat.
-# Формат для удаленных I2P-узлов: <base32>.b32.i2p:19444 (порт сервера Blind Box).
+# Встроенные реплики Blind Box по умолчанию (дефолтный публичный пул проекта).
+# Подставляются как источник «release-builtin», если для именованного профиля не заданы
+# I2PCHAT_BLINDBOX_REPLICAS, I2PCHAT_BLINDBOX_DEFAULT_REPLICAS,
+# I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE и нет файла {profile}.blindbox_replicas.json;
+# отключить встроенный набор: I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1.
+# (Профиль default в приложении — отдельно: для него BlindBox выключен, см. __init__.)
+# Формат строки: <base32>.b32.i2p:19444 — порт TCP сервера Blind Box.
 DEFAULT_RELEASE_BLINDBOX_ENDPOINTS: Tuple[str, ...] = (
     "tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444",
     "dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444",
@@ -198,6 +208,35 @@ def _load_replicas_file(path: str) -> list[str]:
         if cleaned:
             normalized.append(cleaned)
     return _parse_replicas_list(",".join(normalized))
+
+
+def _blindbox_direct_replicas_security_issue(
+    replicas: list[str],
+    *,
+    use_sam: bool,
+    require_sam: bool,
+    local_auth_token: str,
+    allow_insecure_local: bool,
+) -> Optional[str]:
+    if require_sam and len(replicas) > 0 and not use_sam:
+        return (
+            "BlindBox strict SAM mode is enabled (I2PCHAT_BLINDBOX_REQUIRE_SAM=1), "
+            "but replicas are configured as direct host:port endpoints. "
+            "Use .i2p replicas via SAM or disable strict SAM mode."
+        )
+    if (
+        replicas
+        and not use_sam
+        and any(_is_loopback_replica(item) for item in replicas)
+        and not (local_auth_token or "").strip()
+        and not allow_insecure_local
+    ):
+        return (
+            "BlindBox local/direct replicas require I2PCHAT_BLINDBOX_LOCAL_TOKEN. "
+            "Set a token or explicitly opt out with "
+            "I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1."
+        )
+    return None
 
 
 def _is_cant_reach_peer_error(exc: Exception) -> bool:
@@ -842,6 +881,13 @@ class I2PChatCore:
         elif replicas_from_file:
             self._blindbox_replicas_source = "file-default"
             replicas_resolved = replicas_from_file
+        elif self.profile != "default" and (
+            replicas_profile := load_profile_blindbox_replicas_list(
+                get_profiles_dir(), self.profile
+            )
+        ):
+            self._blindbox_replicas_source = "profile-file"
+            replicas_resolved = replicas_profile
         elif not no_release_builtin and DEFAULT_RELEASE_BLINDBOX_ENDPOINTS:
             self._blindbox_replicas_source = "release-builtin"
             replicas_resolved = list(DEFAULT_RELEASE_BLINDBOX_ENDPOINTS)
@@ -2330,6 +2376,8 @@ class I2PChatCore:
             "enabled_source": str(self._blindbox_enabled_source),
             "blind_boxes": len(self.blindbox_replicas),
             "blind_boxes_source": str(self._blindbox_replicas_source),
+            "replica_endpoints": list(self.blindbox_replicas),
+            "replicas_gui_locked": bool(self.blindbox_replicas_gui_locked()),
             "use_sam_for_blind_boxes": bool(self._blindbox_use_sam),
             "require_sam_for_blind_boxes": bool(self._blindbox_require_sam),
             "replicas_source": str(self._blindbox_replicas_source),
@@ -2549,6 +2597,82 @@ class I2PChatCore:
 
     async def ensure_blindbox_runtime_started(self) -> None:
         await self._ensure_blindbox_runtime_started()
+
+    def get_blindbox_replica_endpoints_readonly(self) -> Tuple[str, ...]:
+        return tuple(self.blindbox_replicas)
+
+    def blindbox_replicas_gui_locked(self) -> bool:
+        if (self.profile or "").strip() in ("", "default"):
+            return True
+        src = self._blindbox_replicas_source
+        return src in ("env", "env-default", "file-default", "local-auto")
+
+    async def _stop_blindbox_runtime_only(self) -> None:
+        task = self._blindbox_task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._blindbox_task = None
+        if self._blindbox_client is not None:
+            try:
+                await self._blindbox_client.close()
+            except Exception:
+                pass
+            self._blindbox_client = None
+
+    async def apply_blindbox_replica_endpoints(self, endpoints: list[str]) -> str:
+        """
+        Save per-profile replica list and restart BlindBox runtime.
+        Returns empty string on success, otherwise a user-facing error message.
+        """
+        if (self.profile or "").strip() in ("", "default"):
+            return "BlindBox replica editing is only available for named profiles."
+        if not self.blindbox_enabled:
+            return "BlindBox is disabled for this profile."
+        if self.blindbox_replicas_gui_locked():
+            return (
+                "Replica list is controlled by environment variables "
+                "(or local-auto mode) and cannot be changed here."
+            )
+        norm = normalize_replica_endpoints(endpoints)
+        if not norm:
+            return "Add at least one Blind Box endpoint (one per line)."
+        use_sam = not (
+            len(norm) > 0 and all(_is_host_port_replica(x) for x in norm)
+        )
+        sec = _blindbox_direct_replicas_security_issue(
+            norm,
+            use_sam=use_sam,
+            require_sam=self._blindbox_require_sam,
+            local_auth_token=self._blindbox_local_auth_token,
+            allow_insecure_local=self._blindbox_allow_insecure_local,
+        )
+        if sec:
+            return sec
+        try:
+            save_profile_blindbox_replicas_list(
+                get_profiles_dir(), self.profile, norm
+            )
+        except ValueError as e:
+            return str(e)
+        except OSError as e:
+            return f"Failed to save replica list: {_exception_user_message(e)}"
+        async with self._blindbox_runtime_lock:
+            await self._stop_blindbox_runtime_only()
+            self.blindbox_replicas = norm
+            self._blindbox_use_sam = use_sam
+            self._blindbox_replicas_source = "profile-file"
+            if self.blindbox_enabled and len(self.blindbox_replicas) > 0 and not self._blindbox_use_sam:
+                logger.warning(
+                    "BlindBox transport is using direct TCP (non-SAM): %s",
+                    ", ".join(self.blindbox_replicas),
+                )
+            await self._ensure_blindbox_runtime_started()
+        self._emit_system("BlindBox replica list updated; runtime restarted.")
+        return ""
 
     async def _blindbox_poll_loop(self) -> None:
         client = self._blindbox_client

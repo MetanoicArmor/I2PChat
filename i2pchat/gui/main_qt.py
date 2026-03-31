@@ -17,7 +17,19 @@ from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
 from i2pchat.storage.blindbox_state import atomic_write_json
+from i2pchat.storage.profile_blindbox_replicas import (
+    load_profile_blindbox_replicas_list,
+    normalize_replica_endpoints,
+)
 from i2pchat.blindbox.blindbox_diagnostics import build_blindbox_diagnostics_text
+from i2pchat.blindbox.local_server_example import (
+    get_i2pd_blindbox_tunnel_example_note,
+    get_i2pd_blindbox_tunnel_example_source,
+    get_local_blindbox_server_example_note,
+    get_local_blindbox_server_example_source,
+    get_systemd_blindbox_unit_example_note,
+    get_systemd_blindbox_unit_example_source,
+)
 from i2pchat.presentation.compose_drafts import apply_compose_draft_peer_switch
 from i2pchat.protocol.message_delivery import (
     DELIVERY_STATE_DELIVERED,
@@ -58,6 +70,7 @@ from i2pchat.storage.profile_backup import (
 )
 from i2pchat.core.i2p_chat_core import (
     ChatMessage,
+    DEFAULT_RELEASE_BLINDBOX_ENDPOINTS,
     FileTransferInfo,
     I2PChatCore,
     ensure_valid_profile_name,
@@ -71,7 +84,15 @@ from i2pchat.core.i2p_chat_core import (
     render_bw,
     validate_image,
 )
+from i2pchat.gui import menu_manual_tooltips as menu_tt
+from i2pchat.gui.rounded_qtooltip import (
+    I2PChatQApplication,
+    apply_tooltip_handling,
+    hide_rounded_tooltip,
+    show_rounded_tooltip_at,
+)
 from i2pchat.gui.popup_geometry import (
+    apply_win_popup_rounded_mask,
     clamp_popup_top_left_to_available_geometry,
     global_position_popup_below_anchor,
 )
@@ -110,11 +131,30 @@ except Exception:  # pragma: no cover - мультимедиа не везде �
     QSoundEffect = None  # type: ignore[assignment]
 
 def _read_version() -> str:
-    for p in (__file__, "."):
-        vf = os.path.join(os.path.dirname(os.path.abspath(p)), "VERSION")
-        if os.path.isfile(vf):
-            with open(vf) as f:
-                return f.read().strip()
+    """VERSION в корне репозитория; при запуске из trunk cwd часто не корень — ищем вверх от main_qt.py."""
+    roots: list[str] = []
+    roots.append(os.path.dirname(os.path.abspath(__file__)))
+    roots.append(os.path.abspath("."))
+    meipass = getattr(sys, "_MEIPASS", None)
+    if isinstance(meipass, str) and meipass:
+        roots.append(meipass)
+    if getattr(sys, "frozen", False):
+        roots.append(os.path.dirname(os.path.abspath(sys.executable)))
+    seen: set[str] = set()
+    for start in roots:
+        if start in seen:
+            continue
+        seen.add(start)
+        d = start
+        for _ in range(24):
+            vf = os.path.join(d, "VERSION")
+            if os.path.isfile(vf):
+                with open(vf) as f:
+                    return f.read().strip()
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
     return "0.0.0"
 
 APP_VERSION = _read_version()
@@ -366,8 +406,18 @@ THEMES: dict[str, dict[str, object]] = {
     "ligth": {
         "label": "ligth",
         "dialog_stylesheet": """
-            QDialog { background-color: #f5f5f7; }
+            QDialog {
+                background-color: #f5f5f7;
+                border: none;
+            }
             QLabel { color: #1d1d1f; }
+            QLabel#ContactDetailsSelectable {
+                background-color: #f5f5f7;
+                color: #1d1d1f;
+                border: none;
+                selection-background-color: #0a84ff;
+                selection-color: #ffffff;
+            }
             QComboBox {
                 background: #ffffff;
                 border: none;
@@ -421,6 +471,91 @@ THEMES: dict[str, dict[str, object]] = {
                 color: #1d1d1f;
             }
             QLineEdit:focus { border: 1px solid #0a84ff; }
+            QFrame#HistoryNumericRow {
+                border: 1px solid #c8ceda;
+                border-radius: 8px;
+                background: #ffffff;
+            }
+            QFrame#HistoryNumericRow[focused="true"] {
+                border: 1px solid #0a84ff;
+            }
+            QFrame#HistoryNumericRow QSpinBox {
+                border: none;
+                background: transparent;
+                padding: 6px 10px;
+                min-height: 28px;
+                color: #1d1d1f;
+                outline: none;
+                selection-background-color: #0a84ff;
+                selection-color: #ffffff;
+            }
+            QWidget#HistorySpinStepColumn {
+                background: #eef1f7;
+                border: none;
+                border-left: 1px solid #d8dce6;
+                border-top-right-radius: 7px;
+                border-bottom-right-radius: 7px;
+            }
+            QToolButton#HistorySpinStepUp, QToolButton#HistorySpinStepDown {
+                border: none;
+                background: transparent;
+                color: #3f4757;
+                font-size: 11px;
+                min-width: 28px;
+                max-width: 28px;
+                min-height: 15px;
+                padding: 0px;
+            }
+            QToolButton#HistorySpinStepUp:hover, QToolButton#HistorySpinStepDown:hover {
+                background: #e4e9f2;
+                color: #1d1d1f;
+            }
+            QToolButton#HistorySpinStepUp:pressed, QToolButton#HistorySpinStepDown:pressed {
+                background: #d5dbe8;
+            }
+            QLabel#HistoryFieldHint {
+                color: #6c6e7e;
+                font-size: 11px;
+            }
+            QTabWidget#BlindBoxExampleTabWidget {
+                border: none;
+                background-color: #f5f5f7;
+            }
+            QTabWidget#BlindBoxExampleTabWidget::pane {
+                border: none;
+                padding-top: 6px;
+                background: transparent;
+            }
+            QTabWidget#BlindBoxExampleTabWidget::tab-bar {
+                border: none;
+                background: transparent;
+            }
+            QTabWidget#BlindBoxExampleTabWidget QTabBar {
+                background: transparent;
+                border: none;
+                qproperty-drawBase: 0;
+            }
+            QTabWidget#BlindBoxExampleTabWidget QTabBar::tab {
+                min-height: 20px;
+                padding: 2px 12px;
+                margin-right: 5px;
+                border: none;
+                outline: none;
+                border-radius: 10px;
+                background: #e8ebf2;
+                color: #3f4757;
+                font-weight: 500;
+            }
+            QTabWidget#BlindBoxExampleTabWidget QTabBar::tab:selected {
+                background: #ffffff;
+                color: #1d1d1f;
+            }
+            QTabWidget#BlindBoxExampleTabWidget QTabBar::tab:hover {
+                background: #dfe4ee;
+            }
+            QTabWidget#BlindBoxExampleTabWidget QTabBar::tab:selected:hover {
+                background: #f2f4f8;
+            }
             QCheckBox { color: #1d1d1f; spacing: 8px; }
             QCheckBox::indicator { width: 18px; height: 18px; }
         """,
@@ -491,17 +626,30 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical { height: 0px; }
-            QLineEdit, QPlainTextEdit, QTextEdit {
+            QLineEdit, QTextEdit {
                 background: #ffffff;
                 border: none;
                 border-radius: 9px;
                 padding: 8px 10px;
                 color: #1d1d1f;
             }
+            QPlainTextEdit {
+                background: #ffffff;
+                border: none;
+                border-radius: 9px;
+                padding: 8px 10px;
+            }
+            QPlainTextEdit#BlindBoxDiagnosticsSummary {
+                color: #1d1d1f;
+            }
             QLineEdit#PeerAddressEdit {
                 padding: 8px 10px 8px 8px;
             }
-            QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {
+            QLineEdit:focus, QTextEdit:focus {
+                background: #ffffff;
+                border: 1px solid #0a84ff;
+            }
+            QPlainTextEdit:focus {
                 background: #ffffff;
                 border: 1px solid #0a84ff;
             }
@@ -738,8 +886,18 @@ THEMES: dict[str, dict[str, object]] = {
     "night": {
         "label": "night",
         "dialog_stylesheet": """
-            QDialog { background-color: #141417; }
+            QDialog {
+                background-color: #141417;
+                border: none;
+            }
             QLabel { color: #f5f5f7; }
+            QLabel#ContactDetailsSelectable {
+                background-color: #141417;
+                color: #f5f5f7;
+                border: none;
+                selection-background-color: #0a84ff;
+                selection-color: #ffffff;
+            }
             QComboBox {
                 background: #1f1f23;
                 border: none;
@@ -793,6 +951,91 @@ THEMES: dict[str, dict[str, object]] = {
                 color: #f5f5f7;
             }
             QLineEdit:focus { border: 1px solid #0a84ff; }
+            QFrame#HistoryNumericRow {
+                border: 1px solid #3d4450;
+                border-radius: 8px;
+                background: #1f1f23;
+            }
+            QFrame#HistoryNumericRow[focused="true"] {
+                border: 1px solid #0a84ff;
+            }
+            QFrame#HistoryNumericRow QSpinBox {
+                border: none;
+                background: transparent;
+                padding: 6px 10px;
+                min-height: 28px;
+                color: #f5f5f7;
+                outline: none;
+                selection-background-color: #0a84ff;
+                selection-color: #ffffff;
+            }
+            QWidget#HistorySpinStepColumn {
+                background: #2a2d36;
+                border: none;
+                border-left: 1px solid #3d4450;
+                border-top-right-radius: 7px;
+                border-bottom-right-radius: 7px;
+            }
+            QToolButton#HistorySpinStepUp, QToolButton#HistorySpinStepDown {
+                border: none;
+                background: transparent;
+                color: #c6cfdf;
+                font-size: 11px;
+                min-width: 28px;
+                max-width: 28px;
+                min-height: 15px;
+                padding: 0px;
+            }
+            QToolButton#HistorySpinStepUp:hover, QToolButton#HistorySpinStepDown:hover {
+                background: #353945;
+                color: #f5f5f7;
+            }
+            QToolButton#HistorySpinStepUp:pressed, QToolButton#HistorySpinStepDown:pressed {
+                background: #404554;
+            }
+            QLabel#HistoryFieldHint {
+                color: #8d95a6;
+                font-size: 11px;
+            }
+            QTabWidget#BlindBoxExampleTabWidget {
+                border: none;
+                background-color: #141417;
+            }
+            QTabWidget#BlindBoxExampleTabWidget::pane {
+                border: none;
+                padding-top: 6px;
+                background: transparent;
+            }
+            QTabWidget#BlindBoxExampleTabWidget::tab-bar {
+                border: none;
+                background: transparent;
+            }
+            QTabWidget#BlindBoxExampleTabWidget QTabBar {
+                background: transparent;
+                border: none;
+                qproperty-drawBase: 0;
+            }
+            QTabWidget#BlindBoxExampleTabWidget QTabBar::tab {
+                min-height: 20px;
+                padding: 2px 12px;
+                margin-right: 5px;
+                border: none;
+                outline: none;
+                border-radius: 10px;
+                background: rgba(255, 255, 255, 0.06);
+                color: #b4bcc8;
+                font-weight: 500;
+            }
+            QTabWidget#BlindBoxExampleTabWidget QTabBar::tab:selected {
+                background: rgba(255, 255, 255, 0.18);
+                color: #f5f5f7;
+            }
+            QTabWidget#BlindBoxExampleTabWidget QTabBar::tab:hover {
+                background: rgba(255, 255, 255, 0.11);
+            }
+            QTabWidget#BlindBoxExampleTabWidget QTabBar::tab:selected:hover {
+                background: rgba(255, 255, 255, 0.22);
+            }
             QCheckBox { color: #f5f5f7; spacing: 8px; }
             QCheckBox::indicator { width: 18px; height: 18px; }
         """,
@@ -862,17 +1105,30 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical { height: 0px; }
-            QLineEdit, QPlainTextEdit, QTextEdit {
+            QLineEdit, QTextEdit {
                 background: rgba(255, 255, 255, 0.06);
                 border: none;
                 border-radius: 8px;
                 padding: 8px 10px;
                 color: #f5f5f7;
             }
+            QPlainTextEdit {
+                background: rgba(255, 255, 255, 0.06);
+                border: none;
+                border-radius: 8px;
+                padding: 8px 10px;
+            }
+            QPlainTextEdit#BlindBoxDiagnosticsSummary {
+                color: #f5f5f7;
+            }
             QLineEdit#PeerAddressEdit {
                 padding: 8px 10px 8px 8px;
             }
-            QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {
+            QLineEdit:focus, QTextEdit:focus {
+                background: rgba(255, 255, 255, 0.09);
+                border: 1px solid rgba(10, 132, 255, 0.85);
+            }
+            QPlainTextEdit:focus {
                 background: rgba(255, 255, 255, 0.09);
                 border: 1px solid rgba(10, 132, 255, 0.85);
             }
@@ -1110,10 +1366,96 @@ def _resolve_theme(theme_id: Optional[str]) -> str:
     return THEME_DEFAULT
 
 
+# Tooltip colors for QPalette — used by i2pchat.gui.rounded_qtooltip (replaces native QTipLabel on macOS).
+_TOOLTIP_THEME_COLORS: dict[str, tuple[str, str]] = {
+    "ligth": ("#f2f4f8", "#1d1d1f"),
+    "night": ("#22252d", "#e3e8f1"),
+}
+
+
+def _apply_application_tooltip_stylesheet(theme_id: Optional[str]) -> None:
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+    tid = _resolve_theme(theme_id)
+    bg_hex, fg_hex = _TOOLTIP_THEME_COLORS.get(tid, _TOOLTIP_THEME_COLORS[THEME_DEFAULT])
+    bg = QtGui.QColor(bg_hex)
+    fg = QtGui.QColor(fg_hex)
+    pal = QtGui.QPalette(app.palette())
+    for grp in (
+        QtGui.QPalette.ColorGroup.Active,
+        QtGui.QPalette.ColorGroup.Inactive,
+        QtGui.QPalette.ColorGroup.Disabled,
+    ):
+        pal.setColor(grp, QtGui.QPalette.ColorRole.ToolTipBase, bg)
+        pal.setColor(grp, QtGui.QPalette.ColorRole.ToolTipText, fg)
+    app.setPalette(pal)
+
+
 def _apply_dialog_theme_sheet(widget: QtWidgets.QWidget, theme_id: Optional[str]) -> None:
     """Отдельный лист от QMainWindow: иначе на macOS QDialog с светлым фоном наследует QLabel { color: #f5f5f7 }."""
     theme = THEMES[_resolve_theme(theme_id)]
     widget.setStyleSheet(str(theme["dialog_stylesheet"]))
+
+
+def _format_plaintext_hash_comment_lines(
+    edit: QtWidgets.QPlainTextEdit, theme_id: Optional[str]
+) -> None:
+    """Dim lines starting with # via QTextCharFormat. Do not set QSS `color` on this QPlainTextEdit."""
+    if getattr(edit, "_bb_hash_format_guard", False):
+        return
+    edit._bb_hash_format_guard = True
+    try:
+        tid = _resolve_theme(theme_id)
+        theme = THEMES[tid]
+        normal = QtGui.QColor("#1d1d1f" if tid == "ligth" else "#f5f5f7")
+        muted = QtGui.QColor(str(theme.get("hint_muted", "#767d8b")))
+        doc = edit.document()
+        cur_save = edit.textCursor()
+        a0, a1 = cur_save.anchor(), cur_save.position()
+        lo, hi = (min(a0, a1), max(a0, a1))
+        edit.blockSignals(True)
+        try:
+            block = doc.begin()
+            cur = QtGui.QTextCursor(doc)
+            while block.isValid():
+                t = block.text()
+                cur.setPosition(block.position())
+                cur.movePosition(
+                    QtGui.QTextCursor.MoveOperation.EndOfBlock,
+                    QtGui.QTextCursor.MoveMode.KeepAnchor,
+                )
+                fmt = QtGui.QTextCharFormat()
+                fmt.setForeground(
+                    QtGui.QBrush(muted if t.lstrip().startswith("#") else normal)
+                )
+                cur.setCharFormat(fmt)
+                block = block.next()
+        finally:
+            edit.blockSignals(False)
+        cur_rest = edit.textCursor()
+        cur_rest.setPosition(lo)
+        cur_rest.setPosition(hi, QtGui.QTextCursor.MoveMode.KeepAnchor)
+        edit.setTextCursor(cur_rest)
+    finally:
+        edit._bb_hash_format_guard = False
+
+
+def _contact_details_selectable_label(
+    parent: QtWidgets.QWidget, html: str
+) -> QtWidgets.QLabel:
+    """Текст диалога Contact details: выделение мышью/клавиатурой для копирования."""
+    lab = QtWidgets.QLabel(html, parent)
+    lab.setObjectName("ContactDetailsSelectable")
+    lab.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+    lab.setWordWrap(True)
+    lab.setAutoFillBackground(True)
+    lab.setTextInteractionFlags(
+        QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        | QtCore.Qt.TextInteractionFlag.TextSelectableByKeyboard
+    )
+    lab.setFocusPolicy(QtCore.Qt.FocusPolicy.ClickFocus)
+    return lab
 
 
 def _ui_prefs_path() -> str:
@@ -1608,12 +1950,16 @@ class ChatListView(QtWidgets.QListView):
 
         def add_copy_text() -> None:
             self._context_popup.add_action(
-                "Copy text", lambda i=index: self._copy_index_text(i, with_meta=False)
+                "Copy text",
+                lambda i=index: self._copy_index_text(i, with_meta=False),
+                tool_tip=menu_tt.TT_COPY_TEXT,
             )
 
         def add_copy_timestamp() -> None:
             self._context_popup.add_action(
-                "Copy with timestamp", lambda i=index: self._copy_index_text(i, with_meta=True)
+                "Copy with timestamp",
+                lambda i=index: self._copy_index_text(i, with_meta=True),
+                tool_tip=menu_tt.TT_COPY_WITH_TIMESTAMP,
             )
 
         k = item.kind
@@ -1622,9 +1968,12 @@ class ChatListView(QtWidgets.QListView):
             self._context_popup.add_action(
                 "Open",
                 lambda path=p: self.imageOpenRequested.emit(path),
+                tool_tip=menu_tt.TT_OPEN_IMAGE_OR_FILE,
             )
             self._context_popup.add_action(
-                "Copy path", lambda path=p: self._copy_path(path),
+                "Copy path",
+                lambda path=p: self._copy_path(path),
+                tool_tip=menu_tt.TT_COPY_PATH,
             )
             if item.text.strip():
                 add_copy_text()
@@ -1637,9 +1986,12 @@ class ChatListView(QtWidgets.QListView):
                     lambda path=fp: QtGui.QDesktopServices.openUrl(
                         QtCore.QUrl.fromLocalFile(path)
                     ),
+                    tool_tip=menu_tt.TT_OPEN_IMAGE_OR_FILE,
                 )
                 self._context_popup.add_action(
-                    "Copy path", lambda path=fp: self._copy_path(path),
+                    "Copy path",
+                    lambda path=fp: self._copy_path(path),
+                    tool_tip=menu_tt.TT_COPY_PATH,
                 )
             if item.open_folder_path and os.path.isdir(item.open_folder_path):
                 folder = item.open_folder_path
@@ -1648,9 +2000,12 @@ class ChatListView(QtWidgets.QListView):
                     lambda d=folder: QtGui.QDesktopServices.openUrl(
                         QtCore.QUrl.fromLocalFile(d)
                     ),
+                    tool_tip=menu_tt.TT_OPEN_FOLDER,
                 )
                 self._context_popup.add_action(
-                    "Copy folder path", lambda d=folder: self._copy_path(d)
+                    "Copy folder path",
+                    lambda d=folder: self._copy_path(d),
+                    tool_tip=menu_tt.TT_COPY_FOLDER_PATH,
                 )
             if item.text.strip():
                 add_copy_text()
@@ -1664,15 +2019,20 @@ class ChatListView(QtWidgets.QListView):
                     lambda it=item: self.replyRequested.emit(
                         format_reply_quote(it.sender, it.text)
                     ),
+                    tool_tip=menu_tt.TT_REPLY,
                 )
             if item.retryable:
                 self._context_popup.add_action(
-                    "Retry", lambda r=index.row(): self.retryRequested.emit(r)
+                    "Retry",
+                    lambda r=index.row(): self.retryRequested.emit(r),
+                    tool_tip=menu_tt.TT_RETRY,
                 )
         elif k == "transfer" and item.text.strip():
             fn = item.text.strip()
             self._context_popup.add_action(
-                "Copy filename", lambda name=fn: self._copy_path(name)
+                "Copy filename",
+                lambda name=fn: self._copy_path(name),
+                tool_tip=menu_tt.TT_COPY_FILENAME,
             )
         else:
             if item.text.strip():
@@ -1680,7 +2040,9 @@ class ChatListView(QtWidgets.QListView):
                 add_copy_timestamp()
             if item.retryable:
                 self._context_popup.add_action(
-                    "Retry", lambda r=index.row(): self.retryRequested.emit(r)
+                    "Retry",
+                    lambda r=index.row(): self.retryRequested.emit(r),
+                    tool_tip=menu_tt.TT_RETRY,
                 )
 
         detail = (item.delivery_hint or item.delivery_reason or "").strip()
@@ -1688,6 +2050,7 @@ class ChatListView(QtWidgets.QListView):
             self._context_popup.add_action(
                 "Copy delivery details",
                 lambda text=detail: QtWidgets.QApplication.clipboard().setText(text),
+                tool_tip=menu_tt.TT_DELIVERY_DETAIL,
             )
 
         if self._context_popup.surface_layout.count() > 0:
@@ -1717,9 +2080,9 @@ class ChatListView(QtWidgets.QListView):
                     if isinstance(item, ChatItem):
                         detail = (item.delivery_hint or item.delivery_reason or "").strip()
                         if detail:
-                            QtWidgets.QToolTip.showText(help_event.globalPos(), detail, self)
+                            show_rounded_tooltip_at(help_event.globalPos(), detail, owner=self)
                             return True
-            QtWidgets.QToolTip.hideText()
+            hide_rounded_tooltip()
         return super().viewportEvent(event)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
@@ -2534,7 +2897,7 @@ class MessageInputEdit(QtWidgets.QTextEdit):
 
     В протокол и черновики уходит Unicode через plainTextForSend().
 
-    Отправка: Shift+Enter (везде), а также Ctrl+Enter (Windows/Linux) или ⌘+Enter (macOS).
+    Отправка: Shift+Enter (везде), а также Ctrl+Enter или ⌘+Enter в зависимости от ОС.
     """
     sendRequested = QtCore.pyqtSignal()
     imagePasteReady = QtCore.pyqtSignal(str)
@@ -2744,16 +3107,29 @@ class MessageInputEdit(QtWidgets.QTextEdit):
             return
         self._context_popup.clear_actions()
         self._context_popup.apply_theme(self._theme_id)
-        self._context_popup.add_action("Undo", self.undo, enabled=self.document().isUndoAvailable())
-        self._context_popup.add_action("Redo", self.redo, enabled=self.document().isRedoAvailable())
+        self._context_popup.add_action(
+            "Undo", self.undo, enabled=self.document().isUndoAvailable(), tool_tip=menu_tt.TT_UNDO
+        )
+        self._context_popup.add_action(
+            "Redo", self.redo, enabled=self.document().isRedoAvailable(), tool_tip=menu_tt.TT_REDO
+        )
         self._context_popup.add_separator()
         has_selection = self.textCursor().hasSelection()
-        self._context_popup.add_action("Cut", self.cut, enabled=has_selection)
-        self._context_popup.add_action("Copy", self.copy, enabled=has_selection)
-        self._context_popup.add_action("Paste", self.paste, enabled=bool(self.canPaste()))
-        self._context_popup.add_action("Delete", self._delete_selection, enabled=has_selection)
+        self._context_popup.add_action("Cut", self.cut, enabled=has_selection, tool_tip=menu_tt.TT_CUT)
+        self._context_popup.add_action("Copy", self.copy, enabled=has_selection, tool_tip=menu_tt.TT_COPY)
+        self._context_popup.add_action(
+            "Paste", self.paste, enabled=bool(self.canPaste()), tool_tip=menu_tt.TT_PASTE
+        )
+        self._context_popup.add_action(
+            "Delete", self._delete_selection, enabled=has_selection, tool_tip=menu_tt.TT_DELETE
+        )
         self._context_popup.add_separator()
-        self._context_popup.add_action("Select All", self.selectAll, enabled=not self.document().isEmpty())
+        self._context_popup.add_action(
+            "Select All",
+            self.selectAll,
+            enabled=not self.document().isEmpty(),
+            tool_tip=menu_tt.TT_SELECT_ALL,
+        )
         self._context_popup.show_at_global(event.globalPos())
 
     @QtCore.pyqtSlot()
@@ -2764,6 +3140,30 @@ class MessageInputEdit(QtWidgets.QTextEdit):
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         key = event.key()
+        if key == QtCore.Qt.Key.Key_B and _event_matches_portable_ctrl_only(
+            event.modifiers()
+        ):
+            win = self.window()
+            if isinstance(win, ChatWindow):
+                win._toggle_contacts_sidebar()
+            event.accept()
+            return
+        if key == QtCore.Qt.Key.Key_T and _event_matches_portable_ctrl_only(
+            event.modifiers()
+        ):
+            win = self.window()
+            if isinstance(win, ChatWindow):
+                win.on_theme_switch_clicked()
+            event.accept()
+            return
+        if key == QtCore.Qt.Key.Key_U and _event_matches_portable_ctrl_only(
+            event.modifiers()
+        ):
+            win = self.window()
+            if isinstance(win, ChatWindow):
+                win._on_check_for_updates_clicked()
+            event.accept()
+            return
         if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
             modifiers = event.modifiers()
             shift_down = bool(modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier)
@@ -2829,16 +3229,26 @@ class AddressLineEdit(QtWidgets.QLineEdit):
             return
         self._context_popup.clear_actions()
         self._context_popup.apply_theme(self._theme_id)
-        self._context_popup.add_action("Undo", self.undo, enabled=self.isUndoAvailable())
-        self._context_popup.add_action("Redo", self.redo, enabled=self.isRedoAvailable())
+        self._context_popup.add_action(
+            "Undo", self.undo, enabled=self.isUndoAvailable(), tool_tip=menu_tt.TT_UNDO
+        )
+        self._context_popup.add_action(
+            "Redo", self.redo, enabled=self.isRedoAvailable(), tool_tip=menu_tt.TT_REDO
+        )
         self._context_popup.add_separator()
         has_selection = self.hasSelectedText()
-        self._context_popup.add_action("Cut", self.cut, enabled=has_selection)
-        self._context_popup.add_action("Copy", self.copy, enabled=has_selection)
-        self._context_popup.add_action("Paste", self.paste, enabled=self._can_paste())
-        self._context_popup.add_action("Delete", self._delete_selection, enabled=has_selection)
+        self._context_popup.add_action("Cut", self.cut, enabled=has_selection, tool_tip=menu_tt.TT_CUT)
+        self._context_popup.add_action("Copy", self.copy, enabled=has_selection, tool_tip=menu_tt.TT_COPY)
+        self._context_popup.add_action(
+            "Paste", self.paste, enabled=self._can_paste(), tool_tip=menu_tt.TT_PASTE
+        )
+        self._context_popup.add_action(
+            "Delete", self._delete_selection, enabled=has_selection, tool_tip=menu_tt.TT_DELETE
+        )
         self._context_popup.add_separator()
-        self._context_popup.add_action("Select All", self.selectAll, enabled=bool(self.text()))
+        self._context_popup.add_action(
+            "Select All", self.selectAll, enabled=bool(self.text()), tool_tip=menu_tt.TT_SELECT_ALL
+        )
         self._context_popup.show_at_global(event.globalPos())
 
     @QtCore.pyqtSlot()
@@ -2882,15 +3292,19 @@ class _PeerLockIndicatorLabel(QtWidgets.QLabel):
 class ActionsPopup(QtWidgets.QFrame):
     """Кастомный popup вместо QMenu для одинаковой отрисовки на всех ОС."""
     closed = QtCore.pyqtSignal()
+    # Синхронно с #ActionsPopupSurface border-radius в apply_theme
+    _WIN_OUTER_RADIUS = 14.0
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
+        self._win_menu_chrome = sys.platform.startswith("win")
         popup_flags = QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
-        if sys.platform.startswith("win"):
-            # Avoid native DWM shadow/frame artifacts around translucent popup on Windows.
-            popup_flags |= QtCore.Qt.WindowType.NoDropShadowWindowHint
         self.setWindowFlags(popup_flags)
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        if self._win_menu_chrome:
+            # Как EmojiPickerPopup: непрозрачный корень + рамка; иначе на Windows «торчит» подложка.
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        else:
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setObjectName("ActionsPopupWindow")
         self.setMinimumWidth(236)
 
@@ -2906,11 +3320,20 @@ class ActionsPopup(QtWidgets.QFrame):
         self.surface_layout.setContentsMargins(8, 8, 8, 8)
         self.surface_layout.setSpacing(4)
 
-    def add_action(self, text: str, callback: Callable[[], None], enabled: bool = True) -> QtWidgets.QPushButton:
+    def add_action(
+        self,
+        text: str,
+        callback: Callable[[], None],
+        enabled: bool = True,
+        *,
+        tool_tip: Optional[str] = None,
+    ) -> QtWidgets.QPushButton:
         btn = QtWidgets.QPushButton(text, self.surface)
         btn.setObjectName("ActionsPopupItem")
         btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         btn.setEnabled(enabled)
+        if tool_tip:
+            btn.setToolTip(tool_tip)
         btn.clicked.connect(lambda: (self.hide(), callback()))
         self.surface_layout.addWidget(btn)
         return btn
@@ -2929,8 +3352,23 @@ class ActionsPopup(QtWidgets.QFrame):
             if widget is not None:
                 widget.deleteLater()
 
+    def _apply_win_popup_mask(self) -> None:
+        if not self._win_menu_chrome:
+            return
+        apply_win_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._apply_win_popup_mask()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        if self._win_menu_chrome:
+            QtCore.QTimer.singleShot(0, self._apply_win_popup_mask)
+
     def show_below(self, anchor: QtWidgets.QWidget) -> None:
         self.adjustSize()
+        self._apply_win_popup_mask()
         w, h = self.width(), self.height()
         self.move(
             global_position_popup_below_anchor(
@@ -2941,6 +3379,7 @@ class ActionsPopup(QtWidgets.QFrame):
 
     def show_at_global(self, global_pos: QtCore.QPoint) -> None:
         self.adjustSize()
+        self._apply_win_popup_mask()
         pos = QtCore.QPoint(global_pos)
         screen = QtGui.QGuiApplication.screenAt(global_pos)
         if screen is None:
@@ -2958,17 +3397,8 @@ class ActionsPopup(QtWidgets.QFrame):
         self.closed.emit()
 
     def apply_theme(self, theme_id: str) -> None:
-        if theme_id == "night":
-            self.setStyleSheet(
-                """
-                #ActionsPopupWindow {
-                    background: transparent;
-                }
-                #ActionsPopupSurface {
-                    background: rgba(34, 37, 45, 0.96);
-                    border: none;
-                    border-radius: 14px;
-                }
+        night = theme_id == "night"
+        items_night = """
                 QPushButton#ActionsPopupItem {
                     background: transparent;
                     color: #e3e8f1;
@@ -2995,18 +3425,7 @@ class ActionsPopup(QtWidgets.QFrame):
                     margin: 4px 8px;
                 }
                 """
-            )
-        else:
-            self.setStyleSheet(
-                """
-                #ActionsPopupWindow {
-                    background: transparent;
-                }
-                #ActionsPopupSurface {
-                    background: #f6f7fa;
-                    border: none;
-                    border-radius: 14px;
-                }
+        items_light = """
                 QPushButton#ActionsPopupItem {
                     background: transparent;
                     color: #2c3442;
@@ -3033,7 +3452,63 @@ class ActionsPopup(QtWidgets.QFrame):
                     margin: 4px 8px;
                 }
                 """
+        if self._win_menu_chrome:
+            if night:
+                shell = """
+                #ActionsPopupWindow {
+                    background: #22252d;
+                    border: 1px solid #4a5060;
+                    border-radius: 14px;
+                }
+                #ActionsPopupSurface {
+                    background: transparent;
+                    border: none;
+                    border-radius: 14px;
+                }
+                """
+            else:
+                shell = """
+                #ActionsPopupWindow {
+                    background: #f6f7fa;
+                    border: 1px solid #c4c4c4;
+                    border-radius: 14px;
+                }
+                #ActionsPopupSurface {
+                    background: transparent;
+                    border: none;
+                    border-radius: 14px;
+                }
+                """
+            self.setStyleSheet(shell + (items_night if night else items_light))
+        elif night:
+            self.setStyleSheet(
+                """
+                #ActionsPopupWindow {
+                    background: transparent;
+                }
+                #ActionsPopupSurface {
+                    background: rgba(34, 37, 45, 0.96);
+                    border: none;
+                    border-radius: 14px;
+                }
+                """
+                + items_night
             )
+        else:
+            self.setStyleSheet(
+                """
+                #ActionsPopupWindow {
+                    background: transparent;
+                }
+                #ActionsPopupSurface {
+                    background: #f6f7fa;
+                    border: none;
+                    border-radius: 14px;
+                }
+                """
+                + items_light
+            )
+        self._apply_win_popup_mask()
 
 
 class ProfileSelectDialog(QtWidgets.QDialog):
@@ -3291,6 +3766,127 @@ class ContactRowWidget(QtWidgets.QWidget):
         super().mouseReleaseEvent(event)
 
 
+def _add_centered_dialog_buttons(
+    vbox: QtWidgets.QVBoxLayout, bb: QtWidgets.QDialogButtonBox
+) -> None:
+    bb.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Fixed,
+        QtWidgets.QSizePolicy.Policy.Fixed,
+    )
+    row = QtWidgets.QHBoxLayout()
+    row.addStretch(1)
+    row.addWidget(bb, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
+    row.addStretch(1)
+    vbox.addLayout(row)
+
+
+def _add_centered_dialog_buttons_form(
+    form: QtWidgets.QFormLayout, bb: QtWidgets.QDialogButtonBox
+) -> None:
+    bb.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Fixed,
+        QtWidgets.QSizePolicy.Policy.Fixed,
+    )
+    row = QtWidgets.QHBoxLayout()
+    row.addStretch(1)
+    row.addWidget(bb, 0, QtCore.Qt.AlignmentFlag.AlignHCenter)
+    row.addStretch(1)
+    wrap = QtWidgets.QWidget()
+    wrap.setLayout(row)
+    form.addRow(wrap)
+
+
+class _HistorySpinFocusFilter(QtCore.QObject):
+    """Подсветка QFrame#HistoryNumericRow при фокусе на QSpinBox внутри."""
+
+    def __init__(self, row: QtWidgets.QFrame) -> None:
+        super().__init__(row)
+        self._row = row
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if event.type() == QtCore.QEvent.Type.FocusIn:
+            self._row.setProperty("focused", True)
+        elif event.type() == QtCore.QEvent.Type.FocusOut:
+            self._row.setProperty("focused", False)
+        else:
+            return False
+        self._row.style().unpolish(self._row)
+        self._row.style().polish(self._row)
+        self._row.update()
+        return False
+
+
+def _history_field_label_block(title: str, hint: str) -> QtWidgets.QWidget:
+    w = QtWidgets.QWidget()
+    w.setObjectName("HistoryFieldLabelBlock")
+    vl = QtWidgets.QVBoxLayout(w)
+    vl.setContentsMargins(0, 0, 0, 0)
+    vl.setSpacing(4)
+    vl.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
+    t = QtWidgets.QLabel(title)
+    t.setObjectName("HistoryFieldTitle")
+    t.setAlignment(
+        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+    )
+    hi = QtWidgets.QLabel(hint)
+    hi.setObjectName("HistoryFieldHint")
+    hi.setWordWrap(True)
+    hi.setAlignment(
+        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+    )
+    vl.addWidget(t)
+    vl.addWidget(hi)
+    return w
+
+
+def _wrap_history_numeric_row(spin: QtWidgets.QSpinBox) -> QtWidgets.QFrame:
+    spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons)
+    frame = QtWidgets.QFrame()
+    frame.setObjectName("HistoryNumericRow")
+    frame.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+    frame.setProperty("focused", False)
+    frame.setMinimumWidth(260)
+    h = QtWidgets.QHBoxLayout(frame)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(0)
+    h.addWidget(spin, 1)
+    step_col = QtWidgets.QWidget()
+    step_col.setObjectName("HistorySpinStepColumn")
+    v = QtWidgets.QVBoxLayout(step_col)
+    v.setContentsMargins(0, 0, 0, 0)
+    v.setSpacing(0)
+    up = QtWidgets.QToolButton(step_col)
+    up.setObjectName("HistorySpinStepUp")
+    up.setText("▲")
+    up.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+    up.setAutoRepeat(True)
+    up.setAutoRepeatDelay(400)
+    up.setAutoRepeatInterval(120)
+    down = QtWidgets.QToolButton(step_col)
+    down.setObjectName("HistorySpinStepDown")
+    down.setText("▼")
+    down.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+    down.setAutoRepeat(True)
+    down.setAutoRepeatDelay(400)
+    down.setAutoRepeatInterval(120)
+
+    def _do_up() -> None:
+        spin.stepUp()
+        spin.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+
+    def _do_down() -> None:
+        spin.stepDown()
+        spin.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+
+    up.clicked.connect(_do_up)
+    down.clicked.connect(_do_down)
+    v.addWidget(up)
+    v.addWidget(down)
+    h.addWidget(step_col, 0)
+    spin.installEventFilter(_HistorySpinFocusFilter(frame))
+    return frame
+
+
 class _ContactNameNoteDialog(QtWidgets.QDialog):
     """Локальные display_name и note для записи в contact book."""
 
@@ -3318,7 +3914,7 @@ class _ContactNameNoteDialog(QtWidgets.QDialog):
         )
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
-        lay.addRow(bb)
+        _add_centered_dialog_buttons_form(lay, bb)
 
     def profile_values(self) -> tuple[str, str]:
         return self._name.text().strip(), self._note.text().strip()
@@ -3367,7 +3963,7 @@ class _RemoveSavedPeerDialog(QtWidgets.QDialog):
         bb.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Remove")
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
-        v.addWidget(bb)
+        _add_centered_dialog_buttons(v, bb)
 
     def options(
         self,
@@ -3378,6 +3974,141 @@ class _RemoveSavedPeerDialog(QtWidgets.QDialog):
             self._cb_lock.isChecked(),
             self._cb_bb.isChecked(),
         )
+
+
+class _HistoryRetentionDialog(QtWidgets.QDialog):
+    """Настройка лимитов истории в стиле приложения (вместо QInputDialog)."""
+
+    def __init__(
+        self,
+        parent: Optional[QtWidgets.QWidget],
+        *,
+        max_messages: int,
+        max_age_days: int,
+        theme_id: Optional[str] = None,
+    ) -> None:
+        super().__init__(parent)
+        _apply_dialog_theme_sheet(self, theme_id)
+        self.setWindowTitle("History retention")
+        self.setModal(True)
+        v = QtWidgets.QVBoxLayout(self)
+        v.setContentsMargins(20, 16, 20, 16)
+        v.setSpacing(14)
+        form = QtWidgets.QFormLayout()
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(12)
+        form.setRowWrapPolicy(
+            QtWidgets.QFormLayout.RowWrapPolicy.DontWrapRows
+        )
+        form.setFieldGrowthPolicy(
+            QtWidgets.QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint
+        )
+        form.setLabelAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+        )
+        self._sp_messages = QtWidgets.QSpinBox()
+        self._sp_messages.setRange(1, 100000)
+        self._sp_messages.setSingleStep(50)
+        self._sp_messages.setValue(max_messages)
+        self._sp_days = QtWidgets.QSpinBox()
+        self._sp_days.setRange(0, 3650)
+        self._sp_days.setSingleStep(1)
+        self._sp_days.setValue(max_age_days)
+        form.addRow(
+            _history_field_label_block(
+                "Max saved messages per peer",
+                "Older entries are dropped when this count is exceeded.",
+            ),
+            _wrap_history_numeric_row(self._sp_messages),
+        )
+        form.addRow(
+            _history_field_label_block(
+                "Max age in days",
+                "0 = keep only by message count above (ignore age).",
+            ),
+            _wrap_history_numeric_row(self._sp_days),
+        )
+        v.addLayout(form)
+        bb = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        bb.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setObjectName(
+            "PrimaryButton"
+        )
+        bb.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel).setObjectName(
+            "SecondaryButton"
+        )
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        _add_centered_dialog_buttons(v, bb)
+
+    def values(self) -> tuple[int, int]:
+        return self._sp_messages.value(), self._sp_days.value()
+
+
+class _BackupPassphraseDialog(QtWidgets.QDialog):
+    """Парольная фраза для бэкапа в стиле приложения."""
+
+    def __init__(
+        self,
+        parent: Optional[QtWidgets.QWidget],
+        *,
+        title: str,
+        confirm: bool,
+        theme_id: Optional[str] = None,
+    ) -> None:
+        super().__init__(parent)
+        _apply_dialog_theme_sheet(self, theme_id)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        v = QtWidgets.QVBoxLayout(self)
+        v.setContentsMargins(20, 16, 20, 16)
+        v.setSpacing(12)
+        self._pw1 = QtWidgets.QLineEdit()
+        self._pw1.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        f1 = QtWidgets.QFormLayout()
+        f1.addRow("Backup passphrase:", self._pw1)
+        v.addLayout(f1)
+        self._pw2: Optional[QtWidgets.QLineEdit] = None
+        if confirm:
+            self._pw2 = QtWidgets.QLineEdit()
+            self._pw2.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+            f2 = QtWidgets.QFormLayout()
+            f2.addRow("Confirm passphrase:", self._pw2)
+            v.addLayout(f2)
+        bb = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        bb.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setObjectName(
+            "PrimaryButton"
+        )
+        bb.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel).setObjectName(
+            "SecondaryButton"
+        )
+        bb.accepted.connect(self._on_accept)
+        bb.rejected.connect(self.reject)
+        _add_centered_dialog_buttons(v, bb)
+
+    def _on_accept(self) -> None:
+        s1 = self._pw1.text().strip()
+        if not s1:
+            QtWidgets.QMessageBox.warning(
+                self, self.windowTitle(), "Passphrase must not be empty."
+            )
+            return
+        if self._pw2 is not None:
+            s2 = self._pw2.text().strip()
+            if s1 != s2:
+                QtWidgets.QMessageBox.warning(
+                    self, self.windowTitle(), "Passphrases do not match."
+                )
+                return
+        self.accept()
+
+    def passphrase(self) -> str:
+        return self._pw1.text().strip()
 
 
 class _ContactsSidebarResizeGrip(QtWidgets.QWidget):
@@ -3482,6 +4213,59 @@ class ChatSearchHitsConsoleFrame(QtWidgets.QFrame):
         p.drawPath(path)
 
 
+def _tooltip_with_portable_shortcut(base: str, portable_sequence: str) -> str:
+    """Дополняет tooltip нативной подписью хоткея; Ctrl+… на macOS в Qt даёт ⌘ (кроме явных Meta+…)."""
+    seq = QtGui.QKeySequence(portable_sequence)
+    native = seq.toString(QtGui.QKeySequence.SequenceFormat.NativeText)
+    if not native:
+        return base
+    return f"{base}\n\nShortcut: {native}"
+
+
+def _privacy_mode_shortcut_portable() -> str:
+    """macOS: ⌘H зарезервировано системой (Hide); используем Control+H → в QKeySequence это Meta+H."""
+    return "Meta+H" if sys.platform == "darwin" else "Ctrl+H"
+
+
+def _event_matches_portable_ctrl_only(modifiers: QtCore.Qt.KeyboardModifier) -> bool:
+    """Как у QKeySequence Ctrl+…: на macOS — только ⌘, иначе только Ctrl (без Shift/Alt)."""
+    m = modifiers & (
+        QtCore.Qt.KeyboardModifier.ShiftModifier
+        | QtCore.Qt.KeyboardModifier.ControlModifier
+        | QtCore.Qt.KeyboardModifier.AltModifier
+        | QtCore.Qt.KeyboardModifier.MetaModifier
+    )
+    if sys.platform == "darwin":
+        return m == QtCore.Qt.KeyboardModifier.MetaModifier
+    return m == QtCore.Qt.KeyboardModifier.ControlModifier
+
+
+def _compose_input_placeholder_text() -> str:
+    """Подсказка в поле ввода: только релевантный модификатор (⌘ на macOS, Ctrl иначе)."""
+    send_mod = "⌘" if sys.platform == "darwin" else "Ctrl"
+    return (
+        f"Type message. Enter = new line; Shift+Enter or {send_mod}+Enter = send. "
+        "Drag and drop images or files to send."
+    )
+
+
+class _UpdateCheckThread(QtCore.QThread):
+    finished_with_result = QtCore.pyqtSignal(object)
+
+    def __init__(
+        self, current_version: str, parent: Optional[QtWidgets.QWidget] = None
+    ) -> None:
+        super().__init__(parent)
+        self._current_version = current_version
+
+    def run(self) -> None:
+        from i2pchat.updates.release_index import check_for_updates_sync
+
+        self.finished_with_result.emit(
+            check_for_updates_sync(self._current_version)
+        )
+
+
 class ChatWindow(QtWidgets.QMainWindow):
     # Ниже этого порога ширины лейбла статуса показывается сокращённая строка.
     _STATUS_LABEL_COMPACT_PX = 700
@@ -3539,6 +4323,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_actions_popup = ActionsPopup(self)
         self.saved_peers_context_popup = ActionsPopup(self)
         self._more_actions_suppress_until_ms = 0
+        self._update_check_thread: Optional[QtCore.QThread] = None
         self.more_actions_popup.closed.connect(self._on_more_actions_popup_closed)
 
         self._history_loaded_for_peer: Optional[str] = None
@@ -3817,9 +4602,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.compose_input_wrap = ComposeInputWrapper(input_container)
         self.input_edit = MessageInputEdit(self.compose_input_wrap)
         self.compose_input_wrap.attach_input(self.input_edit)
-        self.input_edit.setPlaceholderText(
-            "Type message. Enter = new line; Shift+Enter or Ctrl/⌘+Enter = send."
-        )
+        self.input_edit.setPlaceholderText(_compose_input_placeholder_text())
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
         self.input_edit.setFont(font)
@@ -3969,7 +4752,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
         self.contacts_toggle_btn.setText("◀")
-        self.contacts_toggle_btn.setToolTip("Show or hide saved peers")
+        self.contacts_toggle_btn.setToolTip(
+            _tooltip_with_portable_shortcut("Show or hide saved peers", "Ctrl+B")
+        )
         self.contacts_toggle_btn.clicked.connect(self._toggle_contacts_sidebar)
 
         # Грипп между кнопкой и чатом (узкая полоса).
@@ -4008,6 +4793,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             _app.applicationStateChanged.connect(
                 self._on_app_state_changed_clear_unread
             )
+            _app.installEventFilter(self)
 
         # Звук уведомления: env (I2PCHAT_NOTIFY_SOUND) имеет приоритет над prefs.
         # Если путь не задан или недоступен, используем fallback на QApplication.beep().
@@ -4031,55 +4817,111 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.peer_lock_label.clicked.connect(self.on_lock_peer_clicked)
         self.addr_edit.editingFinished.connect(self._on_addr_editing_finished_for_drafts)
         self.input_edit.composeTextChanged.connect(self._on_compose_text_changed)
-        self.more_actions_popup.add_action("Load profile (.dat)", self.on_load_profile_clicked)
-        self.more_actions_popup.add_action("Send picture", self.on_send_pic_clicked)
-        self.more_actions_popup.add_action("Send file", self.on_send_file_clicked)
         self.more_actions_popup.add_action(
-            "BlindBox diagnostics", self._show_blindbox_diagnostics
+            "Load profile (.dat)",
+            self.on_load_profile_clicked,
+            tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_LOAD_PROFILE_DAT, "Ctrl+O"),
         )
         self.more_actions_popup.add_action(
-            "Export profile backup…", self._export_profile_backup
+            "Send picture",
+            self.on_send_pic_clicked,
+            tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_SEND_PICTURE, "Ctrl+P"),
         )
         self.more_actions_popup.add_action(
-            "Import profile backup…", self._import_profile_backup
+            "Send file",
+            self.on_send_file_clicked,
+            tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_SEND_FILE, "Ctrl+F"),
         )
         self.more_actions_popup.add_action(
-            "Export history backup…", self._export_history_backup
+            "BlindBox diagnostics",
+            self._show_blindbox_diagnostics,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_BLINDBOX_DIAGNOSTICS, "Ctrl+D"
+            ),
         )
         self.more_actions_popup.add_action(
-            "Import history backup…", self._import_history_backup
+            "Export profile backup…",
+            self._export_profile_backup,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_EXPORT_PROFILE_BACKUP, "Ctrl+E"
+            ),
+        )
+        self.more_actions_popup.add_action(
+            "Import profile backup…",
+            self._import_profile_backup,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_IMPORT_PROFILE_BACKUP, "Ctrl+I"
+            ),
+        )
+        self.more_actions_popup.add_action(
+            "Export history backup…",
+            self._export_history_backup,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_EXPORT_HISTORY_BACKUP, "Ctrl+Shift+E"
+            ),
+        )
+        self.more_actions_popup.add_action(
+            "Import history backup…",
+            self._import_history_backup,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_IMPORT_HISTORY_BACKUP, "Ctrl+Shift+I"
+            ),
+        )
+        self.more_actions_popup.add_action(
+            "Check for updates…",
+            self._on_check_for_updates_clicked,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_CHECK_UPDATES, "Ctrl+U"
+            ),
         )
         self.more_actions_popup.add_separator()
-        self.more_actions_popup.add_action("Lock to peer", self.on_lock_peer_clicked)
-        self.more_actions_popup.add_action("Forget pinned peer key", self.on_forget_pinned_peer_key_clicked)
-        self.more_actions_popup.add_action("Copy my address", self.on_copy_my_addr_clicked)
+        self.more_actions_popup.add_action(
+            "Lock to peer",
+            self.on_lock_peer_clicked,
+            tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_LOCK_TO_PEER, "Ctrl+L"),
+        )
+        self.more_actions_popup.add_action(
+            "Forget pinned peer key",
+            self.on_forget_pinned_peer_key_clicked,
+            tool_tip=menu_tt.TT_FORGET_PINNED_PEER_KEY,
+        )
+        self.more_actions_popup.add_action(
+            "Copy my address",
+            self.on_copy_my_addr_clicked,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_COPY_MY_ADDRESS, "Ctrl+Shift+C"
+            ),
+        )
         self.more_actions_popup.add_separator()
         self._history_toggle_btn = self.more_actions_popup.add_action(
-            self._history_toggle_label(), self._on_toggle_history_clicked,
+            self._history_toggle_label(),
+            self._on_toggle_history_clicked,
+            tool_tip=menu_tt.TT_CHAT_HISTORY_TOGGLE,
         )
         self._sync_chat_search_header_with_history()
-        self.more_actions_popup.add_action("Clear history", self._on_clear_history_clicked)
         self.more_actions_popup.add_action(
-            "History retention…", self._configure_history_retention
+            "Clear history", self._on_clear_history_clicked, tool_tip=menu_tt.TT_CLEAR_HISTORY
+        )
+        self.more_actions_popup.add_action(
+            "History retention…",
+            self._configure_history_retention,
+            tool_tip=menu_tt.TT_HISTORY_RETENTION,
         )
         self._privacy_mode_toggle_btn = self.more_actions_popup.add_action(
-            self._privacy_mode_toggle_label(), self._on_toggle_privacy_mode_clicked
-        )
-        self._privacy_mode_toggle_btn.setToolTip(
-            "When ON: tray toasts hide message text (title may still name the peer); "
-            "while this window is focused, tray toasts and notification sounds are suppressed "
-            "(including for other chats). Notification sound item only controls sound when "
-            "Privacy mode is OFF or the window is not focused."
+            self._privacy_mode_toggle_label(),
+            self._on_toggle_privacy_mode_clicked,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_PRIVACY_MODE_TOGGLE, _privacy_mode_shortcut_portable()
+            ),
         )
         self.more_actions_popup.add_separator()
         self._notify_sound_enabled = load_notify_sound_enabled()
         self._notify_sound_toggle_btn = self.more_actions_popup.add_action(
             self._notify_sound_toggle_label(),
             self._on_toggle_notify_sound_clicked,
+            tool_tip=menu_tt.TT_NOTIFICATION_SOUND_TOGGLE,
         )
-        self._notify_sound_toggle_btn.setToolTip(
-            "When off, notification sounds are never played (custom sound path is kept)."
-        )
+        self._setup_more_actions_shortcuts()
         self.chat_view.cancelTransferRequested.connect(self.on_cancel_transfer)
         self.chat_view.imageOpenRequested.connect(self.on_image_open_requested)
         self.chat_view.replyRequested.connect(self._on_reply_requested)
@@ -4394,14 +5236,20 @@ class ChatWindow(QtWidgets.QMainWindow):
         popup.clear_actions()
         popup.apply_theme(self.theme_id)
         popup.add_action(
-            "Edit name & note…", lambda a=addr: self._saved_peer_edit_name_note(a)
+            "Edit name & note…",
+            lambda a=addr: self._saved_peer_edit_name_note(a),
+            tool_tip=menu_tt.TT_EDIT_NAME_NOTE,
         )
         popup.add_action(
-            "Contact details…", lambda a=addr: self._saved_peer_contact_details(a)
+            "Contact details…",
+            lambda a=addr: self._saved_peer_contact_details(a),
+            tool_tip=menu_tt.TT_CONTACT_DETAILS,
         )
         popup.add_separator()
         popup.add_action(
-            "Remove from saved peers…", lambda a=addr: self._saved_peer_remove(a)
+            "Remove from saved peers…",
+            lambda a=addr: self._saved_peer_remove(a),
+            tool_tip=menu_tt.TT_REMOVE_SAVED_PEER,
         )
         popup.show_at_global(self.contacts_list.mapToGlobal(pos))
 
@@ -4432,22 +5280,26 @@ class ChatWindow(QtWidgets.QMainWindow):
         _apply_dialog_theme_sheet(dlg, self.theme_id)
         dlg.setWindowTitle("Contact details")
         v = QtWidgets.QVBoxLayout(dlg)
-        v.addWidget(QtWidgets.QLabel(f"<b>Address</b><br>{norm}", dlg))
+        v.addWidget(_contact_details_selectable_label(dlg, f"<b>Address</b><br>{norm}"))
         if info is None:
-            v.addWidget(QtWidgets.QLabel("Invalid address.", dlg))
+            v.addWidget(_contact_details_selectable_label(dlg, "Invalid address."))
         elif info.pinned:
             key_hex = info.signing_key_hex or ""
             short_key = f"{key_hex[:24]}…{key_hex[-16:]}" if len(key_hex) > 48 else key_hex
             v.addWidget(
-                QtWidgets.QLabel(
+                _contact_details_selectable_label(
+                    dlg,
                     f"<b>TOFU</b>: pinned<br>"
                     f"Fingerprint (SHA-256, short): {info.fingerprint_short or '—'}<br>"
                     f"Signing key (hex, truncated): {short_key}",
-                    dlg,
                 )
             )
         else:
-            v.addWidget(QtWidgets.QLabel("No TOFU pin stored for this peer.", dlg))
+            v.addWidget(
+                _contact_details_selectable_label(
+                    dlg, "No TOFU pin stored for this peer."
+                )
+            )
 
         row = QtWidgets.QHBoxLayout()
         row.setSpacing(10)
@@ -4924,7 +5776,51 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._open_chat_search_console()
         self._update_chat_search_chrome()
 
+    def _escape_dismisses_chat_search(self) -> bool:
+        if not getattr(self, "_history_enabled", False):
+            return False
+        if not self.isActiveWindow():
+            return False
+        header = getattr(self, "_chat_search_header", None)
+        if header is None or not header.isVisible():
+            return False
+        fw = QtWidgets.QApplication.focusWidget()
+        if fw is not None and not self.isAncestorOf(fw):
+            return False
+        edit = getattr(self, "_chat_search_edit", None)
+        if edit is not None and edit.text().strip():
+            return True
+        console = getattr(self, "_chat_search_console", None)
+        if console is not None and (
+            console.isVisible() or int(console.maximumHeight()) > 0
+        ):
+            return True
+        if fw is not None and header is not None and header.isAncestorOf(fw):
+            return True
+        return False
+
+    def _dismiss_chat_search(self) -> None:
+        edit = getattr(self, "_chat_search_edit", None)
+        if edit is None:
+            return
+        self._chat_search_debounce.stop()
+        edit.blockSignals(True)
+        edit.clear()
+        edit.blockSignals(False)
+        self._rebuild_chat_search_matches()
+        if self.chat_view is not None:
+            self.chat_view.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if event.type() == QtCore.QEvent.Type.KeyPress:
+            ke = event
+            if isinstance(ke, QtGui.QKeyEvent):
+                if ke.key() == QtCore.Qt.Key.Key_Escape and (
+                    ke.modifiers() == QtCore.Qt.KeyboardModifier.NoModifier
+                ):
+                    if self._escape_dismisses_chat_search():
+                        self._dismiss_chat_search()
+                        return True
         if (
             obj is getattr(self, "_chat_search_field_wrap", None)
             and event.type() == QtCore.QEvent.Type.Resize
@@ -5696,7 +6592,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.theme_switch_button.setIcon(QtGui.QIcon())
             self.theme_switch_button.setText("◐")
         self.theme_switch_button.setToolTip(
-            f"Current: {self.theme_id}. Click to switch to {next_theme}"
+            _tooltip_with_portable_shortcut(
+                f"Current: {self.theme_id}. Click to switch to {next_theme}",
+                "Ctrl+T",
+            )
         )
 
     def _apply_theme(self, theme_id: str, persist: bool = True) -> None:
@@ -5722,6 +6621,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.chat_view.viewport().update()
         if persist:
             save_theme(self.theme_id)
+        _apply_application_tooltip_stylesheet(self.theme_id)
         self._update_theme_switch_label()
         self.more_actions_popup.apply_theme(self.theme_id)
         self.saved_peers_context_popup.apply_theme(self.theme_id)
@@ -5732,6 +6632,69 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._update_peer_lock_indicator()
         self._refresh_connection_buttons()
         self._chat_search_console.set_console_theme(self.theme_id)
+
+    def _setup_more_actions_shortcuts(self) -> None:
+        # В QKeySequence строка Ctrl+… на macOS интерпретируется как ⌘ (не путать с Meta в keyPressEvent).
+        pairs: list[tuple[str, Callable[[], None]]] = [
+            ("Ctrl+O", self.on_load_profile_clicked),
+            ("Ctrl+P", self.on_send_pic_clicked),
+            ("Ctrl+F", self.on_send_file_clicked),
+            ("Ctrl+D", self._show_blindbox_diagnostics),
+            ("Ctrl+E", self._export_profile_backup),
+            ("Ctrl+I", self._import_profile_backup),
+            ("Ctrl+Shift+E", self._export_history_backup),
+            ("Ctrl+Shift+I", self._import_history_backup),
+            ("Ctrl+L", self.on_lock_peer_clicked),
+            # ChatListView: только StandardKey.Copy (Ctrl/Cmd+C без Shift) — конфликта нет.
+            ("Ctrl+Shift+C", self.on_copy_my_addr_clicked),
+            (_privacy_mode_shortcut_portable(), self._on_toggle_privacy_mode_clicked),
+            ("Ctrl+T", self.on_theme_switch_clicked),
+            ("Ctrl+B", self._toggle_contacts_sidebar),
+            ("Ctrl+U", self._on_check_for_updates_clicked),
+        ]
+        for seq_str, slot in pairs:
+            sc = QtGui.QShortcut(QtGui.QKeySequence(seq_str), self)
+            sc.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
+            sc.activated.connect(slot)
+
+    @QtCore.pyqtSlot()
+    def _on_check_for_updates_clicked(self) -> None:
+        if self._update_check_thread is not None and self._update_check_thread.isRunning():
+            return
+        th = _UpdateCheckThread(APP_VERSION, self)
+        self._update_check_thread = th
+        th.finished_with_result.connect(self._on_update_check_finished)
+        th.finished.connect(th.deleteLater)
+        th.start()
+
+    @QtCore.pyqtSlot(object)
+    def _on_update_check_finished(self, result: object) -> None:
+        from i2pchat.updates.release_index import UpdateCheckResult, downloads_page_url
+
+        self._update_check_thread = None
+        if not isinstance(result, UpdateCheckResult):
+            return
+        mb = QtWidgets.QMessageBox(self)
+        mb.setWindowTitle("Check for updates")
+        mb.setText(result.message)
+        if not result.ok:
+            mb.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        else:
+            mb.setIcon(QtWidgets.QMessageBox.Icon.Information)
+        open_btn: Optional[QtWidgets.QAbstractButton] = None
+        if (
+            result.kind == "update_available"
+            or result.kind == "no_artifact"
+            or not result.ok
+        ):
+            open_btn = mb.addButton(
+                "Open downloads page",
+                QtWidgets.QMessageBox.ButtonRole.ActionRole,
+            )
+        mb.addButton(QtWidgets.QMessageBox.StandardButton.Ok)
+        mb.exec()
+        if open_btn is not None and mb.clickedButton() == open_btn:
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl(downloads_page_url()))
 
     @QtCore.pyqtSlot()
     def on_theme_switch_clicked(self) -> None:
@@ -6419,30 +7382,15 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def _configure_history_retention(self) -> None:
-        current_limit = load_history_max_messages()
-        limit, ok = QtWidgets.QInputDialog.getInt(
+        dlg = _HistoryRetentionDialog(
             self,
-            "History retention",
-            "Max saved messages per peer:",
-            current_limit,
-            1,
-            100000,
-            50,
+            max_messages=load_history_max_messages(),
+            max_age_days=load_history_retention_days(),
+            theme_id=self.theme_id,
         )
-        if not ok:
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
-        current_days = load_history_retention_days()
-        days, ok = QtWidgets.QInputDialog.getInt(
-            self,
-            "History retention",
-            "Max age in days (0 = keep by count only):",
-            current_days,
-            0,
-            3650,
-            1,
-        )
-        if not ok:
-            return
+        limit, days = dlg.values()
         save_history_max_messages(limit)
         save_history_retention_days(days)
         retained, _ = apply_history_retention(
@@ -6458,31 +7406,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
 
     def _prompt_backup_passphrase(self, *, title: str, confirm: bool) -> Optional[str]:
-        password, ok = QtWidgets.QInputDialog.getText(
-            self,
-            title,
-            "Backup passphrase:",
-            QtWidgets.QLineEdit.EchoMode.Password,
+        dlg = _BackupPassphraseDialog(
+            self, title=title, confirm=confirm, theme_id=self.theme_id
         )
-        if not ok:
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return None
-        secret = password.strip()
-        if not secret:
-            QtWidgets.QMessageBox.warning(self, title, "Passphrase must not be empty.")
-            return None
-        if confirm:
-            second, ok = QtWidgets.QInputDialog.getText(
-                self,
-                title,
-                "Confirm passphrase:",
-                QtWidgets.QLineEdit.EchoMode.Password,
-            )
-            if not ok:
-                return None
-            if secret != second:
-                QtWidgets.QMessageBox.warning(self, title, "Passphrases do not match.")
-                return None
-        return secret
+        return dlg.passphrase()
 
     def _send_local_path(self, path: str) -> None:
         low = path.lower()
@@ -6665,43 +7594,261 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.handle_system("No saved history found for this peer.")
 
     def _show_blindbox_diagnostics(self) -> None:
-        delivery = self.core.get_delivery_telemetry()
-        blindbox = self.core.get_blindbox_telemetry()
-        ack = self.core.get_ack_telemetry()
-        selected_peer = (
-            self.addr_edit.text().strip()
-            or self.core.current_peer_addr
-            or self.core.stored_peer
-            or ""
-        )
-        text = build_blindbox_diagnostics_text(
-            profile=self.profile,
-            selected_peer=selected_peer,
-            delivery=delivery,
-            blindbox=blindbox,
-            ack=ack,
-        )
         dlg = QtWidgets.QDialog(self)
         _apply_dialog_theme_sheet(dlg, self.theme_id)
         dlg.setWindowTitle("BlindBox diagnostics")
-        dlg.resize(700, 520)
+        dlg.resize(720, 580)
         layout = QtWidgets.QVBoxLayout(dlg)
+        locked = self.core.blindbox_replicas_gui_locked()
+        bb_on = bool(self.core.blindbox_enabled)
         intro = QtWidgets.QLabel(
-            "Read-only diagnostics for offline / delayed delivery readiness.", dlg
+            "Diagnostics for offline / delayed delivery. "
+            + (
+                "Replica endpoints are read-only (environment or local-auto controls the list)."
+                if locked
+                else (
+                    "You can edit Blind Box endpoints below when BlindBox is enabled for this profile."
+                    if bb_on
+                    else "BlindBox is off for this profile; endpoint list is shown for reference only."
+                )
+            ),
+            dlg,
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
-        editor = QtWidgets.QPlainTextEdit(dlg)
-        editor.setReadOnly(True)
-        editor.setPlainText(text)
-        layout.addWidget(editor, 1)
-        row = QtWidgets.QHBoxLayout()
-        row.addStretch(1)
+        summary = QtWidgets.QPlainTextEdit(dlg)
+        summary.setObjectName("BlindBoxDiagnosticsSummary")
+        summary.setReadOnly(True)
+
+        def refresh_summary() -> None:
+            delivery = self.core.get_delivery_telemetry()
+            blindbox = self.core.get_blindbox_telemetry()
+            ack = self.core.get_ack_telemetry()
+            selected_peer = (
+                self.addr_edit.text().strip()
+                or self.core.current_peer_addr
+                or self.core.stored_peer
+                or ""
+            )
+            summary.setPlainText(
+                build_blindbox_diagnostics_text(
+                    profile=self.profile,
+                    selected_peer=selected_peer,
+                    delivery=delivery,
+                    blindbox=blindbox,
+                    ack=ack,
+                )
+            )
+
+        refresh_summary()
+        summary.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        layout.addWidget(summary, 1)
+        layout.addWidget(
+            QtWidgets.QLabel(
+                "Blind Box endpoints (one per line, e.g. *.b32.i2p:19444):",
+                dlg,
+            )
+        )
+
+        def _bb_replica_endpoint_lines() -> list[str]:
+            if self.profile != "default":
+                disk = load_profile_blindbox_replicas_list(
+                    get_profiles_dir(), self.profile
+                )
+                if disk:
+                    return list(disk)
+            return list(self.core.get_blindbox_replica_endpoints_readonly())
+
+        def _bb_same_as_release_builtin(endpoints: list[str]) -> bool:
+            if not DEFAULT_RELEASE_BLINDBOX_ENDPOINTS:
+                return False
+            norm = normalize_replica_endpoints(endpoints)
+            want = list(DEFAULT_RELEASE_BLINDBOX_ENDPOINTS)
+            return len(norm) == len(want) and set(norm) == set(want)
+
+        def _bb_show_default_servers_note() -> bool:
+            lines = _bb_replica_endpoint_lines()
+            src = str(self.core.get_blindbox_telemetry().get("replicas_source") or "")
+            return src == "release-builtin" or _bb_same_as_release_builtin(lines)
+
+        def _blindbox_replica_field_text() -> str:
+            lines = _bb_replica_endpoint_lines()
+            if _bb_show_default_servers_note():
+                return "\n".join(["# default servers", *lines])
+            return "\n".join(lines)
+
+        replica_edit = QtWidgets.QPlainTextEdit(dlg)
+        replica_edit.setObjectName("BlindBoxReplicaEndpointsEdit")
+        replica_edit.setPlainText(_blindbox_replica_field_text())
+        _format_plaintext_hash_comment_lines(replica_edit, self.theme_id)
+        can_edit = bb_on and not locked
+        replica_edit.setReadOnly(not can_edit)
+        _prof = (self.profile or "").strip()
+        if _prof in ("", "default"):
+            _bb_rep_tip = menu_tt.TT_BLINDBOX_REPLICA_EDITOR_TRANSIENT_PROFILE
+        elif locked:
+            _bb_rep_tip = menu_tt.TT_BLINDBOX_REPLICA_EDITOR_ENV_LOCKED
+        else:
+            _bb_rep_tip = menu_tt.TT_BLINDBOX_REPLICA_EDITOR
+        replica_edit.setToolTip(_bb_rep_tip)
+        replica_edit.viewport().setToolTip(_bb_rep_tip)
+        _bb_fm = replica_edit.fontMetrics()
+        _bb_line = max(_bb_fm.lineSpacing(), _bb_fm.height())
+        replica_edit.setMinimumHeight(_bb_line * 2 + 20)
+        replica_edit.setMaximumHeight(_bb_line * 5 + 24)
+        replica_edit.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
+        layout.addWidget(replica_edit, 0)
+        replica_edit.textChanged.connect(
+            lambda: _format_plaintext_hash_comment_lines(replica_edit, self.theme_id)
+        )
+
+        def reload_replica_field() -> None:
+            replica_edit.setPlainText(_blindbox_replica_field_text())
+
+        example_btn = QtWidgets.QPushButton("Example server…", dlg)
+        example_btn.setToolTip(
+            "Local Blind Box server (Python), i2pd tunnel, and optional systemd unit."
+        )
+        example_btn.clicked.connect(
+            lambda: self._show_blindbox_local_server_example_dialog(dlg)
+        )
+        reload_btn = QtWidgets.QPushButton("Reload", dlg)
+        reload_btn.setToolTip("Reload the endpoint list from your saved profile file.")
+        reload_btn.clicked.connect(reload_replica_field)
+        save_btn = QtWidgets.QPushButton("Save and restart", dlg)
+        save_btn.setToolTip(
+            "Write endpoints to the profile file and restart the BlindBox runtime."
+        )
+        save_btn.setEnabled(can_edit)
+
+        async def _save_replicas_async() -> None:
+            try:
+                lines = replica_edit.toPlainText().splitlines()
+                err = await self.core.apply_blindbox_replica_endpoints(lines)
+            except Exception as e:
+                logger.exception("apply_blindbox_replica_endpoints failed")
+                QtWidgets.QMessageBox.warning(
+                    dlg,
+                    "BlindBox replicas",
+                    str(e).strip() or type(e).__name__,
+                )
+                return
+            if err:
+                QtWidgets.QMessageBox.warning(dlg, "BlindBox replicas", err)
+            else:
+                refresh_summary()
+                reload_replica_field()
+
+        def _schedule_save_replicas() -> None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                QtWidgets.QMessageBox.warning(
+                    dlg,
+                    "BlindBox replicas",
+                    "No asyncio event loop (qasync). Restart the app and try again.",
+                )
+                return
+            asyncio.create_task(_save_replicas_async())
+
+        save_btn.clicked.connect(_schedule_save_replicas)
         close_btn = QtWidgets.QPushButton("Close", dlg)
         close_btn.clicked.connect(dlg.accept)
+        layout.addSpacing(8)
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(0)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(example_btn)
+        row.addStretch(1)
+        row.addWidget(reload_btn)
+        row.addStretch(1)
+        row.addWidget(save_btn)
+        row.addStretch(1)
         row.addWidget(close_btn)
         layout.addLayout(row)
         dlg.exec()
+
+    def _show_blindbox_local_server_example_dialog(
+        self, parent: QtWidgets.QWidget
+    ) -> None:
+        sub = QtWidgets.QDialog(parent)
+        _apply_dialog_theme_sheet(sub, self.theme_id)
+        sub.setWindowTitle("Blind Box setup examples")
+        sub.resize(680, 520)
+        v = QtWidgets.QVBoxLayout(sub)
+        _bb_example_pad = 8  # same as tab page pl margins — align footer with editor block
+        tabs = QtWidgets.QTabWidget(sub)
+        tabs.setObjectName("BlindBoxExampleTabWidget")
+        tabs.setDocumentMode(True)
+        _bb_tab_bar = tabs.tabBar()
+        _bb_tab_bar.setUsesScrollButtons(False)
+        _bb_tab_bar.setExpanding(False)
+        _bb_tab_bar.setDrawBase(False)
+
+        def _tab_page(note: str, body_text: str) -> tuple[QtWidgets.QWidget, QtWidgets.QPlainTextEdit]:
+            page = QtWidgets.QWidget(sub)
+            pl = QtWidgets.QVBoxLayout(page)
+            pl.setContentsMargins(
+                _bb_example_pad,
+                _bb_example_pad,
+                _bb_example_pad,
+                _bb_example_pad,
+            )
+            hl = QtWidgets.QLabel(note, page)
+            hl.setWordWrap(True)
+            pl.addWidget(hl)
+            te = QtWidgets.QPlainTextEdit(page)
+            te.setObjectName("BlindBoxExampleSourceEdit")
+            te.setReadOnly(True)
+            te.setPlainText(body_text)
+            _format_plaintext_hash_comment_lines(te, self.theme_id)
+            te.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Expanding,
+            )
+            pl.addWidget(te, 1)
+            return page, te
+
+        py_page, py_edit = _tab_page(
+            get_local_blindbox_server_example_note(),
+            get_local_blindbox_server_example_source(),
+        )
+        tabs.addTab(py_page, "Python")
+        i2p_page, i2p_edit = _tab_page(
+            get_i2pd_blindbox_tunnel_example_note(),
+            get_i2pd_blindbox_tunnel_example_source(),
+        )
+        tabs.addTab(i2p_page, "I2pd")
+        sd_page, sd_edit = _tab_page(
+            get_systemd_blindbox_unit_example_note(),
+            get_systemd_blindbox_unit_example_source(),
+        )
+        tabs.addTab(sd_page, "Systemd")
+        v.addWidget(tabs, 1)
+        edits = (py_edit, i2p_edit, sd_edit)
+        v.addSpacing(6)
+        brow = QtWidgets.QHBoxLayout()
+        brow.setSpacing(10)
+        brow.setContentsMargins(_bb_example_pad, 0, _bb_example_pad, 0)
+        copy_btn = QtWidgets.QPushButton("Copy all", sub)
+        copy_btn.clicked.connect(
+            lambda: QtWidgets.QApplication.clipboard().setText(
+                edits[tabs.currentIndex()].toPlainText()
+            )
+        )
+        brow.addStretch(1)
+        brow.addWidget(copy_btn)
+        close_sub = QtWidgets.QPushButton("Close", sub)
+        close_sub.clicked.connect(sub.accept)
+        brow.addWidget(close_sub)
+        v.addLayout(brow)
+        sub.exec()
 
     @QtCore.pyqtSlot()
     def on_forget_pinned_peer_key_clicked(self) -> None:
@@ -6981,6 +8128,9 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         """Останавливаем ядро и event loop при закрытии окна."""
+        _app = QtWidgets.QApplication.instance()
+        if _app is not None:
+            _app.removeEventFilter(self)
         self._history_flush_timer.stop()
         self._compose_drafts_save_timer.stop()
         self._flush_compose_drafts_to_disk()
@@ -7023,8 +8173,9 @@ def main() -> None:
             QtCore.Qt.ApplicationAttribute.AA_DontUseNativeMenuWindows, True
         )
 
-    # Создаём единственный экземпляр QApplication
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    # Создаём единственный экземпляр QApplication (подкласс перехватывает QHelpEvent ToolTip).
+    app = QtWidgets.QApplication.instance() or I2PChatQApplication(sys.argv)
+    apply_tooltip_handling(app)
 
     # Единый стиль и шрифт для всех платформ (более предсказуемый рендеринг)
     app.setStyle("Fusion")
@@ -7041,6 +8192,7 @@ def main() -> None:
 
     saved_theme = load_saved_theme()
     selected_theme = saved_theme
+    _apply_application_tooltip_stylesheet(saved_theme)
 
     # 1) если профиль передан аргументом (CLI), используем его как есть
     if len(sys.argv) > 1:
@@ -7085,6 +8237,7 @@ def main() -> None:
                 return
         finally:
             app.removeEventFilter(dialog)
+    _apply_application_tooltip_stylesheet(selected_theme)
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
 

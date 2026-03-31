@@ -4,6 +4,7 @@ Versioned release write-ups for I2PChat live in this directory (`docs/releases/`
 
 | Version | Notes |
 |--------|--------|
+| **1.1.0** | [RELEASE_1.1.0.md](RELEASE_1.1.0.md) — keyboard shortcuts, I2P update check, compose/search UX, VERSION discovery |
 | **1.0.1** | [RELEASE_1.0.1.md](RELEASE_1.0.1.md) — profile switch race fixes; notification menu (Privacy + sound only) |
 | **1.0.0** | [RELEASE_1.0.0.md](RELEASE_1.0.0.md) — stable niche milestone; backup/restore, retention, privacy mode, drag-and-drop, reliability |
 | **0.9.0** | [RELEASE_0.9.0.md](RELEASE_0.9.0.md) — profile/history backup, retention UI, privacy/PIN, DnD, transfer auto-retry (feature slice before 1.0.0 tag) |

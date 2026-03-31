@@ -31,10 +31,23 @@ def build_blindbox_diagnostics_text(
         f"- Poller running: {'yes' if blindbox.get('poller_running') else 'no'}",
         f"- Root secret initialized: {'yes' if blindbox.get('has_root_secret') else 'no'}",
         f"- Blind Boxes configured: {blindbox.get('blind_boxes', 0)}",
-        f"- Privacy profile: {blindbox.get('privacy_profile', 'unknown')}",
-        f"- Send index: {blindbox.get('send_index', 0)}",
-        f"- Root epoch: {blindbox.get('root_epoch', 0)}",
     ]
+    reps = blindbox.get("replica_endpoints")
+    if isinstance(reps, list) and reps:
+        lines.append("- Endpoints:")
+        for i, ep in enumerate(reps, 1):
+            lines.append(f"  {i}. {ep}")
+    if blindbox.get("replicas_gui_locked"):
+        lines.append(
+            "- Replica list: locked by environment (use env vars / global replicas file)"
+        )
+    lines.extend(
+        [
+            f"- Privacy profile: {blindbox.get('privacy_profile', 'unknown')}",
+            f"- Send index: {blindbox.get('send_index', 0)}",
+            f"- Root epoch: {blindbox.get('root_epoch', 0)}",
+        ]
+    )
     if blindbox.get("insecure_local_mode"):
         lines.append("- Warning: insecure local BlindBox mode is active")
     lines.extend(

@@ -2,9 +2,28 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
+
+
+def win_rounded_window_region(width: int, height: int, radius: float) -> QtGui.QRegion:
+    """Регион для QWidget.setMask: обрезка Win32-popup по скруглению (убирает «острые» углы подложки)."""
+    path = QtGui.QPainterPath()
+    path.addRoundedRect(
+        QtCore.QRectF(0, 0, float(width), float(height)), radius, radius
+    )
+    return QtGui.QRegion(path.toFillPolygon())
+
+
+def apply_win_popup_rounded_mask(widget: QtWidgets.QWidget, radius: float) -> None:
+    if not sys.platform.startswith("win"):
+        return
+    w, h = widget.width(), widget.height()
+    if w < 2 or h < 2:
+        return
+    widget.setMask(win_rounded_window_region(w, h, radius))
 
 
 def popup_screen_for_anchor(anchor: QtWidgets.QWidget) -> Optional[QtGui.QScreen]:

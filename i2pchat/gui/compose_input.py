@@ -8,6 +8,9 @@ from typing import Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from i2pchat.gui.popup_geometry import apply_win_popup_rounded_mask
+from i2pchat.gui.styled_combo_widgets import RoundedVerticalScrollbar
+
 from .emoji_data import EMOJI_CHARS
 
 _ICONS_DIR = Path(__file__).resolve().parent / "icons"
@@ -95,6 +98,8 @@ class EmojiPickerPopup(QtWidgets.QFrame):
     emojiChosen = QtCore.pyqtSignal(str)
 
     _COLS = 8
+    # Должен совпадать с border-radius у QFrame#EmojiPickerPopupWindow в ветке _win_menu_chrome
+    _WIN_OUTER_RADIUS = 8.0
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -122,26 +127,55 @@ class EmojiPickerPopup(QtWidgets.QFrame):
         surf_lay.setContentsMargins(6, 6, 6, 6)
         surf_lay.setSpacing(0)
 
-        scroll = QtWidgets.QScrollArea(self._surface)
-        scroll.setObjectName("EmojiPickerScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(
+        self._scroll = QtWidgets.QScrollArea(self._surface)
+        self._scroll.setObjectName("EmojiPickerScroll")
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(
             QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        scroll.setFixedHeight(260)
+        self._scroll.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._scroll.setFixedHeight(260)
 
         inner = QtWidgets.QWidget()
         inner.setObjectName("EmojiPickerGridHost")
         self._grid_layout = QtWidgets.QGridLayout(inner)
         self._grid_layout.setSpacing(4)
         self._grid_layout.setContentsMargins(8, 6, 8, 6)
-        self._repopulate_grid()
 
-        scroll.setWidget(inner)
-        surf_lay.addWidget(scroll)
-        self.setFixedWidth(min(self._COLS * 44 + 24, 380))
+        self._scroll.setWidget(inner)
+        self._custom_scrollbar = RoundedVerticalScrollbar(
+            self._scroll.verticalScrollBar(), self._surface
+        )
+        scroll_row = QtWidgets.QHBoxLayout()
+        scroll_row.setContentsMargins(0, 0, 0, 0)
+        scroll_row.setSpacing(4)
+        scroll_row.addWidget(self._scroll, 1)
+        scroll_row.addWidget(self._custom_scrollbar, 0)
+        surf_lay.addLayout(scroll_row)
+        self._scroll.verticalScrollBar().rangeChanged.connect(
+            lambda *_a: self._sync_emoji_scrollbar()
+        )
+        self._repopulate_grid()
+        # +10 под кастомный скролл (как у ProfileComboPopup) рядом с QScrollArea
+        self.setFixedWidth(min(self._COLS * 44 + 34, 392))
         self.apply_theme(self._theme_id)
+
+    def _apply_win_rounded_mask(self) -> None:
+        if not self._win_menu_chrome:
+            return
+        apply_win_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._apply_win_rounded_mask()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        if self._win_menu_chrome:
+            QtCore.QTimer.singleShot(0, self._apply_win_rounded_mask)
 
     def _repopulate_grid(self) -> None:
         from i2pchat.gui import emoji_paths as _ep
@@ -185,6 +219,15 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                 btn.setFont(f)
             btn.clicked.connect(lambda _=False, sym=ch: self._pick(sym))
             grid.addWidget(btn, r, c)
+        self._sync_emoji_scrollbar()
+
+    def _sync_emoji_scrollbar(self) -> None:
+        cs = getattr(self, "_custom_scrollbar", None)
+        if cs is None:
+            return
+        vsb = self._scroll.verticalScrollBar()
+        cs.setVisible(vsb.maximum() > 0)
+        cs.update()
 
     def apply_theme(self, theme_id: str) -> None:
         self._theme_id = (theme_id or "").strip().lower()
@@ -223,18 +266,6 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                     QToolButton#EmojiCell:hover {
                         background: rgba(255, 255, 255, 0.12);
                     }
-                    QScrollBar:vertical {
-                        background: transparent;
-                        width: 10px;
-                        margin: 2px;
-                    }
-                    QScrollBar::handle:vertical {
-                        background: rgba(255, 255, 255, 0.25);
-                        min-height: 24px;
-                        border-radius: 4px;
-                    }
-                    QScrollBar::add-line:vertical,
-                    QScrollBar::sub-line:vertical { height: 0px; }
                     """
                 )
             else:
@@ -271,20 +302,19 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                     QToolButton#EmojiCell:hover {
                         background: #e8e8e8;
                     }
-                    QScrollBar:vertical {
-                        background: transparent;
-                        width: 10px;
-                        margin: 2px;
-                    }
-                    QScrollBar::handle:vertical {
-                        background: rgba(0, 0, 0, 0.28);
-                        min-height: 24px;
-                        border-radius: 4px;
-                    }
-                    QScrollBar::add-line:vertical,
-                    QScrollBar::sub-line:vertical { height: 0px; }
                     """
                 )
+            if self._theme_id == "night":
+                self._custom_scrollbar.set_colors(
+                    thumb=QtGui.QColor(255, 255, 255, 51),
+                    track=QtGui.QColor(0, 0, 0, 0),
+                )
+            else:
+                self._custom_scrollbar.set_colors(
+                    thumb=QtGui.QColor(60, 60, 67, 72),
+                    track=QtGui.QColor(0, 0, 0, 0),
+                )
+            self._sync_emoji_scrollbar()
             return
         if self._theme_id == "night":
             self.setStyleSheet(
@@ -318,18 +348,6 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                 QToolButton#EmojiCell:hover {
                     background: rgba(255, 255, 255, 0.10);
                 }
-                QScrollBar:vertical {
-                    background: transparent;
-                    width: 8px;
-                    margin: 0px;
-                }
-                QScrollBar::handle:vertical {
-                    background: rgba(255, 255, 255, 0.20);
-                    min-height: 24px;
-                    border-radius: 4px;
-                }
-                QScrollBar::add-line:vertical,
-                QScrollBar::sub-line:vertical { height: 0px; }
                 """
             )
         else:
@@ -364,20 +382,19 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                 QToolButton#EmojiCell:hover {
                     background: #e5eaf2;
                 }
-                QScrollBar:vertical {
-                    background: transparent;
-                    width: 8px;
-                    margin: 0px;
-                }
-                QScrollBar::handle:vertical {
-                    background: rgba(60, 60, 67, 0.35);
-                    min-height: 24px;
-                    border-radius: 4px;
-                }
-                QScrollBar::add-line:vertical,
-                QScrollBar::sub-line:vertical { height: 0px; }
                 """
             )
+        if self._theme_id == "night":
+            self._custom_scrollbar.set_colors(
+                thumb=QtGui.QColor(255, 255, 255, 51),
+                track=QtGui.QColor(0, 0, 0, 0),
+            )
+        else:
+            self._custom_scrollbar.set_colors(
+                thumb=QtGui.QColor(60, 60, 67, 72),
+                track=QtGui.QColor(0, 0, 0, 0),
+            )
+        self._sync_emoji_scrollbar()
 
     def _pick(self, sym: str) -> None:
         self.emojiChosen.emit(sym)
@@ -386,6 +403,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
     def show_near_anchor(self, anchor: QtWidgets.QWidget, theme_id: str) -> None:
         self.apply_theme(theme_id)
         self.adjustSize()
+        self._apply_win_rounded_mask()
         top_left = anchor.mapToGlobal(QtCore.QPoint(0, 0))
         pw = self.width()
         ph = self.height()
@@ -398,6 +416,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
             screen = QtWidgets.QApplication.primaryScreen()
         if screen is None:
             self.move(int(x), int(y))
+            self._sync_emoji_scrollbar()
             self.show()
             self.raise_()
             return
@@ -406,6 +425,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
         x = max(geo.left() + margin, min(int(x), geo.right() - pw - margin + 1))
         y = max(geo.top() + margin, min(int(y), geo.bottom() - ph - margin + 1))
         self.move(x, y)
+        self._sync_emoji_scrollbar()
         self.show()
         self.raise_()
 
