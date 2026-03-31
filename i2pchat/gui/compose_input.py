@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -12,47 +11,6 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from .emoji_data import EMOJI_CHARS
 
 _ICONS_DIR = Path(__file__).resolve().parent / "icons"
-_GUI_DIR = Path(__file__).resolve().parent
-
-
-def fluent_emoji_root() -> Path:
-    """Каталог fluent_emoji: исходники или PyInstaller _MEIPASS (без сетевых запросов)."""
-    meipass = getattr(sys, "_MEIPASS", None)
-    if isinstance(meipass, str) and meipass:
-        bundled = Path(meipass) / "i2pchat" / "gui" / "fluent_emoji"
-        if bundled.is_dir():
-            return bundled
-    return _GUI_DIR / "fluent_emoji"
-
-
-def load_fluent_emoji_paths() -> dict[str, Path]:
-    """Глиф из EMOJI_CHARS -> абсолютный путь к PNG; пусто, если манифеста/файлов нет."""
-    root = fluent_emoji_root()
-    mf = root / "manifest.json"
-    if not mf.is_file():
-        return {}
-    try:
-        raw = json.loads(mf.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    root_resolved = root.resolve()
-    out: dict[str, Path] = {}
-    for key, rel in raw.items():
-        if not isinstance(key, str) or not isinstance(rel, str):
-            continue
-        rel_path = Path(rel)
-        if rel_path.is_absolute() or ".." in rel_path.parts:
-            continue
-        p = (root / rel).resolve()
-        try:
-            p.relative_to(root_resolved)
-        except ValueError:
-            continue
-        if p.is_file():
-            out[key] = p
-    return out
 
 
 def _resolve_gui_icon_file(filename: str) -> Optional[Path]:
@@ -64,6 +22,33 @@ def _resolve_gui_icon_file(filename: str) -> Optional[Path]:
             return bundled
     p = _ICONS_DIR / filename
     return p if p.is_file() else None
+
+
+def _picker_emoji_icon(png_path: Path, logical_side: int) -> QtGui.QIcon:
+    """Квадратная иконка с PNG по центру — без смещения/обрезки стилем QPushButton на macOS."""
+    src = QtGui.QPixmap(str(png_path))
+    if src.isNull():
+        return QtGui.QIcon()
+    app = QtWidgets.QApplication.instance()
+    dpr = 1.0
+    if app is not None:
+        scr = app.primaryScreen()
+        if scr is not None:
+            dpr = max(1.0, min(3.0, float(scr.devicePixelRatio())))
+    phys = max(1, int(round(logical_side * dpr)))
+    canvas = QtGui.QPixmap(phys, phys)
+    canvas.fill(QtCore.Qt.GlobalColor.transparent)
+    scaled = src.scaled(
+        phys,
+        phys,
+        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+        QtCore.Qt.TransformationMode.SmoothTransformation,
+    )
+    p = QtGui.QPainter(canvas)
+    p.drawPixmap((phys - scaled.width()) // 2, (phys - scaled.height()) // 2, scaled)
+    p.end()
+    canvas.setDevicePixelRatio(dpr)
+    return QtGui.QIcon(canvas)
 
 
 def _tint_pixmap_with_alpha(source: QtGui.QPixmap, color: QtGui.QColor) -> QtGui.QPixmap:
@@ -120,6 +105,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
         self.setObjectName("EmojiPickerPopupWindow")
         self._theme_id = "ligth"
+        self._grid_layout: Optional[QtWidgets.QGridLayout] = None
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -144,44 +130,58 @@ class EmojiPickerPopup(QtWidgets.QFrame):
 
         inner = QtWidgets.QWidget()
         inner.setObjectName("EmojiPickerGridHost")
-        grid = QtWidgets.QGridLayout(inner)
-        grid.setSpacing(4)
-        grid.setContentsMargins(4, 4, 4, 4)
-
-        fluent_paths = load_fluent_emoji_paths()
-        icon_sz = QtCore.QSize(30, 30)
-
-        for i, ch in enumerate(EMOJI_CHARS):
-            r, c = divmod(i, self._COLS)
-            btn = QtWidgets.QPushButton()
-            btn.setObjectName("EmojiCell")
-            btn.setFlat(True)
-            btn.setFixedSize(40, 40)
-            btn.setAccessibleName(ch)
-            btn.setToolTip(ch)
-            fp = fluent_paths.get(ch)
-            if fp is not None:
-                ic = QtGui.QIcon(str(fp))
-                if not ic.isNull():
-                    btn.setIcon(ic)
-                    btn.setIconSize(icon_sz)
-                else:
-                    btn.setText(ch)
-            else:
-                btn.setText(ch)
-            if btn.text() == "" and btn.icon().isNull():
-                btn.setText(ch)
-            if btn.text():
-                f = QtGui.QFont(btn.font())
-                f.setPointSize(16)
-                btn.setFont(f)
-            btn.clicked.connect(lambda _=False, sym=ch: self._pick(sym))
-            grid.addWidget(btn, r, c)
+        self._grid_layout = QtWidgets.QGridLayout(inner)
+        self._grid_layout.setSpacing(4)
+        self._grid_layout.setContentsMargins(8, 6, 8, 6)
+        self._repopulate_grid()
 
         scroll.setWidget(inner)
         surf_lay.addWidget(scroll)
         self.setFixedWidth(min(self._COLS * 44 + 24, 380))
         self.apply_theme(self._theme_id)
+
+    def _repopulate_grid(self) -> None:
+        from i2pchat.gui import emoji_paths as _ep
+
+        grid = self._grid_layout
+        if grid is None:
+            return
+        while (item := grid.takeAt(0)) is not None:
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        paths = _ep.emoji_paths_cached()
+        icon_logical = 30
+        icon_sz = QtCore.QSize(icon_logical, icon_logical)
+        for i, ch in enumerate(EMOJI_CHARS):
+            r, c = divmod(i, self._COLS)
+            btn = QtWidgets.QToolButton()
+            btn.setObjectName("EmojiCell")
+            btn.setAutoRaise(True)
+            btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            btn.setFixedSize(40, 40)
+            btn.setAccessibleName(ch)
+            btn.setToolTip(ch)
+            fp = paths.get(ch)
+            ic = QtGui.QIcon()
+            if fp is not None:
+                ic = _picker_emoji_icon(fp, icon_logical)
+            if not ic.isNull():
+                btn.setToolButtonStyle(
+                    QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+                )
+                btn.setIcon(ic)
+                btn.setIconSize(icon_sz)
+            else:
+                btn.setToolButtonStyle(
+                    QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly
+                )
+                btn.setText(ch)
+                f = QtGui.QFont(btn.font())
+                f.setPointSize(16)
+                btn.setFont(f)
+            btn.clicked.connect(lambda _=False, sym=ch: self._pick(sym))
+            grid.addWidget(btn, r, c)
 
     def apply_theme(self, theme_id: str) -> None:
         self._theme_id = (theme_id or "").strip().lower()
@@ -206,13 +206,15 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                 QWidget#EmojiPickerGridHost {
                     background: transparent;
                 }
-                QPushButton#EmojiCell {
+                QToolButton#EmojiCell {
                     background: transparent;
                     border: none;
                     border-radius: 10px;
+                    padding: 0px;
+                    margin: 0px;
                     color: #e3e8f1;
                 }
-                QPushButton#EmojiCell:hover {
+                QToolButton#EmojiCell:hover {
                     background: rgba(255, 255, 255, 0.10);
                 }
                 QScrollBar:vertical {
@@ -250,13 +252,15 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                 QWidget#EmojiPickerGridHost {
                     background: transparent;
                 }
-                QPushButton#EmojiCell {
+                QToolButton#EmojiCell {
                     background: transparent;
                     border: none;
                     border-radius: 10px;
+                    padding: 0px;
+                    margin: 0px;
                     color: #2c3442;
                 }
-                QPushButton#EmojiCell:hover {
+                QToolButton#EmojiCell:hover {
                     background: #e5eaf2;
                 }
                 QScrollBar:vertical {
@@ -410,7 +414,7 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         if self._edit is None:
             return
         self._edit.setFocus()
-        ins = getattr(self._edit, "insert_fluent_emoji", None)
+        ins = getattr(self._edit, "insert_raster_emoji", None)
         if callable(ins):
             ins(ch)
         else:

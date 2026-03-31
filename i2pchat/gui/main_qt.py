@@ -71,16 +71,22 @@ from i2pchat.core.i2p_chat_core import (
     render_bw,
     validate_image,
 )
+from i2pchat.gui.popup_geometry import (
+    clamp_popup_top_left_to_available_geometry,
+    global_position_popup_below_anchor,
+)
+from i2pchat.gui.styled_combo_widgets import ProfileComboWithArrow
+
 from .compose_input import ComposeInputWrapper
-from .fluent_message_render import (
-    append_plain_with_fluent_at_cursor,
+from .emoji_paths import emoji_paths_cached
+from .raster_emoji_render import (
+    append_plain_with_raster_emoji_at_cursor,
     compose_emoji_px,
-    document_plain_with_fluent_images,
+    document_plain_with_raster_emoji_images,
     emoji_inline_px,
     fill_document_from_plain,
-    fluent_emoji_paths_cached,
-    insert_fluent_emoji_at_cursor,
-    line_horizontal_advance_fluent,
+    insert_raster_emoji_at_cursor,
+    line_horizontal_advance_raster_emoji,
     make_message_qtextdocument,
     map_plain_offset_to_qt_pos,
     map_qt_pos_to_plain_offset,
@@ -1887,16 +1893,16 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         return pixmap
 
     def _text_max_line_advance(self, text: str, font: QtGui.QFont) -> int:
-        """Макс. ширина среди явных строк (по \\n); эмодзи из Fluent — как картинки фикс. ширины."""
+        """Макс. ширина среди явных строк (по \\n); растровые эмодзи — как картинки фикс. ширины."""
         metrics = QtGui.QFontMetrics(font)
-        paths = fluent_emoji_paths_cached()
+        paths = emoji_paths_cached()
         px = emoji_inline_px(metrics)
         if not text:
             return int(metrics.horizontalAdvance(" "))
         best = 0
         for line in text.split("\n"):
             if paths:
-                w = line_horizontal_advance_fluent(line, metrics, paths, px)
+                w = line_horizontal_advance_raster_emoji(line, metrics, paths, px)
             else:
                 w = int(metrics.horizontalAdvance(line if line else " "))
             best = max(best, w)
@@ -2032,7 +2038,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             text_area = inner_rect
             ts_rect = None
 
-        paths = fluent_emoji_paths_cached()
+        paths = emoji_paths_cached()
         doc = make_message_qtextdocument(
             full_text,
             base_font,
@@ -2504,7 +2510,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         text = item.text or " "
 
-        paths = fluent_emoji_paths_cached()
+        paths = emoji_paths_cached()
         dummy_color = QtGui.QColor("#000000")
         doc = make_message_qtextdocument(
             text, font, dummy_color, float(available_width), paths
@@ -2524,7 +2530,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
 
 class MessageInputEdit(QtWidgets.QTextEdit):
-    """Многострочное поле ввода: Enter — новая строка; эмодзи из Fluent — как в пикере (PNG в документе).
+    """Многострочное поле ввода: Enter — новая строка; Noto Emoji в документе — как в пикере (PNG).
 
     В протокол и черновики уходит Unicode через plainTextForSend().
 
@@ -2549,11 +2555,11 @@ class MessageInputEdit(QtWidgets.QTextEdit):
         self._materialize_timer = QtCore.QTimer(self)
         self._materialize_timer.setSingleShot(True)
         self._materialize_timer.setInterval(200)
-        self._materialize_timer.timeout.connect(self._materialize_fluent_emojis)
+        self._materialize_timer.timeout.connect(self._materialize_raster_emojis)
         self.document().contentsChanged.connect(self._on_document_contents_changed)
 
     def plainTextForSend(self) -> str:
-        return document_plain_with_fluent_images(self.document())
+        return document_plain_with_raster_emoji_images(self.document())
 
     def setPlainTextForCompose(self, text: str) -> None:
         self._materialize_timer.stop()
@@ -2568,15 +2574,15 @@ class MessageInputEdit(QtWidgets.QTextEdit):
             self._suppress_materialize = False
             self._suppress_compose_signal = False
 
-    def insert_fluent_emoji(self, ch: str) -> None:
-        paths = fluent_emoji_paths_cached()
+    def insert_raster_emoji(self, ch: str) -> None:
+        paths = emoji_paths_cached()
         pth = paths.get(ch)
         cur = self.textCursor()
         if pth is None:
             cur.insertText(ch)
         else:
             px = compose_emoji_px(self.font())
-            insert_fluent_emoji_at_cursor(cur, self.document(), ch, pth, px)
+            insert_raster_emoji_at_cursor(cur, self.document(), ch, pth, px)
         self.setTextCursor(cur)
 
     def _on_document_contents_changed(self) -> None:
@@ -2584,20 +2590,19 @@ class MessageInputEdit(QtWidgets.QTextEdit):
             self.composeTextChanged.emit()
         if self._suppress_materialize or self._materializing:
             return
-        if not fluent_emoji_paths_cached():
+        if not emoji_paths_cached():
             return
         self._materialize_timer.start()
 
-    def _materialize_fluent_emojis(self) -> None:
+    def _rebuild_compose_emojis_from_unicode_plain(self) -> None:
+        """Пересобрать документ из Unicode-представления (растровые эмодзи из manifest)."""
         self._materialize_timer.stop()
         if self._suppress_materialize or self._materializing:
-            return
-        if not fluent_emoji_paths_cached():
             return
         self._materializing = True
         self._suppress_compose_signal = True
         try:
-            plain = document_plain_with_fluent_images(self.document())
+            plain = document_plain_with_raster_emoji_images(self.document())
             pos = self.textCursor().position()
             off = map_qt_pos_to_plain_offset(self.document(), pos)
             fill_document_from_plain(self.document(), plain, self.font())
@@ -2609,6 +2614,11 @@ class MessageInputEdit(QtWidgets.QTextEdit):
         finally:
             self._suppress_compose_signal = False
             self._materializing = False
+
+    def _materialize_raster_emojis(self) -> None:
+        if not emoji_paths_cached():
+            return
+        self._rebuild_compose_emojis_from_unicode_plain()
 
     def canPaste(self) -> bool:  # type: ignore[override]
         mime = QtWidgets.QApplication.clipboard().mimeData()
@@ -2652,7 +2662,7 @@ class MessageInputEdit(QtWidgets.QTextEdit):
             cur = self.textCursor()
             self._suppress_materialize = True
             try:
-                append_plain_with_fluent_at_cursor(
+                append_plain_with_raster_emoji_at_cursor(
                     cur, self.document(), source.text(), self.font()
                 )
                 self.setTextCursor(cur)
@@ -2668,7 +2678,7 @@ class MessageInputEdit(QtWidgets.QTextEdit):
             cur = self.textCursor()
             self._suppress_materialize = True
             try:
-                append_plain_with_fluent_at_cursor(
+                append_plain_with_raster_emoji_at_cursor(
                     cur, self.document(), plain, self.font()
                 )
                 self.setTextCursor(cur)
@@ -2838,446 +2848,6 @@ class AddressLineEdit(QtWidgets.QLineEdit):
         )
 
 
-class ProfileComboBox(QtWidgets.QComboBox):
-    popupRequested = QtCore.pyqtSignal()
-
-    def showPopup(self) -> None:  # type: ignore[override]
-        self.popupRequested.emit()
-
-
-class RoundedVerticalScrollbar(QtWidgets.QWidget):
-    """Кастомный скроллбар для popup-списка профилей (точные “пилюльные” концы)."""
-
-    def __init__(
-        self,
-        linked_scrollbar: QtWidgets.QScrollBar,
-        parent: Optional[QtWidgets.QWidget] = None,
-    ) -> None:
-        super().__init__(parent)
-        self._sb = linked_scrollbar
-
-        # Цвета будут проставлены в apply_theme().
-        self._thumb_color = QtGui.QColor(60, 60, 67, 160)
-        self._track_color = QtGui.QColor(0, 0, 0, 0)
-
-        self._dragging = False
-        self._drag_offset_y = 0
-
-        self.setFixedWidth(6)
-        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-
-        self.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Fixed,
-            QtWidgets.QSizePolicy.Policy.Expanding,
-        )
-
-        self._sb.valueChanged.connect(self.update)
-        # rangeChanged есть у QScrollBar, но типизация может отличаться в разных сборках.
-        self._sb.rangeChanged.connect(self.update)  # type: ignore[attr-defined]
-        # У QScrollBar/Qt не везде есть сигнал pageStepChanged.
-        # В вычислении thumb используем pageStep() (если доступен) при перерисовке.
-
-    def set_colors(self, thumb: QtGui.QColor, track: QtGui.QColor) -> None:
-        self._thumb_color = thumb
-        self._track_color = track
-        self.update()
-
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
-        super().resizeEvent(event)
-        self.update()
-
-    def _compute_thumb(self) -> QtCore.QRectF:
-        track_h = max(0, self.height())
-        if track_h <= 0:
-            return QtCore.QRectF(0, 0, float(self.width()), 0)
-
-        sb_min = self._sb.minimum()
-        sb_max = self._sb.maximum()
-        sb_range = max(0, sb_max - sb_min)
-        value = self._sb.value()
-
-        # pageStep влияет на “размер” видимой области.
-        try:
-            page = int(self._sb.pageStep())  # type: ignore[attr-defined]
-        except Exception:
-            page = 0
-        total = sb_range + max(0, page)
-        visible_ratio = (max(0, page) / total) if total > 0 else 1.0
-        visible_ratio = max(0.05, min(1.0, float(visible_ratio)))
-
-        thumb_h = max(16.0, min(float(track_h), float(track_h) * visible_ratio))
-
-        if sb_range <= 0:
-            progress = 0.0
-        else:
-            progress = float(value - sb_min) / float(sb_range)
-            progress = max(0.0, min(1.0, progress))
-
-        travel = max(0.0, float(track_h) - thumb_h)
-        thumb_y = travel * progress
-
-        return QtCore.QRectF(0.0, thumb_y, float(self.width()), thumb_h)
-
-    def _set_value_from_thumb_y(self, thumb_y: float, thumb_h: float) -> None:
-        sb_min = self._sb.minimum()
-        sb_max = self._sb.maximum()
-        sb_range = max(0, sb_max - sb_min)
-        if sb_range <= 0:
-            return
-
-        track_h = max(1, self.height())
-        travel = max(0.0, float(track_h) - float(thumb_h))
-        if travel <= 0.0:
-            self._sb.setValue(int(sb_min))
-            return
-
-        progress = max(0.0, min(1.0, float(thumb_y) / travel))
-        new_value = sb_min + progress * float(sb_range)
-        self._sb.setValue(int(round(new_value)))
-
-    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
-        super().paintEvent(event)
-
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
-
-        if self._track_color.alpha() > 0:
-            track_rect = QtCore.QRectF(0.0, 0.0, float(self.width()), float(self.height()))
-            radius = float(self.width()) / 2.0
-            painter.setPen(QtGui.QPen(QtCore.Qt.PenStyle.NoPen))  # type: ignore[arg-type]
-            painter.setBrush(QtGui.QBrush(self._track_color))
-            painter.drawRoundedRect(track_rect, radius, radius)
-
-        thumb = self._compute_thumb()
-        radius = float(self.width()) / 2.0
-        painter.setPen(QtGui.QPen(QtCore.Qt.PenStyle.NoPen))  # type: ignore[arg-type]
-        painter.setBrush(QtGui.QBrush(self._thumb_color))
-        painter.drawRoundedRect(thumb, radius, radius)
-
-    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
-        thumb = self._compute_thumb()
-        if thumb.height() <= 0:
-            return
-
-        self._dragging = True
-        if thumb.contains(event.pos()):
-            self._drag_offset_y = int(event.pos().y() - thumb.y())
-        else:
-            self._drag_offset_y = int(thumb.height() / 2.0)
-
-        target_thumb_y = float(event.pos().y() - self._drag_offset_y)
-        target_thumb_y = max(0.0, min(float(self.height()) - float(thumb.height()), target_thumb_y))
-        self._set_value_from_thumb_y(target_thumb_y, float(thumb.height()))
-
-        event.accept()
-
-    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
-        if not self._dragging:
-            return
-
-        thumb = self._compute_thumb()
-        if thumb.height() <= 0:
-            return
-
-        target_thumb_y = float(event.pos().y() - self._drag_offset_y)
-        target_thumb_y = max(0.0, min(float(self.height()) - float(thumb.height()), target_thumb_y))
-        self._set_value_from_thumb_y(target_thumb_y, float(thumb.height()))
-        event.accept()
-
-    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
-        self._dragging = False
-        event.accept()
-
-
-class ProfileComboPopup(QtWidgets.QFrame):
-    itemChosen = QtCore.pyqtSignal(str)
-
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
-        super().__init__(parent)
-        popup_flags = QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
-        if sys.platform.startswith("win"):
-            # Avoid native DWM shadow/frame artifacts around translucent popup on Windows.
-            popup_flags |= QtCore.Qt.WindowType.NoDropShadowWindowHint
-        self.setWindowFlags(popup_flags)
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setObjectName("ProfileComboPopupWindow")
-        self.setMinimumWidth(220)
-
-        root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-
-        self.surface = QtWidgets.QFrame(self)
-        self.surface.setObjectName("ProfileComboPopupSurface")
-        root.addWidget(self.surface)
-
-        inner = QtWidgets.QHBoxLayout(self.surface)
-        inner.setContentsMargins(6, 6, 6, 6)
-        inner.setSpacing(0)
-
-        self.list = QtWidgets.QListWidget(self.surface)
-        self.list.setObjectName("ProfileComboPopupList")
-        self.list.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        self.list.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Нативный вертикальный скроллбар скрываем: рисуем кастомный справа.
-        self.list.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.list.itemClicked.connect(self._on_item_clicked)
-        inner.addWidget(self.list, 1)
-
-        self._custom_scrollbar = RoundedVerticalScrollbar(self.list.verticalScrollBar(), self.surface)
-        inner.addWidget(self._custom_scrollbar, 0)
-
-    def _on_item_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
-        self.itemChosen.emit(item.text())
-        self.hide()
-
-    def set_items(self, values: List[str], selected_text: str) -> None:
-        unique: List[str] = []
-        seen = set()
-        for v in values:
-            s = (v or "").strip()
-            if not s or s in seen:
-                continue
-            seen.add(s)
-            unique.append(s)
-        self.list.clear()
-        for v in unique:
-            self.list.addItem(v)
-        selected_row = -1
-        for i, v in enumerate(unique):
-            if v == selected_text:
-                selected_row = i
-                break
-        if selected_row >= 0:
-            self.list.setCurrentRow(selected_row)
-        elif unique:
-            self.list.setCurrentRow(0)
-
-    def show_below(self, anchor: QtWidgets.QWidget) -> None:
-        row_h = max(24, self.list.sizeHintForRow(0))
-        visible = min(max(1, self.list.count()), 8)
-        content_h = visible * row_h + 12
-        self.list.setMinimumHeight(content_h)
-        self.list.setMaximumHeight(content_h)
-        self.setFixedWidth(max(anchor.width(), self.minimumWidth()))
-        self.adjustSize()
-        w, h = self.width(), self.height()
-        self.move(
-            _global_position_popup_below_anchor(
-                anchor, w, h, vertical_gap=4, align_right=False
-            )
-        )
-        self.show()
-        self._custom_scrollbar.update()
-
-    def apply_theme(self, theme_id: str) -> None:
-        if theme_id == "night":
-            self.setStyleSheet(
-                """
-                #ProfileComboPopupWindow { background: transparent; }
-                #ProfileComboPopupSurface {
-                    background: rgba(28, 31, 40, 0.98);
-                    border: none;
-                    border-radius: 12px;
-                }
-                /* Скроллбар внутри dropdown-попапа должен выглядеть как macOS-пилюля */
-                QListWidget#ProfileComboPopupList QScrollBar:vertical {
-                    background: transparent;
-                    width: 6px;
-                    margin: 0px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::handle:vertical {
-                    background-color: rgba(255, 255, 255, 0.20);
-                    min-height: 24px;
-                    border-radius: 999px;
-                    border: none;
-                    margin: 0px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::groove:vertical {
-                    background: transparent;
-                    border-radius: 999px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::add-page:vertical,
-                QListWidget#ProfileComboPopupList QScrollBar::sub-page:vertical {
-                    background: transparent;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::add-line:vertical,
-                QListWidget#ProfileComboPopupList QScrollBar::sub-line:vertical { height: 0px; }
-                QListWidget#ProfileComboPopupList {
-                    background: transparent;
-                    border: none;
-                    outline: none;
-                    color: #d8deea;
-                    font-size: 13px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar:vertical {
-                    background: transparent;
-                    width: 10px;
-                    margin: 0px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::handle:vertical {
-                    background: rgba(160, 160, 160, 0.35);
-                    border-radius: 5px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::add-line:vertical,
-                QListWidget#ProfileComboPopupList QScrollBar::sub-line:vertical,
-                QListWidget#ProfileComboPopupList QScrollBar::up-arrow:vertical,
-                QListWidget#ProfileComboPopupList QScrollBar::down-arrow:vertical {
-                    background: none;
-                    border: none;
-                    height: 0px;
-                }
-                QListWidget#ProfileComboPopupList::item {
-                    border-radius: 8px;
-                    padding: 6px 10px;
-                    margin: 1px 2px;
-                }
-                QListWidget#ProfileComboPopupList::item:selected {
-                    background: rgba(72, 138, 255, 0.35);
-                    color: #f4f7ff;
-                }
-                QListWidget#ProfileComboPopupList::item:hover {
-                    background: rgba(255, 255, 255, 0.10);
-                }
-                """
-            )
-            self._custom_scrollbar.set_colors(
-                thumb=QtGui.QColor(255, 255, 255, 51),  # 0.20 alpha
-                track=QtGui.QColor(0, 0, 0, 0),
-            )
-        else:
-            self.setStyleSheet(
-                """
-                #ProfileComboPopupWindow { background: transparent; }
-                #ProfileComboPopupSurface {
-                    background: #f6f7fa;
-                    border: none;
-                    border-radius: 12px;
-                }
-                /* Скроллбар внутри dropdown-попапа должен выглядеть как macOS-пилюля */
-                QListWidget#ProfileComboPopupList QScrollBar:vertical {
-                    background: transparent;
-                    width: 6px;
-                    margin: 0px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::handle:vertical {
-                    background-color: rgba(60, 60, 67, 0.28);
-                    min-height: 24px;
-                    border-radius: 999px;
-                    border: none;
-                    margin: 0px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::groove:vertical {
-                    background: transparent;
-                    border-radius: 999px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::add-page:vertical,
-                QListWidget#ProfileComboPopupList QScrollBar::sub-page:vertical {
-                    background: transparent;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::add-line:vertical,
-                QListWidget#ProfileComboPopupList QScrollBar::sub-line:vertical { height: 0px; }
-                QListWidget#ProfileComboPopupList {
-                    background: transparent;
-                    border: none;
-                    outline: none;
-                    color: #2f3644;
-                    font-size: 13px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar:vertical {
-                    background: transparent;
-                    width: 10px;
-                    margin: 0px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::handle:vertical {
-                    background: rgba(70, 90, 120, 0.28);
-                    border-radius: 5px;
-                }
-                QListWidget#ProfileComboPopupList QScrollBar::add-line:vertical,
-                QListWidget#ProfileComboPopupList QScrollBar::sub-line:vertical,
-                QListWidget#ProfileComboPopupList QScrollBar::up-arrow:vertical,
-                QListWidget#ProfileComboPopupList QScrollBar::down-arrow:vertical {
-                    background: none;
-                    border: none;
-                    height: 0px;
-                }
-                QListWidget#ProfileComboPopupList::item {
-                    border-radius: 8px;
-                    padding: 6px 10px;
-                    margin: 1px 2px;
-                }
-                QListWidget#ProfileComboPopupList::item:selected {
-                    background: #dbe9ff;
-                    color: #1b4f9f;
-                }
-                QListWidget#ProfileComboPopupList::item:hover {
-                    background: #e8eef8;
-                }
-                """
-            )
-            self._custom_scrollbar.set_colors(
-                thumb=QtGui.QColor(60, 60, 67, 72),  # ~0.28 alpha
-                track=QtGui.QColor(0, 0, 0, 0),
-            )
-
-
-class ProfileComboWithArrow(QtWidgets.QWidget):
-    """QComboBox с видимой стрелкой ▼ поверх области выпадающего списка."""
-    
-    def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
-        super().__init__(parent)
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.combo = ProfileComboBox(self)
-        self._completer: Optional[QtWidgets.QCompleter] = None
-        layout.addWidget(self.combo)
-        self._arrow = QtWidgets.QLabel("∨", self)
-        self.set_arrow_color("#9fa1b5")
-        self._arrow.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        self._arrow.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.popup = ProfileComboPopup(self)
-        self.combo.popupRequested.connect(self._show_popup)
-        self.popup.itemChosen.connect(self._on_item_chosen)
-
-    def _show_popup(self) -> None:
-        values = [self.combo.itemText(i) for i in range(self.combo.count())]
-        self.popup.set_items(values, self.combo.currentText().strip())
-        self.popup.show_below(self.combo)
-
-    def _on_item_chosen(self, text: str) -> None:
-        idx = self.combo.findText(text)
-        if idx >= 0:
-            self.combo.setCurrentIndex(idx)
-        else:
-            self.combo.setCurrentText(text)
-
-    def enable_autocomplete(self) -> None:
-        # Позволяет подбирать существующие профили по мере набора текста.
-        self._completer = QtWidgets.QCompleter(self.combo.model(), self.combo)
-        self._completer.setCaseSensitivity(QtCore.Qt.CaseSensitivity.CaseInsensitive)
-        self._completer.setCompletionMode(
-            QtWidgets.QCompleter.CompletionMode.PopupCompletion
-        )
-        self._completer.setFilterMode(QtCore.Qt.MatchFlag.MatchContains)
-        self.combo.setCompleter(self._completer)
-
-    def set_arrow_color(self, color: str) -> None:
-        self._arrow.setStyleSheet(
-            f"color: {color}; font-size: 10px; background: transparent;"
-        )
-
-    def apply_popup_theme(self, theme_id: str) -> None:
-        self.popup.apply_theme(_resolve_theme(theme_id))
-    
-    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
-        super().resizeEvent(event)
-        drop_width = 28
-        self._arrow.setGeometry(
-            self.width() - drop_width, 0,
-            drop_width, self.height(),
-        )
-
-
 class _ClickableFolderLabel(QtWidgets.QLabel):
     """QLabel, по клику открывающий папку (как «Open downloads folder» в чате)."""
 
@@ -3307,74 +2877,6 @@ class _PeerLockIndicatorLabel(QtWidgets.QLabel):
             self.clicked.emit()
             return
         super().mousePressEvent(event)
-
-
-def _popup_screen_for_anchor(anchor: QtWidgets.QWidget) -> Optional[QtGui.QScreen]:
-    """Экран, на котором находится якорь (несколько мониторов); иначе primary."""
-    if anchor.width() > 0 and anchor.height() > 0:
-        center = anchor.mapToGlobal(
-            QtCore.QPoint(anchor.width() // 2, anchor.height() // 2)
-        )
-        s = QtGui.QGuiApplication.screenAt(center)
-        if s is not None:
-            return s
-    for pt in (
-        anchor.mapToGlobal(QtCore.QPoint(0, 0)),
-        anchor.mapToGlobal(
-            QtCore.QPoint(max(0, anchor.width() - 1), max(0, anchor.height() - 1))
-        ),
-    ):
-        s = QtGui.QGuiApplication.screenAt(pt)
-        if s is not None:
-            return s
-    return QtGui.QGuiApplication.primaryScreen()
-
-
-def _clamp_popup_top_left_to_available_geometry(
-    top_left: QtCore.QPoint, popup_w: int, popup_h: int, geom: QtCore.QRect
-) -> QtCore.QPoint:
-    """Удерживает левый верх угла popup внутри availableGeometry (как у контекстного меню)."""
-    x = max(geom.left(), min(top_left.x(), geom.right() - popup_w + 1))
-    y = max(geom.top(), min(top_left.y(), geom.bottom() - popup_h + 1))
-    return QtCore.QPoint(x, y)
-
-
-def _global_position_popup_below_anchor(
-    anchor: QtWidgets.QWidget,
-    popup_w: int,
-    popup_h: int,
-    *,
-    vertical_gap: int,
-    align_right: bool,
-) -> QtCore.QPoint:
-    """
-    Глобальный top-left: сначала под якорем; если снизу не помещается — над якорем.
-    Затем поджатие к availableGeometry выбранного экрана.
-    align_right=True: правый край popup совпадает с правым краем якоря.
-    """
-    if align_right:
-        x_local = max(0, anchor.width() - popup_w)
-    else:
-        x_local = 0
-    pos_below = anchor.mapToGlobal(
-        QtCore.QPoint(x_local, anchor.height() + vertical_gap)
-    )
-    pos_above = anchor.mapToGlobal(
-        QtCore.QPoint(x_local, -popup_h - vertical_gap)
-    )
-
-    screen = _popup_screen_for_anchor(anchor)
-    if screen is None:
-        return pos_below
-    geom = screen.availableGeometry()
-    max_top_for_below = geom.bottom() - popup_h + 1
-
-    if pos_below.y() > max_top_for_below and pos_above.y() >= geom.top():
-        pos = pos_above
-    else:
-        pos = pos_below
-
-    return _clamp_popup_top_left_to_available_geometry(pos, popup_w, popup_h, geom)
 
 
 class ActionsPopup(QtWidgets.QFrame):
@@ -3431,7 +2933,7 @@ class ActionsPopup(QtWidgets.QFrame):
         self.adjustSize()
         w, h = self.width(), self.height()
         self.move(
-            _global_position_popup_below_anchor(
+            global_position_popup_below_anchor(
                 anchor, w, h, vertical_gap=6, align_right=True
             )
         )
@@ -3445,7 +2947,7 @@ class ActionsPopup(QtWidgets.QFrame):
             screen = QtGui.QGuiApplication.primaryScreen()
         if screen is not None:
             geom = screen.availableGeometry()
-            pos = _clamp_popup_top_left_to_available_geometry(
+            pos = clamp_popup_top_left_to_available_geometry(
                 pos, self.width(), self.height(), geom
             )
         self.move(pos)

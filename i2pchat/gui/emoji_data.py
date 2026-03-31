@@ -1,4 +1,4 @@
-"""Список эмодзи для пикера (Unicode в сообщение). Единый источник для GUI и scripts/vendor_fluent_emoji.py."""
+"""Список эмодзи для пикера (Unicode в сообщение). Единый источник для GUI и scripts/vendor_noto_emoji.py."""
 
 from __future__ import annotations
 

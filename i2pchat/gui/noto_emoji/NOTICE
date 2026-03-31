@@ -1,0 +1,14 @@
+Noto Emoji (raster pack)
+========================
+
+When you populate ``png/`` and ``manifest.json`` using
+``scripts/vendor_noto_emoji.py`` from a clone of the upstream repository, those
+image files come from the Noto Emoji project:
+
+  https://github.com/googlefonts/noto-emoji
+
+See the LICENSE and README in that repository for image and tooling licenses
+(Apache License 2.0 applies to most image resources and build tools there).
+
+Until you run the vendor script, this directory ships with an empty manifest so
+the app falls back to Unicode glyphs in the emoji picker.
