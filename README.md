@@ -229,9 +229,9 @@ Practical notes:
 ### 📸 Screenshots
 
 <p align="center">
-  <img src="screenshots/6.png" alt="I2PChat – Saved peers sidebar (contact book)" width="900" /><br>
-  <img src="screenshots/5.png" alt="I2PChat – received image and chat" width="900" /><br>
-  <img src="screenshots/4.png" alt="I2PChat – chat and file transfer (sending)" width="900" />
+  <img src="screenshots/1.png" alt="I2PChat – main window" width="900" /><br>
+  <img src="screenshots/4.png" alt="I2PChat – chat and file transfer (sending)" width="900" /><br>
+  <img src="screenshots/5.png" alt="I2PChat – received image and chat" width="900" />
 </p>
 
 ### 📦 Prebuilt binaries

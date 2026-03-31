@@ -73,7 +73,7 @@ Use **Connect** for live chat and the first BlindBox bootstrap session. If Blind
 
 The **Saved peers** strip on the **left** is your local **contact book** for the current profile. It is stored as `<profile>.contacts.json` in the profiles directory (together with `.dat`).
 
-<img src="../screenshots/6.png" alt="Main window with Saved peers sidebar open: contact list and chat" width="900" />
+<img src="../screenshots/7.png" alt="Main window with Saved peers sidebar: contact list and chat" width="900" />
 
 - **Rows** — each contact shows a display name (or shortened `.b32.i2p`), a subtitle (last message preview or your note), and unread styling when that peer is not the active chat.
 - **Click** a row — sets the peer address field to that contact (same as typing the address) and syncs compose drafts; if the profile is **locked** to another peer, switching may be blocked (see status messages).
@@ -191,8 +191,6 @@ After pressing it:
 
 The **`Copy my address`** item in the **`⋯`** menu copies your own I2P destination to the clipboard.
 
-<img src="../screenshots/4.png" alt="Getting your own address via Copy my address" width="900" />
-
 Logic:
 
 1. If the local destination is not yet initialised:
@@ -229,6 +227,8 @@ Transfer progress is displayed in the chat area as messages like:
 <filename>: <received>/<size> bytes
 ```
 
+<img src="../screenshots/4.png" alt="Chat area: outgoing file send progress in the message list" width="900" />
+
 On the receiving side:
 
 - an **`Incoming file`** dialog is shown first:
@@ -244,6 +244,8 @@ On the receiving side:
 - if a file with the same name already exists in `downloads`, the new file is saved as `<name> (1).<ext>`, `<name> (2).<ext>`, etc. without overwriting.
 
 The **`Send picture`** item works the same way but is intended for images (PNG, JPEG, or WebP) and is shown inline in the chat.
+
+<img src="../screenshots/5.png" alt="Chat area: inline image in a message bubble" width="900" />
 
 #### 4.7. `Lock to peer` button
 
@@ -328,6 +330,10 @@ Using this button you can:
 - BlindBox queue/receive debug lines are not shown in the chat feed; delivery details remain in status/tooltips.
 - Runtime state appears in the **status row** (`Send:*` and BlindBox fields); hover for hints if something is misconfigured.
 - **Compatibility:** peers on older builds may not support BlindBox traffic; live chat and file/image transfer work as before.
+
+Example **BlindBox diagnostics** window (**⋯ → BlindBox diagnostics**):
+
+<img src="../screenshots/8.png" alt="BlindBox diagnostics: textual summary of offline routing and replicas" width="900" />
 
 #### 4.10. `Forget pinned peer key` action (`⋯` menu)
 
