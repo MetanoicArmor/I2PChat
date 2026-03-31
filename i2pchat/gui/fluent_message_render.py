@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import re
 from pathlib import Path
 from typing import Optional
@@ -36,34 +35,25 @@ def emoji_inline_px(metrics: QtGui.QFontMetrics) -> int:
     return max(19, min(30, int(metrics.height() * 1.02)))
 
 
-def _line_html(line: str, paths: dict[str, Path], emoji_px: int) -> str:
-    if not paths:
-        return html.escape(line) if line else " "
-    rx = emoji_pick_regex()
-    out: list[str] = []
-    pos = 0
-    for m in rx.finditer(line):
-        if m.start() > pos:
-            out.append(html.escape(line[pos:m.start()]))
-        g = m.group(0)
-        pth = paths.get(g)
-        if pth is not None:
-            url = QtCore.QUrl.fromLocalFile(str(pth)).toString()
-            out.append(
-                f'<img src="{html.escape(url, quote=True)}" width="{emoji_px}" '
-                f'height="{emoji_px}" style="vertical-align: middle;"/>'
-            )
-        else:
-            out.append(html.escape(g))
-        pos = m.end()
-    if pos < len(line):
-        out.append(html.escape(line[pos:]))
-    return "".join(out) if out else " "
+def _app_device_pixel_ratio() -> float:
+    """DPR активного/основного экрана для чётких растров в QTextDocument (Retina и т.п.)."""
+    try:
+        from PyQt6 import QtWidgets
 
-
-def message_body_html(text: str, paths: dict[str, Path], emoji_px: int) -> str:
-    lines = (text or "").split("\n")
-    return "<br/>".join(_line_html(line, paths, emoji_px) for line in lines) if lines else " "
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return 1.0
+        scr = None
+        w = app.activeWindow()
+        if w is not None:
+            scr = w.screen()
+        if scr is None:
+            scr = app.primaryScreen()
+        if scr is None:
+            return 1.0
+        return max(1.0, min(3.0, float(scr.devicePixelRatio())))
+    except Exception:
+        return 1.0
 
 
 def line_horizontal_advance_fluent(
@@ -94,22 +84,56 @@ def make_message_qtextdocument(
     inner_width: float,
     paths: dict[str, Path],
 ) -> QtGui.QTextDocument:
-    metrics = QtGui.QFontMetrics(font)
-    px = emoji_inline_px(metrics)
-    body = message_body_html(text or "", paths, px)
-    if not body.strip():
-        body = " "
-    color = text_color.name(QtGui.QColor.NameFormat.HexRgb)
-    full = (
-        f'<style>body {{ margin: 0; color: {color}; }}</style>'
-        f"<body>{body}</body>"
-    )
+    """Собирает документ без HTML <img>: те же QPixmap + devicePixelRatio, что и в поле ввода."""
     doc = QtGui.QTextDocument()
     doc.setDefaultFont(font)
-    doc.setHtml(full)
+    doc.setProperty("fluent_res_id", -1)
     opt = QtGui.QTextOption()
     opt.setWrapMode(QtGui.QTextOption.WrapMode.WrapAnywhere)
     doc.setDefaultTextOption(opt)
+
+    cursor = QtGui.QTextCursor(doc)
+    base = QtGui.QTextCharFormat()
+    base.setForeground(text_color)
+    cursor.setCharFormat(base)
+
+    metrics = QtGui.QFontMetrics(font)
+    px = emoji_inline_px(metrics)
+    dpr = _app_device_pixel_ratio()
+
+    raw = text or ""
+    lines = raw.split("\n")
+    if raw == "":
+        lines = [" "]
+
+    for li, line in enumerate(lines):
+        if li > 0:
+            cursor.insertBlock()
+        if not paths:
+            cursor.setCharFormat(base)
+            cursor.insertText(line if line else " ")
+            continue
+        rx = emoji_pick_regex()
+        pos = 0
+        for m in rx.finditer(line):
+            if m.start() > pos:
+                cursor.setCharFormat(base)
+                cursor.insertText(line[pos : m.start()])
+            g = m.group(0)
+            pth = paths.get(g)
+            if pth is not None:
+                insert_fluent_emoji_at_cursor(cursor, doc, g, pth, px, dpr=dpr)
+            else:
+                cursor.setCharFormat(base)
+                cursor.insertText(g)
+            pos = m.end()
+        if pos < len(line):
+            cursor.setCharFormat(base)
+            cursor.insertText(line[pos:])
+        elif line == "":
+            cursor.setCharFormat(base)
+            cursor.insertText(" ")
+
     doc.setTextWidth(float(inner_width))
     return doc
 
@@ -141,17 +165,24 @@ def insert_fluent_emoji_at_cursor(
     glyph: str,
     png_path: Path,
     px: int,
+    *,
+    dpr: Optional[float] = None,
 ) -> None:
+    if dpr is None:
+        dpr = _app_device_pixel_ratio()
     pm = QtGui.QPixmap(str(png_path))
     if pm.isNull():
         cursor.insertText(glyph)
         return
+    # PNG 256×256 достаточно; чёткость на Retina — за счёт физических пикселей (px * dpr)
+    side = max(1, int(round(px * dpr)))
     scaled = pm.scaled(
-        px,
-        px,
+        side,
+        side,
         QtCore.Qt.AspectRatioMode.KeepAspectRatio,
         QtCore.Qt.TransformationMode.SmoothTransformation,
     )
+    scaled.setDevicePixelRatio(dpr)
     rid = _next_fluent_res_id(doc)
     url = QtCore.QUrl(f"fluentemoji:{rid}")
     doc.addResource(
