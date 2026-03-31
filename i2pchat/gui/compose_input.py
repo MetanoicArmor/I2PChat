@@ -88,7 +88,8 @@ def emoji_picker_toolbar_icon(theme_id: str) -> QtGui.QIcon:
 class EmojiPickerPopup(QtWidgets.QFrame):
     """Всплывающая сетка эмодзи; в сообщение уходит Unicode-символ.
 
-    Отрисовка как у ActionsPopup: прозрачное окно + скруглённая surface (одинаково на ОС).
+    macOS/Linux: прозрачное окно + скруглённая surface.
+    Windows: без WA_TranslucentBackground — иначе нет нормальной рамки; вид «как у меню» (фон + border + тень DWM).
     """
 
     emojiChosen = QtCore.pyqtSignal(str)
@@ -97,11 +98,13 @@ class EmojiPickerPopup(QtWidgets.QFrame):
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
+        self._win_menu_chrome = sys.platform.startswith("win")
         popup_flags = QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
-        if sys.platform.startswith("win"):
-            popup_flags |= QtCore.Qt.WindowType.NoDropShadowWindowHint
         self.setWindowFlags(popup_flags)
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        if self._win_menu_chrome:
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        else:
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
         self.setObjectName("EmojiPickerPopupWindow")
         self._theme_id = "ligth"
@@ -162,7 +165,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
             btn.setFixedSize(40, 40)
             btn.setAccessibleName(ch)
             btn.setToolTip(ch)
-            fp = paths.get(ch)
+            fp = paths.get(_ep.normalize_emoji_glyph(ch))
             ic = QtGui.QIcon()
             if fp is not None:
                 ic = _picker_emoji_icon(fp, icon_logical)
@@ -185,6 +188,104 @@ class EmojiPickerPopup(QtWidgets.QFrame):
 
     def apply_theme(self, theme_id: str) -> None:
         self._theme_id = (theme_id or "").strip().lower()
+        if self._win_menu_chrome:
+            if self._theme_id == "night":
+                self.setStyleSheet(
+                    """
+                    QFrame#EmojiPickerPopupWindow {
+                        background: #2c2c2c;
+                        border: 1px solid #5c5c5c;
+                        border-radius: 8px;
+                    }
+                    QFrame#EmojiPickerPopupSurface {
+                        background: transparent;
+                        border: none;
+                        border-radius: 8px;
+                    }
+                    QScrollArea#EmojiPickerScroll {
+                        border: none;
+                        background: transparent;
+                    }
+                    QScrollArea#EmojiPickerScroll > QWidget > QWidget {
+                        background: transparent;
+                    }
+                    QWidget#EmojiPickerGridHost {
+                        background: transparent;
+                    }
+                    QToolButton#EmojiCell {
+                        background: transparent;
+                        border: none;
+                        border-radius: 8px;
+                        padding: 0px;
+                        margin: 0px;
+                        color: #e8e8e8;
+                    }
+                    QToolButton#EmojiCell:hover {
+                        background: rgba(255, 255, 255, 0.12);
+                    }
+                    QScrollBar:vertical {
+                        background: transparent;
+                        width: 10px;
+                        margin: 2px;
+                    }
+                    QScrollBar::handle:vertical {
+                        background: rgba(255, 255, 255, 0.25);
+                        min-height: 24px;
+                        border-radius: 4px;
+                    }
+                    QScrollBar::add-line:vertical,
+                    QScrollBar::sub-line:vertical { height: 0px; }
+                    """
+                )
+            else:
+                self.setStyleSheet(
+                    """
+                    QFrame#EmojiPickerPopupWindow {
+                        background: #ffffff;
+                        border: 1px solid #c4c4c4;
+                        border-radius: 8px;
+                    }
+                    QFrame#EmojiPickerPopupSurface {
+                        background: transparent;
+                        border: none;
+                        border-radius: 8px;
+                    }
+                    QScrollArea#EmojiPickerScroll {
+                        border: none;
+                        background: transparent;
+                    }
+                    QScrollArea#EmojiPickerScroll > QWidget > QWidget {
+                        background: transparent;
+                    }
+                    QWidget#EmojiPickerGridHost {
+                        background: transparent;
+                    }
+                    QToolButton#EmojiCell {
+                        background: transparent;
+                        border: none;
+                        border-radius: 8px;
+                        padding: 0px;
+                        margin: 0px;
+                        color: #1f1f1f;
+                    }
+                    QToolButton#EmojiCell:hover {
+                        background: #e8e8e8;
+                    }
+                    QScrollBar:vertical {
+                        background: transparent;
+                        width: 10px;
+                        margin: 2px;
+                    }
+                    QScrollBar::handle:vertical {
+                        background: rgba(0, 0, 0, 0.28);
+                        min-height: 24px;
+                        border-radius: 4px;
+                    }
+                    QScrollBar::add-line:vertical,
+                    QScrollBar::sub-line:vertical { height: 0px; }
+                    """
+                )
+            return
         if self._theme_id == "night":
             self.setStyleSheet(
                 """

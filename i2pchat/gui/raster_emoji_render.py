@@ -9,7 +9,7 @@ from typing import Optional
 from PyQt6 import QtCore, QtGui
 
 from i2pchat.gui.emoji_data import EMOJI_CHARS
-from i2pchat.gui.emoji_paths import emoji_paths_cached
+from i2pchat.gui.emoji_paths import emoji_paths_cached, normalize_emoji_glyph
 
 _emoji_re: Optional[re.Pattern[str]] = None
 
@@ -65,7 +65,8 @@ def line_horizontal_advance_raster_emoji(
         if m.start() > pos:
             total += metrics.horizontalAdvance(line[pos : m.start()])
         g = m.group(0)
-        total += emoji_px if g in paths else metrics.horizontalAdvance(g)
+        gn = normalize_emoji_glyph(g)
+        total += emoji_px if gn in paths else metrics.horizontalAdvance(g)
         pos = m.end()
     if pos < len(line):
         total += metrics.horizontalAdvance(line[pos:])
@@ -115,7 +116,7 @@ def make_message_qtextdocument(
                 cursor.setCharFormat(base)
                 cursor.insertText(line[pos : m.start()])
             g = m.group(0)
-            pth = paths.get(g)
+            pth = paths.get(normalize_emoji_glyph(g))
             if pth is not None:
                 insert_raster_emoji_at_cursor(cursor, doc, g, pth, px, dpr=dpr)
             else:
@@ -212,7 +213,7 @@ def append_plain_with_raster_emoji_at_cursor(
         if m.start() > pos:
             cursor.insertText(fragment[pos : m.start()])
         g = m.group(0)
-        pth = paths.get(g)
+        pth = paths.get(normalize_emoji_glyph(g))
         if pth is not None:
             insert_raster_emoji_at_cursor(cursor, doc, g, pth, px)
         else:

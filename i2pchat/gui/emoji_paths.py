@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
@@ -25,7 +26,7 @@ def _load_emoji_manifest_paths(root: Path) -> dict[str, Path]:
     if not mf.is_file():
         return {}
     try:
-        raw = json.loads(mf.read_text(encoding="utf-8"))
+        raw = json.loads(mf.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
     if not isinstance(raw, dict):
@@ -44,8 +45,13 @@ def _load_emoji_manifest_paths(root: Path) -> dict[str, Path]:
         except ValueError:
             continue
         if p.is_file():
-            out[key] = p
+            out[unicodedata.normalize("NFC", key)] = p
     return out
+
+
+def normalize_emoji_glyph(ch: str) -> str:
+    """NFC для согласованного поиска в manifest (Windows/macOS могут отличаться по нормализации)."""
+    return unicodedata.normalize("NFC", ch)
 
 
 _paths_cache: Optional[dict[str, Path]] = None

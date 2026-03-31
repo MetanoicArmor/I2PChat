@@ -78,7 +78,7 @@ from i2pchat.gui.popup_geometry import (
 from i2pchat.gui.styled_combo_widgets import ProfileComboWithArrow
 
 from .compose_input import ComposeInputWrapper
-from .emoji_paths import emoji_paths_cached
+from .emoji_paths import emoji_paths_cached, normalize_emoji_glyph
 from .raster_emoji_render import (
     append_plain_with_raster_emoji_at_cursor,
     compose_emoji_px,
@@ -2576,7 +2576,7 @@ class MessageInputEdit(QtWidgets.QTextEdit):
 
     def insert_raster_emoji(self, ch: str) -> None:
         paths = emoji_paths_cached()
-        pth = paths.get(ch)
+        pth = paths.get(normalize_emoji_glyph(ch))
         cur = self.textCursor()
         if pth is None:
             cur.insertText(ch)
