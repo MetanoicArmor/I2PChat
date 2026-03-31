@@ -73,8 +73,6 @@ Use **Connect** for live chat and the first BlindBox bootstrap session. If Blind
 
 The **Saved peers** strip on the **left** is your local **contact book** for the current profile. It is stored as `<profile>.contacts.json` in the profiles directory (together with `.dat`).
 
-<img src="../screenshots/7.png" alt="Main window with Saved peers sidebar: contact list and chat" width="900" />
-
 - **Rows** — each contact shows a display name (or shortened `.b32.i2p`), a subtitle (last message preview or your note), and unread styling when that peer is not the active chat.
 - **Click** a row — sets the peer address field to that contact (same as typing the address) and syncs compose drafts; if the profile is **locked** to another peer, switching may be blocked (see status messages).
 - **◀ / ▶** — collapse or expand the sidebar; when the profile is **locked to a peer**, the strip may start **collapsed** to give more space to the chat.
@@ -333,7 +331,7 @@ Using this button you can:
 
 Example **BlindBox diagnostics** window (**⋯ → BlindBox diagnostics**):
 
-<img src="../screenshots/8.png" alt="BlindBox diagnostics: textual summary of offline routing and replicas" width="900" />
+<img src="../screenshots/6.png" alt="BlindBox diagnostics: textual summary of offline routing and replicas" width="900" />
 
 #### 4.10. `Forget pinned peer key` action (`⋯` menu)
 

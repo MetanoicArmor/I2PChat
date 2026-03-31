@@ -234,6 +234,8 @@ Practical notes:
   <img src="screenshots/5.png" alt="I2PChat – received image and chat" width="900" />
 </p>
 
+The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.png`** (profile picker), and **`6.png`** (BlindBox diagnostics) are documented inline in [**MANUAL_EN.md**](docs/MANUAL_EN.md) / [**MANUAL_RU.md**](docs/MANUAL_RU.md).
+
 ### 📦 Prebuilt binaries
 
 **[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt binaries for Windows, macOS, and Linux.
