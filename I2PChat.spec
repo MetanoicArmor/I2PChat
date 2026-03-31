@@ -22,6 +22,8 @@ a = Analysis(
         ('sun.max.png', '.'),
         ('moon.png', '.'),
         ('assets/sounds/notify.wav', 'assets/sounds'),
+        ('i2pchat/gui/fluent_emoji', 'i2pchat/gui/fluent_emoji'),
+        ('i2pchat/gui/icons', 'i2pchat/gui/icons'),
     ],
     hiddenimports=_local_modules + [
         'rich', 'textual', 'pyperclip',

@@ -70,6 +70,7 @@ from i2pchat.core.i2p_chat_core import (
     render_bw,
     validate_image,
 )
+from .compose_input import ComposeInputWrapper
 from i2pchat.storage.contact_book import (
     ContactBook,
     ContactRecord,
@@ -4191,7 +4192,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Симметрично с правым краем (раньше слева был col_left — визуально уже).
         input_layout.setContentsMargins(g, g, g, g)
         input_layout.setSpacing(self._UI_GRID_PX)
-        self.input_edit = MessageInputEdit(self)
+        self.compose_input_wrap = ComposeInputWrapper(input_container)
+        self.input_edit = MessageInputEdit(self.compose_input_wrap)
+        self.compose_input_wrap.attach_input(self.input_edit)
         self.input_edit.setPlaceholderText(
             "Type message. Enter = new line; Shift+Enter or Ctrl/⌘+Enter = send."
         )
@@ -4205,10 +4208,20 @@ class ChatWindow(QtWidgets.QMainWindow):
         compose_h = _compose_bar_input_height_px(self.input_edit, lines=2)
         self.input_edit.setMinimumHeight(compose_h)
         self.input_edit.setFixedHeight(compose_h)
+        self.compose_input_wrap.setMinimumHeight(compose_h)
+        self.compose_input_wrap.setFixedHeight(compose_h)
+        self.compose_input_wrap.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.send_button.setMinimumHeight(compose_h)
         self.send_button.setFixedHeight(compose_h)
-        input_layout.addWidget(self.input_edit)
-        input_layout.addWidget(self.send_button)
+        self.send_button.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Minimum,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        input_layout.addWidget(self.compose_input_wrap, 1)
+        input_layout.addWidget(self.send_button, 0)
 
         # панель действий: сегментированные группы кнопок в стиле macOS toolbar
         actions_container = QtWidgets.QWidget(self)
@@ -6092,6 +6105,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.saved_peers_context_popup.apply_theme(self.theme_id)
         self.chat_view.set_theme(self.theme_id)
         self.input_edit.set_theme(self.theme_id)
+        self.compose_input_wrap.set_theme(self.theme_id)
         self.addr_edit.set_theme(self.theme_id)
         self._update_peer_lock_indicator()
         self._refresh_connection_buttons()
