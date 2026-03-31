@@ -42,6 +42,9 @@ def load_fluent_emoji_paths() -> dict[str, Path]:
     for key, rel in raw.items():
         if not isinstance(key, str) or not isinstance(rel, str):
             continue
+        rel_path = Path(rel)
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            continue
         p = (root / rel).resolve()
         try:
             p.relative_to(root_resolved)

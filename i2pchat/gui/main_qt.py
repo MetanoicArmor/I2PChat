@@ -1,4 +1,5 @@
 import asyncio
+import html
 import json
 import logging
 import os
@@ -2653,6 +2654,22 @@ class MessageInputEdit(QtWidgets.QTextEdit):
             try:
                 append_plain_with_fluent_at_cursor(
                     cur, self.document(), source.text(), self.font()
+                )
+                self.setTextCursor(cur)
+            finally:
+                self._suppress_materialize = False
+            return
+        # Только HTML в буфере без текста: не кормим произвольный разметкой QTextDocument
+        if source.hasHtml():
+            raw_h = source.html()
+            if not isinstance(raw_h, str):
+                raw_h = str(raw_h)
+            plain = html.unescape(re.sub(r"<[^>]+>", "", raw_h))
+            cur = self.textCursor()
+            self._suppress_materialize = True
+            try:
+                append_plain_with_fluent_at_cursor(
+                    cur, self.document(), plain, self.font()
                 )
                 self.setTextCursor(cur)
             finally:
