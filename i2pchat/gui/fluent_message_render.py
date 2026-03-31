@@ -32,7 +32,8 @@ def emoji_pick_regex() -> re.Pattern[str]:
 
 
 def emoji_inline_px(metrics: QtGui.QFontMetrics) -> int:
-    return max(16, min(26, int(metrics.height() * 0.92)))
+    # Баблы и поле ввода: чуть крупнее строки текста, в пределах читаемости бабла
+    return max(19, min(30, int(metrics.height() * 1.02)))
 
 
 def _line_html(line: str, paths: dict[str, Path], emoji_px: int) -> str:
