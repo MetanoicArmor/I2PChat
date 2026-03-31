@@ -68,6 +68,8 @@ TT_CHECK_UPDATES = (
     "when no system http_proxy is set; override with I2PCHAT_UPDATE_HTTP_PROXY if needed."
 )
 
+TT_OPEN_APP_DIR = "Open the app data directory in your system file manager."
+
 TT_LOCK_TO_PEER = (
     "Bind this named profile to the connected peer: the address is stored in the profile .dat, "
     "and later sessions reuse it. Not available in TRANSIENT (default) mode. "

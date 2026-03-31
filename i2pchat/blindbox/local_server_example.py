@@ -14,6 +14,21 @@ from typing import Optional
 _EXAMPLE_NAME = "blindbox_server_example.py"
 
 
+def _read_example_via_importlib_resources() -> Optional[str]:
+    """Works for installs where the file is package data (and some frozen layouts)."""
+    try:
+        from importlib.resources import files
+    except ImportError:
+        return None
+    try:
+        candidate = files("i2pchat.blindbox").joinpath(_EXAMPLE_NAME)
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+    except (OSError, TypeError, FileNotFoundError, ModuleNotFoundError, ValueError):
+        pass
+    return None
+
+
 def resolve_bundled_example_path() -> Optional[str]:
     """Package file next to this module, or same name under ``_MEIPASS``."""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +51,9 @@ def get_local_blindbox_server_example_source() -> str:
                 return f.read()
         except OSError:
             pass
+    embedded = _read_example_via_importlib_resources()
+    if embedded is not None:
+        return embedded
     return (
         f"# Example script {_EXAMPLE_NAME} not found in the package install.\n"
     )

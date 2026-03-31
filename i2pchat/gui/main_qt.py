@@ -422,9 +422,15 @@ THEMES: dict[str, dict[str, object]] = {
                 background: #ffffff;
                 border: none;
                 border-radius: 8px;
-                padding: 10px 12px;
+                padding: 8px 12px;
                 color: #1d1d1f;
-                min-height: 20px;
+                min-height: 22px;
+            }
+            QComboBox QLineEdit {
+                border: none;
+                background: transparent;
+                margin: 0px;
+                padding: 0px 0px 6px 0px;
             }
             QComboBox:hover { background: #f7f8fb; }
             QComboBox:focus { background: #ffffff; border: 1px solid #0a84ff; }
@@ -902,9 +908,15 @@ THEMES: dict[str, dict[str, object]] = {
                 background: #1f1f23;
                 border: none;
                 border-radius: 8px;
-                padding: 10px 12px;
+                padding: 8px 12px;
                 color: #f5f5f7;
-                min-height: 20px;
+                min-height: 22px;
+            }
+            QComboBox QLineEdit {
+                border: none;
+                background: transparent;
+                margin: 0px;
+                padding: 0px 0px 6px 0px;
             }
             QComboBox:hover { background: #242831; }
             QComboBox:focus { background: #1f1f23; border: 1px solid #0a84ff; }
@@ -3289,6 +3301,102 @@ class _PeerLockIndicatorLabel(QtWidgets.QLabel):
         super().mousePressEvent(event)
 
 
+class ActionsPopupButton(QtWidgets.QFrame):
+    """Строка пункта ActionsPopup: не QPushButton — на macOS дочерние QLabel внутри кнопки не рисуются."""
+
+    clicked = QtCore.pyqtSignal()
+
+    @staticmethod
+    def _app_menu_fonts() -> tuple[QtGui.QFont, QtGui.QFont]:
+        """Шрифты в пунктах (pt), без font-size в QSS px — иначе на HiDPI текст часто выглядит размытым."""
+        app = QtWidgets.QApplication.instance()
+        base = QtGui.QFont(app.font() if app is not None else QtGui.QFont())
+        title_f = QtGui.QFont(base)
+        if title_f.pointSizeF() <= 0:
+            title_f.setPointSize(13)
+        sc_f = QtGui.QFont(base)
+        step = 1.25 if base.pointSizeF() > 10.5 else 1.0
+        sc_f.setPointSizeF(max(9.0, base.pointSizeF() - step))
+        return title_f, sc_f
+
+    def __init__(
+        self,
+        text: str,
+        parent: Optional[QtWidgets.QWidget] = None,
+        *,
+        shortcut_hint: Optional[str] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("ActionsPopupItem")
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self._shortcut_hint = (shortcut_hint or "").strip()
+
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(10)
+
+        self._title_label = QtWidgets.QLabel(text, self)
+        self._title_label.setObjectName("ActionsPopupItemTitle")
+        self._title_label.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        lay.addWidget(self._title_label, 1)
+
+        self._shortcut_label = QtWidgets.QLabel(self)
+        self._shortcut_label.setObjectName("ActionsPopupItemShortcut")
+        self._shortcut_label.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self._shortcut_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        lay.addWidget(self._shortcut_label, 0)
+        self.set_shortcut_hint(self._shortcut_hint)
+        tf, sf = self._app_menu_fonts()
+        self._title_label.setFont(tf)
+        self._shortcut_label.setFont(sf)
+
+    def set_shortcut_hint(self, hint: Optional[str]) -> None:
+        self._shortcut_hint = (hint or "").strip()
+        self._shortcut_label.setText(self._shortcut_hint)
+        self._shortcut_label.setVisible(bool(self._shortcut_hint))
+
+    def setText(self, text: str) -> None:
+        self._title_label.setText(text)
+
+    def apply_action_row_colors(self, *, night: bool) -> None:
+        """Явные цвета на QLabel: на macOS QSS с родителя ActionsPopup часто не доходит до детей внутри QFrame."""
+        if night:
+            title, title_dis = "#eceff4", "#8b93a5"
+            sc, sc_dis = "#8a93a8", "#5f6778"
+        else:
+            title, title_dis = "#1d1d1f", "#8e8e93"
+            sc, sc_dis = "#5c5c63", "#aeaeb2"
+        self._title_label.setStyleSheet(
+            f"""
+            QLabel#ActionsPopupItemTitle {{ color: {title}; }}
+            QLabel#ActionsPopupItemTitle:disabled {{ color: {title_dis}; }}
+            """
+        )
+        self._shortcut_label.setStyleSheet(
+            f"""
+            QLabel#ActionsPopupItemShortcut {{ color: {sc}; }}
+            QLabel#ActionsPopupItemShortcut:disabled {{ color: {sc_dis}; }}
+            """
+        )
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if (
+            event.button() == QtCore.Qt.MouseButton.LeftButton
+            and self.isEnabled()
+            and self.rect().contains(event.pos())
+        ):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class ActionsPopup(QtWidgets.QFrame):
     """Кастомный popup вместо QMenu для одинаковой отрисовки на всех ОС."""
     closed = QtCore.pyqtSignal()
@@ -3319,6 +3427,14 @@ class ActionsPopup(QtWidgets.QFrame):
         self.surface_layout = QtWidgets.QVBoxLayout(self.surface)
         self.surface_layout.setContentsMargins(8, 8, 8, 8)
         self.surface_layout.setSpacing(4)
+        self._actions_popup_theme_night: bool = False
+
+    def _refresh_all_action_row_colors(self) -> None:
+        for i in range(self.surface_layout.count()):
+            lay_item = self.surface_layout.itemAt(i)
+            w = lay_item.widget()
+            if isinstance(w, ActionsPopupButton):
+                w.apply_action_row_colors(night=self._actions_popup_theme_night)
 
     def add_action(
         self,
@@ -3327,15 +3443,20 @@ class ActionsPopup(QtWidgets.QFrame):
         enabled: bool = True,
         *,
         tool_tip: Optional[str] = None,
-    ) -> QtWidgets.QPushButton:
-        btn = QtWidgets.QPushButton(text, self.surface)
-        btn.setObjectName("ActionsPopupItem")
+        shortcut_hint: Optional[str] = None,
+    ) -> ActionsPopupButton:
+        btn = ActionsPopupButton(
+            text,
+            self.surface,
+            shortcut_hint=shortcut_hint,
+        )
         btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         btn.setEnabled(enabled)
         if tool_tip:
             btn.setToolTip(tool_tip)
         btn.clicked.connect(lambda: (self.hide(), callback()))
         self.surface_layout.addWidget(btn)
+        btn.apply_action_row_colors(night=self._actions_popup_theme_night)
         return btn
 
     def add_separator(self) -> None:
@@ -3398,24 +3519,22 @@ class ActionsPopup(QtWidgets.QFrame):
 
     def apply_theme(self, theme_id: str) -> None:
         night = theme_id == "night"
+        self._actions_popup_theme_night = night
         items_night = """
-                QPushButton#ActionsPopupItem {
+                QFrame#ActionsPopupItem {
                     background: transparent;
-                    color: #e3e8f1;
                     border: none;
                     border-radius: 10px;
-                    text-align: left;
-                    padding: 8px 12px;
-                    font-size: 13px;
+                    padding: 0px;
                 }
-                QPushButton#ActionsPopupItem:hover {
+                QFrame#ActionsPopupItem:hover {
                     background: rgba(255, 255, 255, 0.10);
                 }
-                QPushButton#ActionsPopupItem:pressed {
+                QFrame#ActionsPopupItem:pressed {
                     background: rgba(255, 255, 255, 0.16);
                 }
-                QPushButton#ActionsPopupItem:disabled {
-                    color: #7d8798;
+                QFrame#ActionsPopupItem:disabled {
+                    background: transparent;
                 }
                 QFrame#ActionsPopupSeparator {
                     background: #343a46;
@@ -3426,23 +3545,20 @@ class ActionsPopup(QtWidgets.QFrame):
                 }
                 """
         items_light = """
-                QPushButton#ActionsPopupItem {
+                QFrame#ActionsPopupItem {
                     background: transparent;
-                    color: #2c3442;
                     border: none;
                     border-radius: 10px;
-                    text-align: left;
-                    padding: 8px 12px;
-                    font-size: 13px;
+                    padding: 0px;
                 }
-                QPushButton#ActionsPopupItem:hover {
+                QFrame#ActionsPopupItem:hover {
                     background: #e5eaf2;
                 }
-                QPushButton#ActionsPopupItem:pressed {
+                QFrame#ActionsPopupItem:pressed {
                     background: #dfe6f0;
                 }
-                QPushButton#ActionsPopupItem:disabled {
-                    color: #9da5b2;
+                QFrame#ActionsPopupItem:disabled {
+                    background: transparent;
                 }
                 QFrame#ActionsPopupSeparator {
                     background: #d6dce7;
@@ -3508,6 +3624,7 @@ class ActionsPopup(QtWidgets.QFrame):
                 """
                 + items_light
             )
+        self._refresh_all_action_row_colors()
         self._apply_win_popup_mask()
 
 
@@ -3562,6 +3679,7 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         self.profile_combo_widget = combo_widget
         self.combo = combo_widget.combo
         self.combo.setEditable(True)
+        self.combo.setCompleter(None)
         self.combo.addItems(profiles)
         self.combo.setCurrentIndex(0)
         self.combo.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.NoInsert)
@@ -4213,17 +4331,21 @@ class ChatSearchHitsConsoleFrame(QtWidgets.QFrame):
         p.drawPath(path)
 
 
+def _native_shortcut_text(portable_sequence: str) -> str:
+    seq = QtGui.QKeySequence(portable_sequence)
+    return seq.toString(QtGui.QKeySequence.SequenceFormat.NativeText)
+
+
 def _tooltip_with_portable_shortcut(base: str, portable_sequence: str) -> str:
     """Дополняет tooltip нативной подписью хоткея; Ctrl+… на macOS в Qt даёт ⌘ (кроме явных Meta+…)."""
-    seq = QtGui.QKeySequence(portable_sequence)
-    native = seq.toString(QtGui.QKeySequence.SequenceFormat.NativeText)
+    native = _native_shortcut_text(portable_sequence)
     if not native:
         return base
     return f"{base}\n\nShortcut: {native}"
 
 
 def _privacy_mode_shortcut_portable() -> str:
-    """macOS: ⌘H зарезервировано системой (Hide); используем Control+H → в QKeySequence это Meta+H."""
+    """macOS: ⌘H занято системой (Hide); используем физический Control+H → в QKeySequence это Meta+H."""
     return "Meta+H" if sys.platform == "darwin" else "Ctrl+H"
 
 
@@ -4821,16 +4943,19 @@ class ChatWindow(QtWidgets.QMainWindow):
             "Load profile (.dat)",
             self.on_load_profile_clicked,
             tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_LOAD_PROFILE_DAT, "Ctrl+O"),
+            shortcut_hint=_native_shortcut_text("Ctrl+O"),
         )
         self.more_actions_popup.add_action(
             "Send picture",
             self.on_send_pic_clicked,
             tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_SEND_PICTURE, "Ctrl+P"),
+            shortcut_hint=_native_shortcut_text("Ctrl+P"),
         )
         self.more_actions_popup.add_action(
             "Send file",
             self.on_send_file_clicked,
             tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_SEND_FILE, "Ctrl+F"),
+            shortcut_hint=_native_shortcut_text("Ctrl+F"),
         )
         self.more_actions_popup.add_action(
             "BlindBox diagnostics",
@@ -4838,6 +4963,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             tool_tip=_tooltip_with_portable_shortcut(
                 menu_tt.TT_BLINDBOX_DIAGNOSTICS, "Ctrl+D"
             ),
+            shortcut_hint=_native_shortcut_text("Ctrl+D"),
         )
         self.more_actions_popup.add_action(
             "Export profile backup…",
@@ -4845,6 +4971,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             tool_tip=_tooltip_with_portable_shortcut(
                 menu_tt.TT_EXPORT_PROFILE_BACKUP, "Ctrl+E"
             ),
+            shortcut_hint=_native_shortcut_text("Ctrl+E"),
         )
         self.more_actions_popup.add_action(
             "Import profile backup…",
@@ -4852,6 +4979,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             tool_tip=_tooltip_with_portable_shortcut(
                 menu_tt.TT_IMPORT_PROFILE_BACKUP, "Ctrl+I"
             ),
+            shortcut_hint=_native_shortcut_text("Ctrl+I"),
         )
         self.more_actions_popup.add_action(
             "Export history backup…",
@@ -4859,6 +4987,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             tool_tip=_tooltip_with_portable_shortcut(
                 menu_tt.TT_EXPORT_HISTORY_BACKUP, "Ctrl+Shift+E"
             ),
+            shortcut_hint=_native_shortcut_text("Ctrl+Shift+E"),
         )
         self.more_actions_popup.add_action(
             "Import history backup…",
@@ -4866,6 +4995,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             tool_tip=_tooltip_with_portable_shortcut(
                 menu_tt.TT_IMPORT_HISTORY_BACKUP, "Ctrl+Shift+I"
             ),
+            shortcut_hint=_native_shortcut_text("Ctrl+Shift+I"),
         )
         self.more_actions_popup.add_action(
             "Check for updates…",
@@ -4873,12 +5003,22 @@ class ChatWindow(QtWidgets.QMainWindow):
             tool_tip=_tooltip_with_portable_shortcut(
                 menu_tt.TT_CHECK_UPDATES, "Ctrl+U"
             ),
+            shortcut_hint=_native_shortcut_text("Ctrl+U"),
+        )
+        self.more_actions_popup.add_action(
+            "Open App dir",
+            self._on_open_app_dir_clicked,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_OPEN_APP_DIR, "Ctrl+Shift+A"
+            ),
+            shortcut_hint=_native_shortcut_text("Ctrl+Shift+A"),
         )
         self.more_actions_popup.add_separator()
         self.more_actions_popup.add_action(
             "Lock to peer",
             self.on_lock_peer_clicked,
             tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_LOCK_TO_PEER, "Ctrl+L"),
+            shortcut_hint=_native_shortcut_text("Ctrl+L"),
         )
         self.more_actions_popup.add_action(
             "Forget pinned peer key",
@@ -4891,6 +5031,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             tool_tip=_tooltip_with_portable_shortcut(
                 menu_tt.TT_COPY_MY_ADDRESS, "Ctrl+Shift+C"
             ),
+            shortcut_hint=_native_shortcut_text("Ctrl+Shift+C"),
         )
         self.more_actions_popup.add_separator()
         self._history_toggle_btn = self.more_actions_popup.add_action(
@@ -4913,6 +5054,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             tool_tip=_tooltip_with_portable_shortcut(
                 menu_tt.TT_PRIVACY_MODE_TOGGLE, _privacy_mode_shortcut_portable()
             ),
+            shortcut_hint=_native_shortcut_text(_privacy_mode_shortcut_portable()),
         )
         self.more_actions_popup.add_separator()
         self._notify_sound_enabled = load_notify_sound_enabled()
@@ -6644,6 +6786,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             ("Ctrl+I", self._import_profile_backup),
             ("Ctrl+Shift+E", self._export_history_backup),
             ("Ctrl+Shift+I", self._import_history_backup),
+            ("Ctrl+Shift+A", self._on_open_app_dir_clicked),
             ("Ctrl+L", self.on_lock_peer_clicked),
             # ChatListView: только StandardKey.Copy (Ctrl/Cmd+C без Shift) — конфликта нет.
             ("Ctrl+Shift+C", self.on_copy_my_addr_clicked),
@@ -7154,6 +7297,30 @@ class ChatWindow(QtWidgets.QMainWindow):
         addr = self.core.my_dest.base32 + ".b32.i2p"
         QtWidgets.QApplication.clipboard().setText(addr)
         self.handle_system("My address copied to clipboard.")
+
+    @QtCore.pyqtSlot()
+    def _on_open_app_dir_clicked(self) -> None:
+        app_dir = get_profiles_dir()
+        try:
+            os.makedirs(app_dir, exist_ok=True)
+        except Exception:
+            pass
+        if not os.path.isdir(app_dir):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Open App dir",
+                f"App directory is not available:\n{app_dir}",
+            )
+            return
+        ok = QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(app_dir))
+        if not ok:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Open App dir",
+                f"Could not open directory:\n{app_dir}",
+            )
+            return
+        self.handle_system(f"Opened app directory: {app_dir}")
 
     def _current_history_peer(self) -> Optional[str]:
         return (

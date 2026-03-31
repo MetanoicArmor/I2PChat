@@ -19,13 +19,18 @@ def win_rounded_window_region(width: int, height: int, radius: float) -> QtGui.Q
     return QtGui.QRegion(poly_f.toPolygon())
 
 
-def apply_win_popup_rounded_mask(widget: QtWidgets.QWidget, radius: float) -> None:
-    if not sys.platform.startswith("win"):
-        return
+def apply_rounded_rect_mask(widget: QtWidgets.QWidget, radius: float) -> None:
+    """Обрезка прямоугольного виджета по скруглённому контуру (убирает артефакты углов на прозрачном фоне)."""
     w, h = widget.width(), widget.height()
     if w < 2 or h < 2:
         return
     widget.setMask(win_rounded_window_region(w, h, radius))
+
+
+def apply_win_popup_rounded_mask(widget: QtWidgets.QWidget, radius: float) -> None:
+    if not sys.platform.startswith("win"):
+        return
+    apply_rounded_rect_mask(widget, radius)
 
 
 def popup_screen_for_anchor(anchor: QtWidgets.QWidget) -> Optional[QtGui.QScreen]:
@@ -56,6 +61,43 @@ def clamp_popup_top_left_to_available_geometry(
     x = max(geom.left(), min(top_left.x(), geom.right() - popup_w + 1))
     y = max(geom.top(), min(top_left.y(), geom.bottom() - popup_h + 1))
     return QtCore.QPoint(x, y)
+
+
+def embedded_popup_top_left_in_window(
+    anchor: QtWidgets.QWidget,
+    window: QtWidgets.QWidget,
+    popup_w: int,
+    popup_h: int,
+    *,
+    vertical_gap: int = 4,
+    margin: int = 8,
+    center_under_anchor: bool = False,
+) -> QtCore.QPoint:
+    """
+    Левый верх встроенного popup в координатах ``window`` (родитель — то же окно).
+    Под якорём; если снизу не хватает места — над якорём; не вылезает за края клиентской области.
+    center_under_anchor: горизонтально центрировать относительно якоря (полезно, если ширина popup ≠ якоря).
+    """
+    wrect = window.rect()
+    p0 = anchor.mapTo(window, QtCore.QPoint(0, 0))
+    below_y = p0.y() + anchor.height() + vertical_gap
+    above_y = p0.y() - popup_h - vertical_gap
+    bottom_limit = wrect.bottom() - margin
+    top_limit = wrect.top() + margin
+
+    if below_y + popup_h <= bottom_limit:
+        y = below_y
+    elif above_y >= top_limit:
+        y = above_y
+    else:
+        y = max(top_limit, min(below_y, bottom_limit - popup_h))
+
+    if center_under_anchor:
+        x = int(p0.x() + max(0, (anchor.width() - popup_w) // 2))
+    else:
+        x = int(p0.x())
+    x = max(margin, min(x, int(wrect.right()) - margin - popup_w + 1))
+    return QtCore.QPoint(x, int(y))
 
 
 def global_position_popup_below_anchor(

@@ -24,6 +24,8 @@ a = Analysis(
         ('assets/sounds/notify.wav', 'assets/sounds'),
         ('i2pchat/gui/noto_emoji', 'i2pchat/gui/noto_emoji'),
         ('i2pchat/gui/icons', 'i2pchat/gui/icons'),
+        # Example script is not imported anywhere; bundle explicitly for Blind Box setup dialog.
+        ('i2pchat/blindbox/blindbox_server_example.py', 'i2pchat/blindbox'),
     ],
     hiddenimports=_local_modules + [
         'rich', 'textual', 'pyperclip',
