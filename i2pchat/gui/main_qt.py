@@ -2204,8 +2204,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     
     # Настройки для inline-изображений
     # Макс. размер превью в бабле (масштабирование с сохранением пропорций).
-    IMAGE_MAX_WIDTH = 560
-    IMAGE_MAX_HEIGHT = 420
+    IMAGE_MAX_WIDTH = 448
+    IMAGE_MAX_HEIGHT = 336
     
     # Кэш для QPixmap (путь -> pixmap)
     _pixmap_cache: dict = {}
