@@ -2036,7 +2036,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         painter.translate(text_area.left(), text_area.top())
         tw, th = int(text_area.width()), int(text_area.height())
         painter.setClipRect(0, 0, tw, th)
-        doc.drawContents(painter, QtCore.QRect(0, 0, tw, th))
+        doc.drawContents(painter, QtCore.QRectF(0, 0, tw, th))
         painter.restore()
 
         meta_text = _chat_item_delivery_meta_text(item)
