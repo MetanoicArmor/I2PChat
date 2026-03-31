@@ -72,10 +72,17 @@ from i2pchat.core.i2p_chat_core import (
 )
 from .compose_input import ComposeInputWrapper
 from .fluent_message_render import (
-    fluent_emoji_paths_cached,
+    append_plain_with_fluent_at_cursor,
+    compose_emoji_px,
+    document_plain_with_fluent_images,
     emoji_inline_px,
+    fill_document_from_plain,
+    fluent_emoji_paths_cached,
+    insert_fluent_emoji_at_cursor,
     line_horizontal_advance_fluent,
     make_message_qtextdocument,
+    map_plain_offset_to_qt_pos,
+    map_qt_pos_to_plain_offset,
 )
 from i2pchat.storage.contact_book import (
     ContactBook,
@@ -327,12 +334,12 @@ def _save_pasted_qimage_to_images_dir(image: QtGui.QImage) -> Optional[str]:
     return None
 
 
-def _compose_bar_input_height_px(edit: QtWidgets.QPlainTextEdit, *, lines: int = 2) -> int:
-    """Высота поля ввода под заданное число видимых строк (padding из QSS QPlainTextEdit 8+8)."""
+def _compose_bar_input_height_px(edit: QtWidgets.QTextEdit, *, lines: int = 2) -> int:
+    """Высота поля ввода под заданное число видимых строк (padding из QSS 8+8)."""
     fm = edit.fontMetrics()
     line_px = max(int(fm.lineSpacing()), int(fm.height()))
     dm = int(float(edit.document().documentMargin()) * 2.0)
-    vpad = 16  # padding: 8px сверху и снизу в темах для QPlainTextEdit
+    vpad = 16  # padding: 8px сверху и снизу в темах для поля ввода
     return max(48, vpad + dm + line_px * lines + 4)
 
 
@@ -477,7 +484,7 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical { height: 0px; }
-            QLineEdit, QPlainTextEdit {
+            QLineEdit, QPlainTextEdit, QTextEdit {
                 background: #ffffff;
                 border: none;
                 border-radius: 9px;
@@ -487,7 +494,7 @@ THEMES: dict[str, dict[str, object]] = {
             QLineEdit#PeerAddressEdit {
                 padding: 8px 10px 8px 8px;
             }
-            QLineEdit:focus, QPlainTextEdit:focus {
+            QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {
                 background: #ffffff;
                 border: 1px solid #0a84ff;
             }
@@ -848,7 +855,7 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical { height: 0px; }
-            QLineEdit, QPlainTextEdit {
+            QLineEdit, QPlainTextEdit, QTextEdit {
                 background: rgba(255, 255, 255, 0.06);
                 border: none;
                 border-radius: 8px;
@@ -858,7 +865,7 @@ THEMES: dict[str, dict[str, object]] = {
             QLineEdit#PeerAddressEdit {
                 padding: 8px 10px 8px 8px;
             }
-            QLineEdit:focus, QPlainTextEdit:focus {
+            QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {
                 background: rgba(255, 255, 255, 0.09);
                 border: 1px solid rgba(10, 132, 255, 0.85);
             }
@@ -2515,14 +2522,16 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         return QtCore.QSize(int(cell_width), int(height))
 
 
-class MessageInputEdit(QtWidgets.QPlainTextEdit):
-    """Многострочное поле ввода: Enter — новая строка.
+class MessageInputEdit(QtWidgets.QTextEdit):
+    """Многострочное поле ввода: Enter — новая строка; эмодзи из Fluent — как в пикере (PNG в документе).
+
+    В протокол и черновики уходит Unicode через plainTextForSend().
 
     Отправка: Shift+Enter (везде), а также Ctrl+Enter (Windows/Linux) или ⌘+Enter (macOS).
     """
     sendRequested = QtCore.pyqtSignal()
-    # Путь к изображению после вставки из буфера (картинка или локальный файл)
     imagePasteReady = QtCore.pyqtSignal(str)
+    composeTextChanged = QtCore.pyqtSignal()
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
@@ -2530,6 +2539,75 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
         self._context_popup: Optional["ActionsPopup"] = None
         self._context_popup_suppress_until_ms = 0
         self.setAcceptDrops(True)
+        self.setAcceptRichText(True)
+        self.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._suppress_compose_signal = False
+        self._suppress_materialize = False
+        self._materializing = False
+        self._materialize_timer = QtCore.QTimer(self)
+        self._materialize_timer.setSingleShot(True)
+        self._materialize_timer.setInterval(200)
+        self._materialize_timer.timeout.connect(self._materialize_fluent_emojis)
+        self.document().contentsChanged.connect(self._on_document_contents_changed)
+
+    def plainTextForSend(self) -> str:
+        return document_plain_with_fluent_images(self.document())
+
+    def setPlainTextForCompose(self, text: str) -> None:
+        self._materialize_timer.stop()
+        self._suppress_compose_signal = True
+        self._suppress_materialize = True
+        try:
+            fill_document_from_plain(self.document(), text, self.font())
+            cur = QtGui.QTextCursor(self.document())
+            cur.movePosition(QtGui.QTextCursor.MoveOperation.End)
+            self.setTextCursor(cur)
+        finally:
+            self._suppress_materialize = False
+            self._suppress_compose_signal = False
+
+    def insert_fluent_emoji(self, ch: str) -> None:
+        paths = fluent_emoji_paths_cached()
+        pth = paths.get(ch)
+        cur = self.textCursor()
+        if pth is None:
+            cur.insertText(ch)
+        else:
+            px = compose_emoji_px(self.font())
+            insert_fluent_emoji_at_cursor(cur, self.document(), ch, pth, px)
+        self.setTextCursor(cur)
+
+    def _on_document_contents_changed(self) -> None:
+        if not self._suppress_compose_signal:
+            self.composeTextChanged.emit()
+        if self._suppress_materialize or self._materializing:
+            return
+        if not fluent_emoji_paths_cached():
+            return
+        self._materialize_timer.start()
+
+    def _materialize_fluent_emojis(self) -> None:
+        self._materialize_timer.stop()
+        if self._suppress_materialize or self._materializing:
+            return
+        if not fluent_emoji_paths_cached():
+            return
+        self._materializing = True
+        self._suppress_compose_signal = True
+        try:
+            plain = document_plain_with_fluent_images(self.document())
+            pos = self.textCursor().position()
+            off = map_qt_pos_to_plain_offset(self.document(), pos)
+            fill_document_from_plain(self.document(), plain, self.font())
+            new_off = min(max(0, off), len(plain))
+            qt_pos = map_plain_offset_to_qt_pos(self.document(), new_off)
+            cur = QtGui.QTextCursor(self.document())
+            cur.setPosition(qt_pos)
+            self.setTextCursor(cur)
+        finally:
+            self._suppress_compose_signal = False
+            self._materializing = False
 
     def canPaste(self) -> bool:  # type: ignore[override]
         mime = QtWidgets.QApplication.clipboard().mimeData()
@@ -2569,6 +2647,17 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
                 if ok:
                     self.imagePasteReady.emit(fpath)
                     return
+        if source.hasText():
+            cur = self.textCursor()
+            self._suppress_materialize = True
+            try:
+                append_plain_with_fluent_at_cursor(
+                    cur, self.document(), source.text(), self.font()
+                )
+                self.setTextCursor(cur)
+            finally:
+                self._suppress_materialize = False
+            return
         super().insertFromMimeData(source)
 
     def _local_urls_from_mime(self, source: QtGui.QMimeData) -> list[str]:
@@ -2673,7 +2762,7 @@ class MessageInputEdit(QtWidgets.QPlainTextEdit):
                 self.sendRequested.emit()
                 event.accept()
             else:
-                # Пусть стандартный обработчик QPlainTextEdit вставит перевод строки.
+                # Пусть стандартный обработчик QTextEdit вставит перевод строки.
                 super().keyPressEvent(event)
             return
 
@@ -4422,7 +4511,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.addr_edit.textChanged.connect(lambda _t: self._update_peer_lock_indicator())
         self.peer_lock_label.clicked.connect(self.on_lock_peer_clicked)
         self.addr_edit.editingFinished.connect(self._on_addr_editing_finished_for_drafts)
-        self.input_edit.textChanged.connect(self._on_compose_text_changed)
+        self.input_edit.composeTextChanged.connect(self._on_compose_text_changed)
         self.more_actions_popup.add_action("Load profile (.dat)", self.on_load_profile_clicked)
         self.more_actions_popup.add_action("Send picture", self.on_send_pic_clicked)
         self.more_actions_popup.add_action("Send file", self.on_send_file_clicked)
@@ -6391,7 +6480,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_send_clicked(self) -> None:
-        text = self.input_edit.toPlainText().strip()
+        text = self.input_edit.plainTextForSend().strip()
         if not text:
             return
         asyncio.create_task(self._send_text_ui_flow(text))
@@ -6410,10 +6499,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             else:
                 # Keep text in the input when blocked (especially await-live-root),
                 # so user can press Connect and retry without retyping.
-                self.input_edit.setPlainText(text)
-                cursor = self.input_edit.textCursor()
-                cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
-                self.input_edit.setTextCursor(cursor)
+                self.input_edit.setPlainTextForCompose(text)
                 self.input_edit.setFocus()
                 if result.delivery_state == DELIVERY_STATE_FAILED:
                     self._append_failed_text_message(
@@ -6467,10 +6553,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     self._schedule_compose_drafts_persist()
                     self.handle_system("Auto-connect succeeded, message sent.")
                 else:
-                    self.input_edit.setPlainText(text)
-                    cursor = self.input_edit.textCursor()
-                    cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
-                    self.input_edit.setTextCursor(cursor)
+                    self.input_edit.setPlainTextForCompose(text)
                     self.input_edit.setFocus()
                     self.handle_system("Auto-connect finished, but send is still blocked. Message kept.")
             else:
@@ -6606,7 +6689,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _merge_active_input_into_compose_drafts(self) -> None:
         if self._compose_draft_active_key is not None:
-            self._compose_drafts[self._compose_draft_active_key] = self.input_edit.toPlainText()
+            self._compose_drafts[self._compose_draft_active_key] = self.input_edit.plainTextForSend()
 
     def _load_compose_drafts_from_disk(self) -> None:
         self._compose_drafts = {}
@@ -6644,7 +6727,7 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def _on_compose_text_changed(self) -> None:
         if self._compose_draft_active_key is not None:
-            self._compose_drafts[self._compose_draft_active_key] = self.input_edit.toPlainText()
+            self._compose_drafts[self._compose_draft_active_key] = self.input_edit.plainTextForSend()
         self._schedule_compose_drafts_persist()
 
     @QtCore.pyqtSlot()
@@ -6657,17 +6740,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         active, text, out = apply_compose_draft_peer_switch(
             old_active_key=self._compose_draft_active_key,
             new_key=new_key,
-            input_plain=self.input_edit.toPlainText(),
+            input_plain=self.input_edit.plainTextForSend(),
             drafts=self._compose_drafts,
         )
         self._compose_drafts = out
         self._compose_draft_active_key = active
-        self.input_edit.blockSignals(True)
-        self.input_edit.setPlainText(text)
-        cursor = self.input_edit.textCursor()
-        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
-        self.input_edit.setTextCursor(cursor)
-        self.input_edit.blockSignals(False)
+        self.input_edit.setPlainTextForCompose(text)
         self._schedule_compose_drafts_persist()
         clear_unread_for_peer(self._unread_by_peer, active)
         self._update_unread_chrome()
@@ -7284,12 +7362,9 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def _on_reply_requested(self, block: str) -> None:
         """Вставить цитату в поле ввода (конец черновика)."""
-        cur = self.input_edit.toPlainText()
+        cur = self.input_edit.plainTextForSend()
         sep = "\n\n" if cur.strip() else ""
-        self.input_edit.setPlainText(f"{cur}{sep}{block}")
-        cursor = self.input_edit.textCursor()
-        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
-        self.input_edit.setTextCursor(cursor)
+        self.input_edit.setPlainTextForCompose(f"{cur}{sep}{block}")
         self.input_edit.setFocus()
         self._on_compose_text_changed()
 

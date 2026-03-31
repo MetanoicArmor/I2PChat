@@ -303,7 +303,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
 
 
 class ComposeInputWrapper(QtWidgets.QWidget):
-    """Полноразмерный QPlainTextEdit и кнопка пикера в правом верхнем углу."""
+    """Полноразмерное поле ввода (QTextEdit) и кнопка пикера в правом верхнем углу."""
 
     _BTN_SIDE = 28
     _CORNER_MARGIN = 6
@@ -311,7 +311,7 @@ class ComposeInputWrapper(QtWidgets.QWidget):
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
-        self._edit: Optional[QtWidgets.QPlainTextEdit] = None
+        self._edit: Optional[QtWidgets.QTextEdit] = None
         self._theme_id = "ligth"
         self._popup: Optional[EmojiPickerPopup] = None
 
@@ -326,12 +326,12 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         self._apply_emoji_button_style()
         self._refresh_emoji_icon()
 
-    def attach_input(self, edit: QtWidgets.QPlainTextEdit) -> None:
+    def attach_input(self, edit: QtWidgets.QTextEdit) -> None:
         self._edit = edit
         edit.setParent(self)
         self._apply_viewport_margins()
 
-    def input_widget(self) -> Optional[QtWidgets.QPlainTextEdit]:
+    def input_widget(self) -> Optional[QtWidgets.QTextEdit]:
         return self._edit
 
     def set_theme(self, theme_id: str) -> None:
@@ -407,6 +407,10 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         if self._edit is None:
             return
         self._edit.setFocus()
-        cur = self._edit.textCursor()
-        cur.insertText(ch)
-        self._edit.setTextCursor(cur)
+        ins = getattr(self._edit, "insert_fluent_emoji", None)
+        if callable(ins):
+            ins(ch)
+        else:
+            cur = self._edit.textCursor()
+            cur.insertText(ch)
+            self._edit.setTextCursor(cur)
