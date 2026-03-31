@@ -243,7 +243,7 @@ On the receiving side:
 
 The **`Send picture`** item works the same way but is intended for images (PNG, JPEG, or WebP) and is shown inline in the chat.
 
-<img src="../screenshots/5.png" alt="Chat area: inline image in a message bubble" width="900" />
+<img src="../screenshots/5.png" alt="Emoji picker (smiley grid) next to the compose field" width="380" />
 
 #### 4.7. `Lock to peer` button
 
