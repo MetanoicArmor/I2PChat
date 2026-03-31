@@ -27,6 +27,12 @@ def _unicode_hex_key(s: str) -> str:
     return "-".join(f"{ord(c):X}" for c in s)
 
 
+def _storage_hex_key(s: str) -> str:
+    """Имя файла без U+FE0F (variation selector) — короче и без суффикса -FE0F."""
+    nfc = unicodedata.normalize("NFC", s)
+    return "-".join(f"{ord(c):X}" for c in nfc if ord(c) != 0xFE0F)
+
+
 def _parse_metadata_unicode(raw: str) -> str:
     parts = raw.strip().split()
     return "-".join(p.upper() for p in parts if p)
@@ -139,7 +145,7 @@ def main() -> int:
         if src is None or not src.is_file():
             missing.append(emoji)
             continue
-        key = _unicode_hex_key(unicodedata.normalize("NFC", emoji))
+        key = _storage_hex_key(emoji)
         fname = f"{key}.png"
         if fname in used_names and used_names[fname] != emoji:
             # крайне редко; добавить суффикс
