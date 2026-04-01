@@ -64,24 +64,24 @@ def load_profile_blindbox_replicas_bundle(
 ) -> tuple[list[str], dict[str, str]]:
     """Load normalized replicas and per-endpoint auth map. Returns ([], {}) if missing/invalid."""
     if (profile or "").strip() in ("", "default"):
-        return [], []
+        return [], {}
     path = profile_blindbox_replicas_path(profiles_dir, profile)
     if not os.path.isfile(path):
-        return [], []
+        return [], {}
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         logger.warning("BlindBox profile replicas load failed (%s): %s", path, e)
-        return [], []
+        return [], {}
     if not isinstance(data, dict):
-        return [], []
+        return [], {}
     ver = int(data.get("version", 0))
     if ver not in _SUPPORTED_LOAD_VERSIONS:
-        return [], []
+        return [], {}
     reps = data.get("replicas")
     if not isinstance(reps, list):
-        return [], []
+        return [], {}
     strings = [str(x).strip() for x in reps if str(x).strip()]
     replicas = normalize_replica_endpoints(strings)
     if ver == 1:

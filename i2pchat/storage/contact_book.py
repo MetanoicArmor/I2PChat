@@ -220,7 +220,8 @@ def set_peer_profile(
     if rec is None:
         remember_peer(book, addr)
         rec = book.get(addr)
-        assert rec is not None
+    if rec is None:
+        return False
     if rec.display_name == display_name and rec.note == note:
         return False
     rec.display_name = display_name
@@ -246,7 +247,8 @@ def touch_peer_message_meta(
     if rec is None:
         remember_peer(book, addr)
         rec = book.get(addr)
-        assert rec is not None
+    if rec is None:
+        return False
     if rec.last_preview == preview and rec.last_activity_ts == ts_iso:
         return False
     rec.last_preview = preview

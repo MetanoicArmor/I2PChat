@@ -1,37 +1,43 @@
-# I2PChat Security Audit Report
+# I2PChat Security Audit Report (re-run after remediations)
 
 | Field | Value |
 |-------|-------|
-| Date | 2026-04-01 |
+| Report date | 2026-04-01 |
+| Revision | Re-audit after remediations: `contact_book` (no `assert`), GUI warning for `I2PCHAT_UPDATE_HTTP_PROXY`, `load_profile_blindbox_replicas_bundle` contract `([], {})` |
 | Scope | I2PChat repository (Python/Qt source + vendored `i2plib`) |
 | Out of scope | Pentest of shipped binaries, PyInstaller reverse engineering, I2P router firmware audit |
 
 ## Executive summary
 
-This review covered the desktop client’s security posture: cryptography and protocol, BlindBox, updates, profile backups, GUI (paths and external processes), CI, and supply chain. Dependency scanning (`pip-audit` in the same configuration as CI, with a Pygments CVE ignored) reported **no known vulnerabilities** in the pinned graphs for `requirements.txt`, `requirements-build.txt`, and `requirements.in`. **Bandit** static analysis on `i2pchat/` and `i2plib/` reported **0** High/Medium issues and **47** Low findings (mostly broad `try/except` and `assert` usage).
+This repeat review uses the same check classes as the prior report, plus **verification after fixes**: a repo scan for the **`assert`** statement under `i2pchat/` and `i2plib/` found **no** production matches on the report date; `atomic_write_json` for `*.blindbox_replicas.json` still defaults to **mode 0o600** on Unix.
 
-The most notable **residual risk** is the **update check** design: it fetches an HTML release page over HTTP (typically via the local I2P HTTP proxy for `*.i2p`), parses ZIP filenames, and **compares version numbers only**. The client **does not download** the ZIP or **verify** cryptographic integrity. This is consistent with a “notify the user” model; a compromised page or proxy could misrepresent availability and filenames (**social / operational** risk if the user installs artifacts without following the project’s release signing policy).
+**pip-audit** on `requirements.txt`, `requirements-build.txt`, and `requirements.in` reported **no known vulnerabilities** (local run dated this report).
+
+**Bandit 1.9.4** (`bandit -r i2pchat i2plib`) reported **0** High/Medium issues and **41** Low issues (mostly B110/B112; some B404/B603), scanning **20,819** lines of code in scope.
+
+No **Critical** or **High** issues were identified from tooling plus targeted manual review. The main **residual risk** remains **update metadata trust** (FIND-001) and **operational discipline** for Blind Box samples and local replicas (FIND-003, FIND-004).
 
 ---
 
 ## 1. Methodology
 
-1. Local **pip-audit** (per [`.github/workflows/security-audit.yml`](../.github/workflows/security-audit.yml)) against `requirements.txt`, `requirements-build.txt`, and `requirements.in`, with no CVE ignores (Pygments bumped to 2.20.0).
-2. Local **Bandit 1.9.4** (Python 3.14.3): `bandit -r i2pchat i2plib` (~20,400 LOC scanned per metrics).
-3. Manual checklist review: `i2pchat/crypto.py`, `i2pchat/protocol/`, BlindBox, `i2p_chat_core.py`, `profile_backup.py`, `release_index.py`, GUI (`main_qt.py`), `notifications.py`, `drag_drop.py`, scripts, GitHub Actions.
-4. Cross-check with policy regression tests in [`tests/test_audit_remediation.py`](../tests/test_audit_remediation.py).
+1. Local **pip-audit** aligned with [`.github/workflows/security-audit.yml`](../.github/workflows/security-audit.yml) for `requirements.txt`, `requirements-build.txt`, and `requirements.in` (no CVE ignores).
+2. Local **Bandit 1.9.4** (Python 3.14.x): `bandit -r i2pchat i2plib`.
+3. Manual review after remediations: `contact_book.py`, `profile_blindbox_replicas.py`, the update-check dialog in `main_qt.py` (`load_releases_custom_*_warn_ack`), plus related areas: `blindbox_client.py`, `i2p_chat_core.py`, `blindbox_server_example.py`, `release_index.py`, CI workflows.
+4. **`assert`** search across `i2pchat/**/*.py` and `i2plib/**/*.py` — **no** matches on the report date.
+5. Cross-check with regression tests including [`tests/test_audit_remediation.py`](../tests/test_audit_remediation.py), [`tests/test_profile_blindbox_replicas.py`](../tests/test_profile_blindbox_replicas.py), [`tests/test_blindbox_client.py`](../tests/test_blindbox_client.py), [`tests/test_contact_book.py`](../tests/test_contact_book.py), and the full suite (**467** tests collected under `tests/`).
 
 ---
 
-## 2. Already automated in CI (not re-reported as new critical findings)
+## 2. Already automated in CI
 
 | Control | Location / notes |
 |---------|------------------|
 | Secret scanning | [`.github/workflows/secret-scan.yml`](../.github/workflows/secret-scan.yml) — Gitleaks |
 | Dependency audit | [`.github/workflows/security-audit.yml`](../.github/workflows/security-audit.yml) — `pip-audit` |
-| Release signing policy | Workflow enforces SHA256/GPG references in build scripts |
+| Release signing policy | Build scripts must reference SHA256/GPG |
 | Vendored provenance | `i2plib/VENDORED_UPSTREAM.json`, `flake.lock` |
-| HKDF / padding / GUI path policy tests | `tests/test_audit_remediation.py` |
+| HKDF / padding / GUI path tests | `tests/test_audit_remediation.py` |
 
 ---
 
@@ -58,7 +64,7 @@ flowchart LR
   GUI --> Updates
 ```
 
-**Primary surfaces:** remote peers (chat protocol and file transfer), network path to I2P/proxies, local OS user or malware, untrusted update metadata source, misconfigured BlindBox (direct TCP, relaxed local mode).
+**Primary surfaces:** remote peers, path to I2P/proxies, local OS user malware, untrusted update metadata, misconfigured BlindBox, **profile file disclosure** (including `replica_auth` if disks or backups leak).
 
 ---
 
@@ -70,10 +76,10 @@ flowchart LR
 |-------|-------|
 | **Severity** | Medium |
 | **Component** | `i2pchat/updates/release_index.py`, GUI caller |
-| **Description** | The app fetches the releases HTML, extracts ZIP names with regexes, and compares semantic versions. It **does not** download the distribution or verify SHA256/GPG **inside the client**. Transport for `*.i2p` defaults to HTTP through the local I2P proxy ([`release_index.py`](../i2pchat/updates/release_index.py)). |
-| **Scenario** | An actor who can tamper with the page or proxy (or a user pointing at an untrusted URL) can show a fake “update available” message and filename. Impact is mainly **social/operational**: harm depends on the user installing an unverified package. |
+| **Description** | HTML fetch + ZIP name parsing + version compare; **no** in-client download or SHA256/GPG verification. |
+| **Scenario** | Tampered page/proxy → misleading update prompt; **social/operational** impact if users install unverified artifacts. |
 | **Status** | Accepted risk / design limitation |
-| **Recommendations** | Document mandatory `SHA256SUMS` + GPG verification for downloaded ZIPs in user-facing docs; consider embedding signed manifests or pinned release keys if requirements tighten. |
+| **Recommendations** | In **MANUAL**, spell out: download ZIP only from the official releases page; verify **`SHA256SUMS`**; verify **`SHA256SUMS.asc`** with the release-signing GPG workflow; do not rely on the in-app “update available” prompt alone. Longer term: consider a **signed manifest** (or an embedded release-signing key) if requirements tighten. |
 
 ---
 
@@ -83,23 +89,23 @@ flowchart LR
 |-------|-------|
 | **Severity** | Low |
 | **Component** | `I2PCHAT_RELEASES_PAGE_URL`, `I2PCHAT_UPDATE_HTTP_PROXY` |
-| **Description** | The user (or malware with user privileges) can redirect update checks to arbitrary hosts or proxies. |
-| **Scenario** | Same trust issues as FIND-001. |
-| **Status** | Expected for advanced setups |
-| **Recommendations** | Optional UI warning when the releases URL is customized. |
+| **Description** | User- or malware-controlled redirection of update checks. |
+| **Status** | Expected for advanced setups; **partially mitigated in GUI** |
+| **Mitigation (code)** | On “Check for updates”, a single **Update check overrides** warning if not previously acknowledged: custom URL → `releases_custom_url_warn_ack` in UI prefs; custom proxy → `releases_custom_proxy_warn_ack`. Copy reminds users to trust both URL and proxy and points to MANUAL §4.12. |
+| **Recommendations** | Document both variables and impersonation risk in the user manual. Do not bake overrides into shared scripts/repos; keep them in the user’s trusted environment only. Clearing prefs will show the warning again. |
 
 ---
 
-### FIND-003 — `blindbox_server_example.py` has no authentication
+### FIND-003 — `blindbox_server_example.py` (no-token mode)
 
 | Field | Value |
 |-------|-------|
-| **Severity** | Medium (if used outside its documented scenario) |
+| **Severity** | Medium (if **no** token and the service is reachable beyond loopback) |
 | **Component** | [`i2pchat/blindbox/blindbox_server_example.py`](../i2pchat/blindbox/blindbox_server_example.py) |
-| **Description** | Minimal dev server bound to `127.0.0.1` with **no** token or cryptographic client authentication. |
-| **Scenario** | Binding beyond loopback or port forwarding could expose the blob store. |
-| **Status** | Documented in-file (“not for untrusted networks”) |
-| **Recommendations** | Do not widen bind addresses without a full security design; keep developer docs explicit about `127.0.0.1` only. |
+| **Description** | Optional **`BLINDBOX_AUTH_TOKEN`** is supported; verification uses `hmac.compare_digest`. If the variable is **empty**, behavior matches the old example (**no** line-protocol authentication). Optional `.env` loading from the script directory and `~/.i2pchat-blindbox/.env` does **not** override variables already present in the environment. |
+| **Scenario** | Exposing the server off `127.0.0.1` without a token re-opens the blob store to the network path. |
+| **Status** | Documented sample; with a shared token configured, risk drops for “single shared secret per replica” setups. |
+| **Recommendations** | Always set **`BLINDBOX_AUTH_TOKEN`** (long random secret) for any replica reachable beyond localhost. Do not change bind from `127.0.0.1` to `0.0.0.0` without a dedicated threat model, host firewall, and usually an additional isolation layer (e.g. I2P-only exposure). Keep **`.env`** user-readable only; never commit it. |
 
 ---
 
@@ -108,23 +114,22 @@ flowchart LR
 | Field | Value |
 |-------|-------|
 | **Severity** | Low |
-| **Component** | [`BlindBoxLocalReplicaServer`](../i2pchat/blindbox/blindbox_local_replica.py) (`_is_authorized` allows operations when `auth_token` is empty) |
-| **Description** | Any local process that can open TCP to `host:port` may PUT/GET blobs if no token is configured. |
-| **Scenario** | Multi-user host or compromised local process. |
-| **Status** | Partially mitigated in core: loopback direct replicas without a token are rejected unless `I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL` is set ([`_blindbox_direct_replicas_security_issue`](../i2pchat/core/i2p_chat_core.py)). |
-| **Recommendations** | Always set `I2PCHAT_BLINDBOX_LOCAL_TOKEN` for non-development use. |
+| **Component** | [`BlindBoxLocalReplicaServer`](../i2pchat/blindbox/blindbox_local_replica.py) |
+| **Description** | Without a token, any local process that can open the TCP port may PUT/GET blobs. |
+| **Status** | Partially mitigated in core for loopback + direct replicas ([`i2p_chat_core.py`](../i2pchat/core/i2p_chat_core.py)). |
+| **Recommendations** | Outside development, set **`I2PCHAT_BLINDBOX_LOCAL_TOKEN`**. Do not expose the replica port through the host firewall to untrusted networks. On multi-user hosts, treat any local process that can open the port as a potential client. |
 
 ---
 
-### FIND-005 — CVE-2026-4539 (Pygments) in CI
+### FIND-005 — Pygments / CVE handling in CI
 
 | Field | Value |
 |-------|-------|
-| **Severity** | Low (ReDoS, usage-dependent) |
-| **Component** | [`.github/workflows/security-audit.yml`](../.github/workflows/security-audit.yml), `requirements.txt` |
-| **Description** | Previously `pip-audit` used `--ignore-vuln CVE-2026-4539` while no fixed PyPI release existed. After **Pygments 2.20.0** shipped, the dependency was upgraded and the workflow ignore was removed. |
-| **Status** | Mitigated (upgrade + plain `pip-audit`) |
-| **Recommendations** | When pip-audit flags Pygments again, refresh the lockfile and re-run audits. |
+| **Severity** | Low (historical ReDoS class; dependency upgraded) |
+| **Component** | `requirements.txt`, workflows |
+| **Description** | After **Pygments 2.20.0**, pip-audit CVE ignores were removed; current audit run is clean. |
+| **Status** | Mitigated by upgrade |
+| **Recommendations** | On every meaningful dependency change, run **`pip-audit`** against all three requirements files (as in CI). Keep **`requirements-ci-audit.txt`** current; when new CVEs appear, upgrade the package or document a deliberate ignore with rationale. |
 
 ---
 
@@ -134,62 +139,71 @@ flowchart LR
 |-------|-------|
 | **Severity** | Informational |
 | **Component** | `i2pchat/`, `i2plib/` |
-| **Description** | **47** hits, all **Low**: B110 (`try/except: pass`), B112 (`try/except: continue`), B101 (`assert`). No injection-class or hardcoded-secret issues flagged. |
-| **Status** | Optional hardening / style |
-| **Recommendations** | Narrow broad `except` blocks with logging; avoid security-relevant invariants that rely solely on `assert` (or always run tests without `-O`). |
+| **Description** | **41** **Low** findings (mostly B110/B112; some B404/B603), **0** High/Medium; **20,819** LOC. |
+| **Status** | Optional style / hardening |
+| **Recommendations** | Triage Bandit output: narrow **`except`**, log and re-raise meaningful errors; do not introduce **`assert`** for security-relevant invariants; optionally add **pre-commit** Bandit on touched paths. |
 
 ---
 
-### FIND-007 — `assert` in BlindBox networking paths
+### FIND-007 — `assert` in production code (historically contacts / BlindBox)
 
 | Field | Value |
 |-------|-------|
-| **Severity** | Low |
-| **Component** | [`blindbox_client.py`](../i2pchat/blindbox/blindbox_client.py), [`i2p_chat_core.py`](../i2pchat/core/i2p_chat_core.py) |
-| **Description** | With `python -O`, assertions are stripped, changing behavior on rare post-retry error paths. |
-| **Status** | Common Python caveat; PyInstaller bundles typically do not use `-O` |
-| **Recommendations** | Replace critical `assert` statements with explicit `if ...: raise`. |
+| **Severity** | Low → **mitigated in current tree** |
+| **Component** | Previously: [`contact_book.py`](../i2pchat/storage/contact_book.py) (`set_peer_profile`, `touch_peer_message_meta`); **`blindbox_client.py`** / **`i2p_chat_core.py`** contain **no** **`assert`** on the report date. |
+| **Description** | With `python -O`, assertions are stripped; a missing invariant after `remember_peer` could fail silently. |
+| **Status** | **Mitigated:** `contact_book` returns **`False`** if the record is still missing after `remember_peer`; scanning `i2pchat/` + `i2plib/` finds **no** **`assert`**. |
+| **Recommendations** | Avoid **`assert`** for data-integrity paths in new code; periodically re-run an **`assert`** search under `i2pchat/` and `i2plib/`. |
 
 ---
 
-## 5. Positive controls (implemented / tested)
+### FIND-008 — On-disk `replica_auth` secrets
 
-- **HKDF** session subkey separation ([`crypto.derive_handshake_subkeys`](../i2pchat/crypto.py)); regression in `test_audit_remediation`.
-- **HMAC** and vNext header fields in [`compute_mac`](../i2pchat/crypto.py); framing hardening tests in [`test_protocol_hardening.py`](../tests/test_protocol_hardening.py).
-- **Padding profile** (`I2PCHAT_PADDING_PROFILE`) for traffic metadata; documented and policy-tested.
-- **Backups**: scrypt + NaCl SecretBox, per-file SHA256 in manifest, `_safe_member_name` against tar path traversal ([`profile_backup.py`](../i2pchat/storage/profile_backup.py)).
-- **Data directory** `chmod 0o700` on Unix ([`get_profiles_dir`](../i2pchat/core/i2p_chat_core.py)).
-- **Image open path**: `_is_path_within_directory` + `realpath` (see `test_audit_remediation`).
-- **subprocess** on Linux: argv lists, binaries from `shutil.which`, sound path as a separate argument, no `shell=True`.
-- **BlindBox**: `hmac.compare_digest` for tokens on the local replica; strict SAM mode (`I2PCHAT_BLINDBOX_REQUIRE_SAM`).
-- **Secrets in SCM**: broad [`.gitignore`](../.gitignore) for keys and `.env`.
-- **GitHub script**: token from environment only, documented in [`sync_github_backlog.py`](../scripts/sync_github_backlog.py).
-- **No** `pickle` or unsafe `yaml.load` in application `.py` tree (repo search).
+| Field | Value |
+|-------|-------|
+| **Severity** | Low (confidentiality / abuse if profile files leak) |
+| **Component** | [`profile_blindbox_replicas.py`](../i2pchat/storage/profile_blindbox_replicas.py), profile JSON (`replica_auth`) |
+| **Description** | Line-protocol shared secrets are stored alongside profile data. Writes use **`atomic_write_json`** with default **0o600** on Unix. This does **not** replace trust in the I2P destination; copying the profile copies these tokens. Failed/missing loads return **`([], {})`** (second value is always a dict). |
+| **Scenario** | Host compromise or unsafe backups expose replica tokens. |
+| **Status** | Expected “secret as part of profile” model |
+| **Recommendations** | **Backups:** for profile portability use the **built-in encrypted export** (passphrase, scrypt, SecretBox); do not copy raw `profiles/` trees to USB/cloud without full-disk or archive encryption. **OS:** Unix data dirs already use **0700**—do not loosen ACLs manually; on Windows restrict account access and use volume encryption (BitLocker, etc.) where physical access is a risk. **SCM / sharing:** never commit live profiles or paste **`*.blindbox_replicas.json`** / `replica_auth` snippets into tickets, chats, or screenshots. **Incident response:** if a file leaks, treat replica tokens as compromised—rotate secrets on servers and update I2PChat. **Blast radius:** prefer distinct tokens per endpoint where practical (already supported). |
 
 ---
 
-## 6. pip-audit results (local run 2026-04-01)
+## 5. Positive controls (including new work)
+
+- **Contacts:** after remediations, no **`assert`** on peer profile update paths; missing record yields **`False`**.
+- **Updates:** combined warning for custom URL and/or **`I2PCHAT_UPDATE_HTTP_PROXY`** with separate acknowledgement flags in prefs.
+- **BlindBox replicas JSON:** atomic writes with **0o600**; load contract **`([], {})`** on empty/error paths.
+- **Per-replica auth:** client attaches tokens only to matching endpoints; example server uses **`hmac.compare_digest`** for the configured token.
+- Prior controls remain in force: **HKDF**, **HMAC**, padding profile, encrypted backups, `chmod 0o700` data dir on Unix, safe image paths, `compare_digest` on the local replica token path, etc.
+- **GUI:** pixmap tinting respects **devicePixelRatio**; scaling via ARGB **QImage** preserves alpha.
+- **Input / UX:** ⋯ menu actions honor the same keyboard shortcuts while the popup is focused; **Esc** dismisses the menu.
+
+---
+
+## 6. pip-audit results (local run for this report revision)
 
 | Requirements file | Result |
 |-------------------|--------|
-| `requirements.txt` | No vulnerabilities (after Pygments 2.20.0 upgrade) |
-| `requirements-build.txt` | No vulnerabilities |
-| `requirements.in` | No vulnerabilities |
+| `requirements.txt` | No vulnerabilities found |
+| `requirements-build.txt` | No vulnerabilities found |
+| `requirements.in` | No vulnerabilities found |
 
 ---
 
-## 7. Top five follow-ups
+## 7. Top five follow-ups (aligned with FIND recommendations)
 
-1. Document the end-user trust chain for updates (GPG/SHA256 on releases), aligned with FIND-001.
-2. Keep dependencies current per `pip-audit` (FIND-005 addressed by the Pygments upgrade).
-3. Do not promote `blindbox_server_example` to production without a full threat model (FIND-003).
-4. Consider replacing critical `assert` statements on network paths with explicit exceptions (FIND-007).
-5. Keep current CI discipline (Gitleaks + pip-audit + release artifact signing policy).
+1. **Updates (FIND-001):** document step-by-step GPG + `SHA256SUMS` in MANUAL; do not rely on the in-app prompt alone.
+2. **Dependencies (FIND-005):** run `pip-audit` when lockfiles change; watch the **Security Dependency Audit** CI job.
+3. **Sample replica (FIND-003):** require `BLINDBOX_AUTH_TOKEN` off localhost; no wider bind without a threat model.
+4. **FIND-007 regression guard:** do not reintroduce **`assert`** in `i2pchat/` / `i2plib/` for data invariants; use `grep`/Bandit when unsure.
+5. **Profile / `replica_auth` (FIND-008):** encrypted profile exports only, strict OS permissions / disk encryption, no secrets in SCM; token rotation plan after any leak.
 
 ---
 
 ## 8. Conclusion
 
-The codebase shows **mature practices** for a desktop messenger: cryptographic key separation, strict protocol framing, encrypted backups, GUI path confinement, and automated dependency review. The main **residual risk** is **trust in update metadata** (FIND-001) and **operational discipline** around BlindBox examples and environment variables. This audit did **not** identify Critical or High severity vulnerabilities in source review and tooling output.
+The re-audit confirms a **strong security posture** for the desktop client after Blind Box **`replica_auth`**, the token-aware example server, and **recent remediations** (FIND-002, FIND-007, FIND-008 clarification). **No new Critical or High** issues were found. Residual themes: **update metadata trust** (FIND-001), **example / local replica exposure** (FIND-003, FIND-004), and **on-disk secret handling** (FIND-008).
 
-*This report reflects a source-code security review; it is not a substitute for formal certification or full-scope penetration testing.*
+*This report is a source-code security review; it does not replace formal penetration testing of binary releases.*

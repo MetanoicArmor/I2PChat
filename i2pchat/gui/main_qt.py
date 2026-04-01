@@ -1630,6 +1630,17 @@ def save_releases_custom_url_warn_ack() -> None:
     _save_ui_prefs(data)
 
 
+def load_releases_custom_proxy_warn_ack() -> bool:
+    data = _load_ui_prefs()
+    return data.get("releases_custom_proxy_warn_ack") is True
+
+
+def save_releases_custom_proxy_warn_ack() -> None:
+    data = _load_ui_prefs()
+    data["releases_custom_proxy_warn_ack"] = True
+    _save_ui_prefs(data)
+
+
 def load_history_enabled() -> bool:
     data = _load_ui_prefs()
     val = data.get("history_enabled")
@@ -7116,15 +7127,27 @@ class ChatWindow(QtWidgets.QMainWindow):
         if self._update_check_thread is not None and self._update_check_thread.isRunning():
             return
         custom_url = (os.environ.get("I2PCHAT_RELEASES_PAGE_URL") or "").strip()
-        if custom_url and not load_releases_custom_url_warn_ack():
+        custom_proxy = (os.environ.get("I2PCHAT_UPDATE_HTTP_PROXY") or "").strip()
+        need_url_ack = bool(custom_url) and not load_releases_custom_url_warn_ack()
+        need_proxy_ack = bool(custom_proxy) and not load_releases_custom_proxy_warn_ack()
+        if need_url_ack or need_proxy_ack:
             warn = QtWidgets.QMessageBox(self)
             warn.setIcon(QtWidgets.QMessageBox.Icon.Warning)
-            warn.setWindowTitle("Custom releases URL")
-            warn.setText(
-                "I2PCHAT_RELEASES_PAGE_URL is set. The update check trusts whatever that "
-                "server returns over HTTP. Only use URLs you fully trust.\n\n"
-                "See the user manual §4.12 (Verifying downloads)."
-            )
+            warn.setWindowTitle("Update check overrides")
+            parts: list[str] = []
+            if need_url_ack:
+                parts.append(
+                    "I2PCHAT_RELEASES_PAGE_URL is set. The update check trusts whatever that "
+                    "server returns over HTTP. Only use URLs you fully trust."
+                )
+            if need_proxy_ack:
+                parts.append(
+                    "I2PCHAT_UPDATE_HTTP_PROXY is set. Update requests go through that proxy; "
+                    "use only proxies you trust. Together with a custom releases URL, both "
+                    "affect what you are shown as the latest version."
+                )
+            parts.append("See the user manual §4.12 (Verifying downloads).")
+            warn.setText("\n\n".join(parts))
             warn.setStandardButtons(
                 QtWidgets.QMessageBox.StandardButton.Ok
                 | QtWidgets.QMessageBox.StandardButton.Cancel
@@ -7132,7 +7155,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             warn.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Ok)
             if warn.exec() != QtWidgets.QMessageBox.StandardButton.Ok:
                 return
-            save_releases_custom_url_warn_ack()
+            if need_url_ack:
+                save_releases_custom_url_warn_ack()
+            if need_proxy_ack:
+                save_releases_custom_proxy_warn_ack()
         th = _UpdateCheckThread(APP_VERSION, self)
         self._update_check_thread = th
         th.finished_with_result.connect(self._on_update_check_finished)
