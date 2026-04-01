@@ -17,7 +17,7 @@ from i2pchat.core.i2p_chat_core import (
     ChatMessage,
     FileTransferInfo,
     I2PChatCore,
-    get_profiles_dir,
+    migrate_all_legacy_profiles_if_needed,
     render_braille,
     render_bw,
 )
@@ -50,6 +50,7 @@ class I2PChat(App):
     def __init__(self) -> None:
         super().__init__()
         self.profile = sys.argv[1] if len(sys.argv) > 1 else "default"
+        migrate_all_legacy_profiles_if_needed()
 
         self.core = I2PChatCore(
             profile=self.profile,

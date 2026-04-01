@@ -12,6 +12,14 @@ import struct
 import tempfile
 import unittest
 
+from i2pchat.core.i2p_chat_core import get_profile_data_dir
+
+
+def _dat_in_dest(dest: str, name: str) -> str:
+    return os.path.join(
+        get_profile_data_dir(name, create=True, app_root=dest), f"{name}.dat"
+    )
+
 
 def _make_archive(
     profiles_dir: str,
@@ -56,7 +64,7 @@ class TestImportConflictStrategies(unittest.TestCase):
             archive = _make_archive(tmp)
             dest = os.path.join(tmp, "dest")
             os.makedirs(dest)
-            open(os.path.join(dest, "alice.dat"), "wb").close()
+            open(_dat_in_dest(dest, "alice"), "wb").close()
             with self.assertRaises(FileExistsError):
                 profile_export.import_profile(archive, "pw", dest, "error")
 
@@ -76,10 +84,10 @@ class TestImportConflictStrategies(unittest.TestCase):
             archive = _make_archive(tmp)
             dest = os.path.join(tmp, "dest")
             os.makedirs(dest)
-            open(os.path.join(dest, "alice.dat"), "wb").close()
+            open(_dat_in_dest(dest, "alice"), "wb").close()
             name = profile_export.import_profile(archive, "pw", dest, "rename")
             self.assertEqual(name, "alice_1")
-            self.assertTrue(os.path.exists(os.path.join(dest, "alice_1.dat")))
+            self.assertTrue(os.path.exists(_dat_in_dest(dest, "alice_1")))
 
     def test_rename_strategy_increments_further(self) -> None:
         from i2pchat.storage import profile_export
@@ -88,8 +96,8 @@ class TestImportConflictStrategies(unittest.TestCase):
             archive = _make_archive(tmp)
             dest = os.path.join(tmp, "dest")
             os.makedirs(dest)
-            open(os.path.join(dest, "alice.dat"), "wb").close()
-            open(os.path.join(dest, "alice_1.dat"), "wb").close()
+            open(_dat_in_dest(dest, "alice"), "wb").close()
+            open(_dat_in_dest(dest, "alice_1"), "wb").close()
             name = profile_export.import_profile(archive, "pw", dest, "rename")
             self.assertEqual(name, "alice_2")
 
@@ -101,10 +109,10 @@ class TestImportConflictStrategies(unittest.TestCase):
             dest = os.path.join(tmp, "dest")
             os.makedirs(dest)
             sentinel = b"do-not-overwrite"
-            with open(os.path.join(dest, "alice.dat"), "wb") as f:
+            with open(_dat_in_dest(dest, "alice"), "wb") as f:
                 f.write(sentinel)
             profile_export.import_profile(archive, "pw", dest, "rename")
-            with open(os.path.join(dest, "alice.dat"), "rb") as f:
+            with open(_dat_in_dest(dest, "alice"), "rb") as f:
                 self.assertEqual(f.read(), sentinel)
 
     def test_overwrite_strategy_replaces_existing(self) -> None:
@@ -115,11 +123,11 @@ class TestImportConflictStrategies(unittest.TestCase):
             archive = _make_archive(tmp, dat_bytes=dat)
             dest = os.path.join(tmp, "dest")
             os.makedirs(dest)
-            with open(os.path.join(dest, "alice.dat"), "wb") as f:
+            with open(_dat_in_dest(dest, "alice"), "wb") as f:
                 f.write(b"old-identity")
             name = profile_export.import_profile(archive, "pw", dest, "overwrite")
             self.assertEqual(name, "alice")
-            with open(os.path.join(dest, "alice.dat"), "rb") as f:
+            with open(_dat_in_dest(dest, "alice"), "rb") as f:
                 self.assertEqual(f.read(), dat)
 
     def test_unknown_strategy_raises_value_error(self) -> None:
@@ -140,7 +148,7 @@ class TestImportDataRestoration(unittest.TestCase):
             archive = _make_archive(tmp, dat_bytes=original)
             dest = os.path.join(tmp, "dest")
             name = profile_export.import_profile(archive, "pw", dest)
-            with open(os.path.join(dest, f"{name}.dat"), "rb") as f:
+            with open(_dat_in_dest(dest, name), "rb") as f:
                 self.assertEqual(f.read(), original)
 
     def test_contacts_json_restored_when_present(self) -> None:
@@ -151,7 +159,8 @@ class TestImportDataRestoration(unittest.TestCase):
             archive = _make_archive(tmp, contacts=contacts)
             dest = os.path.join(tmp, "dest")
             name = profile_export.import_profile(archive, "pw", dest)
-            contacts_path = os.path.join(dest, f"{name}.contacts.json")
+            pdir = get_profile_data_dir(name, create=False, app_root=dest)
+            contacts_path = os.path.join(pdir, f"{name}.contacts.json")
             self.assertTrue(os.path.exists(contacts_path))
             with open(contacts_path) as f:
                 self.assertEqual(json.load(f), contacts)
@@ -163,7 +172,8 @@ class TestImportDataRestoration(unittest.TestCase):
             archive = _make_archive(tmp, contacts=None)
             dest = os.path.join(tmp, "dest")
             name = profile_export.import_profile(archive, "pw", dest)
-            self.assertFalse(os.path.exists(os.path.join(dest, f"{name}.contacts.json")))
+            pdir = get_profile_data_dir(name, create=False, app_root=dest)
+            self.assertFalse(os.path.exists(os.path.join(pdir, f"{name}.contacts.json")))
 
     def test_gui_settings_not_restored_by_default(self) -> None:
         from i2pchat.storage import profile_export
@@ -193,7 +203,7 @@ class TestImportDataRestoration(unittest.TestCase):
             archive = _make_archive(tmp)
             dest = os.path.join(tmp, "dest")
             name = profile_export.import_profile(archive, "pw", dest)
-            mode = oct(os.stat(os.path.join(dest, f"{name}.dat")).st_mode)[-3:]
+            mode = oct(os.stat(_dat_in_dest(dest, name)).st_mode)[-3:]
             self.assertEqual(mode, "600")
 
     def test_returned_name_matches_written_dat(self) -> None:
@@ -203,7 +213,7 @@ class TestImportDataRestoration(unittest.TestCase):
             archive = _make_archive(tmp)
             dest = os.path.join(tmp, "dest")
             name = profile_export.import_profile(archive, "pw", dest)
-            self.assertTrue(os.path.exists(os.path.join(dest, f"{name}.dat")))
+            self.assertTrue(os.path.exists(_dat_in_dest(dest, name)))
 
 
 class TestImportErrorMessages(unittest.TestCase):
@@ -326,7 +336,7 @@ class TestImportIsImmediatelyUsable(unittest.TestCase):
             archive = _make_archive(tmp, dat_bytes=original)
             dest = os.path.join(tmp, "dest")
             name = profile_export.import_profile(archive, "pw", dest)
-            dat_path = os.path.join(dest, f"{name}.dat")
+            dat_path = _dat_in_dest(dest, name)
             with open(dat_path, "rb") as f:
                 content = f.read()
             self.assertEqual(content, original)
@@ -339,7 +349,8 @@ class TestImportIsImmediatelyUsable(unittest.TestCase):
             archive = _make_archive(tmp, contacts=contacts)
             dest = os.path.join(tmp, "dest")
             name = profile_export.import_profile(archive, "pw", dest)
-            contacts_path = os.path.join(dest, f"{name}.contacts.json")
+            pdir = get_profile_data_dir(name, create=False, app_root=dest)
+            contacts_path = os.path.join(pdir, f"{name}.contacts.json")
             with open(contacts_path) as f:
                 data = json.load(f)
             self.assertIsInstance(data, dict)

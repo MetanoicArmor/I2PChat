@@ -76,9 +76,15 @@ from i2pchat.core.i2p_chat_core import (
     ensure_valid_profile_name,
     peek_persisted_stored_peer,
     get_downloads_dir,
+    get_profile_data_dir,
     get_profiles_dir,
     get_images_dir,
     import_profile_dat_atomic,
+    list_profile_names_in_app_data,
+    migrate_all_legacy_profiles_if_needed,
+    migrate_legacy_profile_files_if_needed,
+    nested_profile_dat_path,
+    resolve_existing_profile_file,
     is_valid_profile_name,
     render_braille,
     render_bw,
@@ -197,8 +203,25 @@ def _default_notify_sound_path() -> Optional[str]:
     return _resolve_local_asset(BUNDLED_NOTIFY_SOUND_REL)
 
 
-def _contacts_file_path(profile: str) -> str:
-    return os.path.join(get_profiles_dir(), f"{profile}.contacts.json")
+def _contacts_file_path_for_read(profile: str) -> str:
+    app = get_profiles_dir()
+    migrate_legacy_profile_files_if_needed(app_root=app, profile=profile)
+    existing = resolve_existing_profile_file(app, profile, f"{profile}.contacts.json")
+    if existing:
+        return existing
+    return os.path.join(
+        get_profile_data_dir(profile, create=True, app_root=app),
+        f"{profile}.contacts.json",
+    )
+
+
+def _contacts_file_path_for_write(profile: str) -> str:
+    app = get_profiles_dir()
+    migrate_legacy_profile_files_if_needed(app_root=app, profile=profile)
+    return os.path.join(
+        get_profile_data_dir(profile, create=True, app_root=app),
+        f"{profile}.contacts.json",
+    )
 
 
 # Сайдбар узкий: полный .b32 выглядит как «стена» из одинаковых символов и не различается визуально.
@@ -1629,8 +1652,27 @@ COMPOSE_DRAFTS_MAX_KEYS = 100
 COMPOSE_DRAFTS_DEBOUNCE_MS = 1500
 
 
-def _compose_drafts_file_path(profile: str) -> str:
-    return os.path.join(get_profiles_dir(), f"{profile}.compose_drafts.json")
+def _compose_drafts_file_path_for_read(profile: str) -> str:
+    app = get_profiles_dir()
+    migrate_legacy_profile_files_if_needed(app_root=app, profile=profile)
+    existing = resolve_existing_profile_file(
+        app, profile, f"{profile}.compose_drafts.json"
+    )
+    if existing:
+        return existing
+    return os.path.join(
+        get_profile_data_dir(profile, create=True, app_root=app),
+        f"{profile}.compose_drafts.json",
+    )
+
+
+def _compose_drafts_file_path_for_write(profile: str) -> str:
+    app = get_profiles_dir()
+    migrate_legacy_profile_files_if_needed(app_root=app, profile=profile)
+    return os.path.join(
+        get_profile_data_dir(profile, create=True, app_root=app),
+        f"{profile}.compose_drafts.json",
+    )
 
 
 @dataclass
@@ -3364,6 +3406,10 @@ class ActionsPopupButton(QtWidgets.QFrame):
     def setText(self, text: str) -> None:
         self._title_label.setText(text)
 
+    def text(self) -> str:
+        """Как у QPushButton — для тестов и кода, ожидающего ``.text()``."""
+        return self._title_label.text()
+
     def apply_action_row_colors(self, *, night: bool) -> None:
         """Явные цвета на QLabel: на macOS QSS с родителя ActionsPopup часто не доходит до детей внутри QFrame."""
         if night:
@@ -3692,7 +3738,10 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         layout.addWidget(combo_hint)
         
         profiles_path = get_profiles_dir()
-        path_hint = _ClickableFolderLabel(f"Profiles folder: {profiles_path}", profiles_path)
+        path_hint = _ClickableFolderLabel(
+            f"Data folder: {profiles_path} (each profile: profiles/<name>/)",
+            profiles_path,
+        )
         self.path_hint = path_hint
         path_hint.setWordWrap(True)
         path_hint.setToolTip("Click to open folder")
@@ -5086,7 +5135,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
 
     def _load_contacts_book(self) -> None:
-        self._contact_book = load_book(_contacts_file_path(self.profile))
+        self._contact_book = load_book(_contacts_file_path_for_read(self.profile))
 
     def _ensure_stored_peer_in_contact_book(self) -> None:
         """Lock-пир из .dat всегда есть в Saved peers, даже если contacts.json пустой."""
@@ -5105,7 +5154,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._save_contacts_book()
 
     def _save_contacts_book(self) -> None:
-        save_book(_contacts_file_path(self.profile), self._contact_book)
+        save_book(_contacts_file_path_for_write(self.profile), self._contact_book)
 
     def _stop_contacts_sidebar_animation(self) -> None:
         if self._contacts_sidebar_anim is None:
@@ -5533,7 +5582,12 @@ class ChatWindow(QtWidgets.QMainWindow):
             else peer_b32
         )
         safe = re.sub(r"[^a-z0-9._-]", "_", host.lower())
-        return os.path.join(get_profiles_dir(), f"{self.profile}.blindbox.{safe}.json")
+        app = get_profiles_dir()
+        migrate_legacy_profile_files_if_needed(app_root=app, profile=self.profile)
+        return os.path.join(
+            get_profile_data_dir(self.profile, create=True, app_root=app),
+            f"{self.profile}.blindbox.{safe}.json",
+        )
 
     def _saved_peer_remove(self, addr: str) -> None:
         norm_cb = normalize_peer_address(addr)
@@ -5560,7 +5614,12 @@ class ChatWindow(QtWidgets.QMainWindow):
             return
         del_hist, del_pin, del_lock, del_bb = dlg.options()
         if del_hist:
-            delete_history(self.core.get_profiles_dir(), self.profile, norm_cb)
+            delete_history(
+                self.core.get_profile_data_dir(),
+                self.profile,
+                norm_cb,
+                app_data_root=self.core.get_profiles_dir(),
+            )
             if norm_cb == self._history_loaded_for_peer:
                 self._history_entries = []
                 self._history_dirty = False
@@ -7342,7 +7401,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _load_compose_drafts_from_disk(self) -> None:
         self._compose_drafts = {}
-        path = _compose_drafts_file_path(self.profile)
+        path = _compose_drafts_file_path_for_read(self.profile)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -7363,7 +7422,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             del self._compose_drafts[next(iter(self._compose_drafts))]
         try:
             atomic_write_json(
-                _compose_drafts_file_path(self.profile),
+                _compose_drafts_file_path_for_write(self.profile),
                 {"version": 1, "drafts": dict(self._compose_drafts)},
             )
         except Exception:
@@ -7409,7 +7468,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         if not identity_key:
             return
         entries = load_history(
-            self.core.get_profiles_dir(), self.core.profile, peer, identity_key,
+            self.core.get_profile_data_dir(),
+            self.core.profile,
+            peer,
+            identity_key,
+            app_data_root=self.core.get_profiles_dir(),
         )
         self._history_entries = list(entries)
         self._history_dirty = False
@@ -7485,12 +7548,13 @@ class ChatWindow(QtWidgets.QMainWindow):
         if entries:
             try:
                 save_history(
-                    self.core.get_profiles_dir(),
+                    self.core.get_profile_data_dir(),
                     self.core.profile,
                     peer,
                     entries,
                     identity_key,
                     max_messages=load_history_max_messages(),
+                    app_data_root=self.core.get_profiles_dir(),
                 )
             except Exception as e:
                 logger.warning("Failed to save chat history: %s", e, exc_info=True)
@@ -7648,7 +7712,11 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def _export_history_backup(self) -> None:
-        history_files = list_history_file_paths(self.core.get_profiles_dir(), self.profile)
+        history_files = list_history_file_paths(
+            self.core.get_profile_data_dir(),
+            self.profile,
+            app_data_root=self.core.get_profiles_dir(),
+        )
         if not history_files:
             QtWidgets.QMessageBox.information(
                 self,
@@ -7751,7 +7819,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         if not peer:
             self.handle_system("No peer to clear history for.")
             return
-        deleted = delete_history(self.core.get_profiles_dir(), self.core.profile, peer)
+        deleted = delete_history(
+            self.core.get_profile_data_dir(),
+            self.core.profile,
+            peer,
+            app_data_root=self.core.get_profiles_dir(),
+        )
         if deleted:
             if peer == self._history_loaded_for_peer:
                 self._history_entries = []
@@ -7822,8 +7895,11 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         def _bb_replica_endpoint_lines() -> list[str]:
             if self.profile != "default":
+                app = get_profiles_dir()
+                migrate_legacy_profile_files_if_needed(app_root=app, profile=self.profile)
                 disk = load_profile_blindbox_replicas_list(
-                    get_profiles_dir(), self.profile
+                    get_profile_data_dir(self.profile, create=False, app_root=app),
+                    self.profile,
                 )
                 if disk:
                     return list(disk)
@@ -8057,11 +8133,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Копируем выбранный .dat в папку профилей, чтобы ядро его увидело
         profiles_dir = get_profiles_dir()
         target_base = source_base
-        dest_path = os.path.join(profiles_dir, f"{target_base}.dat")
+        dest_path = nested_profile_dat_path(profiles_dir, target_base)
         if os.path.abspath(path) != os.path.abspath(dest_path):
             try:
                 target_base = import_profile_dat_atomic(path, profiles_dir, source_base)
-                dest_path = os.path.join(profiles_dir, f"{target_base}.dat")
+                dest_path = nested_profile_dat_path(profiles_dir, target_base)
                 if target_base != source_base:
                     QtWidgets.QMessageBox.information(
                         self,
@@ -8330,6 +8406,9 @@ class ChatWindow(QtWidgets.QMainWindow):
 
 def main() -> None:
     """Точка входа без qasync.run, чтобы избежать падений при завершении."""
+    # Сразу убираем плоскую раскладку для всех профилей с `<имя>.dat` в корне —
+    # не только для того, который откроют в этой сессии.
+    migrate_all_legacy_profiles_if_needed()
     if hasattr(sip, "setdestroyonexit"):
         sip.setdestroyonexit(False)
 
@@ -8378,15 +8457,7 @@ def main() -> None:
             save_theme(selected_theme)
     else:
         # 2) для .app / обычного запуска без аргументов показываем диалог выбора профиля
-        profiles = ["default"]
-        try:
-            for name in os.listdir(get_profiles_dir()):
-                if name.endswith(".dat"):
-                    base = os.path.splitext(name)[0]
-                    if base not in profiles:
-                        profiles.append(base)
-        except OSError:
-            pass
+        profiles = ["default"] + list_profile_names_in_app_data()
 
         dialog = ProfileSelectDialog(profiles, theme_id=saved_theme)
         app.installEventFilter(dialog)

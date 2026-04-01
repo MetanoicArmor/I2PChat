@@ -1,7 +1,7 @@
 """
 Per-profile Blind Box replica endpoints (GUI-editable when not overridden by env).
 
-File: {profiles_dir}/{profile}.blindbox_replicas.json
+File: {profile_data_dir}/{profile}.blindbox_replicas.json (``profile_data_dir`` = ``profiles/<profile>/``).
 """
 
 from __future__ import annotations

@@ -11,15 +11,24 @@ import struct
 import tempfile
 import unittest
 
+from i2pchat.core.i2p_chat_core import get_profile_data_dir
+
+
+def _profile_dat_path(app_root: str, profile_name: str) -> str:
+    return os.path.join(
+        get_profile_data_dir(profile_name, create=False, app_root=app_root),
+        f"{profile_name}.dat",
+    )
+
 
 class TestExportProfile(unittest.TestCase):
     def _make_profiles_dir(self, tmp: str, profile_name: str = "alice") -> str:
-        profiles_dir = os.path.join(tmp, "profiles")
-        os.makedirs(profiles_dir, exist_ok=True)
-        # minimal .dat (two-line format: identity key + optional locked peer)
-        with open(os.path.join(profiles_dir, f"{profile_name}.dat"), "wb") as f:
+        app_root = os.path.join(tmp, "appdata")
+        os.makedirs(app_root, exist_ok=True)
+        pdir = get_profile_data_dir(profile_name, create=True, app_root=app_root)
+        with open(os.path.join(pdir, f"{profile_name}.dat"), "wb") as f:
             f.write(b"fake-identity-key-bytes\n")
-        return profiles_dir
+        return app_root
 
     def test_export_creates_file(self) -> None:
         from i2pchat.storage import profile_export
@@ -73,10 +82,10 @@ class TestExportProfile(unittest.TestCase):
         from i2pchat.storage import profile_export
 
         with tempfile.TemporaryDirectory() as tmp:
-            profiles_dir = os.path.join(tmp, "profiles")
-            os.makedirs(profiles_dir)
+            app_root = os.path.join(tmp, "appdata")
+            os.makedirs(app_root)
             with self.assertRaises(FileNotFoundError):
-                profile_export.export_profile("nonexistent", "pw", profiles_dir)
+                profile_export.export_profile("nonexistent", "pw", app_root)
 
     def test_contacts_included_when_present(self) -> None:
         from i2pchat.storage import profile_export
@@ -84,7 +93,8 @@ class TestExportProfile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             profiles_dir = self._make_profiles_dir(tmp)
             contacts_data = {"version": 2, "contacts": []}
-            with open(os.path.join(profiles_dir, "alice.contacts.json"), "w") as f:
+            alice_dir = get_profile_data_dir("alice", create=True, app_root=profiles_dir)
+            with open(os.path.join(alice_dir, "alice.contacts.json"), "w") as f:
                 json.dump(contacts_data, f)
             out_path, _ = profile_export.export_profile("alice", "pw", profiles_dir)
             payload = profile_export._decrypt_archive(out_path, "pw")
@@ -129,7 +139,7 @@ class TestExportProfile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             profiles_dir = self._make_profiles_dir(tmp)
             original_dat = b"identity-key-data-xyz\nlocked-peer\n"
-            with open(os.path.join(profiles_dir, "alice.dat"), "wb") as f:
+            with open(_profile_dat_path(profiles_dir, "alice"), "wb") as f:
                 f.write(original_dat)
             out_path, _ = profile_export.export_profile("alice", "passw0rd", profiles_dir)
             payload = profile_export._decrypt_archive(out_path, "passw0rd")
@@ -141,11 +151,12 @@ class TestDecryptArchive(unittest.TestCase):
     def _export(self, tmp: str, password: str = "pw") -> str:
         from i2pchat.storage import profile_export
 
-        profiles_dir = os.path.join(tmp, "profiles")
-        os.makedirs(profiles_dir, exist_ok=True)
-        with open(os.path.join(profiles_dir, "alice.dat"), "wb") as f:
+        app_root = os.path.join(tmp, "appdata")
+        os.makedirs(app_root, exist_ok=True)
+        pdir = get_profile_data_dir("alice", create=True, app_root=app_root)
+        with open(os.path.join(pdir, "alice.dat"), "wb") as f:
             f.write(b"key-bytes")
-        out_path, _ = profile_export.export_profile("alice", password, profiles_dir)
+        out_path, _ = profile_export.export_profile("alice", password, app_root)
         return out_path
 
     def test_wrong_password_raises_value_error(self) -> None:
@@ -221,11 +232,12 @@ class TestImportProfile(unittest.TestCase):
     ) -> str:
         from i2pchat.storage import profile_export
 
-        profiles_dir = os.path.join(tmp, "src_profiles")
-        os.makedirs(profiles_dir, exist_ok=True)
-        with open(os.path.join(profiles_dir, f"{profile_name}.dat"), "wb") as f:
+        app_root = os.path.join(tmp, "src_profiles")
+        os.makedirs(app_root, exist_ok=True)
+        pdir = get_profile_data_dir(profile_name, create=True, app_root=app_root)
+        with open(os.path.join(pdir, f"{profile_name}.dat"), "wb") as f:
             f.write(dat_bytes)
-        out_path, _ = profile_export.export_profile(profile_name, password, profiles_dir)
+        out_path, _ = profile_export.export_profile(profile_name, password, app_root)
         return out_path
 
     def test_basic_import(self) -> None:
@@ -236,7 +248,7 @@ class TestImportProfile(unittest.TestCase):
             dest_dir = os.path.join(tmp, "dest")
             name = profile_export.import_profile(archive, "pw", dest_dir)
             self.assertEqual(name, "alice")
-            self.assertTrue(os.path.exists(os.path.join(dest_dir, "alice.dat")))
+            self.assertTrue(os.path.exists(_profile_dat_path(dest_dir, "alice")))
 
     def test_dat_content_restored_correctly(self) -> None:
         from i2pchat.storage import profile_export
@@ -246,7 +258,7 @@ class TestImportProfile(unittest.TestCase):
             archive = self._make_archive(tmp, dat_bytes=original)
             dest_dir = os.path.join(tmp, "dest")
             profile_export.import_profile(archive, "pw", dest_dir)
-            with open(os.path.join(dest_dir, "alice.dat"), "rb") as f:
+            with open(_profile_dat_path(dest_dir, "alice"), "rb") as f:
                 self.assertEqual(f.read(), original)
 
     def test_conflict_strategy_error_raises(self) -> None:
@@ -256,8 +268,8 @@ class TestImportProfile(unittest.TestCase):
             archive = self._make_archive(tmp)
             dest_dir = os.path.join(tmp, "dest")
             os.makedirs(dest_dir)
-            # Pre-create the file
-            with open(os.path.join(dest_dir, "alice.dat"), "wb") as f:
+            adir = get_profile_data_dir("alice", create=True, app_root=dest_dir)
+            with open(os.path.join(adir, "alice.dat"), "wb") as f:
                 f.write(b"existing")
             with self.assertRaises(FileExistsError):
                 profile_export.import_profile(archive, "pw", dest_dir, "error")
@@ -269,13 +281,14 @@ class TestImportProfile(unittest.TestCase):
             archive = self._make_archive(tmp)
             dest_dir = os.path.join(tmp, "dest")
             os.makedirs(dest_dir)
-            with open(os.path.join(dest_dir, "alice.dat"), "wb") as f:
+            adir = get_profile_data_dir("alice", create=True, app_root=dest_dir)
+            with open(os.path.join(adir, "alice.dat"), "wb") as f:
                 f.write(b"existing")
             name = profile_export.import_profile(archive, "pw", dest_dir, "rename")
             self.assertEqual(name, "alice_1")
-            self.assertTrue(os.path.exists(os.path.join(dest_dir, "alice_1.dat")))
+            self.assertTrue(os.path.exists(_profile_dat_path(dest_dir, "alice_1")))
             # Original untouched
-            with open(os.path.join(dest_dir, "alice.dat"), "rb") as f:
+            with open(os.path.join(adir, "alice.dat"), "rb") as f:
                 self.assertEqual(f.read(), b"existing")
 
     def test_conflict_strategy_overwrite(self) -> None:
@@ -285,11 +298,12 @@ class TestImportProfile(unittest.TestCase):
             archive = self._make_archive(tmp, dat_bytes=b"new-key")
             dest_dir = os.path.join(tmp, "dest")
             os.makedirs(dest_dir)
-            with open(os.path.join(dest_dir, "alice.dat"), "wb") as f:
+            adir = get_profile_data_dir("alice", create=True, app_root=dest_dir)
+            with open(os.path.join(adir, "alice.dat"), "wb") as f:
                 f.write(b"old-key")
             name = profile_export.import_profile(archive, "pw", dest_dir, "overwrite")
             self.assertEqual(name, "alice")
-            with open(os.path.join(dest_dir, "alice.dat"), "rb") as f:
+            with open(_profile_dat_path(dest_dir, "alice"), "rb") as f:
                 self.assertEqual(f.read(), b"new-key")
 
     def test_contacts_restored_when_present(self) -> None:
@@ -298,15 +312,17 @@ class TestImportProfile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src_profiles = os.path.join(tmp, "src_profiles")
             os.makedirs(src_profiles)
-            with open(os.path.join(src_profiles, "alice.dat"), "wb") as f:
+            spdir = get_profile_data_dir("alice", create=True, app_root=src_profiles)
+            with open(os.path.join(spdir, "alice.dat"), "wb") as f:
                 f.write(b"key")
             contacts = {"version": 2, "contacts": [{"addr": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"}]}
-            with open(os.path.join(src_profiles, "alice.contacts.json"), "w") as f:
+            with open(os.path.join(spdir, "alice.contacts.json"), "w") as f:
                 json.dump(contacts, f)
             out_path, _ = profile_export.export_profile("alice", "pw", src_profiles)
             dest_dir = os.path.join(tmp, "dest")
             profile_export.import_profile(out_path, "pw", dest_dir)
-            contacts_path = os.path.join(dest_dir, "alice.contacts.json")
+            ddir = get_profile_data_dir("alice", create=False, app_root=dest_dir)
+            contacts_path = os.path.join(ddir, "alice.contacts.json")
             self.assertTrue(os.path.exists(contacts_path))
             with open(contacts_path) as f:
                 restored = json.load(f)
@@ -318,7 +334,8 @@ class TestImportProfile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src_profiles = os.path.join(tmp, "src_profiles")
             os.makedirs(src_profiles)
-            with open(os.path.join(src_profiles, "alice.dat"), "wb") as f:
+            spdir = get_profile_data_dir("alice", create=True, app_root=src_profiles)
+            with open(os.path.join(spdir, "alice.dat"), "wb") as f:
                 f.write(b"key")
             with open(os.path.join(src_profiles, "gui.json"), "w") as f:
                 json.dump({"theme": "dark"}, f)
@@ -333,7 +350,8 @@ class TestImportProfile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src_profiles = os.path.join(tmp, "src_profiles")
             os.makedirs(src_profiles)
-            with open(os.path.join(src_profiles, "alice.dat"), "wb") as f:
+            spdir = get_profile_data_dir("alice", create=True, app_root=src_profiles)
+            with open(os.path.join(spdir, "alice.dat"), "wb") as f:
                 f.write(b"key")
             with open(os.path.join(src_profiles, "gui.json"), "w") as f:
                 json.dump({"theme": "dark"}, f)
@@ -377,7 +395,7 @@ class TestImportProfile(unittest.TestCase):
             archive = self._make_archive(tmp)
             dest_dir = os.path.join(tmp, "dest")
             profile_export.import_profile(archive, "pw", dest_dir)
-            dat_path = os.path.join(dest_dir, "alice.dat")
+            dat_path = _profile_dat_path(dest_dir, "alice")
             mode = oct(os.stat(dat_path).st_mode)[-3:]
             self.assertEqual(mode, "600")
 

@@ -79,30 +79,55 @@ def _legacy_safe_peer_id(peer_addr: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:LEGACY_PEER_ID_HEX_LEN]
 
 
-def _history_path(profiles_dir: str, profile: str, peer_addr: str) -> str:
+def _history_path(profile_data_dir: str, profile: str, peer_addr: str) -> str:
     pid = _safe_peer_id(peer_addr)
-    return os.path.join(profiles_dir, f"{profile}.history.{pid}.enc")
+    return os.path.join(profile_data_dir, f"{profile}.history.{pid}.enc")
 
 
-def _legacy_history_path(profiles_dir: str, profile: str, peer_addr: str) -> str:
+def _legacy_history_path(profile_data_dir: str, profile: str, peer_addr: str) -> str:
     pid = _legacy_safe_peer_id(peer_addr)
-    return os.path.join(profiles_dir, f"{profile}.history.{pid}.enc")
+    return os.path.join(profile_data_dir, f"{profile}.history.{pid}.enc")
 
 
-def _history_path_candidates(profiles_dir: str, profile: str, peer_addr: str) -> list[str]:
-    current = _history_path(profiles_dir, profile, peer_addr)
-    legacy = _legacy_history_path(profiles_dir, profile, peer_addr)
-    if legacy == current:
-        return [current]
-    return [current, legacy]
+def _history_search_roots(
+    profile_data_dir: str, app_data_root: Optional[str] = None
+) -> list[str]:
+    roots = [os.path.abspath(profile_data_dir)]
+    if app_data_root:
+        ar = os.path.abspath(app_data_root)
+        if ar not in roots:
+            roots.append(ar)
+    return roots
+
+
+def _history_path_candidates(
+    profile_data_dir: str,
+    profile: str,
+    peer_addr: str,
+    *,
+    app_data_root: Optional[str] = None,
+) -> list[str]:
+    out: list[str] = []
+    for root in _history_search_roots(profile_data_dir, app_data_root):
+        cur = _history_path(root, profile, peer_addr)
+        if cur not in out:
+            out.append(cur)
+        leg = _legacy_history_path(root, profile, peer_addr)
+        if leg not in out:
+            out.append(leg)
+    return out
 
 
 def _resolve_existing_history_path(
-    profiles_dir: str,
+    profile_data_dir: str,
     profile: str,
     peer_addr: str,
+    *,
+    app_data_root: Optional[str] = None,
 ) -> Optional[str]:
-    for candidate in _history_path_candidates(profiles_dir, profile, peer_addr):
+    for candidate in _history_path_candidates(
+        profile_data_dir, profile, peer_addr, app_data_root=app_data_root
+    ):
         if os.path.exists(candidate):
             return candidate
     return None
@@ -120,26 +145,57 @@ def _derive_file_key(profile_key: bytes, salt: bytes, peer_addr: str) -> bytes:
     return crypto.hkdf_expand(prk, b"I2PCHAT-HISTORY|file-key|" + peer_id, 32)
 
 
-def list_history_file_names(profiles_dir: str, profile: str) -> list[str]:
+def list_history_file_names(
+    profile_data_dir: str,
+    profile: str,
+    *,
+    app_data_root: Optional[str] = None,
+) -> list[str]:
     prefix = f"{profile}.history."
-    try:
-        names = [
-            name
-            for name in os.listdir(profiles_dir)
-            if name.startswith(prefix) and name.endswith(".enc")
-        ]
-    except FileNotFoundError:
-        return []
+    names: set[str] = set()
+    for root in _history_search_roots(profile_data_dir, app_data_root):
+        try:
+            for name in os.listdir(root):
+                if name.startswith(prefix) and name.endswith(".enc"):
+                    names.add(name)
+        except FileNotFoundError:
+            continue
     return sorted(names)
 
 
-def list_history_file_paths(profiles_dir: str, profile: str) -> list[str]:
-    return [os.path.join(profiles_dir, name) for name in list_history_file_names(profiles_dir, profile)]
+def list_history_file_paths(
+    profile_data_dir: str,
+    profile: str,
+    *,
+    app_data_root: Optional[str] = None,
+) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    prefix = f"{profile}.history."
+    for root in _history_search_roots(profile_data_dir, app_data_root):
+        try:
+            for name in os.listdir(root):
+                if name.startswith(prefix) and name.endswith(".enc"):
+                    full = os.path.join(root, name)
+                    if full not in seen:
+                        seen.add(full)
+                        paths.append(full)
+        except FileNotFoundError:
+            continue
+    paths.sort()
+    return paths
 
 
-def list_history_files(profiles_dir: str, profile: str) -> list[str]:
+def list_history_files(
+    profile_data_dir: str,
+    profile: str,
+    *,
+    app_data_root: Optional[str] = None,
+) -> list[str]:
     """Absolute paths to encrypted history files for a profile."""
-    return list_history_file_paths(profiles_dir, profile)
+    return list_history_file_paths(
+        profile_data_dir, profile, app_data_root=app_data_root
+    )
 
 
 def _parse_history_entry_ts(raw_ts: str) -> Optional[datetime]:
@@ -259,29 +315,38 @@ def _json_to_entries(data: bytes) -> tuple[str, List[HistoryEntry], Optional[str
 
 
 def save_history(
-    profiles_dir: str,
+    profile_data_dir: str,
     profile: str,
     peer_addr: str,
     entries: List[HistoryEntry],
     identity_key: bytes,
     max_messages: int = DEFAULT_MAX_MESSAGES,
     max_age_days: int = 0,
+    *,
+    app_data_root: Optional[str] = None,
 ) -> None:
-    """Encrypt and atomically write chat history for a peer."""
+    """Encrypt and atomically write chat history for a peer into ``profile_data_dir``."""
     if not entries:
         return
     if not crypto.NACL_AVAILABLE:
         logger.warning("PyNaCl not available — cannot save encrypted history")
         return
 
-    path = _history_path(profiles_dir, profile, peer_addr)
+    path = _history_path(profile_data_dir, profile, peer_addr)
 
     # Try to reuse the existing salt so the file key stays stable.
     salt = _read_existing_salt(path)
     if salt is None:
-        legacy_path = _legacy_history_path(profiles_dir, profile, peer_addr)
+        legacy_path = _legacy_history_path(profile_data_dir, profile, peer_addr)
         if legacy_path != path:
             salt = _read_existing_salt(legacy_path)
+    if salt is None and app_data_root:
+        for cand in _history_path_candidates(
+            profile_data_dir, profile, peer_addr, app_data_root=app_data_root
+        ):
+            salt = _read_existing_salt(cand)
+            if salt is not None:
+                break
     if salt is None:
         salt = secrets.token_bytes(SALT_SIZE)
 
@@ -302,17 +367,21 @@ def save_history(
 
 
 def load_history(
-    profiles_dir: str,
+    profile_data_dir: str,
     profile: str,
     peer_addr: str,
     identity_key: bytes,
+    *,
+    app_data_root: Optional[str] = None,
 ) -> List[HistoryEntry]:
     """Decrypt and return chat history for a peer.  Returns [] on any error."""
     if not crypto.NACL_AVAILABLE:
         logger.warning("PyNaCl not available — cannot load encrypted history")
         return []
 
-    path = _resolve_existing_history_path(profiles_dir, profile, peer_addr)
+    path = _resolve_existing_history_path(
+        profile_data_dir, profile, peer_addr, app_data_root=app_data_root
+    )
     if path is None:
         return []
 
@@ -366,13 +435,17 @@ def load_history(
 
 
 def delete_history(
-    profiles_dir: str,
+    profile_data_dir: str,
     profile: str,
     peer_addr: str,
+    *,
+    app_data_root: Optional[str] = None,
 ) -> bool:
     """Remove the encrypted history file for a peer.  Returns True if deleted."""
     deleted_any = False
-    for path in _history_path_candidates(profiles_dir, profile, peer_addr):
+    for path in _history_path_candidates(
+        profile_data_dir, profile, peer_addr, app_data_root=app_data_root
+    ):
         try:
             os.remove(path)
             deleted_any = True

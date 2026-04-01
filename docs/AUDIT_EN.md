@@ -171,7 +171,7 @@ Since audit dated 2026-03-29 (security-neutral maintenance):
 - `default` profile remains transient (TOFU not persisted across restarts).
 - BlindBox insecure local mode only via explicit override and warnings.
 - Built-in BlindBox replica defaults may be inappropriate for strict privacy deployments; configure custom replicas for hardened setups.
-- **`*.contacts.json`** and **`*.compose_drafts.json`** store **unencrypted** local metadata (names, notes, message previews, draft text) under the profiles directory — protect the host disk/account; distinct from encrypted history blobs.
+- **`*.contacts.json`** and **`*.compose_drafts.json`** store **unencrypted** local metadata (names, notes, message previews, draft text) under **`profiles/<name>/`** — protect the host disk/account; distinct from encrypted history blobs.
 
 ## Conclusion
 

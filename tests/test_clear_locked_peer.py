@@ -21,7 +21,8 @@ MOCK_DAT_LINE1 = "dGVzdC1wcml2YXRlLWtleS1saW5lLWJhc2U2NAo="
 class ClearLockedPeerTests(unittest.TestCase):
     def test_clears_second_line_leaves_key(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            dat = os.path.join(td, "p.dat")
+            dat = os.path.join(td, "profiles", "p", "p.dat")
+            os.makedirs(os.path.dirname(dat), exist_ok=True)
             with open(dat, "w", encoding="utf-8") as f:
                 f.write(f"{MOCK_DAT_LINE1}\n{PEER}\n")
             with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):
@@ -36,7 +37,8 @@ class ClearLockedPeerTests(unittest.TestCase):
 
     def test_keyring_only_peer_file_removed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            dat = os.path.join(td, "q.dat")
+            dat = os.path.join(td, "profiles", "q", "q.dat")
+            os.makedirs(os.path.dirname(dat), exist_ok=True)
             with open(dat, "w", encoding="utf-8") as f:
                 f.write(f"{PEER}\n")
             with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):

@@ -37,7 +37,7 @@ class AtomicWritesTests(unittest.TestCase):
                 core = I2PChatCore(profile="alice")
                 core.peer_trusted_signing_keys[VALID_PEER] = "a" * 64
                 core._save_trust_store()  # noqa: SLF001 - internal persistence behavior
-                trust_path = os.path.join(td, "alice.trust.json")
+                trust_path = os.path.join(td, "profiles", "alice", "alice.trust.json")
                 self.assertTrue(os.path.exists(trust_path))
                 self.assertFalse(os.path.exists(trust_path + ".tmp"))
 
@@ -46,7 +46,7 @@ class AtomicWritesTests(unittest.TestCase):
             with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):
                 core = I2PChatCore(profile="alice")
                 core._write_profile_dat("priv-key", VALID_PEER)  # noqa: SLF001
-                profile_path = os.path.join(td, "alice.dat")
+                profile_path = os.path.join(td, "profiles", "alice", "alice.dat")
                 self.assertTrue(os.path.exists(profile_path))
                 self.assertFalse(os.path.exists(profile_path + ".tmp"))
 
@@ -100,7 +100,8 @@ class AtomicWritesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=td):
                 core = I2PChatCore(profile="alice")
-                profile_path = os.path.join(td, "alice.dat")
+                profile_path = os.path.join(td, "profiles", "alice", "alice.dat")
+                os.makedirs(os.path.dirname(profile_path), exist_ok=True)
                 with open(profile_path, "w", encoding="utf-8") as f:
                     f.write("old-key\n")
 

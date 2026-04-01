@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 from i2pchat import crypto
+from i2pchat.core.i2p_chat_core import (
+    get_profile_data_dir,
+    migrate_legacy_profile_files_if_needed,
+)
+from i2pchat.storage import chat_history as chat_history_mod
 from i2pchat.storage.blindbox_state import atomic_write_bytes
 
 
@@ -184,8 +189,12 @@ def _validate_manifest_files(
     return bundle_type, source_profile
 
 
-def _profile_dat_path(profiles_dir: str, profile: str) -> str:
-    return os.path.join(profiles_dir, f"{profile}.dat")
+def _profile_dat_path(app_root: str, profile: str) -> str:
+    migrate_legacy_profile_files_if_needed(app_root=app_root, profile=profile)
+    return os.path.join(
+        get_profile_data_dir(profile, create=False, app_root=app_root),
+        f"{profile}.dat",
+    )
 
 
 def _collect_optional_file(path: str) -> Optional[bytes]:
@@ -195,21 +204,16 @@ def _collect_optional_file(path: str) -> Optional[bytes]:
         return f.read()
 
 
-def list_history_files(profiles_dir: str, profile: str) -> list[str]:
-    prefix = f"{profile}.history."
-    result: list[str] = []
-    try:
-        for name in os.listdir(profiles_dir):
-            if name.startswith(prefix) and name.endswith(".enc"):
-                result.append(os.path.join(profiles_dir, name))
-    except FileNotFoundError:
-        return []
-    result.sort()
-    return result
+def list_history_files(app_root: str, profile: str) -> list[str]:
+    migrate_legacy_profile_files_if_needed(app_root=app_root, profile=profile)
+    pdir = get_profile_data_dir(profile, create=False, app_root=app_root)
+    return chat_history_mod.list_history_file_paths(
+        pdir, profile, app_data_root=app_root
+    )
 
 
 def _collect_profile_bundle_files(
-    profiles_dir: str,
+    app_root: str,
     profile: str,
     *,
     include_history: bool,
@@ -218,7 +222,10 @@ def _collect_profile_bundle_files(
     sidecar_count = 0
     history_count = 0
 
-    profile_dat = _collect_optional_file(_profile_dat_path(profiles_dir, profile))
+    migrate_legacy_profile_files_if_needed(app_root=app_root, profile=profile)
+    pdir = get_profile_data_dir(profile, create=False, app_root=app_root)
+
+    profile_dat = _collect_optional_file(_profile_dat_path(app_root, profile))
     if profile_dat is None:
         raise BackupError(f"Profile data file not found: {profile}.dat")
     files["profile.dat"] = profile_dat
@@ -228,22 +235,26 @@ def _collect_profile_bundle_files(
         (f"{profile}.compose_drafts.json", "compose_drafts.json"),
     ]
     for file_name, logical_name in optional_sidecars:
-        content = _collect_optional_file(os.path.join(profiles_dir, file_name))
+        content = _collect_optional_file(os.path.join(pdir, file_name))
         if content is None:
             continue
         files[logical_name] = content
         sidecar_count += 1
 
     blindbox_prefix = f"{profile}.blindbox."
-    for name in sorted(os.listdir(profiles_dir)):
+    try:
+        listing = sorted(os.listdir(pdir))
+    except FileNotFoundError:
+        listing = []
+    for name in listing:
         if not (name.startswith(blindbox_prefix) and name.endswith(".json")):
             continue
-        with open(os.path.join(profiles_dir, name), "rb") as f:
+        with open(os.path.join(pdir, name), "rb") as f:
             files[f"blindbox/{name[len(profile) + 1:]}"] = f.read()
         sidecar_count += 1
 
     if include_history:
-        for path in list_history_files(profiles_dir, profile):
+        for path in list_history_files(app_root, profile):
             name = os.path.basename(path)
             suffix = name[len(f"{profile}.history.") :]
             with open(path, "rb") as f:
@@ -254,12 +265,12 @@ def _collect_profile_bundle_files(
 
 
 def _collect_history_bundle_files(
-    profiles_dir: str,
+    app_root: str,
     profile: str,
 ) -> tuple[dict[str, bytes], int]:
     files: dict[str, bytes] = {}
     count = 0
-    for path in list_history_files(profiles_dir, profile):
+    for path in list_history_files(app_root, profile):
         name = os.path.basename(path)
         suffix = name[len(f"{profile}.history.") :]
         with open(path, "rb") as f:
@@ -366,7 +377,10 @@ def import_profile_bundle(
     *,
     requested_profile: Optional[str] = None,
 ) -> ImportSummary:
-    from i2pchat.core.i2p_chat_core import ensure_valid_profile_name, import_profile_dat_atomic
+    from i2pchat.core.i2p_chat_core import (
+        ensure_valid_profile_name,
+        import_profile_dat_atomic,
+    )
 
     _manifest, files, bundle_type, source_profile = _load_bundle(bundle_path, passphrase)
     if bundle_type != "profile":
@@ -385,6 +399,7 @@ def import_profile_bundle(
         target_profile = import_profile_dat_atomic(tmp_profile, profiles_dir, base_profile)
     restored_files += 1
 
+    pdir = get_profile_data_dir(target_profile, create=True, app_root=profiles_dir)
     for logical_name, content in sorted(files.items()):
         if logical_name == "profile.dat":
             continue
@@ -401,7 +416,7 @@ def import_profile_bundle(
             history_files += 1
         else:
             raise BackupError(f"Unexpected file in profile bundle: {logical_name}")
-        atomic_write_bytes(os.path.join(profiles_dir, dest_name), content)
+        atomic_write_bytes(os.path.join(pdir, dest_name), content)
         restored_files += 1
 
     return ImportSummary(
@@ -431,6 +446,7 @@ def import_history_bundle(
         raise BackupError(f"Unsupported history import conflict mode: {conflict_mode}")
 
     os.makedirs(profiles_dir, exist_ok=True)
+    pdir = get_profile_data_dir(target_profile, create=True, app_root=profiles_dir)
     restored_files = 0
     skipped_files = 0
     history_files = 0
@@ -438,7 +454,7 @@ def import_history_bundle(
         if not logical_name.startswith("history/"):
             raise BackupError(f"Unexpected file in history bundle: {logical_name}")
         suffix = logical_name[len("history/") :]
-        dest_path = os.path.join(profiles_dir, f"{target_profile}.history.{suffix}")
+        dest_path = os.path.join(pdir, f"{target_profile}.history.{suffix}")
         history_files += 1
         if os.path.exists(dest_path) and conflict_mode == "skip":
             skipped_files += 1

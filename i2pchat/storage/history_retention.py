@@ -91,8 +91,9 @@ def enforce_retention_for_peer(
     identity_key: bytes,
     peer_addr: str,
     policy: RetentionPolicy,
-    profiles_dir: str,
+    profile_data_dir: str,
     *,
+    app_data_root: Optional[str] = None,
     confirmed: bool = False,
 ) -> int:
     """
@@ -103,7 +104,8 @@ def enforce_retention_for_peer(
         identity_key: 32-byte identity key.
         peer_addr: Peer address to apply retention to.
         policy: RetentionPolicy to enforce.
-        profiles_dir: Directory containing encrypted history files.
+        profile_data_dir: ``profiles/<name>/`` directory for this profile.
+        app_data_root: Optional application root for legacy flat history files.
         confirmed: Must be True to actually write the pruned history.
 
     Returns:
@@ -118,7 +120,13 @@ def enforce_retention_for_peer(
             "pass confirmed=True to proceed"
         )
 
-    entries = load_history(profiles_dir, profile_name, peer_addr, identity_key)
+    entries = load_history(
+        profile_data_dir,
+        profile_name,
+        peer_addr,
+        identity_key,
+        app_data_root=app_data_root,
+    )
     if not entries:
         return 0
 
@@ -127,12 +135,13 @@ def enforce_retention_for_peer(
 
     if removed > 0:
         save_history(
-            profiles_dir,
+            profile_data_dir,
             profile_name,
             peer_addr,
             pruned,
             identity_key,
             max_messages=policy.max_messages or DEFAULT_MAX_MESSAGES,
+            app_data_root=app_data_root,
         )
         logger.info(
             "Retention applied for peer %s: removed %d entries (%d remain)",
@@ -145,9 +154,10 @@ def enforce_retention_all(
     profile_name: str,
     identity_key: bytes,
     policy: RetentionPolicy,
-    profiles_dir: str,
+    profile_data_dir: str,
     peer_addrs: List[str],
     *,
+    app_data_root: Optional[str] = None,
     confirmed: bool = False,
 ) -> dict[str, int]:
     """
@@ -157,7 +167,8 @@ def enforce_retention_all(
         profile_name: Profile name.
         identity_key: 32-byte identity key.
         policy: RetentionPolicy to enforce.
-        profiles_dir: Directory containing encrypted history files.
+        profile_data_dir: ``profiles/<name>/`` directory for this profile.
+        app_data_root: Optional application root for legacy flat history files.
         peer_addrs: List of peer addresses to process.
         confirmed: Must be True to actually write pruned histories.
 
@@ -181,7 +192,8 @@ def enforce_retention_all(
                 identity_key,
                 peer_addr,
                 policy,
-                profiles_dir,
+                profile_data_dir,
+                app_data_root=app_data_root,
                 confirmed=True,
             )
             results[peer_addr] = removed

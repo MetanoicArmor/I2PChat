@@ -57,17 +57,27 @@ def _derive_key(password: str | bytes, salt: bytes) -> bytes:
     )
 
 
-def _read_dat(profiles_dir: str, profile_name: str) -> bytes:
-    path = os.path.join(profiles_dir, f"{profile_name}.dat")
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Profile .dat not found: {path}")
+def _read_dat(app_root: str, profile_name: str) -> bytes:
+    from i2pchat.core.i2p_chat_core import resolve_existing_profile_file
+
+    path = resolve_existing_profile_file(
+        app_root, profile_name, f"{profile_name}.dat"
+    )
+    if not path:
+        raise FileNotFoundError(
+            f"Profile .dat not found for {profile_name!r} under {app_root!r}"
+        )
     with open(path, "rb") as f:
         return f.read()
 
 
-def _read_contacts(profiles_dir: str, profile_name: str) -> Any:
-    path = os.path.join(profiles_dir, f"{profile_name}.contacts.json")
-    if not os.path.exists(path):
+def _read_contacts(app_root: str, profile_name: str) -> Any:
+    from i2pchat.core.i2p_chat_core import resolve_existing_profile_file
+
+    path = resolve_existing_profile_file(
+        app_root, profile_name, f"{profile_name}.contacts.json"
+    )
+    if not path:
         return None
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -102,7 +112,7 @@ def export_profile(
     Args:
         profile_name: name of the profile (without .dat extension)
         password: encryption password
-        profiles_dir: directory containing .dat and .contacts.json files
+        profiles_dir: application data root (same as ``get_profiles_dir()``)
         include_gui_settings: whether to include gui.json in the archive
         output_path: destination file path; defaults to profiles_dir/{profile_name}.i2pchat-profile
 
@@ -137,7 +147,9 @@ def export_profile(
     archive_bytes = header + ciphertext
 
     if output_path is None:
-        output_path = os.path.join(profiles_dir, f"{profile_name}.i2pchat-profile")
+        output_path = os.path.join(
+            os.path.abspath(profiles_dir), f"{profile_name}.i2pchat-profile"
+        )
 
     _atomic_write_profile(output_path, archive_bytes)
     return output_path, EXPORT_WARNING
@@ -255,7 +267,7 @@ def import_profile(
     Args:
         archive_path: path to the .i2pchat-profile file
         password: decryption password
-        profiles_dir: destination directory for .dat and .contacts.json
+        profiles_dir: application data root; files are written under ``profiles/<final_name>/``
         conflict_strategy: what to do if the profile already exists:
             "error"    — raise FileExistsError
             "rename"   — suffix with _1, _2, ... (allocate_unique_profile_name)
@@ -275,6 +287,8 @@ def import_profile(
     if not os.path.exists(archive_path):
         raise FileNotFoundError(f"Archive not found: {archive_path}")
 
+    from i2pchat.core.i2p_chat_core import get_profile_data_dir, nested_profile_dat_path
+
     # Decrypt and validate before touching the filesystem (all-or-nothing)
     payload = _decrypt_archive(archive_path, password)
 
@@ -293,26 +307,28 @@ def import_profile(
     import re
     base_name = re.sub(r"[^A-Za-z0-9._-]", "_", base_name)[:64] or "imported"
 
-    os.makedirs(profiles_dir, exist_ok=True)
-    dat_dest = os.path.join(profiles_dir, f"{base_name}.dat")
+    app_root = os.path.abspath(profiles_dir)
+    os.makedirs(app_root, exist_ok=True)
+    dat_dest = nested_profile_dat_path(app_root, base_name)
 
     if conflict_strategy == "error":
         if os.path.exists(dat_dest):
             raise FileExistsError(f"Profile already exists: {dat_dest}")
         final_name = base_name
     elif conflict_strategy == "rename":
-        final_name = allocate_unique_profile_name(profiles_dir, base_name)
+        final_name = allocate_unique_profile_name(app_root, base_name)
     elif conflict_strategy == "overwrite":
         final_name = base_name
     else:
         raise ValueError(f"Unknown conflict_strategy: {conflict_strategy!r}")
 
     # Write files atomically — contacts.json only if present in archive
-    dat_path = os.path.join(profiles_dir, f"{final_name}.dat")
+    pdir = get_profile_data_dir(final_name, create=True, app_root=app_root)
+    dat_path = os.path.join(pdir, f"{final_name}.dat")
     _atomic_write_profile(dat_path, dat_bytes)
 
     if contacts is not None:
-        contacts_path = os.path.join(profiles_dir, f"{final_name}.contacts.json")
+        contacts_path = os.path.join(pdir, f"{final_name}.contacts.json")
         contacts_bytes = json.dumps(contacts, ensure_ascii=True, indent=2, sort_keys=True).encode("utf-8")
         _atomic_write_profile(contacts_path, contacts_bytes)
 

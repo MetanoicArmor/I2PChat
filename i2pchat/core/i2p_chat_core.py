@@ -255,10 +255,15 @@ TrustMismatchDecisionCallback = Callable[[str, str, str, str, str], bool]
 FileOfferCallback = Callable[[str, int], Any]
 
 
+PROFILE_DATA_SUBDIR = "profiles"
+
+
 def get_profiles_dir() -> str:
     """
-    Директория для .dat профилей. На macOS — Application Support (надёжный доступ),
-    на Windows — APPDATA, иначе ~/.i2pchat. Создаёт каталог и на Unix выставляет 0o700.
+    Корневой каталог данных приложения I2PChat (Application Support / APPDATA / ~/.i2pchat).
+
+    Содержит общие подпапки ``downloads/``, ``images/``, глобальные файлы вроде ``ui_prefs.json``,
+    а также ``profiles/<имя>/`` с файлами каждого сохранённого профиля.
     """
     if sys.platform == "darwin":
         base = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "I2PChat")
@@ -300,6 +305,206 @@ def get_images_dir() -> str:
     except OSError:
         pass
     return base
+
+
+def get_profile_data_dir(
+    profile: str, *, create: bool = False, app_root: Optional[str] = None
+) -> str:
+    """
+    Каталог данных одного профиля: ``<app_root>/profiles/<profile>/``.
+
+    Имена файлов внутри прежние (``alice.dat``, ``alice.trust.json``, …).
+    ``app_root`` по умолчанию — результат ``get_profiles_dir()``.
+    """
+    p = ensure_valid_profile_name(profile)
+    root = os.path.abspath(app_root if app_root is not None else get_profiles_dir())
+    sub = os.path.join(root, PROFILE_DATA_SUBDIR, p)
+    abs_sub = os.path.abspath(sub)
+    if abs_sub != root and not abs_sub.startswith(root + os.sep):
+        raise ValueError("Invalid profile data path")
+    if create:
+        os.makedirs(abs_sub, exist_ok=True)
+        try:
+            os.chmod(abs_sub, 0o700)
+        except OSError:
+            pass
+    return abs_sub
+
+
+def legacy_flat_profile_dat_path(app_root: str, profile: str) -> str:
+    """Плоская раскладка до вложенных профилей: ``<app_root>/<profile>.dat``."""
+    p = ensure_valid_profile_name(profile)
+    return os.path.join(os.path.abspath(app_root), f"{p}.dat")
+
+
+def nested_profile_dat_path(app_root: str, profile: str) -> str:
+    """Новая раскладка: ``<app_root>/profiles/<profile>/<profile>.dat``."""
+    p = ensure_valid_profile_name(profile)
+    return os.path.join(
+        os.path.abspath(app_root), PROFILE_DATA_SUBDIR, p, f"{p}.dat"
+    )
+
+
+def _legacy_profile_file_should_migrate(name: str, profile: str) -> bool:
+    """Имя файла в корне app data, относящееся к профилю ``profile`` (для переноса)."""
+    p = profile
+    if name == f"{p}.dat":
+        return True
+    if name == f"{p}.trust.json":
+        return True
+    if name == f"{p}.signing":
+        return True
+    if name == f"{p}.contacts.json":
+        return True
+    if name == f"{p}.compose_drafts.json":
+        return True
+    if name == f"{p}.blindbox_replicas.json":
+        return True
+    prefix = f"{p}.history."
+    if name.startswith(prefix) and name.endswith(".enc"):
+        return True
+    bb = f"{p}.blindbox."
+    if name.startswith(bb) and name.endswith(".json"):
+        return True
+    return False
+
+
+def migrate_legacy_profile_files_if_needed(
+    *,
+    app_root: Optional[str] = None,
+    profile: str,
+) -> None:
+    """
+    Если ``<root>/<profile>.dat`` есть, а в новой раскладке ещё нет — переносит
+    все связанные файлы профиля в ``profiles/<profile>/``.
+    """
+    try:
+        p = ensure_valid_profile_name(profile)
+    except ValueError:
+        return
+    root = os.path.abspath(app_root or get_profiles_dir())
+    legacy_dat = legacy_flat_profile_dat_path(root, p)
+    new_dat = nested_profile_dat_path(root, p)
+    if not os.path.isfile(legacy_dat):
+        return
+    if os.path.isfile(new_dat):
+        return
+    profiles_parent = os.path.join(root, PROFILE_DATA_SUBDIR)
+    if os.path.exists(profiles_parent) and not os.path.isdir(profiles_parent):
+        logger.warning(
+            "Cannot migrate profile %r: %r exists and is not a directory",
+            p,
+            profiles_parent,
+        )
+        return
+    dest_dir = get_profile_data_dir(p, create=True, app_root=root)
+    try:
+        names = os.listdir(root)
+    except OSError as e:
+        logger.warning("Legacy profile migrate listdir failed (%s): %s", root, e)
+        return
+    to_move = [n for n in names if _legacy_profile_file_should_migrate(n, p)]
+    to_move.sort(key=lambda x: (x != f"{p}.dat", x))
+    for name in to_move:
+        src = os.path.join(root, name)
+        if not os.path.isfile(src):
+            continue
+        dst = os.path.join(dest_dir, name)
+        if os.path.lexists(dst):
+            logger.warning(
+                "Skipping migrate %s → %s: destination exists", src, dst
+            )
+            continue
+        try:
+            os.replace(src, dst)
+        except OSError as e:
+            logger.warning("Legacy profile migrate failed %s → %s: %s", src, dst, e)
+
+
+def legacy_flat_profile_dat_basenames(app_root: str) -> list[str]:
+    """
+    Имена профилей, у которых в корне ``app_root`` лежит плоский ``<имя>.dat``.
+
+    Используется для одноразового прохода миграции при старте приложения.
+    """
+    root = os.path.abspath(app_root)
+    found: set[str] = set()
+    try:
+        for name in os.listdir(root):
+            if not name.endswith(".dat"):
+                continue
+            base = name[: -len(".dat")]
+            if not is_valid_profile_name(base):
+                continue
+            path = os.path.join(root, name)
+            if os.path.isfile(path):
+                found.add(base)
+    except OSError as e:
+        logger.warning("legacy_flat_profile_dat_basenames listdir failed (%s): %s", root, e)
+    return sorted(found)
+
+
+def migrate_all_legacy_profiles_if_needed(app_root: Optional[str] = None) -> None:
+    """
+    Переносит **все** профили с плоской раскладкой в ``profiles/<имя>/`` за один проход.
+
+    Имеет смысл вызывать при старте UI: иначе файлы профилей, которые пользователь
+    давно не открывал, остаются в корне каталога данных до первого входа в профиль.
+    Повторные вызовы дешёвые: для уже перенесённых профилей
+    :func:`migrate_legacy_profile_files_if_needed` сразу выходит.
+    """
+    root = os.path.abspath(app_root if app_root is not None else get_profiles_dir())
+    for profile in legacy_flat_profile_dat_basenames(root):
+        migrate_legacy_profile_files_if_needed(app_root=root, profile=profile)
+
+
+def resolve_existing_profile_file(
+    app_root: str, profile: str, basename: str
+) -> Optional[str]:
+    """Путь к существующему файлу профиля (новая раскладка, иначе плоская)."""
+    try:
+        p = ensure_valid_profile_name(profile)
+    except ValueError:
+        return None
+    if basename != f"{p}.dat" and not basename.startswith(f"{p}."):
+        return None
+    root = os.path.abspath(app_root)
+    nested = os.path.join(root, PROFILE_DATA_SUBDIR, p, basename)
+    if os.path.isfile(nested):
+        return nested
+    flat = os.path.join(root, basename)
+    if os.path.isfile(flat):
+        return flat
+    return None
+
+
+def list_profile_names_in_app_data(app_root: Optional[str] = None) -> list[str]:
+    """Имена сохранённых профилей (есть ``.dat``), без ``default``."""
+    root = os.path.abspath(app_root or get_profiles_dir())
+    seen: set[str] = set()
+    sub_root = os.path.join(root, PROFILE_DATA_SUBDIR)
+    if os.path.isdir(sub_root):
+        try:
+            for entry in os.listdir(sub_root):
+                if entry == "default" or not is_valid_profile_name(entry):
+                    continue
+                dat_path = os.path.join(sub_root, entry, f"{entry}.dat")
+                if os.path.isfile(dat_path):
+                    seen.add(entry)
+        except OSError:
+            pass
+    try:
+        for name in os.listdir(root):
+            if not name.endswith(".dat"):
+                continue
+            base = name[: -len(".dat")]
+            if base == "default" or not is_valid_profile_name(base):
+                continue
+            if os.path.isfile(os.path.join(root, name)):
+                seen.add(base)
+    except OSError:
+        pass
+    return sorted(seen)
 
 
 UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -410,8 +615,9 @@ def peek_persisted_stored_peer(profile: str) -> Optional[str]:
         return None
     if p == "default":
         return None
-    key_file = os.path.join(get_profiles_dir(), f"{p}.dat")
-    if not os.path.isfile(key_file):
+    app_root = get_profiles_dir()
+    key_file = resolve_existing_profile_file(app_root, p, f"{p}.dat")
+    if not key_file:
         return None
     try:
         with open(key_file, "r", encoding="utf-8") as f:
@@ -454,10 +660,18 @@ def allocate_unique_profile_name(
     """
     Возвращает валидное уникальное имя профиля без расширения `.dat`.
     Формат коллизий: `name_1`, `name_2`, ...
+
+    ``base_dir`` — корень данных приложения (как ``get_profiles_dir()``).
     """
     base_name = ensure_valid_profile_name(profile_name)
-    first_choice = os.path.join(base_dir, f"{base_name}.dat")
-    if not os.path.exists(first_choice):
+    app_root = os.path.abspath(base_dir)
+
+    def _dat_exists(name: str) -> bool:
+        return os.path.exists(nested_profile_dat_path(app_root, name)) or os.path.exists(
+            legacy_flat_profile_dat_path(app_root, name)
+        )
+
+    if not _dat_exists(base_name):
         return base_name
     for idx in range(1, max_attempts + 1):
         suffix = f"_{idx}"
@@ -467,8 +681,7 @@ def allocate_unique_profile_name(
         candidate = f"{base_name[:max_base_len]}{suffix}"
         if not is_valid_profile_name(candidate):
             continue
-        candidate_path = os.path.join(base_dir, f"{candidate}.dat")
-        if not os.path.exists(candidate_path):
+        if not _dat_exists(candidate):
             return candidate
     raise FileExistsError(f"Cannot allocate unique profile name for {base_name!r}")
 
@@ -480,7 +693,10 @@ def import_profile_dat_atomic(
     max_attempts: int = 1000,
 ) -> str:
     """
-    Атомарно импортирует .dat профиль в profiles_dir и возвращает итоговое имя профиля.
+    Атомарно импортирует .dat профиль в каталог данных приложения и возвращает имя профиля.
+
+    ``profiles_dir`` — корень приложения (как ``get_profiles_dir()``); файл создаётся в
+    ``profiles/<имя>/<имя>.dat``.
     Коллизии обрабатываются форматом name_1, name_2, ... без TOCTOU между check/use.
     """
     base_name = ensure_valid_profile_name(profile_name)
@@ -492,6 +708,7 @@ def import_profile_dat_atomic(
     reserved_path = ""
     tmp_path = ""
     candidate = base_name
+    candidate_subdir = ""
     try:
         for idx in range(0, max_attempts + 1):
             if idx == 0:
@@ -504,7 +721,10 @@ def import_profile_dat_atomic(
                 candidate = f"{base_name[:max_base_len]}{suffix}"
                 if not is_valid_profile_name(candidate):
                     continue
-            reserved_path = os.path.join(profiles_abs, f"{candidate}.dat")
+            candidate_subdir = get_profile_data_dir(
+                candidate, create=True, app_root=profiles_abs
+            )
+            reserved_path = os.path.join(candidate_subdir, f"{candidate}.dat")
             if os.path.abspath(reserved_path) == src_abs:
                 return candidate
             try:
@@ -522,7 +742,7 @@ def import_profile_dat_atomic(
 
         with tempfile.NamedTemporaryFile(
             mode="wb",
-            dir=profiles_abs,
+            dir=candidate_subdir,
             prefix=f".{candidate}.",
             suffix=".tmp",
             delete=False,
@@ -883,7 +1103,7 @@ class I2PChatCore:
             replicas_resolved = replicas_from_file
         elif self.profile != "default" and (
             replicas_profile := load_profile_blindbox_replicas_list(
-                get_profiles_dir(), self.profile
+                self.get_profile_data_dir(create=False), self.profile
             )
         ):
             self._blindbox_replicas_source = "profile-file"
@@ -1307,10 +1527,14 @@ class I2PChatCore:
     # ---------- инициализация сессии ----------
 
     def _profile_scoped_path(self, filename: str) -> str:
-        base_dir = os.path.abspath(get_profiles_dir())
+        app = get_profiles_dir()
+        migrate_legacy_profile_files_if_needed(app_root=app, profile=self.profile)
+        base_dir = os.path.abspath(
+            get_profile_data_dir(self.profile, create=True, app_root=app)
+        )
         base_real = os.path.realpath(base_dir)
         target = os.path.abspath(os.path.join(base_dir, filename))
-        if not target.startswith(base_dir + os.sep):
+        if not target.startswith(base_dir + os.sep) and target != base_dir:
             raise ValueError(f"Refusing profile path outside profiles dir: {filename!r}")
         if os.path.lexists(target) and os.path.islink(target):
             raise ValueError(f"Refusing symlinked profile path: {filename!r}")
@@ -1320,7 +1544,7 @@ class I2PChatCore:
         return target
 
     def _profile_path(self) -> str:
-        """Полный путь к .dat файлу профиля (общая директория профилей)."""
+        """Полный путь к ``<имя>.dat`` внутри ``profiles/<имя>/`` (или legacy-плоский путь до миграции)."""
         return self._profile_scoped_path(f"{self.profile}.dat")
 
     def _trust_store_path(self) -> str:
@@ -1338,8 +1562,14 @@ class I2PChatCore:
         return None
 
     def get_profiles_dir(self) -> str:
-        """Public accessor for the profiles directory path."""
+        """Корневой каталог данных приложения (см. ``get_profiles_dir``)."""
         return get_profiles_dir()
+
+    def get_profile_data_dir(self, *, create: bool = True) -> str:
+        """Каталог файлов текущего профиля: ``profiles/<имя>/``."""
+        app = get_profiles_dir()
+        migrate_legacy_profile_files_if_needed(app_root=app, profile=self.profile)
+        return get_profile_data_dir(self.profile, create=create, app_root=app)
 
     def _blindbox_peer_id(self) -> Optional[str]:
         peer = self._normalize_peer_addr(self.stored_peer or self.current_peer_addr or "")
@@ -2654,7 +2884,7 @@ class I2PChatCore:
             return sec
         try:
             save_profile_blindbox_replicas_list(
-                get_profiles_dir(), self.profile, norm
+                self.get_profile_data_dir(create=True), self.profile, norm
             )
         except ValueError as e:
             return str(e)

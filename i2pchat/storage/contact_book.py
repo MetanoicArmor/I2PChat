@@ -1,7 +1,7 @@
 """
 Encrypted-profile contact list (v2): MRU peers, display names, notes, last message preview.
 
-File: {profile}.contacts.json — version 2 with migration from v1 (list of address strings).
+File: ``profiles/<profile>/<profile>.contacts.json`` (v2; migrates from v1 list-of-strings).
 """
 
 from __future__ import annotations

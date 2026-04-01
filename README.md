@@ -50,12 +50,12 @@
 - **Lock to peer** — bind a profile to a single peer
 - **PyQt6 GUI** with light and dark themes (macOS-style, consistent and predictable on all platforms)
 - **File transfer** and **image sending** (Send picture: PNG, JPEG, WebP) between peers
-- **Profiles (.dat)** — multiple profiles, load and import
+- **Profiles (.dat)** — multiple profiles, load and import; each profile’s data lives under **`profiles/<name>/`** in the app data directory (legacy flat files migrate automatically on startup — see **§ profile paths** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md))
 - **System notifications** — tray toasts for new messages
 - **Sound notifications** for incoming messages
 - **BlindBox (default-on for named profiles)** — offline message delivery
 - **Optional encrypted chat history** — per-peer local history (toggle **Chat history: ON/OFF** in the **⋯** menu); encrypted at rest with keys derived from your profile identity (see **§4.11** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md))
-- **Contact book (Saved peers)** — left sidebar list backed by per-profile `contacts.json`: quick switch between saved `.b32.i2p` peers, optional display name/note, unread hints, resize/collapse, and a context menu (edit, trust details, remove). See **§3.1** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md).
+- **Contact book (Saved peers)** — left sidebar list backed by **`profiles/<name>/<name>.contacts.json`**: quick switch between saved `.b32.i2p` peers, optional display name/note, unread hints, resize/collapse, and a context menu (edit, trust details, remove). See **§3.1** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md).
 - Cross‑platform build scripts (Linux, macOS, Windows)
 
 #### 📖 Manuals
@@ -148,8 +148,8 @@ I2P or loopback endpoints"]
     end
 
     subgraph ProfileState["Profile / local identity"]
-        profile["Profile files + secure keyring
-profile .dat
+        profile["profiles/<name>/ per profile
+<name>.dat + keyring
 stored peer lock
 trust store
 signing seed"]
@@ -179,7 +179,7 @@ delivery callbacks"| qt
 
 Runtime in practice:
 
-1. **Startup**: `main_qt.py` creates `ChatWindow`, then `start_core()` calls `I2PChatCore.init_session()`, which loads or creates the profile identity, opens the long-lived SAM session, warms up tunnels, and starts `accept_loop()` / `tunnel_watcher()`.
+1. **Startup**: `main_qt.py` runs legacy **profile layout migration** (flat `*.dat` in the data root → `profiles/<name>/`) before the profile picker, then creates `ChatWindow`; `start_core()` calls `I2PChatCore.init_session()`, which loads or creates the profile identity, opens the long-lived SAM session, warms up tunnels, and starts `accept_loop()` / `tunnel_watcher()`.
 2. **Live chat path**: `connect_to_peer()` or `accept_loop()` establishes an I2P stream; `I2PChatCore` runs the plaintext handshake boundary, verifies/pins the peer signing key (TOFU), derives session subkeys, then switches to encrypted vNext frames through `ProtocolCodec` + `crypto`.
 3. **Delivery tracking**: each outgoing text / file / image gets a `MSG_ID` and ACK context; `message_delivery.py` turns low-level outcomes into UI states (`sending`, `queued`, `delivered`, `failed`).
 4. **Offline path (BlindBox)**: when no live secure session is available, `send_text()` can route through BlindBox — derive deterministic lookup/blob keys, encrypt a padded blob, PUT it to one or more BlindBox replicas, and later poll / decrypt GET results back into the chat stream.
@@ -420,13 +420,13 @@ If you like this project and want to support development, you can send a small d
 
 ### 📥 Prebuilt Downloads
 
-**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt bundles match `VERSION` in the repo (currently **v1.0.1**); no Python installation required.
+**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt bundles match `VERSION` in the repo (currently **v1.1.0**); no Python installation required.
 
 | Platform | Download | Launch |
 |----------|----------|--------|
-| **Windows** | [I2PChat-windows-x64-v1.0.1.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.0.1.zip) | Unzip → run `I2PChat.exe` |
-| **macOS** | [I2PChat-macOS-arm64-v1.0.1.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.0.1.zip) | Unzip → open `I2PChat.app` |
-| **Linux** | [I2PChat-linux-x86_64-v1.0.1.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.0.1.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
+| **Windows** | [I2PChat-windows-x64-v1.1.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.1.0.zip) | Unzip → run `I2PChat.exe` |
+| **macOS** | [I2PChat-macOS-arm64-v1.1.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.1.0.zip) | Unzip → open `I2PChat.app` |
+| **Linux** | [I2PChat-linux-x86_64-v1.1.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.1.0.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
 
 > **Requirement:** [i2pd](https://i2pd.website) router must be running with SAM API enabled (default port 7656).
 

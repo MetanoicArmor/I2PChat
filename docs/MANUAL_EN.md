@@ -22,25 +22,27 @@ How to use it:
   - leave this value if you want a one‑time (TRANSIENT) profile without locking to a single peer;
   - security note: TOFU trust pins are not persisted between app restarts in `default` mode;
 - **pick from the list**:
-  - open the drop‑down on the right and select an existing profile (a `.dat` file from the profiles directory);
+  - open the drop‑down on the right and select an existing profile (each lives under `profiles/<name>/` with `<name>.dat`);
 - **enter a new name**:
   - type your own profile name (for example, `alice`);
   - allowed characters are `a-z`, `A-Z`, `0-9`, `.`, `_`, `-` (length 1..64);
-  - the profile `.dat` is created immediately: keys are stored in `<name>.dat` (or the keyring), and **Lock to peer** appends the peer address and makes the profile one‑to‑one.
+  - the profile `.dat` is created immediately: keys are stored in `profiles/<name>/<name>.dat` (or the keyring), and **Lock to peer** appends the peer address and makes the profile one‑to‑one.
 
-**Profiles directory** is OS-dependent: on **macOS** — `~/Library/Application Support/I2PChat`, on **Windows** — `%APPDATA%\I2PChat`, on **Linux** and others — `~/.i2pchat`. On Unix, the directory is restricted to the owner (0700).
+**Application data directory** is OS-dependent: on **macOS** — `~/Library/Application Support/I2PChat`, on **Windows** — `%APPDATA%\I2PChat`, on **Linux** and others — `~/.i2pchat`. On Unix, the directory is restricted to the owner (0700).
 
-#### Where the profile (.dat) folder is on your system
+#### Where profile files (.dat and sidecars) live
 
-All profile files (e.g. `alice.dat`) are stored in a single folder that the app creates automatically:
+Each saved profile (e.g. `alice`) has its **own subfolder** `profiles/<name>/` under the application data directory. That folder holds `alice.dat`, contacts, chat history, Blind Box state files, and similar data. The data root may also contain shared items such as `downloads/`, `images/`, and `ui_prefs.json`.
 
-| OS      | Path (folder with .dat files) |
-|---------|-------------------------------|
-| Windows | `%APPDATA%\I2PChat` — usually **`C:\Users\<your_username>\AppData\Roaming\I2PChat`** |
-| macOS   | `~/Library/Application Support/I2PChat` |
-| Linux   | `~/.i2pchat` |
+| OS      | I2PChat data root | Example profile folder for `alice` |
+|---------|-------------------|--------------------------------------|
+| Windows | `%APPDATA%\I2PChat` — usually **`C:\Users\<your_username>\AppData\Roaming\I2PChat`** | `...\I2PChat\profiles\alice\` |
+| macOS   | `~/Library/Application Support/I2PChat` | `.../I2PChat/profiles/alice/` |
+| Linux   | `~/.i2pchat` | `~/.i2pchat/profiles/alice/` |
 
-You can open the folder directly from the profile chooser dialog — the **Profiles folder:** line is clickable on all OSes.
+Older installs that kept `alice.dat` (and related files) directly in the data root are **migrated automatically** into `profiles/alice/` the first time that profile is used.
+
+You can open the data folder from the profile chooser dialog — the path line is clickable on all OSes.
 
 Current `.dat` format:
 
@@ -71,7 +73,7 @@ Use **Connect** for live chat and the first BlindBox bootstrap session. If Blind
 
 #### 3.1. Saved peers sidebar (contact book)
 
-The **Saved peers** strip on the **left** is your local **contact book** for the current profile. It is stored as `<profile>.contacts.json` in the profiles directory (together with `.dat`).
+The **Saved peers** strip on the **left** is your local **contact book** for the current profile. It is stored as `profiles/<profile>/<profile>.contacts.json` (alongside `<profile>.dat`).
 
 - **Rows** — each contact shows a display name (or shortened `.b32.i2p`), a subtitle (last message preview or your note), and unread styling when that peer is not the active chat.
 - **Click** a row — sets the peer address field to that contact (same as typing the address) and syncs compose drafts; if the profile is **locked** to another peer, switching may be blocked (see status messages).
@@ -281,7 +283,7 @@ Rules and behaviour:
 
 4. In all other cases:
    - `Lock to peer` is allowed only after cryptographic peer-address binding verification;
-   - the file `<profile>.dat` in the profiles directory is created or updated (canonical format, no duplicate lines);
+   - the file `profiles/<profile>/<profile>.dat` is created or updated (canonical format, no duplicate lines);
    - a system message appears in the chat:
 
    ```text
@@ -295,12 +297,12 @@ The **`Load .dat`** button lets you switch to another profile by picking an exis
 After pressing it:
 
 1. The `Select profile (.dat)` dialog opens:
-   - by default it points to the profiles directory (on Windows: `%APPDATA%\I2PChat`, on Linux: `~/.i2pchat`, on macOS: `~/Library/Application Support/I2PChat`);
+   - by default it points to the **application data directory** (on Windows: `%APPDATA%\I2PChat`, on Linux: `~/.i2pchat`, on macOS: `~/Library/Application Support/I2PChat` — the folder that contains `profiles/`);
    - it filters files using the `*.dat` mask.
 2. If no file is chosen, the operation is cancelled.
 3. If a file is chosen:
    - the base name without extension (`<base>`) is taken from the path;
-   - the `.dat` file is copied into the profiles directory as `<base>.dat` (if not already there);
+   - the `.dat` file is copied to `profiles/<base>/<base>.dat`, creating `profiles/<base>/` if needed (unless that path already exists);
    - the profile is switched asynchronously:
      - the current core is cleanly shut down (`shutdown`);
      - the window title is updated to `I2PChat @ <profile_name>`;
@@ -352,7 +354,7 @@ What happens:
 
 Chat history is stored **locally per peer** in separate encrypted files.
 
-- History files are created in the profiles folder with this name pattern:
+- History files are created under `profiles/<profile>/` with this name pattern:
   - `<profile>.history.<peer_hash>.enc`
 - Encryption details:
   - payload is encrypted with `NaCl SecretBox`;
@@ -478,7 +480,7 @@ On the receiving side:
 2. Start the GUI (with any profile or via `default`).
 3. Click **`Load .dat`**.
 4. In the file dialog, pick `friend.dat`:
-   - the file will be copied into the profiles directory as `friend.dat` (if not already there);
+   - the file will be copied to `profiles/friend/friend.dat` (creating `profiles/friend/` if needed, unless it already exists);
    - the profile will automatically switch to `friend`;
    - the core will be restarted under the new profile.
 

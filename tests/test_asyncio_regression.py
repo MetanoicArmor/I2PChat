@@ -124,7 +124,9 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
                 outside_path = os.path.join(tmp_dir, "outside.dat")
                 with open(outside_path, "w", encoding="utf-8") as f:
                     f.write("x")
-                os.symlink(outside_path, os.path.join(tmp_dir, "alice.dat"))
+                nest = os.path.join(tmp_dir, "profiles", "alice")
+                os.makedirs(nest, exist_ok=True)
+                os.symlink(outside_path, os.path.join(nest, "alice.dat"))
                 core_module.get_profiles_dir = lambda: tmp_dir  # type: ignore[assignment]
                 core = I2PChatCore(profile="alice")
                 with self.assertRaises(ValueError):

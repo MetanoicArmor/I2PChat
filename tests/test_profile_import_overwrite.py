@@ -48,7 +48,10 @@ class ProfileImportSafetyTests(unittest.TestCase):
 
             self.assertEqual(sorted(names), ["alice", "alice_1"])
             for name in names:
-                with open(os.path.join(profiles_dir, f"{name}.dat"), "rb") as f:
+                dat_path = os.path.join(
+                    profiles_dir, "profiles", name, f"{name}.dat"
+                )
+                with open(dat_path, "rb") as f:
                     self.assertEqual(f.read(), b"secret-profile-bytes")
 
     def test_atomic_import_rejects_symlink_source(self) -> None:

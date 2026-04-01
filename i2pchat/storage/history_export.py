@@ -162,7 +162,9 @@ def export_history(
     peers: Optional[List[str]],
     password: str,
     output_path: str,
-    profiles_dir: str,
+    profile_data_dir: str,
+    *,
+    app_data_root: Optional[str] = None,
 ) -> None:
     """
     Export encrypted chat history to an archive file.
@@ -173,18 +175,25 @@ def export_history(
         peers: List of peer addresses to export, or None/[] for all peers.
         password: Password for encrypting the archive.
         output_path: Destination file path.
-        profiles_dir: Directory containing encrypted history files.
+        profile_data_dir: ``profiles/<name>/`` directory for this profile.
+        app_data_root: Optional application root for legacy flat history files.
     """
     if not crypto.NACL_AVAILABLE:
         raise RuntimeError("PyNaCl not available — cannot export history")
 
     # Discover peers if not specified
     if not peers:
-        peers = _discover_peers(profiles_dir, profile_name, identity_key)
+        peers = _discover_peers(profile_data_dir, profile_name, identity_key)
 
     peer_entries: dict[str, List[HistoryEntry]] = {}
     for peer_addr in peers:
-        entries = load_history(profiles_dir, profile_name, peer_addr, identity_key)
+        entries = load_history(
+            profile_data_dir,
+            profile_name,
+            peer_addr,
+            identity_key,
+            app_data_root=app_data_root,
+        )
         if entries:
             peer_entries[_normalize_peer_addr(peer_addr)] = entries
 
@@ -217,9 +226,11 @@ def import_history(
     archive_path: str,
     password: str,
     identity_key: bytes,
-    profiles_dir: str,
+    profile_data_dir: str,
     conflict_strategy: str,
     profile_name: Optional[str] = None,
+    *,
+    app_data_root: Optional[str] = None,
 ) -> dict[str, int]:
     """
     Import encrypted chat history from an archive.
@@ -228,9 +239,10 @@ def import_history(
         archive_path: Path to the .i2hx archive.
         password: Password used when exporting.
         identity_key: 32-byte identity key for re-encrypting history.
-        profiles_dir: Directory to write history files into.
+        profile_data_dir: ``profiles/<name>/`` directory to write history files into.
         conflict_strategy: One of 'merge', 'replace', 'skip'.
         profile_name: Override the profile name from the archive. Uses archive value if None.
+        app_data_root: Optional application root for reading existing legacy history.
 
     Returns:
         Dict mapping peer_addr -> number of entries written (0 = skipped).
@@ -276,7 +288,13 @@ def import_history(
         peer_addr = _normalize_peer_addr(peer_obj["addr"])
         imported_entries = [_dict_to_entry(e) for e in peer_obj["entries"]]
 
-        existing = load_history(profiles_dir, target_profile, peer_addr, identity_key)
+        existing = load_history(
+            profile_data_dir,
+            target_profile,
+            peer_addr,
+            identity_key,
+            app_data_root=app_data_root,
+        )
 
         if conflict_strategy == CONFLICT_SKIP:
             if existing:
@@ -292,11 +310,12 @@ def import_history(
 
         # Re-encrypt and save with the current profile's key derivation
         save_history(
-            profiles_dir,
+            profile_data_dir,
             target_profile,
             peer_addr,
             merged,
             identity_key,
+            app_data_root=app_data_root,
         )
         results[peer_addr] = len(merged)
 
