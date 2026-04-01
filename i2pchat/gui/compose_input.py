@@ -16,6 +16,20 @@ from .emoji_data import EMOJI_CHARS
 _ICONS_DIR = Path(__file__).resolve().parent / "icons"
 
 
+def format_emoji_picker_button_tooltip(portable_shortcut: str = "Ctrl+;") -> str:
+    """Подпись хоткея как в остальном UI (⌘ на macOS для Ctrl+… в QKeySequence)."""
+    native = QtGui.QKeySequence(portable_shortcut).toString(
+        QtGui.QKeySequence.SequenceFormat.NativeText
+    )
+    base = (
+        "Open emoji panel.\n"
+        "In the panel: arrow keys to move; Enter or Space to insert; Esc to close."
+    )
+    if not native:
+        return base
+    return f"{base}\n\nShortcut: {native}"
+
+
 def _resolve_gui_icon_file(filename: str) -> Optional[Path]:
     """Путь к PNG в пакете или в PyInstaller _MEIPASS."""
     meipass = getattr(sys, "_MEIPASS", None)
@@ -96,6 +110,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
     """
 
     emojiChosen = QtCore.pyqtSignal(str)
+    pickerHidden = QtCore.pyqtSignal()
 
     _COLS = 8
     # Должен совпадать с border-radius у QFrame#EmojiPickerPopupWindow в ветке _win_menu_chrome
@@ -112,8 +127,11 @@ class EmojiPickerPopup(QtWidgets.QFrame):
             self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
         self.setObjectName("EmojiPickerPopupWindow")
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self._theme_id = "ligth"
         self._grid_layout: Optional[QtWidgets.QGridLayout] = None
+        self._emoji_buttons: list[QtWidgets.QToolButton] = []
+        self._focus_idx: int = 0
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -121,6 +139,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
 
         self._surface = QtWidgets.QFrame(self)
         self._surface.setObjectName("EmojiPickerPopupSurface")
+        self._surface.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         root.addWidget(self._surface)
 
         surf_lay = QtWidgets.QVBoxLayout(self._surface)
@@ -138,9 +157,11 @@ class EmojiPickerPopup(QtWidgets.QFrame):
             QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self._scroll.setFixedHeight(260)
+        self._scroll.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
 
         inner = QtWidgets.QWidget()
         inner.setObjectName("EmojiPickerGridHost")
+        inner.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self._grid_layout = QtWidgets.QGridLayout(inner)
         self._grid_layout.setSpacing(4)
         self._grid_layout.setContentsMargins(8, 6, 8, 6)
@@ -149,6 +170,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
         self._custom_scrollbar = RoundedVerticalScrollbar(
             self._scroll.verticalScrollBar(), self._surface
         )
+        self._custom_scrollbar.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         scroll_row = QtWidgets.QHBoxLayout()
         scroll_row.setContentsMargins(0, 0, 0, 0)
         scroll_row.setSpacing(4)
@@ -187,6 +209,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
             w = item.widget()
             if w is not None:
                 w.deleteLater()
+        self._emoji_buttons.clear()
         paths = _ep.emoji_paths_cached()
         icon_logical = 30
         icon_sz = QtCore.QSize(icon_logical, icon_logical)
@@ -196,6 +219,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
             btn.setObjectName("EmojiCell")
             btn.setAutoRaise(True)
             btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            btn.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
             btn.setFixedSize(40, 40)
             btn.setAccessibleName(ch)
             btn.setToolTip(ch)
@@ -218,6 +242,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                 f.setPointSize(16)
                 btn.setFont(f)
             btn.clicked.connect(lambda _=False, sym=ch: self._pick(sym))
+            self._emoji_buttons.append(btn)
             grid.addWidget(btn, r, c)
         self._sync_emoji_scrollbar()
 
@@ -262,9 +287,15 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                         padding: 0px;
                         margin: 0px;
                         color: #e8e8e8;
+                        outline: none;
                     }
                     QToolButton#EmojiCell:hover {
                         background: rgba(255, 255, 255, 0.12);
+                    }
+                    QToolButton#EmojiCell[emojiNavFocus="true"] {
+                        background: #505458;
+                        border: none;
+                        outline: none;
                     }
                     """
                 )
@@ -298,9 +329,15 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                         padding: 0px;
                         margin: 0px;
                         color: #1f1f1f;
+                        outline: none;
                     }
                     QToolButton#EmojiCell:hover {
                         background: #e8e8e8;
+                    }
+                    QToolButton#EmojiCell[emojiNavFocus="true"] {
+                        background: #b8c4d4;
+                        border: none;
+                        outline: none;
                     }
                     """
                 )
@@ -344,9 +381,15 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                     padding: 0px;
                     margin: 0px;
                     color: #e3e8f1;
+                    outline: none;
                 }
                 QToolButton#EmojiCell:hover {
                     background: rgba(255, 255, 255, 0.10);
+                }
+                QToolButton#EmojiCell[emojiNavFocus="true"] {
+                    background: #3d424d;
+                    border: none;
+                    outline: none;
                 }
                 """
             )
@@ -378,9 +421,15 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                     padding: 0px;
                     margin: 0px;
                     color: #2c3442;
+                    outline: none;
                 }
                 QToolButton#EmojiCell:hover {
                     background: #e5eaf2;
+                }
+                QToolButton#EmojiCell[emojiNavFocus="true"] {
+                    background: #c5d0e0;
+                    border: none;
+                    outline: none;
                 }
                 """
             )
@@ -395,6 +444,70 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                 track=QtGui.QColor(0, 0, 0, 0),
             )
         self._sync_emoji_scrollbar()
+
+    def _sync_emoji_focus_visual(self) -> None:
+        n = len(self._emoji_buttons)
+        if n == 0:
+            return
+        self._focus_idx = max(0, min(self._focus_idx, n - 1))
+        for i, btn in enumerate(self._emoji_buttons):
+            btn.setProperty("emojiNavFocus", i == self._focus_idx)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        self._scroll.ensureWidgetVisible(self._emoji_buttons[self._focus_idx])
+
+    def _emoji_post_show_focus(self) -> None:
+        if not self.isVisible():
+            return
+        self._sync_emoji_focus_visual()
+        self.activateWindow()
+        self.setFocus(QtCore.Qt.FocusReason.PopupFocusReason)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # type: ignore[override]
+        n = len(self._emoji_buttons)
+        n_sym = len(EMOJI_CHARS)
+        if n == 0 or n_sym == 0:
+            super().keyPressEvent(event)
+            return
+        key = event.key()
+        if key == QtCore.Qt.Key.Key_Escape:
+            self.hide()
+            event.accept()
+            return
+        if key in (
+            QtCore.Qt.Key.Key_Return,
+            QtCore.Qt.Key.Key_Enter,
+            QtCore.Qt.Key.Key_Space,
+        ):
+            if 0 <= self._focus_idx < n_sym:
+                self._pick(EMOJI_CHARS[self._focus_idx])
+            event.accept()
+            return
+        cols = self._COLS
+        row, col = divmod(self._focus_idx, cols)
+        moved = False
+        if key == QtCore.Qt.Key.Key_Left and col > 0:
+            self._focus_idx -= 1
+            moved = True
+        elif key == QtCore.Qt.Key.Key_Right and col < cols - 1:
+            if self._focus_idx + 1 < n:
+                self._focus_idx += 1
+                moved = True
+        elif key == QtCore.Qt.Key.Key_Up and self._focus_idx >= cols:
+            self._focus_idx -= cols
+            moved = True
+        elif key == QtCore.Qt.Key.Key_Down and self._focus_idx + cols < n:
+            self._focus_idx += cols
+            moved = True
+        if moved:
+            self._sync_emoji_focus_visual()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
+        super().hideEvent(event)
+        self.pickerHidden.emit()
 
     def _pick(self, sym: str) -> None:
         self.emojiChosen.emit(sym)
@@ -416,18 +529,17 @@ class EmojiPickerPopup(QtWidgets.QFrame):
             screen = QtWidgets.QApplication.primaryScreen()
         if screen is None:
             self.move(int(x), int(y))
-            self._sync_emoji_scrollbar()
-            self.show()
-            self.raise_()
-            return
-        geo = screen.availableGeometry()
-        margin = 6
-        x = max(geo.left() + margin, min(int(x), geo.right() - pw - margin + 1))
-        y = max(geo.top() + margin, min(int(y), geo.bottom() - ph - margin + 1))
-        self.move(x, y)
+        else:
+            geo = screen.availableGeometry()
+            margin = 6
+            x = max(geo.left() + margin, min(int(x), geo.right() - pw - margin + 1))
+            y = max(geo.top() + margin, min(int(y), geo.bottom() - ph - margin + 1))
+            self.move(x, y)
         self._sync_emoji_scrollbar()
+        self._focus_idx = 0
         self.show()
         self.raise_()
+        QtCore.QTimer.singleShot(0, self._emoji_post_show_focus)
 
 
 class ComposeInputWrapper(QtWidgets.QWidget):
@@ -442,11 +554,14 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         self._edit: Optional[QtWidgets.QTextEdit] = None
         self._theme_id = "ligth"
         self._popup: Optional[EmojiPickerPopup] = None
+        self._emoji_shortcut_portable = "Ctrl+;"
 
         self._emoji_btn = QtWidgets.QToolButton(self)
         self._emoji_btn.setObjectName("EmojiPickerButton")
         self._emoji_btn.setAutoRaise(True)
-        self._emoji_btn.setToolTip("Emoji")
+        self._emoji_btn.setToolTip(
+            format_emoji_picker_button_tooltip(self._emoji_shortcut_portable)
+        )
         self._emoji_btn.setAccessibleName("Emoji picker")
         self._emoji_btn.setFixedSize(self._BTN_SIDE, self._BTN_SIDE)
         self._emoji_btn.setIconSize(QtCore.QSize(17, 17))
@@ -466,6 +581,19 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         self._theme_id = (theme_id or "").strip().lower()
         self._apply_emoji_button_style()
         self._refresh_emoji_icon()
+
+    def set_emoji_shortcut_portable(self, portable: str) -> None:
+        s = (portable or "").strip()
+        self._emoji_shortcut_portable = s if s else "Ctrl+;"
+        self._emoji_btn.setToolTip(
+            format_emoji_picker_button_tooltip(self._emoji_shortcut_portable)
+        )
+
+    def toggle_emoji_picker(self) -> None:
+        if self._popup is not None and self._popup.isVisible():
+            self._popup.hide()
+            return
+        self._on_emoji_clicked()
 
     def _apply_emoji_button_style(self) -> None:
         if self._theme_id == "night":
@@ -529,7 +657,12 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         if self._popup is None:
             self._popup = EmojiPickerPopup(parent_popup)
             self._popup.emojiChosen.connect(self._on_emoji_chosen)
+            self._popup.pickerHidden.connect(self._on_emoji_picker_hidden)
         self._popup.show_near_anchor(self._emoji_btn, self._theme_id)
+
+    def _on_emoji_picker_hidden(self) -> None:
+        if self._edit is not None:
+            self._edit.setFocus()
 
     def _on_emoji_chosen(self, ch: str) -> None:
         if self._edit is None:

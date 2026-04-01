@@ -4377,6 +4377,8 @@ def _privacy_mode_shortcut_portable() -> str:
 _CONNECT_SHORTCUT_PORTABLE = "Ctrl+1"
 _DISCONNECT_SHORTCUT_PORTABLE = "Ctrl+0"
 _MORE_MENU_SHORTCUT_PORTABLE = "Ctrl+."
+_LOCK_TO_PEER_SHORTCUT_PORTABLE = "Ctrl+L"
+_EMOJI_PICKER_SHORTCUT_PORTABLE = "Ctrl+;"
 
 
 def _event_matches_portable_ctrl_only(modifiers: QtCore.Qt.KeyboardModifier) -> bool:
@@ -4806,6 +4808,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.compose_input_wrap = ComposeInputWrapper(input_container)
         self.input_edit = MessageInputEdit(self.compose_input_wrap)
         self.compose_input_wrap.attach_input(self.input_edit)
+        self.compose_input_wrap.set_emoji_shortcut_portable(_EMOJI_PICKER_SHORTCUT_PORTABLE)
         self.input_edit.setPlaceholderText(_compose_input_placeholder_text())
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
@@ -5104,8 +5107,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_actions_popup.add_action(
             "Lock to peer",
             self.on_lock_peer_clicked,
-            tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_LOCK_TO_PEER, "Ctrl+L"),
-            shortcut_hint=_native_shortcut_text("Ctrl+L"),
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_LOCK_TO_PEER, _LOCK_TO_PEER_SHORTCUT_PORTABLE
+            ),
+            shortcut_hint=_native_shortcut_text(_LOCK_TO_PEER_SHORTCUT_PORTABLE),
         )
         self.more_actions_popup.add_action(
             "Forget pinned peer key",
@@ -5732,7 +5737,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             tooltip_lines.append(
                 "TOFU pin: present" if info.pinned else "TOFU pin: not stored"
             )
-        self.peer_lock_label.setToolTip("\n".join(tooltip_lines))
+        self.peer_lock_label.setToolTip(
+            _tooltip_with_portable_shortcut(
+                "\n".join(tooltip_lines), _LOCK_TO_PEER_SHORTCUT_PORTABLE
+            )
+        )
 
     def _peer_target_available(self) -> bool:
         return bool(self.addr_edit.text().strip()) or bool(self.core.stored_peer)
@@ -6060,6 +6069,26 @@ class ChatWindow(QtWidgets.QMainWindow):
         if self.chat_view is not None:
             self.chat_view.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
 
+    def _is_more_menu_keyboard_toggle(self, event: QtGui.QKeyEvent) -> bool:
+        """Ctrl/Cmd + . — то же сочетание, что открывает меню ⋯."""
+        if event.modifiers() & QtCore.Qt.KeyboardModifier.AltModifier:
+            return False
+        if not _event_matches_portable_ctrl_only(event.modifiers()):
+            return False
+        return _physical_key_matches(
+            event, win_vk=0xBE, mac_vk=0x2F, linux_evdev=52
+        )
+
+    def _is_emoji_picker_keyboard_toggle(self, event: QtGui.QKeyEvent) -> bool:
+        """Ctrl/Cmd + ; — физическая клавиша `;` (US QWERTY), раскладка не мешает."""
+        if event.modifiers() & QtCore.Qt.KeyboardModifier.AltModifier:
+            return False
+        if not _event_matches_portable_ctrl_only(event.modifiers()):
+            return False
+        return _physical_key_matches(
+            event, win_vk=0xBA, mac_vk=0x29, linux_evdev=39
+        )
+
     def _try_layout_independent_shortcut(
         self, event: QtGui.QKeyEvent, watched: QtCore.QObject
     ) -> bool:
@@ -6123,7 +6152,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         if _physical_key_matches(event, win_vk=0x30, mac_vk=0x1D, linux_evdev=11):
             self._shortcut_disconnect_if_enabled()
             return True
-        if _physical_key_matches(event, win_vk=0xBE, mac_vk=0x2F, linux_evdev=52):
+        if self._is_more_menu_keyboard_toggle(event):
             self.on_more_actions_clicked()
             return True
         if _physical_key_matches(event, win_vk=0x4F, mac_vk=0x1F, linux_evdev=24):
@@ -6156,18 +6185,58 @@ class ChatWindow(QtWidgets.QMainWindow):
         if _physical_key_matches(event, win_vk=0x55, mac_vk=0x20, linux_evdev=22):
             self._on_check_for_updates_clicked()
             return True
+        if self._is_emoji_picker_keyboard_toggle(event):
+            self.compose_input_wrap.toggle_emoji_picker()
+            return True
         return False
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
         if event.type() == QtCore.QEvent.Type.KeyPress:
             ke = event
             if isinstance(ke, QtGui.QKeyEvent):
-                if isinstance(obj, QtWidgets.QWidget) and obj.window() is self:
-                    if self._try_layout_independent_shortcut(ke, obj):
+                if isinstance(obj, QtWidgets.QWidget):
+                    tw = obj.window()
+                    # Popup ⋯ — отдельное окно: при фокусе в нём главное окно не «self»,
+                    # иначе повторное ⌘/. не доходило бы до _try_layout_independent_shortcut.
+                    if (
+                        tw is self.more_actions_popup
+                        and self.more_actions_popup.isVisible()
+                        and self._is_more_menu_keyboard_toggle(ke)
+                    ):
+                        self.on_more_actions_clicked()
+                        return True
+                    _emoji_pop = getattr(
+                        self.compose_input_wrap, "_popup", None
+                    )
+                    if (
+                        _emoji_pop is not None
+                        and tw is _emoji_pop
+                        and _emoji_pop.isVisible()
+                        and self._is_emoji_picker_keyboard_toggle(ke)
+                    ):
+                        self.compose_input_wrap.toggle_emoji_picker()
+                        return True
+                    if tw is self and self._try_layout_independent_shortcut(ke, obj):
                         return True
                 if ke.key() == QtCore.Qt.Key.Key_Escape and (
                     ke.modifiers() == QtCore.Qt.KeyboardModifier.NoModifier
                 ):
+                    _emoji_pop_esc = getattr(
+                        self.compose_input_wrap, "_popup", None
+                    )
+                    tw_esc = (
+                        obj.window()
+                        if isinstance(obj, QtWidgets.QWidget)
+                        else None
+                    )
+                    if (
+                        _emoji_pop_esc is not None
+                        and _emoji_pop_esc.isVisible()
+                        and tw_esc is not None
+                        and (tw_esc is self or tw_esc is _emoji_pop_esc)
+                    ):
+                        _emoji_pop_esc.hide()
+                        return True
                     if self._escape_dismisses_chat_search():
                         self._dismiss_chat_search()
                         return True
