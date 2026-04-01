@@ -1,5 +1,5 @@
 """
-In-app Blind Box server example (no secrets).
+In-app Blind Box setup examples (Python / i2pd / systemd / .env reference).
 
 Source file: ``i2pchat/blindbox/blindbox_server_example.py`` (same directory).
 PyInstaller: may also ship as ``blindbox_server_example.py`` under ``_MEIPASS``.
@@ -61,16 +61,18 @@ def get_local_blindbox_server_example_source() -> str:
 
 def get_local_blindbox_server_example_note() -> str:
     return (
-        "Tiny TCP server on 127.0.0.1:19444 — save the code below as a .py file and run it. "
-        "In I2PChat use replica 127.0.0.1:19444, set I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1 "
-        "(and I2PCHAT_BLINDBOX_LOCAL_TOKEN if the app asks). Loopback only."
+        "<b>1)</b> On the i2pd host, save this file as <code>.py</code> and keep it running. "
+        "It listens on <code>127.0.0.1:19444</code>. "
+        "<b>2)</b> i2pd: use the next tab, then in I2PChat add that tunnel&apos;s "
+        "<code>*.b32.i2p:19444</code> under Blind Box diagnostics. "
+        "<b>3)</b> Optional password: create <code>~/.i2pchat-blindbox/.env</code> as on the "
+        "<code>.env</code> tab, and the same secret in Replica auth (Tab after the b32 address)."
     )
 
 
 def get_i2pd_blindbox_tunnel_example_source() -> str:
     return (
-        "# /etc/i2pd/tunnels.conf — add or merge this block; restart i2pd after edits.\n"
-        "# Point `keys` at a destination .dat you generated for this service.\n"
+        "# /etc/i2pd/tunnels.conf (merge + restart i2pd; set keys= to your .dat)\n"
         "\n"
         "[blindbox]\n"
         "type = server\n"
@@ -83,17 +85,16 @@ def get_i2pd_blindbox_tunnel_example_source() -> str:
 
 def get_i2pd_blindbox_tunnel_example_note() -> str:
     return (
-        "i2pd forwards I2P to the same 127.0.0.1:19444 server as the Python tab. "
-        "Merge the block, restart i2pd, create keys if needed, then add "
-        "<your>.b32.i2p:19444 as a replica in I2PChat."
+        "<b>Merge into <code>tunnels.conf</code>, restart i2pd.</b> "
+        "I2P traffic hits <code>127.0.0.1:19444</code> where the Python server listens. "
+        "Use this tunnel&apos;s <code>*.b32.i2p:19444</code> in I2PChat (Blind Box diagnostics)."
     )
 
 
 def get_systemd_blindbox_unit_example_source() -> str:
     return (
         "# /etc/systemd/system/blindbox.service\n"
-        "# Replace YOUR_LINUX_USER and the script path; then:\n"
-        "#   sudo systemctl daemon-reload && sudo systemctl enable --now blindbox.service\n"
+        "# sudo systemctl daemon-reload && sudo systemctl enable --now blindbox.service\n"
         "\n"
         "[Unit]\n"
         "Description=I2PChat Blind Box server\n"
@@ -113,7 +114,25 @@ def get_systemd_blindbox_unit_example_source() -> str:
 
 def get_systemd_blindbox_unit_example_note() -> str:
     return (
-        "Runs the Python server from the first tab under systemd. "
-        "Copy `blindbox_server_example.py` to the path in ExecStart, fix User=, "
-        "install the unit, then daemon-reload and enable the service."
+        "<b>Set <code>User=</code> and the <code>ExecStart</code> path to your <code>.py</code>.</b> "
+        "Put <code>BLINDBOX_AUTH_TOKEN</code> in <code>~/.i2pchat-blindbox/.env</code> (see "
+        "<code>.env</code> tab) — the script loads it. "
+        "Then <code>daemon-reload</code> and enable the service. "
+        "Same secret in Blind Box diagnostics → Replica auth if you use a password."
+    )
+
+
+def get_blindbox_dotenv_example_note() -> str:
+    return (
+        "<b>On the server, save this as <code>~/.i2pchat-blindbox/.env</code></b> "
+        "(create the folder if needed). The Python script reads it at startup. "
+        "I2PChat does not use this file — set the same secret under Blind Box diagnostics → "
+        "Replica auth for your <code>*.b32.i2p:19444</code> line (optional)."
+    )
+
+
+def get_blindbox_dotenv_example_source() -> str:
+    return (
+        "# File: ~/.i2pchat-blindbox/.env\n"
+        "BLINDBOX_AUTH_TOKEN=\n"
     )

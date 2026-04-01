@@ -326,6 +326,8 @@ Using this button you can:
 
 - You must use a **persistent profile** and **lock to peer**. For cross-host offline delivery, configure shared **Blind Box** servers via `I2PCHAT_BLINDBOX_REPLICAS`. For deployment-wide defaults, use `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`. For centrally managed production defaults, use `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`. **Release binaries** also ship a **built-in pair** in `DEFAULT_RELEASE_BLINDBOX_ENDPOINTS` inside `i2pchat/core/i2p_chat_core.py` (`tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444`, `dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444`; override with env vars, disable with `I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`). See [**RELEASE_0.6.0.md**](releases/RELEASE_0.6.0.md) — no duplicate crypto detail here.
   Optional local/dev-only fallback: set `I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1` to start a local Blind Box server (`127.0.0.1:19444`).
+  **Local token:** set **`I2PCHAT_BLINDBOX_LOCAL_TOKEN`** in the environment of the **I2PChat** process (use the **same** secret for a separate replica daemon on the same `host:port`, if you run one). In **`local-auto`** mode, if the variable is unset, the core generates a one-shot token per run (handy for quick dev, not for pairing with an external replica process).
+  **Per-replica secrets (named profiles):** in **BlindBox diagnostics**, you can map optional tokens to specific replica endpoints (one line per entry: `endpoint<TAB>token`). They are stored in `<profile>.blindbox_replicas.json` as **`replica_auth`** (file format **version 2**; older **version 1** files load as replicas-only). The client sends the token on `PUT`/`GET` for that endpoint only. On a custom Python replica, set **`BLINDBOX_AUTH_TOKEN`** to the same value (see `i2pchat/blindbox/blindbox_server_example.py`). A line-protocol token does **not** replace trust in the I2P destination — it only gates the raw TCP command line.
   You can force-disable BlindBox with `I2PCHAT_BLINDBOX_ENABLED=0`.
   **PUT quorum:** default `I2PCHAT_BLINDBOX_PUT_QUORUM=1` (success if any **Blind Box** stores the blob). Use `=2` to require every listed Blind Box to ACK (stricter).
 - `Send` in GUI works as a smart route:
@@ -388,6 +390,18 @@ Size limit:
 
 - by default, the latest `1000` messages per peer are stored;
 - you can override this in `ui_prefs.json` via `history_max_messages`.
+
+#### 4.12. Check for updates and verifying downloads
+
+The **`⋯` → Check for updates…** action (**Ctrl/Cmd+U**) fetches the **HTML** releases page (for `*.i2p` hosts, typically via the I2P HTTP proxy; see `I2PCHAT_UPDATE_HTTP_PROXY`), discovers ZIP filenames by pattern, and **compares version numbers** with the local build (the root **`VERSION`** file when running from source). The app **does not download** the archive or **verify** hashes or signatures.
+
+**Trust chain when you install manually:**
+
+1. Download the ZIP from the official releases page (or another mirror you trust).
+2. Verify SHA256 against **`SHA256SUMS`** from the same release.
+3. Verify the detached GPG signature on `SHA256SUMS` (**`SHA256SUMS.asc`**) with the project key.
+
+If **`I2PCHAT_RELEASES_PAGE_URL`** is set, the releases page source changes — treat it like any other HTTP origin. The GUI shows a one-time warning the first time you run an update check; only continue if you fully trust that URL.
 
 ### 5. System notifications and sound
 

@@ -16,7 +16,7 @@ import secrets
 import socket
 import time
 from dataclasses import dataclass
-from typing import Awaitable, Callable, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 
 import i2plib
 from i2pchat.blindbox.blindbox_blob import BLINDBOX_MAX_FRAME_SIZE
@@ -68,8 +68,10 @@ class BlindBoxClient:
         io_timeout: float = 15.0,
         # HELLO + SESSION CREATE can block a long time on a busy Java I2P router.
         sam_session_timeout: float = 120.0,
-        # Optional token sent only to loopback host:port replicas.
+        # Optional token sent only to loopback host:port replicas when no per-replica map entry.
         local_auth_token: str = "",
+        # Optional per-endpoint secrets (exact address string as in blind_boxes).
+        replica_auth: Optional[Dict[str, str]] = None,
         # Hard safety cap for GET response body size.
         max_get_blob_size: int = BLINDBOX_MAX_FRAME_SIZE,
     ) -> None:
@@ -113,6 +115,14 @@ class BlindBoxClient:
         self.io_timeout = io_timeout
         self.sam_session_timeout = sam_session_timeout
         self.local_auth_token = str(local_auth_token or "").strip()
+        ra: dict[str, str] = {}
+        if replica_auth:
+            for k, v in replica_auth.items():
+                ks = str(k).strip()
+                vs = str(v).strip() if v is not None else ""
+                if ks and vs:
+                    ra[ks] = vs
+        self.replica_auth = ra
         self.max_get_blob_size = int(max_get_blob_size)
 
         self._ctrl_reader: Optional[asyncio.StreamReader] = None
@@ -393,13 +403,19 @@ class BlindBoxClient:
 
         return await self._with_retries(_op, op_name=f"GET {box_addr}")
 
-    def _command_auth_suffix(self, box_addr: str) -> str:
+    def _token_for_endpoint(self, box_addr: str) -> str:
+        addr = (box_addr or "").strip()
+        mapped = self.replica_auth.get(addr, "").strip()
+        if mapped:
+            return mapped
         token = self.local_auth_token
-        if not token:
-            return ""
-        if self._is_loopback_endpoint(box_addr):
-            return f" {token}"
+        if token and self._is_loopback_endpoint(addr):
+            return token
         return ""
+
+    def _command_auth_suffix(self, box_addr: str) -> str:
+        t = self._token_for_endpoint(box_addr)
+        return f" {t}" if t else ""
 
     @staticmethod
     def _is_loopback_endpoint(box_addr: str) -> bool:
@@ -422,7 +438,10 @@ class BlindBoxClient:
                 delay = self.retry_backoff_base * (2 ** (attempt - 1))
                 logger.debug("%s attempt %d failed, retrying in %.3fs", op_name, attempt, delay)
                 await asyncio.sleep(delay)
-        assert last_exc is not None
+        if last_exc is None:
+            raise RuntimeError(
+                f"{op_name}: retry loop exhausted without recording an exception"
+            )
         raise last_exc
 
     async def _connect(self, box_addr: str) -> StreamPair:

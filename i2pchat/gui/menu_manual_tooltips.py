@@ -34,8 +34,21 @@ TT_BLINDBOX_REPLICA_EDITOR = (
     "Why: you and your locked peer should normally use the same pool so offline-queued "
     "messages can be fetched later.\n"
     "Here: one endpoint per line (e.g. *.b32.i2p:19444 or 127.0.0.1:19444). "
+    "Every replica you use must appear in this list first; optional line-protocol secrets "
+    "for specific replicas are set in the field below (not a second server list). "
     "Release builds include a default public pair unless overridden by env, a defaults file, "
     "or this saved list. Lines starting with # are ignored when you save."
+)
+
+TT_BLINDBOX_REPLICA_AUTH_EDITOR = (
+    "Optional shared secret per replica endpoint for custom Blind Box servers that require "
+    "authentication (same wire format as the local replica: token as an extra argument on "
+    "PUT/GET). Set the same value as BLINDBOX_AUTH_TOKEN in the server environment.\n"
+    "One line per protected replica: type the endpoint exactly as in the list above, press "
+    "the Tab key once, then the secret (not spaces instead of Tab). "
+    "Replicas without a token need no line here (e.g. public defaults). "
+    "Lines starting with # are ignored. Only keys that match the endpoint list above are kept. "
+    "This does not replace trust in the I2P destination — it only gates the TCP line protocol."
 )
 
 TT_BLINDBOX_REPLICA_EDITOR_ENV_LOCKED = (

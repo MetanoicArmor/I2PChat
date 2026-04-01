@@ -18,11 +18,14 @@ import qasync
 
 from i2pchat.storage.blindbox_state import atomic_write_json
 from i2pchat.storage.profile_blindbox_replicas import (
+    load_profile_blindbox_replicas_bundle,
     load_profile_blindbox_replicas_list,
     normalize_replica_endpoints,
 )
 from i2pchat.blindbox.blindbox_diagnostics import build_blindbox_diagnostics_text
 from i2pchat.blindbox.local_server_example import (
+    get_blindbox_dotenv_example_note,
+    get_blindbox_dotenv_example_source,
     get_i2pd_blindbox_tunnel_example_note,
     get_i2pd_blindbox_tunnel_example_source,
     get_local_blindbox_server_example_note,
@@ -104,7 +107,11 @@ from i2pchat.gui.popup_geometry import (
 )
 from i2pchat.gui.styled_combo_widgets import ProfileComboWithArrow
 
-from .compose_input import ComposeInputWrapper
+from .compose_input import (
+    ComposeInputWrapper,
+    _scale_pixmap_to_height_preserve_alpha,
+    _tint_pixmap_with_alpha,
+)
 from .emoji_paths import emoji_paths_cached, normalize_emoji_glyph
 from .raster_emoji_render import (
     append_plain_with_raster_emoji_at_cursor,
@@ -166,6 +173,28 @@ def _read_version() -> str:
 APP_VERSION = _read_version()
 BUNDLED_NOTIFY_SOUND_REL = "assets/sounds/notify.wav"
 logger = logging.getLogger("i2pchat.gui")
+
+
+def _resolve_gui_icon(filename: str) -> Optional[str]:
+    """
+    Raster icons next to main_qt.py under gui/icons/ (dev + PyInstaller via datas).
+    Falls back to _resolve_local_asset for legacy bundle layouts (root-level PNGs).
+    """
+    gui_dir = os.path.dirname(os.path.abspath(__file__))
+    p = os.path.join(gui_dir, "icons", filename)
+    if os.path.isfile(p):
+        return p
+    meipass = getattr(sys, "_MEIPASS", None)
+    if isinstance(meipass, str) and meipass:
+        alt = os.path.join(meipass, "i2pchat", "gui", "icons", filename)
+        if os.path.isfile(alt):
+            return alt
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        alt2 = os.path.join(exe_dir, "i2pchat", "gui", "icons", filename)
+        if os.path.isfile(alt2):
+            return alt2
+    return _resolve_local_asset(filename)
 
 
 def _resolve_local_asset(filename: str) -> Optional[str]:
@@ -1587,6 +1616,17 @@ def save_notify_quiet_mode(quiet: bool) -> None:
         data["notify_quiet_mode"] = True
     else:
         data.pop("notify_quiet_mode", None)
+    _save_ui_prefs(data)
+
+
+def load_releases_custom_url_warn_ack() -> bool:
+    data = _load_ui_prefs()
+    return data.get("releases_custom_url_warn_ack") is True
+
+
+def save_releases_custom_url_warn_ack() -> None:
+    data = _load_ui_prefs()
+    data["releases_custom_url_warn_ack"] = True
     _save_ui_prefs(data)
 
 
@@ -6205,6 +6245,15 @@ class ChatWindow(QtWidgets.QMainWindow):
                     ):
                         self.on_more_actions_clicked()
                         return True
+                    # Меню ⋯ — отдельное окно: watched.window() не self, иначе ⌘O/⌘P/… не доходят
+                    # до _try_layout_independent_shortcut. Подставляем self как «логический» target.
+                    if (
+                        tw is self.more_actions_popup
+                        and self.more_actions_popup.isVisible()
+                        and self._try_layout_independent_shortcut(ke, self)
+                    ):
+                        self.more_actions_popup.hide()
+                        return True
                     _emoji_pop = getattr(
                         self.compose_input_wrap, "_popup", None
                     )
@@ -6229,6 +6278,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                         if isinstance(obj, QtWidgets.QWidget)
                         else None
                     )
+                    if (
+                        self.more_actions_popup.isVisible()
+                        and tw_esc is self.more_actions_popup
+                    ):
+                        self.more_actions_popup.hide()
+                        return True
                     if (
                         _emoji_pop_esc is not None
                         and _emoji_pop_esc.isVisible()
@@ -6977,7 +7032,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         next_theme = "night" if self.theme_id == "ligth" else "ligth"
         # Показываем иконку текущей темы: ligth -> sun, night -> moon.
         icon_name = "sun.max.png" if self.theme_id == "ligth" else "moon.png"
-        icon_path = _resolve_local_asset(icon_name)
+        icon_path = _resolve_gui_icon(icon_name)
         tint = QtGui.QColor("#1f232b") if self.theme_id == "ligth" else QtGui.QColor("#f2f2f7")
         if icon_path:
             source = QtGui.QPixmap(icon_path)
@@ -7060,6 +7115,24 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _on_check_for_updates_clicked(self) -> None:
         if self._update_check_thread is not None and self._update_check_thread.isRunning():
             return
+        custom_url = (os.environ.get("I2PCHAT_RELEASES_PAGE_URL") or "").strip()
+        if custom_url and not load_releases_custom_url_warn_ack():
+            warn = QtWidgets.QMessageBox(self)
+            warn.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+            warn.setWindowTitle("Custom releases URL")
+            warn.setText(
+                "I2PCHAT_RELEASES_PAGE_URL is set. The update check trusts whatever that "
+                "server returns over HTTP. Only use URLs you fully trust.\n\n"
+                "See the user manual §4.12 (Verifying downloads)."
+            )
+            warn.setStandardButtons(
+                QtWidgets.QMessageBox.StandardButton.Ok
+                | QtWidgets.QMessageBox.StandardButton.Cancel
+            )
+            warn.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Ok)
+            if warn.exec() != QtWidgets.QMessageBox.StandardButton.Ok:
+                return
+            save_releases_custom_url_warn_ack()
         th = _UpdateCheckThread(APP_VERSION, self)
         self._update_check_thread = th
         th.finished_with_result.connect(self._on_update_check_finished)
@@ -7073,9 +7146,21 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._update_check_thread = None
         if not isinstance(result, UpdateCheckResult):
             return
+        display_message = result.message
+        if result.ok and result.kind == "update_available":
+            display_message += (
+                "\n\nBefore installing a build you download: verify SHA256SUMS and the GPG "
+                "detached signature. The in-app check only compares version numbers parsed "
+                "from the release page HTML (see manual §4.12)."
+            )
+        elif result.ok and result.kind == "no_artifact":
+            display_message += (
+                "\n\nIf you download a build manually, verify SHA256SUMS and GPG "
+                "(manual §4.12)."
+            )
         mb = QtWidgets.QMessageBox(self)
         mb.setWindowTitle("Check for updates")
-        mb.setText(result.message)
+        mb.setText(display_message)
         if not result.ok:
             mb.setIcon(QtWidgets.QMessageBox.Icon.Warning)
         else:
@@ -8158,12 +8243,112 @@ class ChatWindow(QtWidgets.QMainWindow):
             lambda: _format_plaintext_hash_comment_lines(replica_edit, self.theme_id)
         )
 
+        def _bb_replica_auth_field_text() -> str:
+            if (self.profile or "").strip() in ("", "default"):
+                return ""
+            app = get_profiles_dir()
+            migrate_legacy_profile_files_if_needed(app_root=app, profile=self.profile)
+            _, auth_disk = load_profile_blindbox_replicas_bundle(
+                get_profile_data_dir(self.profile, create=False, app_root=app),
+                self.profile,
+            )
+            if not auth_disk:
+                return ""
+            return "\n".join(f"{k}\t{v}" for k, v in sorted(auth_disk.items()))
+
+        def _parse_replica_auth_tab_lines(lines: list[str]) -> dict[str, str]:
+            out: dict[str, str] = {}
+            for line in lines:
+                s = (line or "").strip()
+                if not s or s.startswith("#"):
+                    continue
+                if "\t" not in s:
+                    continue
+                ep, tok = s.split("\t", 1)
+                ep = ep.strip()
+                tok = tok.strip()
+                if ep and tok:
+                    out[ep] = tok
+            return out
+
+        _auth_cap_row = QtWidgets.QHBoxLayout()
+        _auth_cap_row.setContentsMargins(0, 0, 0, 0)
+        _auth_cap_row.setSpacing(6)
+        _al_pre = QtWidgets.QLabel(
+            "Replica auth (optional): one line per replica —",
+            dlg,
+        )
+        _al_pre.setWordWrap(False)
+        _tab_icon_path = _resolve_gui_icon("tab.png")
+        _tab_pm = (
+            QtGui.QPixmap(_tab_icon_path)
+            if _tab_icon_path
+            else QtGui.QPixmap()
+        )
+        _tab_ic = QtWidgets.QLabel(dlg)
+        _tab_ic.setStyleSheet("background-color: transparent;")
+        if not _tab_pm.isNull():
+            _th = max(18, min(_bb_fm.height() + 4, 30))
+            _scr = dlg.screen()
+            if _scr is None:
+                _app = QtWidgets.QApplication.instance()
+                if _app is not None:
+                    _scr = _app.primaryScreen()
+            _dpr = 1.0
+            if _scr is not None:
+                _dpr = max(1.0, min(3.0, float(_scr.devicePixelRatio())))
+            _phys_h = max(1, int(round(_th * _dpr)))
+            # Через QImage: иначе scaledToHeight может «запечь» альфу → белый/светлый прямоугольник.
+            _tab_pm = _scale_pixmap_to_height_preserve_alpha(_tab_pm, _phys_h)
+            _tab_pm.setDevicePixelRatio(_dpr)
+            _tid_auth = _resolve_theme(self.theme_id)
+            _tint = QtGui.QColor(
+                "#1d1d1f" if _tid_auth == "ligth" else "#f5f5f7"
+            )
+            _tab_pm = _tint_pixmap_with_alpha(_tab_pm, _tint)
+            _tab_ic.setPixmap(_tab_pm)
+            _lw = max(1, int(round(_tab_pm.width() / _tab_pm.devicePixelRatio())))
+            _lh = max(1, int(round(_tab_pm.height() / _tab_pm.devicePixelRatio())))
+            _tab_ic.setFixedSize(_lw, _lh)
+        else:
+            _tab_ic.setText("Tab")
+        _tab_ic.setToolTip("Tab key on the keyboard")
+        _al_post = QtWidgets.QLabel("token endpoint", dlg)
+        _al_post.setWordWrap(False)
+        _auth_cap_row.addWidget(_al_pre, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        _auth_cap_row.addWidget(_tab_ic, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        _auth_cap_row.addWidget(_al_post, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        _auth_cap_row.addStretch(1)
+        layout.addLayout(_auth_cap_row)
+        auth_edit = QtWidgets.QPlainTextEdit(dlg)
+        auth_edit.setObjectName("BlindBoxReplicaAuthEdit")
+        auth_edit.setPlainText(_bb_replica_auth_field_text())
+        auth_edit.setReadOnly(not can_edit)
+        _bb_auth_tip = menu_tt.TT_BLINDBOX_REPLICA_AUTH_EDITOR
+        if _prof in ("", "default"):
+            _bb_auth_tip = (
+                menu_tt.TT_BLINDBOX_REPLICA_EDITOR_TRANSIENT_PROFILE
+                + " Per-replica auth is saved with named profiles only."
+            )
+        elif locked:
+            _bb_auth_tip = menu_tt.TT_BLINDBOX_REPLICA_EDITOR_ENV_LOCKED
+        auth_edit.setToolTip(_bb_auth_tip)
+        auth_edit.viewport().setToolTip(_bb_auth_tip)
+        auth_edit.setMinimumHeight(_bb_line * 2 + 16)
+        auth_edit.setMaximumHeight(_bb_line * 4 + 20)
+        auth_edit.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
+        layout.addWidget(auth_edit, 0)
+
         def reload_replica_field() -> None:
             replica_edit.setPlainText(_blindbox_replica_field_text())
+            auth_edit.setPlainText(_bb_replica_auth_field_text())
 
         example_btn = QtWidgets.QPushButton("Example server…", dlg)
         example_btn.setToolTip(
-            "Local Blind Box server (Python), i2pd tunnel, and optional systemd unit."
+            "Step-by-step: Python, i2pd, systemd, and ~/.i2pchat-blindbox/.env (one scenario)."
         )
         example_btn.clicked.connect(
             lambda: self._show_blindbox_local_server_example_dialog(dlg)
@@ -8173,14 +8358,20 @@ class ChatWindow(QtWidgets.QMainWindow):
         reload_btn.clicked.connect(reload_replica_field)
         save_btn = QtWidgets.QPushButton("Save and restart", dlg)
         save_btn.setToolTip(
-            "Write endpoints to the profile file and restart the BlindBox runtime."
+            "Write endpoints and optional per-replica auth to the profile file "
+            "and restart the BlindBox runtime."
         )
         save_btn.setEnabled(can_edit)
 
         async def _save_replicas_async() -> None:
             try:
                 lines = replica_edit.toPlainText().splitlines()
-                err = await self.core.apply_blindbox_replica_endpoints(lines)
+                auth_map = _parse_replica_auth_tab_lines(
+                    auth_edit.toPlainText().splitlines()
+                )
+                err = await self.core.apply_blindbox_replica_endpoints(
+                    lines, auth_map
+                )
             except Exception as e:
                 logger.exception("apply_blindbox_replica_endpoints failed")
                 QtWidgets.QMessageBox.warning(
@@ -8251,7 +8442,9 @@ class ChatWindow(QtWidgets.QMainWindow):
                 _bb_example_pad,
             )
             hl = QtWidgets.QLabel(note, page)
+            hl.setTextFormat(QtCore.Qt.TextFormat.RichText)
             hl.setWordWrap(True)
+            hl.setOpenExternalLinks(False)
             pl.addWidget(hl)
             te = QtWidgets.QPlainTextEdit(page)
             te.setObjectName("BlindBoxExampleSourceEdit")
@@ -8280,8 +8473,13 @@ class ChatWindow(QtWidgets.QMainWindow):
             get_systemd_blindbox_unit_example_source(),
         )
         tabs.addTab(sd_page, "Systemd")
+        env_page, env_edit = _tab_page(
+            get_blindbox_dotenv_example_note(),
+            get_blindbox_dotenv_example_source(),
+        )
+        tabs.addTab(env_page, ".env")
         v.addWidget(tabs, 1)
-        edits = (py_edit, i2p_edit, sd_edit)
+        edits = (py_edit, i2p_edit, sd_edit, env_edit)
         v.addSpacing(6)
         brow = QtWidgets.QHBoxLayout()
         brow.setSpacing(10)

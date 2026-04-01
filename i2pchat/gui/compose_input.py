@@ -68,19 +68,52 @@ def _picker_emoji_icon(png_path: Path, logical_side: int) -> QtGui.QIcon:
     return QtGui.QIcon(canvas)
 
 
+def _scale_pixmap_to_height_preserve_alpha(
+    pm: QtGui.QPixmap, height_px: int
+) -> QtGui.QPixmap:
+    """Масштаб по высоте без потери альфы.
+
+    QPixmap.scaled* на некоторых платформах/форматах заливает прозрачные пиксели
+    непрозрачным цветом — после тинта получается сплошной светлый прямоугольник.
+    """
+    if pm.isNull() or height_px < 1:
+        return pm
+    img = pm.toImage()
+    if img.isNull():
+        return pm
+    if img.format() != QtGui.QImage.Format.Format_ARGB32:
+        img = img.convertToFormat(QtGui.QImage.Format.Format_ARGB32)
+    scaled = img.scaledToHeight(
+        int(height_px),
+        QtCore.Qt.TransformationMode.SmoothTransformation,
+    )
+    out = QtGui.QPixmap.fromImage(scaled)
+    return out
+
+
 def _tint_pixmap_with_alpha(source: QtGui.QPixmap, color: QtGui.QColor) -> QtGui.QPixmap:
     """Монохромная иконка на альфе: заливка цветом темы (как инверсия по смыслу для контраста)."""
     if source.isNull():
         return source
-    out = QtGui.QPixmap(source.size())
+    # При devicePixelRatio > 1 drawPixmap на холст того же device size «растягивает» источник
+    # по логическим пикселям и заливает весь буфер (артефакт «светлого квадрата» / L-формы).
+    dpr = float(source.devicePixelRatio())
+    if dpr <= 0:
+        dpr = 1.0
+    work = source
+    if dpr != 1.0:
+        work = source.copy()
+        work.setDevicePixelRatio(1.0)
+    out = QtGui.QPixmap(work.size())
     out.fill(QtCore.Qt.GlobalColor.transparent)
     p = QtGui.QPainter(out)
     p.fillRect(out.rect(), color)
     p.setCompositionMode(
         QtGui.QPainter.CompositionMode.CompositionMode_DestinationIn
     )
-    p.drawPixmap(0, 0, source)
+    p.drawPixmap(0, 0, work)
     p.end()
+    out.setDevicePixelRatio(dpr)
     return out
 
 

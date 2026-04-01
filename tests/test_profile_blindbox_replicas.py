@@ -1,11 +1,15 @@
+import json
 import os
 import tempfile
 import unittest
 
 from i2pchat.storage.profile_blindbox_replicas import (
+    PROFILE_BLINDBOX_REPLICAS_VERSION,
+    load_profile_blindbox_replicas_bundle,
     load_profile_blindbox_replicas_list,
     normalize_replica_endpoints,
     profile_blindbox_replicas_path,
+    save_profile_blindbox_replicas_bundle,
     save_profile_blindbox_replicas_list,
 )
 
@@ -39,6 +43,38 @@ class ProfileBlindboxReplicasTests(unittest.TestCase):
             self.assertEqual(
                 loaded,
                 ["x.b32.i2p:19444", "127.0.0.1:19444"],
+            )
+            with open(p, "r", encoding="utf-8") as f:
+                disk = json.load(f)
+            self.assertEqual(disk.get("version"), PROFILE_BLINDBOX_REPLICAS_VERSION)
+            self.assertEqual(disk.get("replica_auth"), {})
+
+    def test_load_v1_no_replica_auth(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = profile_blindbox_replicas_path(td, "legacy")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"version": 1, "replicas": ["a.b32.i2p:1"]}, f)
+            reps, auth = load_profile_blindbox_replicas_bundle(td, "legacy")
+            self.assertEqual(reps, ["a.b32.i2p:1"])
+            self.assertEqual(auth, {})
+
+    def test_bundle_roundtrip_replica_auth(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            save_profile_blindbox_replicas_bundle(
+                td,
+                "p2",
+                ["x.b32.i2p:1", "127.0.0.1:2"],
+                {
+                    "x.b32.i2p:1": "tok1",
+                    "127.0.0.1:2": "tok2",
+                    "unknown.example:9": "drop",
+                },
+            )
+            reps, auth = load_profile_blindbox_replicas_bundle(td, "p2")
+            self.assertEqual(reps, ["x.b32.i2p:1", "127.0.0.1:2"])
+            self.assertEqual(
+                auth,
+                {"x.b32.i2p:1": "tok1", "127.0.0.1:2": "tok2"},
             )
 
     def test_load_missing_returns_empty(self) -> None:

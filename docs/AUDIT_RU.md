@@ -1,175 +1,195 @@
-# Отчёт по аудиту безопасности: I2PChat
+# Отчёт об аудите безопасности I2PChat
 
-Дата аудита: 2026-03-30  
-Состояние репозитория: `cfc2036d59005994738059971567148ef50f119f`  
-Режим: полный аудит (протокол + криптография + локальная персистентность + UI + CI/release + supply chain + secret scan)
+| Поле | Значение |
+|------|----------|
+| Дата | 2026-04-01 |
+| Объект | Репозиторий I2PChat (исходный код Python/Qt + вендорный `i2plib`) |
+| Вне области | Пентест развёрнутых бинарей, реверс PyInstaller, аудит прошивок I2P-маршрутизаторов |
 
-## Краткий итог
+## Краткое резюме
 
-Полная ревизия аудита после завершения **package-first** раскладки (весь код приложения под `i2pchat/`, точка PyInstaller — [`i2pchat/run_gui.py`](../i2pchat/run_gui.py)), выравнивания шага `compileall` в скриптах сборки Linux/macOS/Windows и обновлений документации на `main`. Сам рефакторинг не менял протокол и криптоповерхность; в этом прогоне повторены аудит зависимостей, регрессионные тесты и обновлён снимок.
+Проведён обзор безопасности десктопного клиента: криптография и протокол, BlindBox, обновления, бэкапы профиля, GUI (пути и внешние процессы), CI и цепочка поставок. Автоматизированная проверка зависимостей (`pip-audit` в конфигурации CI, с игнором CVE для Pygments) **не выявила известных уязвимостей** в закреплённых графах `requirements.txt`, `requirements-build.txt` и `requirements.in`. Статический анализ **Bandit** по каталогам `i2pchat/` и `i2plib/` показал **0** находок уровня High/Medium и **47** низкого приорителя (в основном широкие `try/except` и использование `assert`).
 
-Подтверждённые findings (те же ID; перепроверено 2026-03-30):
-- Critical: 0
-- High: 0
-- Medium: 1
-- Low: 4
-
-Общая оценка:
-- Базовые контроли защищённого канала по-прежнему сильные (signed handshake, HKDF, HMAC + sequence, anti-downgrade).
-- Исправления по истории чата и inline-image из прошлых аудитов на месте, с регрессионными тестами.
-- **Test gate** в CI гоняет весь набор **`pytest tests/`** поверх фиксированного списка unittest.
-- **Gitleaks** на push/PR; **`.gitleaks.toml`** фиксирует узкий path-allowlist для тестовой фикстуры (см. A-05).
-- **pip-audit** (те же вызовы, что в CI): в hash-locked графе не зафиксировано незакрытых CVE сверх документированного ignore для Pygments (см. A-04).
-- Выборочная проверка: под `i2pchat/` нет `shell=True` / `pickle.loads` / `eval`; нотификации и звук в GUI вызывают `subprocess` только со списками argv.
-- Оставшиеся риски в основном **релиз/процесс** и **edge-case** hardening, а не поломка протокола.
-
-## Scope и методология
-
-Проверенные компоненты:
-- Протокол/runtime/криптография: `i2pchat/core/i2p_chat_core.py`, `i2pchat/protocol/protocol_codec.py`, `i2pchat/crypto.py`
-- Offline: `i2pchat/blindbox/blindbox_client.py`, `i2pchat/blindbox/blindbox_blob.py`, `i2pchat/storage/blindbox_state.py`, `i2pchat/blindbox/blindbox_local_replica.py`
-- UI/локальное хранение: `i2pchat/gui/main_qt.py`, `i2pchat/run_gui.py`, `i2pchat/gui/__main__.py`, `i2pchat/storage/chat_history.py`, `i2pchat/storage/contact_book.py`, `i2pchat/presentation/compose_drafts.py`, `i2pchat/presentation/notification_prefs.py`, `i2pchat/presentation/unread_counters.py`, `i2pchat/platform/notifications.py`
-- CI/release/supply-chain: `.github/workflows/*` (test-gate, security-audit, secret-scan), `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`, `requirements*.txt`, `flake.lock`, `.gitleaks.toml`
-
-Выполненные проверки:
-- `pip-audit` (из `requirements-ci-audit.txt`), как в [`.github/workflows/security-audit.yml`](../.github/workflows/security-audit.yml):
-  - `pip-audit -r requirements.txt --ignore-vuln CVE-2026-4539` → **OK** («No known vulnerabilities found, 1 ignored»).
-  - `pip-audit -r requirements-build.txt --ignore-vuln CVE-2026-4539` → **OK**.
-  - `pip-audit -r requirements.in --ignore-vuln CVE-2026-4539` → **OK**.
-- `python -m unittest tests.test_blindbox_state_wrap tests.test_asyncio_regression tests.test_blindbox_client tests.test_atomic_writes tests.test_chat_history tests.test_history_ui_guards tests.test_profile_import_overwrite tests.test_protocol_framing_vnext tests.test_sam_input_validation tests.test_audit_remediation`
-  - Результат: **OK (125 tests)** (на машине аудитора).
-- `python -m pytest tests/ -q`
-  - Результат: **432 passed**, **64 subtests passed** (на машине аудитора).
-- Ручной обзор: trust boundaries, семантика BlindBox/lock, валидация contact JSON, паттерны GUI/subprocess, политика secret-scan, package-first точки входа и отсутствие корневых шимов.
-
-## Findings (текущее состояние)
-
-### [MEDIUM] A-01: Подпись релизов всё ещё необязательна по умолчанию в build-скриптах
-
-Затронуто:
-- `build-linux.sh`, `build-macos.sh`, `build-windows.ps1`
-- `.github/workflows/security-audit.yml` (`release-integrity-policy`)
-
-Суть:
-- Сборка может выдать неподписанный артефакт без `gpg` или при `I2PCHAT_SKIP_GPG_SIGN=1`, если явно не задан `I2PCHAT_REQUIRE_GPG=1`.
-- CI проверяет наличие signing-токенов в скриптах, но не гарантирует подпись каждого официального релиза.
-
-Влияние:
-- На протокол в рантайме не влияет; аутентичность дистрибутива зависит от дисциплины сборки и проверки пользователем.
-
-Рекомендации:
-1. В официальных release jobs принудительно `I2PCHAT_REQUIRE_GPG=1`.
-2. Падать при сбое detached-signature.
-3. Проверка артефактов в CI (например обязательная `.asc`) и понятная инструкция verify для пользователей.
-
-*Статус (2026-03-30): подтверждено; без изменений после package-first и правок build-скриптов.*
+Наиболее значимый **остаточный риск**: механизм «проверки обновлений» опирается на разбор HTML-страницы релизов по HTTP (в типичной конфигурации — через I2P HTTP-прокси); приложение **не загружает** ZIP и **не проверяет** криптографически целостность артефакта — только сравнивает номера версий. Это осознанная модель «уведомить пользователя»; при компрометации страницы или прокси возможна **социальная** подмена сведений о версии (пользователь всё равно должен скачать и проверить билд вручную по политике релизов).
 
 ---
 
-### [LOW] A-02: Ветвь `__IMG_END__` для inline-image всё ещё требует truthy буфер
+## 1. Методология
 
-Затронуто:
-- `i2pchat/core/i2p_chat_core.py` (`receive_loop`, `msg_type == "G"`, `body == "__IMG_END__"`)
-
-Суть:
-- Финализация требует и `inline_image_info`, и **truthy** `inline_image_buffer`.
-
-Влияние:
-- Обычно fail-closed; хрупкий edge-case и диагностика.
-
-Рекомендации:
-1. Обрабатывать `__IMG_END__` при наличии `inline_image_info` независимо от буфера.
-2. Единое size-based правило для пустого/непустого буфера.
-
-*Статус (2026-03-30): подтверждено.*
+1. Локальный запуск **pip-audit** (как в [`.github/workflows/security-audit.yml`](../.github/workflows/security-audit.yml)) для файлов `requirements.txt`, `requirements-build.txt`, `requirements.in` — без игноров CVE (Pygments обновлён до 2.20.0).
+2. Локальный запуск **Bandit 1.9.4** (Python 3.14.3): `bandit -r i2pchat i2plib` (JSON-метрики: ~20400 строк кода в области сканирования).
+3. Ручной обзор по чеклисту: `i2pchat/crypto.py`, `i2pchat/protocol/`, BlindBox, `i2p_chat_core.py`, `profile_backup.py`, `release_index.py`, GUI (`main_qt.py`), `notifications.py`, `drag_drop.py`, скрипты, GitHub Actions.
+4. Сопоставление с регрессионными тестами политик: [`tests/test_audit_remediation.py`](../tests/test_audit_remediation.py).
 
 ---
 
-### [LOW] A-03: Покрытие CI и опциональные GUI-зависимости
+## 2. Что уже автоматизировано в CI (не дублируется как «новые» критические находки)
 
-Затронуто:
-- `.github/workflows/test-gate.yml` (unittest gate **+** `pytest tests/ -q`)
-
-Статус (относительно более старых ревизий):
-- Gate **действительно** прогоняет всё дерево pytest, включая `contact_book`, `compose_drafts`, `notification_prefs`, `send_retry_policy` и др.
-
-Остаточный риск:
-- Тесты, которые **skip** без PyQt6 или при непригодном окружении раннера, не дают гарантий по веткам `main_qt` в CI; smoke для Qt остаётся зависимым от среды.
-
-Рекомендации:
-1. Расширять headless/Qt-offscreen smoke или отдельный optional job с виртуальным дисплеем.
-
-*Статус (2026-03-30): подтверждено.*
+| Механизм | Файл / описание |
+|----------|-----------------|
+| Сканирование секретов | [`.github/workflows/secret-scan.yml`](../.github/workflows/secret-scan.yml) — Gitleaks |
+| Аудит зависимостей | [`.github/workflows/security-audit.yml`](../.github/workflows/security-audit.yml) — `pip-audit` |
+| Политика подписи релизов | Проверка наличия SHA256/GPG в build-скриптах |
+| Provenance вендорного кода | `i2plib/VENDORED_UPSTREAM.json`, `flake.lock` |
+| Регрессии HKDF / padding / путей GUI | `tests/test_audit_remediation.py` |
 
 ---
 
-### [LOW] A-04: `pip-audit` игнорирует известный CVE
+## 3. Модель угроз (кратко)
 
-Затронуто:
-- `.github/workflows/security-audit.yml`
+```mermaid
+flowchart LR
+  subgraph client [I2PChatClient]
+    GUI[QtGUI]
+    Core[I2PChatCore]
+    Crypto[Crypto]
+    Proto[ProtocolCodec]
+  end
+  subgraph net [Network]
+    SAM[SAM_I2P]
+    BB[BlindBoxReplicas]
+    Updates[ReleasesPage_i2p]
+  end
+  GUI --> Core
+  Core --> Crypto
+  Core --> Proto
+  Core --> SAM
+  Core --> BB
+  GUI --> Updates
+```
 
-Суть:
-- `--ignore-vuln CVE-2026-4539` для Pygments до фикс-релиза на PyPI.
-
-Влияние:
-- Управляемое исключение; временно ослабляет строгий «no known vulns».
-
-Рекомендации:
-1. Убрать ignore после появления исправленной версии.
-2. Явный срок пересмотра.
-
-*Статус (2026-03-30): подтверждено; прогоны выше использовали тот же ignore для паритета с CI.*
+**Основные поверхности атаки:** удалённый собеседник (протокол чата и передачи файлов), сеть до I2P/прокси, локальный пользователь/вредонос на той же ОС, подмена источника обновлений, неправильная конфигурация BlindBox (прямой TCP, ослабленный локальный режим).
 
 ---
 
-### [LOW] A-05: Path allowlist Gitleaks для одного тестового файла
+## 4. Находки (сквозная нумерация FIND-xxx)
 
-Затронуто:
-- `.gitleaks.toml` (allowlist: `tests/test_clear_locked_peer\.py`)
+### FIND-001 — Проверка обновлений без криптографической привязки к артефакту
 
-Суть:
-- Убирает ложные срабатывания `generic-api-key` на mock первой строки `.dat`. Путь узкий.
+| Поле | Значение |
+|------|----------|
+| **Уровень** | Medium |
+| **Компонент** | `i2pchat/updates/release_index.py`, вызов из GUI |
+| **Описание** | Приложение загружает HTML страницы релизов, извлекает имена ZIP по регулярным выражениям и сравнивает семантику версии с локальной. Загрузка дистрибутива и проверка SHA256/GPG **в коде клиента не выполняются**. Транспорт для `*.i2p` по умолчанию — HTTP через локальный прокси I2P ([`release_index.py`](../i2pchat/updates/release_index.py)). |
+| **Сценарий** | Актёр, способный подменить ответ страницы или прокси (или пользователь, задавший недоверенный URL), может показать ложное «доступно обновление» и имя файла. Риск в основном **социальный/операционный**: пользователь может перейти по ссылке и установить поддельный пакет, если не следует внешней политике проверки релизов. |
+| **Статус** | Принятый риск / ограничение дизайна |
+| **Рекомендации** | Документировать в руководстве пользователя обязательную проверку `SHA256SUMS` и подписи GPG для скачанных ZIP; при появлении требований — рассмотреть встраивание проверки по известному публичному ключу или отдельный signed manifest. |
 
-Влияние:
-- Чуть меньше автоматического внимания к этому файлу; приемлемо, если там только тестовые не-секреты.
+---
 
-Рекомендации:
-1. Периодически пересматривать содержимое на новые high-entropy литералы.
-2. По возможности избегать паттерна `*KEY* =` в тестах (частично уже: `MOCK_DAT_LINE1`).
+### FIND-002 — Переопределение URL и HTTP-прокси для проверки обновлений
 
-*Статус (2026-03-30): подтверждено.*
+| Поле | Значение |
+|------|----------|
+| **Уровень** | Low |
+| **Компонент** | `I2PCHAT_RELEASES_PAGE_URL`, `I2PCHAT_UPDATE_HTTP_PROXY` |
+| **Описание** | Пользователь (или вредонос с правами того же пользователя) может перенаправить проверку обновлений на произвольный хост или прокси. |
+| **Сценарий** | Утечка или подмена переменных окружения → та же логика, что в FIND-001. |
+| **Статус** | Ожидаемое поведение для продвинутых сценариев |
+| **Рекомендации** | В UI при первом изменении URL показывать предупреждение о доверии к источнику (опционально). |
 
-## Статус закрытия / улучшений относительно прошлых ревизий
+---
 
-Без изменения диспозиции (см. выше):
-- **A-01, A-02, A-04**.
+### FIND-003 — Пример `blindbox_server_example.py` без аутентификации
 
-Улучшено в более ранних ревизиях (по-прежнему в силе):
-- **Ширина test gate**: полный `pytest tests/` в `test-gate.yml`.
-- **Скан секретов**: `secret-scan.yml` + gitleaks + `.gitleaks.toml`.
-- **Книга контактов**: строгая нормализация адреса / regex хоста, лимит `MAX_CONTACTS`, атомарная запись JSON, миграция v1→v2, тесты `tests/test_contact_book.py`.
-- **Lock в UI**: `clear_locked_peer()` + `tests/test_clear_locked_peer.py`; снимок доверия `get_peer_trust_info` + `tests/test_peer_trust_info.py`.
+| Поле | Значение |
+|------|----------|
+| **Уровень** | Medium (при использовании вне задокументированного сценария) |
+| **Компонент** | [`i2pchat/blindbox/blindbox_server_example.py`](../i2pchat/blindbox/blindbox_server_example.py) |
+| **Описание** | Минимальный сервер для разработки слушает `127.0.0.1`, **без** токена и без криптографической авторизации клиентов. |
+| **Сценарий** | Запуск на интерфейсе, отличном от loopback, или проброс порта наружу откроет хранилище блобов локальным/удалённым клиентам. |
+| **Статус** | Документировано в файле («not for untrusted networks») |
+| **Рекомендации** | Не менять bind на `0.0.0.0` без отдельного дизайна безопасности; в README для разработчиков явно указывать только `127.0.0.1`. |
 
-С момента аудита от 2026-03-29 (обслуживание без изменения модели угроз):
-- **Package-first**: только импорты под `i2pchat/`; корневые Python-шимы удалены; канонические запуски `python -m i2pchat.gui`, `python -m i2pchat.run_gui`, скрипт PyInstaller `i2pchat/run_gui.py`.
-- **Скрипты сборки**: перед PyInstaller выполняется `compileall i2pchat i2plib scripts make_icon.py` на Linux/macOS/Windows — снижает риск отгрузки синтаксически битого дерева; на криптографию и trust boundaries не влияет.
+---
 
-## Подтверждённые сильные стороны
+### FIND-004 — Локальная реплика BlindBox с пустым токеном
 
-- Handshake с подписанными INIT/RESP и TOFU для persistent-профилей.
-- HKDF-разделение ключей сессии, HMAC и строгая монотонность sequence, anti-downgrade.
-- Усиленные пути завершения file/inline-image с тестами.
-- Зашифрованная per-peer история: SecretBox, atomic writes, привязка peer digest, fail-closed.
-- Тесты SAM/ввода, framing, BlindBox client/state.
-- Supply-chain job: `i2plib/VENDORED_UPSTREAM.json`, pin `flake.lock`.
+| Поле | Значение |
+|------|----------|
+| **Уровень** | Low |
+| **Компонент** | [`BlindBoxLocalReplicaServer`](../i2pchat/blindbox/blindbox_local_replica.py) (`_is_authorized`: при пустом `auth_token` разрешаются операции) |
+| **Описание** | Если сервер поднят без токена, любой процесс на той же машине, способный открыть TCP к `host:port`, может PUT/GET блобы. |
+| **Сценарий** | Многопользовательская ОС или скомпрометированный локальный процесс. |
+| **Статус** | Частично смягчено в ядре: для loopback + direct replicas без токена выдаётся ошибка, если не задан `I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL` ([`_blindbox_direct_replicas_security_issue`](../i2pchat/core/i2p_chat_core.py)). |
+| **Рекомендации** | Всегда задавать `I2PCHAT_BLINDBOX_LOCAL_TOKEN` для не-dev сценариев. |
 
-## Остаточные операционные риски (по дизайну / явный opt-in)
+---
 
-- Профиль `default` — transient.
-- Небезопасный локальный BlindBox — только через явный override и предупреждения.
-- Встроенные реплики BlindBox в релизе могут не подходить для строгих privacy-сценариев.
-- Файлы **`*.contacts.json`** и **`*.compose_drafts.json`** хранят **незашифрованные** локальные метаданные и черновики в каталоге профилей — защищайте диск/учётную запись; это отдельно от зашифрованной истории чата.
+### FIND-005 — CVE-2026-4539 (Pygments) в CI
 
-## Заключение
+| Поле | Значение |
+|------|----------|
+| **Уровень** | Low (ReDoS в зависимости от использования Pygments) |
+| **Компонент** | [`.github/workflows/security-audit.yml`](../.github/workflows/security-audit.yml), `requirements.txt` |
+| **Описание** | Ранее `pip-audit` вызывался с `--ignore-vuln CVE-2026-4539` из-за отсутствия исправленного релиза на PyPI. После выхода **Pygments 2.20.0** зависимость обновлена, игнор в workflow снят. |
+| **Статус** | Смягчено в коде (обновление + чистый `pip-audit`) |
+| **Рекомендации** | При появлении новых предупреждений по Pygments снова запускать `pip-audit` и обновлять lockfile. |
 
-Подтверждённых Critical/High в проверенном снимке нет. Главный открытый пункт — **принудительная подпись релизов** в официальной автоматизации. Остальное — low-severity edge/process и учёт исключений pip-audit/gitleaks. Обновления package-first и build-скриптов **не выявили** новых подтверждённых регрессий безопасности; на машине аудитора для этой ревизии прошли автоматический аудит зависимостей и полные тестовые ворота.
+---
+
+### FIND-006 — Результаты Bandit (статический анализ)
+
+| Поле | Значение |
+|------|----------|
+| **Уровень** | Informational |
+| **Компонент** | `i2pchat/`, `i2plib/` |
+| **Описание** | **47** срабатываний, все **Low**: B110 (`try/except: pass`), B112 (`try/except: continue`), B101 (`assert`). Уязвимостей класса инъекции или hardcoded secret не выявлено. |
+| **Статус** | Для рассмотрения при ужесточении стиля кода |
+| **Рекомендации** | Точечно заменять широкие `except` на логирование; критичные инварианты не опирать только на `assert` в путях, важных для безопасности (или запускать тесты без `-O`). |
+
+---
+
+### FIND-007 — Использование `assert` в сетевом коде BlindBox
+
+| Поле | Значение |
+|------|----------|
+| **Уровень** | Low |
+| **Компонент** | [`blindbox_client.py`](../i2pchat/blindbox/blindbox_client.py), [`i2p_chat_core.py`](../i2pchat/core/i2p_chat_core.py) |
+| **Описание** | При запуске интерпретатора с оптимизацией (`python -O`) утверждения удаляются; теоретически меняется поведение редких веток ошибок после циклов повторов. |
+| **Статус** | Типичная для Python оговорка; PyInstaller/рантайм обычно без `-O` |
+| **Рекомендации** | Заменить критичные `assert` на явный `if ...: raise`. |
+
+---
+
+## 5. Положительные меры (уже в коде / тестах)
+
+- **HKDF** для разделения ключей сессии после handshake ([`crypto.derive_handshake_subkeys`](../i2pchat/crypto.py)); регрессия в `test_audit_remediation`.
+- **HMAC** и параметры vNext-заголовка в [`compute_mac`](../i2pchat/crypto.py); тесты hardening фрейминга в [`test_protocol_hardening.py`](../tests/test_protocol_hardening.py).
+- **Профиль padding** (`I2PCHAT_PADDING_PROFILE`) для метаданных трафика; задокументировано и покрыто тестами политик.
+- **Бэкапы**: scrypt + NaCl SecretBox, manifest с SHA256 по файлам, `_safe_member_name` против path traversal в tar ([`profile_backup.py`](../i2pchat/storage/profile_backup.py)).
+- **Каталог данных** `chmod 0o700` на Unix ([`get_profiles_dir`](../i2pchat/core/i2p_chat_core.py)).
+- **Открытие изображений**: проверка `_is_path_within_directory` + `realpath` (тесты в `test_audit_remediation`).
+- **subprocess** на Linux: списки аргументов, бинарии из `shutil.which`, путь к звуку как отдельный аргумент без `shell=True`.
+- **BlindBox**: сравнение токена через `hmac.compare_digest` в локальной реплике; строгий режим SAM (`I2PCHAT_BLINDBOX_REQUIRE_SAM`).
+- **Секреты в SCM**: расширенный [`.gitignore`](../.gitignore) для ключей и `.env`.
+- **Скрипт GitHub**: токен только из окружения, предупреждение в docstring ([`sync_github_backlog.py`](../scripts/sync_github_backlog.py)).
+- **Нет** `pickle` / небезопасного `yaml.load` в дереве приложения (поиск по `.py`).
+
+---
+
+## 6. Результаты pip-audit (локальный прогон 2026-04-01)
+
+| Файл требований | Результат |
+|-----------------|-----------|
+| `requirements.txt` | Уязвимостей не найдено (после обновления Pygments 2.20.0) |
+| `requirements-build.txt` | Уязвимостей не найдено |
+| `requirements.in` | Уязвимостей не найдено |
+
+---
+
+## 7. Топ-5 приоритетных действий
+
+1. Явно описать в пользовательской документации цепочку доверия для обновлений (GPG/SHA256 на стороне релиза), согласованно с FIND-001.
+2. Поддерживать актуальный Pygments / зависимости по результатам `pip-audit` (FIND-005 закрыт обновлением).
+3. Не расширять `blindbox_server_example` до production-сервера без полноценной модели угроз (FIND-003).
+4. Рассмотреть замену критичных `assert` в сетевых путях на явные исключения (FIND-007).
+5. Сохранять текущую дисциплину CI (gitleaks + pip-audit + политика подписи артефактов).
+
+---
+
+## 8. Заключение
+
+Кодовая база демонстрирует **зрелый набор практик** для десктопного мессенджера: разделение криптоключей, жёсткий фрейминг протокола, защищённые бэкапы, ограничение путей в GUI и автоматизированный аудит зависимостей. Основной **остаточный риск** связан с **моделью доверия к странице обновлений** (FIND-001) и с **операционной дисциплиной** при использовании примеров и переменных окружения BlindBox. Критических или высоких уязвимостей в результате данного аудита **не зафиксировано**.
+
+*Отчёт подготовлен в рамках внутреннего аудита исходного кода; не заменяет формальный сертификационный пентест.*

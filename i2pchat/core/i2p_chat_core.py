@@ -31,9 +31,9 @@ from i2pchat.storage.blindbox_state import (
     atomic_write_text,
 )
 from i2pchat.storage.profile_blindbox_replicas import (
-    load_profile_blindbox_replicas_list,
+    load_profile_blindbox_replicas_bundle,
     normalize_replica_endpoints,
-    save_profile_blindbox_replicas_list,
+    save_profile_blindbox_replicas_bundle,
 )
 from i2pchat.protocol.message_delivery import (
     DELIVERY_STATE_DELIVERED,
@@ -1074,6 +1074,7 @@ class I2PChatCore:
         else:
             # Persistent profiles default to BlindBox-enabled mode.
             self.blindbox_enabled = True
+        self._blindbox_replica_auth: dict[str, str] = {}
         replicas_from_env = _parse_replicas_list(
             os.environ.get("I2PCHAT_BLINDBOX_REPLICAS", "")
         )
@@ -1102,12 +1103,13 @@ class I2PChatCore:
             self._blindbox_replicas_source = "file-default"
             replicas_resolved = replicas_from_file
         elif self.profile != "default" and (
-            replicas_profile := load_profile_blindbox_replicas_list(
+            (_bb_prof := load_profile_blindbox_replicas_bundle(
                 self.get_profile_data_dir(create=False), self.profile
-            )
+            ))[0]
         ):
             self._blindbox_replicas_source = "profile-file"
-            replicas_resolved = replicas_profile
+            replicas_resolved = _bb_prof[0]
+            self._blindbox_replica_auth = dict(_bb_prof[1])
         elif not no_release_builtin and DEFAULT_RELEASE_BLINDBOX_ENDPOINTS:
             self._blindbox_replicas_source = "release-builtin"
             replicas_resolved = list(DEFAULT_RELEASE_BLINDBOX_ENDPOINTS)
@@ -1155,6 +1157,12 @@ class I2PChatCore:
         )
         if self._blindbox_replicas_source == "local-auto":
             self._blindbox_local_auth_token = local_auth_token_env or secrets.token_hex(24)
+            if not local_auth_token_env:
+                logger.info(
+                    "BlindBox local-auto: I2PCHAT_BLINDBOX_LOCAL_TOKEN is not set; using an "
+                    "ephemeral token for this process. Set a stable secret if a separate "
+                    "local replica process must authenticate to the same endpoint."
+                )
         else:
             self._blindbox_local_auth_token = local_auth_token_env
         self._blindbox_local_max_entries = max(
@@ -2820,6 +2828,7 @@ class I2PChatCore:
                     ),
                     sam_session_timeout=bb_sam_sess_timeout,
                     local_auth_token=self._blindbox_local_auth_token,
+                    replica_auth=self._blindbox_replica_auth,
                 )
             if self._blindbox_task is None or self._blindbox_task.done():
                 loop = asyncio.get_running_loop()
@@ -2853,9 +2862,13 @@ class I2PChatCore:
                 pass
             self._blindbox_client = None
 
-    async def apply_blindbox_replica_endpoints(self, endpoints: list[str]) -> str:
+    async def apply_blindbox_replica_endpoints(
+        self,
+        endpoints: list[str],
+        replica_auth: Optional[dict[str, str]] = None,
+    ) -> str:
         """
-        Save per-profile replica list and restart BlindBox runtime.
+        Save per-profile replica list (and optional per-replica auth) and restart BlindBox runtime.
         Returns empty string on success, otherwise a user-facing error message.
         """
         if (self.profile or "").strip() in ("", "default"):
@@ -2870,6 +2883,20 @@ class I2PChatCore:
         norm = normalize_replica_endpoints(endpoints)
         if not norm:
             return "Add at least one Blind Box endpoint (one per line)."
+        norm_set = set(norm)
+        auth_in = dict(replica_auth or {})
+        filtered_auth: dict[str, str] = {}
+        for k, v in auth_in.items():
+            k2 = (k or "").strip()
+            v2 = (v or "").strip()
+            if not k2 or not v2:
+                continue
+            if k2 not in norm_set:
+                logger.warning(
+                    "BlindBox replica_auth key not in endpoint list, ignoring: %s", k2
+                )
+                continue
+            filtered_auth[k2] = v2
         use_sam = not (
             len(norm) > 0 and all(_is_host_port_replica(x) for x in norm)
         )
@@ -2883,8 +2910,11 @@ class I2PChatCore:
         if sec:
             return sec
         try:
-            save_profile_blindbox_replicas_list(
-                self.get_profile_data_dir(create=True), self.profile, norm
+            save_profile_blindbox_replicas_bundle(
+                self.get_profile_data_dir(create=True),
+                self.profile,
+                norm,
+                filtered_auth,
             )
         except ValueError as e:
             return str(e)
@@ -2893,6 +2923,7 @@ class I2PChatCore:
         async with self._blindbox_runtime_lock:
             await self._stop_blindbox_runtime_only()
             self.blindbox_replicas = norm
+            self._blindbox_replica_auth = dict(filtered_auth)
             self._blindbox_use_sam = use_sam
             self._blindbox_replicas_source = "profile-file"
             if self.blindbox_enabled and len(self.blindbox_replicas) > 0 and not self._blindbox_use_sam:
@@ -3132,7 +3163,10 @@ class I2PChatCore:
                             continue
                         raise
                 else:
-                    assert last_connect_exc is not None
+                    if last_connect_exc is None:
+                        raise RuntimeError(
+                            "outbound connect loop exited without success but no exception was recorded"
+                        )
                     raise last_connect_exc
 
                 if self.my_dest is not None:
@@ -3831,7 +3865,8 @@ class I2PChatCore:
         self, *, force_rotate: bool = False
     ) -> tuple[int, bytes, str, bool] | None:
         if self._blindbox_has_pending_root():
-            assert self._blindbox_pending_root_secret is not None
+            if self._blindbox_pending_root_secret is None:
+                raise RuntimeError("BlindBox pending root invariant violated: secret is None")
             reason = (
                 "initialized"
                 if self._blindbox_root_secret is None
@@ -3865,7 +3900,8 @@ class I2PChatCore:
             return False
         if int(ack_epoch) != int(self._blindbox_pending_root_epoch):
             return False
-        assert self._blindbox_pending_root_secret is not None
+        if self._blindbox_pending_root_secret is None:
+            raise RuntimeError("BlindBox commit: pending root secret is None")
         reason = (
             "initialized"
             if self._blindbox_root_secret is None

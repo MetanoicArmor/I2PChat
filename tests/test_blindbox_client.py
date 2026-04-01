@@ -305,11 +305,67 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             "127.0.0.1:19444",
         )
 
+    def test_token_for_endpoint_uses_replica_auth_for_b32(self) -> None:
+        c = BlindBoxClient(
+            session_id="s",
+            blind_boxes=["dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444"],
+            use_sam=False,
+            local_auth_token="localonly",
+            replica_auth={
+                "dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444": "perrep",
+            },
+        )
+        addr = "dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444"
+        self.assertEqual(c._token_for_endpoint(addr), "perrep")
+        self.assertEqual(c._command_auth_suffix(addr), " perrep")
+
+    def test_token_for_endpoint_remote_without_map_empty(self) -> None:
+        c = BlindBoxClient(
+            session_id="s",
+            blind_boxes=["x.b32.i2p:1"],
+            use_sam=False,
+            local_auth_token="loc",
+        )
+        self.assertEqual(c._token_for_endpoint("x.b32.i2p:1"), "")
+        self.assertEqual(c._command_auth_suffix("x.b32.i2p:1"), "")
+
+    def test_token_for_endpoint_loopback_without_map_uses_local(self) -> None:
+        c = BlindBoxClient(
+            session_id="s",
+            blind_boxes=["127.0.0.1:1"],
+            use_sam=False,
+            local_auth_token="loc",
+        )
+        self.assertEqual(c._token_for_endpoint("127.0.0.1:1"), "loc")
+        self.assertEqual(c._command_auth_suffix("127.0.0.1:1"), " loc")
+
     def test_sam_destination_rejects_injection_chars(self) -> None:
         with self.assertRaises(RuntimeError):
             BlindBoxClient._validate_sam_destination("abc\nINJECT=1")
         with self.assertRaises(RuntimeError):
             BlindBoxClient._validate_sam_destination("abc def")
+
+    async def test_replica_auth_overrides_local_token_on_loopback(self) -> None:
+        storage: dict[str, bytes] = {}
+        srv = _ReplicaServer("ok", storage, required_token="mapped")
+        await srv.start()
+        try:
+            ep = f"127.0.0.1:{srv.port}"
+            client = BlindBoxClient(
+                session_id="test-auth-map",
+                blind_boxes=[ep],
+                use_sam=False,
+                local_auth_token="wrong-token",
+                replica_auth={ep: "mapped"},
+            )
+            payload = b"auth-map-payload"
+            result = await client.put("k-am", payload)
+            self.assertEqual(len(result), 1)
+            blobs = await client.get("k-am")
+            self.assertEqual(blobs, [payload])
+            await client.close()
+        finally:
+            await srv.stop()
 
     async def test_local_auth_token_is_sent_to_loopback_replicas(self) -> None:
         storage: dict[str, bytes] = {}
