@@ -210,10 +210,31 @@ def _install_monkey_patch_if_needed() -> None:
     QtWidgets.QToolTip.hideText = _fallback_hide_text  # type: ignore[assignment]
 
 
+_HIDE_ON_EVENTS = frozenset((
+    QtCore.QEvent.Type.Leave,
+    QtCore.QEvent.Type.Hide,
+    QtCore.QEvent.Type.Close,
+    QtCore.QEvent.Type.MouseMove,
+    QtCore.QEvent.Type.MouseButtonPress,
+    QtCore.QEvent.Type.Wheel,
+    QtCore.QEvent.Type.KeyPress,
+    QtCore.QEvent.Type.FocusOut,
+    QtCore.QEvent.Type.WindowDeactivate,
+))
+
+
 class I2PChatQApplication(QtWidgets.QApplication):
-    """Intercept standard QWidget tooltips before Qt opens native QTipLabel (ignored on macOS)."""
+    """Intercept standard QWidget tooltips before Qt opens native QTipLabel."""
+
+    _tooltip_intercept_enabled: bool = False
+
+    def enable_tooltip_intercept(self) -> None:
+        self._tooltip_intercept_enabled = True
 
     def notify(self, receiver: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if not self._tooltip_intercept_enabled:
+            return super().notify(receiver, event)
+
         et = event.type()
         if et == QtCore.QEvent.Type.ToolTip and isinstance(event, QtGui.QHelpEvent) and isinstance(receiver, QtWidgets.QWidget):
             tip = (receiver.toolTip() or "").strip()
@@ -223,19 +244,8 @@ class I2PChatQApplication(QtWidgets.QApplication):
             hide_rounded_tooltip()
             return True
 
-        if et in (
-            QtCore.QEvent.Type.Leave,
-            QtCore.QEvent.Type.Hide,
-            QtCore.QEvent.Type.Close,
-            QtCore.QEvent.Type.MouseMove,
-            QtCore.QEvent.Type.MouseButtonPress,
-            QtCore.QEvent.Type.Wheel,
-            QtCore.QEvent.Type.KeyPress,
-            QtCore.QEvent.Type.FocusOut,
-            QtCore.QEvent.Type.WindowDeactivate,
-        ):
-            if _panel is not None and _panel.isVisible():
-                hide_rounded_tooltip()
+        if _panel is not None and _panel.isVisible() and et in _HIDE_ON_EVENTS:
+            hide_rounded_tooltip()
 
         return super().notify(receiver, event)
 

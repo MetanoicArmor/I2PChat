@@ -8851,7 +8851,13 @@ def main() -> None:
         )
 
     # Создаём единственный экземпляр QApplication (подкласс перехватывает QHelpEvent ToolTip).
-    app = QtWidgets.QApplication.instance() or I2PChatQApplication(sys.argv)
+    # I2PChatQApplication перехватывает notify() для кастомных tooltip'ов, но на Linux
+    # это блокирует конструирование тяжёлого ChatWindow (каждое событие проходит через Python).
+    # На Linux используем обычный QApplication + monkey-patch QToolTip (легковесно).
+    if sys.platform.startswith("linux"):
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    else:
+        app = QtWidgets.QApplication.instance() or I2PChatQApplication(sys.argv)
     apply_tooltip_handling(app)
 
     # Единый стиль и шрифт для всех платформ (более предсказуемый рендеринг)
@@ -8913,7 +8919,9 @@ def main() -> None:
     window = ChatWindow(profile=profile, theme_id=selected_theme)
     window.show()
 
-    # запускаем инициализацию ядра в Qt-совместимом event loop
+    if isinstance(app, I2PChatQApplication):
+        app.enable_tooltip_intercept()
+
     loop.create_task(window.start_core())
 
     try:
