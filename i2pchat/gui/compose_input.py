@@ -165,6 +165,9 @@ class EmojiPickerPopup(QtWidgets.QFrame):
         self._grid_layout: Optional[QtWidgets.QGridLayout] = None
         self._emoji_buttons: list[QtWidgets.QToolButton] = []
         self._focus_idx: int = 0
+        # Увеличивается при каждом show_near_anchor; нужен для Windows (Popup закрывается
+        # до clicked на кнопке — иначе повторный клик снова открывал бы панель).
+        self._open_seq: int = 0
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -547,6 +550,7 @@ class EmojiPickerPopup(QtWidgets.QFrame):
         self.hide()
 
     def show_near_anchor(self, anchor: QtWidgets.QWidget, theme_id: str) -> None:
+        self._open_seq += 1
         self.apply_theme(theme_id)
         self.adjustSize()
         self._apply_win_rounded_mask()
@@ -588,6 +592,7 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         self._theme_id = "ligth"
         self._popup: Optional[EmojiPickerPopup] = None
         self._emoji_shortcut_portable = "Ctrl+;"
+        self._emoji_close_click_seq: Optional[int] = None
 
         self._emoji_btn = QtWidgets.QToolButton(self)
         self._emoji_btn.setObjectName("EmojiPickerButton")
@@ -599,6 +604,7 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         self._emoji_btn.setFixedSize(self._BTN_SIDE, self._BTN_SIDE)
         self._emoji_btn.setIconSize(QtCore.QSize(17, 17))
         self._emoji_btn.clicked.connect(self._on_emoji_clicked)
+        self._emoji_btn.installEventFilter(self)
         self._apply_emoji_button_style()
         self._refresh_emoji_icon()
 
@@ -627,6 +633,16 @@ class ComposeInputWrapper(QtWidgets.QWidget):
             self._popup.hide()
             return
         self._on_emoji_clicked()
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if obj is self._emoji_btn and event.type() == QtCore.QEvent.Type.MouseButtonPress:
+            me = event
+            if isinstance(me, QtGui.QMouseEvent) and me.button() == QtCore.Qt.MouseButton.LeftButton:
+                if self._popup is not None and self._popup.isVisible():
+                    self._emoji_close_click_seq = self._popup._open_seq
+                else:
+                    self._emoji_close_click_seq = None
+        return super().eventFilter(obj, event)
 
     def _apply_emoji_button_style(self) -> None:
         if self._theme_id == "night":
@@ -685,13 +701,34 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         self._emoji_btn.raise_()
 
     def _on_emoji_clicked(self) -> None:
+        if sys.platform.startswith("win"):
+            QtCore.QTimer.singleShot(0, self._on_emoji_clicked_deferred)
+        else:
+            self._on_emoji_clicked_deferred()
+
+    def _on_emoji_clicked_deferred(self) -> None:
+        p = self._popup
+        close_seq = self._emoji_close_click_seq
+        self._emoji_close_click_seq = None
+
+        if p is not None and p.isVisible():
+            p.hide()
+            return
+        if (
+            close_seq is not None
+            and p is not None
+            and close_seq == p._open_seq
+        ):
+            return
+
         host = self.window()
         parent_popup = host if isinstance(host, QtWidgets.QWidget) else self
-        if self._popup is None:
+        if p is None:
             self._popup = EmojiPickerPopup(parent_popup)
             self._popup.emojiChosen.connect(self._on_emoji_chosen)
             self._popup.pickerHidden.connect(self._on_emoji_picker_hidden)
-        self._popup.show_near_anchor(self._emoji_btn, self._theme_id)
+            p = self._popup
+        p.show_near_anchor(self._emoji_btn, self._theme_id)
 
     def _on_emoji_picker_hidden(self) -> None:
         if self._edit is not None:
