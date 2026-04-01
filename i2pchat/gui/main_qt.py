@@ -6092,11 +6092,14 @@ class ChatWindow(QtWidgets.QMainWindow):
                 return True
             return False
 
-        if _event_matches_privacy_hotkey(mod):
-            if _physical_key_matches(event, win_vk=0x48, mac_vk=0x04, linux_evdev=35):
-                self._on_toggle_privacy_mode_clicked()
-                return True
-            return False
+        # Только Ctrl+H (физ.): нельзя после «не H» делать return False — иначе на
+        # Windows/Linux любой Ctrl+буква сойдёт за «privacy-модификаторы» и остальные
+        # хоткеи (Ctrl+O, …) никогда не обработаются.
+        if _event_matches_privacy_hotkey(mod) and _physical_key_matches(
+            event, win_vk=0x48, mac_vk=0x04, linux_evdev=35
+        ):
+            self._on_toggle_privacy_mode_clicked()
+            return True
 
         if not _event_matches_portable_ctrl_only(mod):
             return False
