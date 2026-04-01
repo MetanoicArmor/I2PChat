@@ -141,6 +141,8 @@ The `Peer .b32.i2p address` field is for the full destination of your peer:
 
 The **`Connect`** button starts a live connection to the address currently present in the peer field.
 
+**Keyboard shortcut:** **Ctrl+1** on Windows/Linux, **⌘1** on macOS — same as clicking **`Connect`** when the button is enabled (also works when focus is in the message compose field).
+
 Logic:
 
 1. If the field is **not empty**:
@@ -172,14 +174,16 @@ On first contact with a new peer signing key, a **Trust on First Use (TOFU)** di
 - choose **Yes** to trust and pin the key, or **No** to abort the connection;
 - for higher security, verify the fingerprint with your peer out‑of‑band.
 
-**Button state:** **`Connect`** is **disabled** (dimmed) until the network status is **Pending** or **Visible** (I2P session ready), you have a peer address or a stored locked peer, and you are not already connected or already dialling out. While a connection attempt is in progress, **`Connect`** stays disabled; a second click is ignored by the core. **Tooltips** on the button explain why it is disabled (e.g. wait for Pending/Visible, enter an address, already connected).  
+**Button state:** **`Connect`** is **disabled** (dimmed) until the network status is **Pending** or **Visible** (I2P session ready), you have a peer address or a stored locked peer, and you are not already connected or already dialling out. While a connection attempt is in progress, **`Connect`** stays disabled; a second click is ignored by the core. **Tooltips** on the button explain why it is disabled (e.g. wait for Pending/Visible, enter an address, already connected) and include a **Shortcut:** line for **Ctrl+1** / **⌘1**.  
 When BlindBox offline queue is already ready, the `Connect` tooltip explicitly marks live connect as **optional**.
 
 #### 4.4. `Disconnect` button
 
 The **`Disconnect`** button terminates the current connection to the peer.
 
-**Button state:** **`Disconnect`** is **disabled** until there is an active peer session (socket connected); hover shows a hint when it is inactive.
+**Keyboard shortcut:** **Ctrl+0** on Windows/Linux, **⌘0** on macOS — same as **`Disconnect`** when the button is enabled.
+
+**Button state:** **`Disconnect`** is **disabled** until there is an active peer session (socket connected); hover shows a hint when it is inactive, plus **Shortcut:** **Ctrl+0** / **⌘0**.
 
 After pressing it:
 

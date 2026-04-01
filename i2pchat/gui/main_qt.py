@@ -4398,6 +4398,11 @@ def _privacy_mode_shortcut_portable() -> str:
     return "Meta+H" if sys.platform == "darwin" else "Ctrl+H"
 
 
+# В QKeySequence строка Ctrl+… на macOS даёт ⌘ (как остальные хоткеи окна).
+_CONNECT_SHORTCUT_PORTABLE = "Ctrl+1"
+_DISCONNECT_SHORTCUT_PORTABLE = "Ctrl+0"
+
+
 def _event_matches_portable_ctrl_only(modifiers: QtCore.Qt.KeyboardModifier) -> bool:
     """Как у QKeySequence Ctrl+…: на macOS — только ⌘, иначе только Ctrl (без Shift/Alt)."""
     m = modifiers & (
@@ -5732,11 +5737,21 @@ class ChatWindow(QtWidgets.QMainWindow):
                 )
             else:
                 c_tip = ""
-        self.connect_button.setToolTip(c_tip)
+        connect_base = c_tip or "Establish a live secure connection to the peer."
+        self.connect_button.setToolTip(
+            _tooltip_with_portable_shortcut(connect_base, _CONNECT_SHORTCUT_PORTABLE)
+        )
         can_disconnect = connected
         self.disconnect_button.setEnabled(can_disconnect)
+        disconnect_base = (
+            "End the current live session."
+            if can_disconnect
+            else "No active connection."
+        )
         self.disconnect_button.setToolTip(
-            "" if can_disconnect else "No active connection."
+            _tooltip_with_portable_shortcut(
+                disconnect_base, _DISCONNECT_SHORTCUT_PORTABLE
+            )
         )
         self._refresh_send_controls()
 
@@ -6837,6 +6852,8 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _setup_more_actions_shortcuts(self) -> None:
         # В QKeySequence строка Ctrl+… на macOS интерпретируется как ⌘ (не путать с Meta в keyPressEvent).
         pairs: list[tuple[str, Callable[[], None]]] = [
+            (_CONNECT_SHORTCUT_PORTABLE, self._shortcut_connect_if_enabled),
+            (_DISCONNECT_SHORTCUT_PORTABLE, self._shortcut_disconnect_if_enabled),
             ("Ctrl+O", self.on_load_profile_clicked),
             ("Ctrl+P", self.on_send_pic_clicked),
             ("Ctrl+F", self.on_send_file_clicked),
@@ -7273,6 +7290,16 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._history_dirty = False
         asyncio.create_task(self.core.disconnect())
         QtCore.QTimer.singleShot(0, self._refresh_connection_buttons)
+
+    @QtCore.pyqtSlot()
+    def _shortcut_connect_if_enabled(self) -> None:
+        if self.connect_button.isEnabled():
+            self.on_connect_clicked()
+
+    @QtCore.pyqtSlot()
+    def _shortcut_disconnect_if_enabled(self) -> None:
+        if self.disconnect_button.isEnabled():
+            self.on_disconnect_clicked()
 
     @QtCore.pyqtSlot()
     def on_cancel_transfer(self) -> None:
