@@ -165,9 +165,25 @@ PY
 fi
 chmod +x "$APPIMAGETOOL"
 
-OUTPUT_FILE="${APP_NAME}.AppImage"
+# Писать только в dist/ с версией в имени: перезапись ./I2PChat.AppImage в корне
+# даёт ETXTBSY («Text file busy»), если этот AppImage сейчас запущен или смонтирован.
+mkdir -p "dist"
+OUTPUT_FILE="dist/${APP_NAME}-linux-${ARCH_SUFFIX}-v${RELEASE_VERSION}.AppImage"
 ./"$APPIMAGETOOL" "${APPDIR}" "$OUTPUT_FILE"
 echo "✔ Built ${OUTPUT_FILE}"
+
+ROOT_APPIMAGE="${APP_NAME}.AppImage"
+if [ -e "$ROOT_APPIMAGE" ] || [ -L "$ROOT_APPIMAGE" ]; then
+  if cp -f "$OUTPUT_FILE" "$ROOT_APPIMAGE" 2>/dev/null; then
+    echo "✔ Updated ${ROOT_APPIMAGE} (copy from dist; close running AppImage if copy ever fails)"
+  else
+    echo "⚠ Skipped ${ROOT_APPIMAGE}: file busy or not writable (artifact is ${OUTPUT_FILE})" >&2
+  fi
+else
+  if cp "$OUTPUT_FILE" "$ROOT_APPIMAGE" 2>/dev/null; then
+    echo "✔ Created ${ROOT_APPIMAGE}"
+  fi
+fi
 
 # 4) архив для релиза: версия + архитектура в имени zip
 ZIP_FILE="${APP_NAME}-linux-${ARCH_SUFFIX}-v${RELEASE_VERSION}.zip"
