@@ -98,12 +98,15 @@ from i2pchat.gui.rounded_qtooltip import (
     I2PChatQApplication,
     apply_tooltip_handling,
     hide_rounded_tooltip,
+    install_tooltip_event_filter,
     show_rounded_tooltip_at,
 )
 from i2pchat.gui.popup_geometry import (
     apply_win_popup_rounded_mask,
     clamp_popup_top_left_to_available_geometry,
     global_position_popup_below_anchor,
+    paint_popup_rounded_bg,
+    update_popup_rounded_mask,
 )
 from i2pchat.gui.styled_combo_widgets import ProfileComboWithArrow
 
@@ -3478,15 +3481,17 @@ class ActionsPopup(QtWidgets.QFrame):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._win_menu_chrome = sys.platform.startswith("win")
+        self._linux_painted_bg = sys.platform.startswith("linux") and not self._win_menu_chrome
         popup_flags = QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
         self.setWindowFlags(popup_flags)
         if self._win_menu_chrome:
-            # Как EmojiPickerPopup: непрозрачный корень + рамка; иначе на Windows «торчит» подложка.
             self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
         else:
             self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setObjectName("ActionsPopupWindow")
         self.setMinimumWidth(236)
+        self._popup_bg = QtGui.QColor(246, 247, 250)
+        self._popup_border = QtGui.QColor(208, 211, 218)
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -3550,14 +3555,26 @@ class ActionsPopup(QtWidgets.QFrame):
             return
         apply_win_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
 
+    def _apply_linux_mask(self) -> None:
+        if self._linux_painted_bg:
+            update_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        if self._linux_painted_bg:
+            paint_popup_rounded_bg(self, self._popup_bg, self._popup_border, self._WIN_OUTER_RADIUS)
+        super().paintEvent(event)
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._apply_win_popup_mask()
+        self._apply_linux_mask()
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
         if self._win_menu_chrome:
             QtCore.QTimer.singleShot(0, self._apply_win_popup_mask)
+        elif self._linux_painted_bg:
+            QtCore.QTimer.singleShot(0, self._apply_linux_mask)
 
     def show_below(self, anchor: QtWidgets.QWidget) -> None:
         self.adjustSize()
@@ -3668,6 +3685,25 @@ class ActionsPopup(QtWidgets.QFrame):
                 }
                 """
             self.setStyleSheet(shell + (items_night if night else items_light))
+        elif self._linux_painted_bg:
+            if night:
+                self._popup_bg = QtGui.QColor(34, 37, 45, 244)
+                self._popup_border = QtGui.QColor(58, 62, 74)
+            else:
+                self._popup_bg = QtGui.QColor(246, 247, 250)
+                self._popup_border = QtGui.QColor(208, 211, 218)
+            self.setStyleSheet(
+                """
+                #ActionsPopupWindow { background: transparent; }
+                #ActionsPopupSurface {
+                    background: transparent;
+                    border: none;
+                    border-radius: 14px;
+                }
+                """
+                + (items_night if night else items_light)
+            )
+            self.update()
         elif night:
             self.setStyleSheet(
                 """
@@ -8921,6 +8957,8 @@ def main() -> None:
 
     if isinstance(app, I2PChatQApplication):
         app.enable_tooltip_intercept()
+    else:
+        install_tooltip_event_filter(app)
 
     loop.create_task(window.start_core())
 

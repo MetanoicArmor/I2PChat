@@ -250,6 +250,53 @@ class I2PChatQApplication(QtWidgets.QApplication):
         return super().notify(receiver, event)
 
 
+class _TooltipInterceptFilter(QtCore.QObject):
+    """Application-level event filter: same logic as I2PChatQApplication.notify()
+    but installable on plain QApplication (deferred until after heavy GUI init)."""
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        et = event.type()
+        if (
+            et == QtCore.QEvent.Type.ToolTip
+            and isinstance(event, QtGui.QHelpEvent)
+            and isinstance(obj, QtWidgets.QWidget)
+        ):
+            tip = (obj.toolTip() or "").strip()
+            if tip:
+                _ensure_panel().present(event.globalPos(), tip, -1, owner=obj)
+                return True
+            hide_rounded_tooltip()
+            return True
+
+        if _panel is not None and et in _HIDE_ON_EVENTS:
+            try:
+                if _panel.isVisible():
+                    hide_rounded_tooltip()
+            except RuntimeError:
+                pass
+
+        return False
+
+
+_tooltip_filter: Optional[_TooltipInterceptFilter] = None
+
+
+def install_tooltip_event_filter(app: Optional[QtWidgets.QApplication] = None) -> None:
+    """Install the lightweight ToolTip event filter on *plain* QApplication.
+
+    Call **after** heavy ChatWindow construction is done so that during
+    init all events stay in C++ (no per-event Python overhead).
+    """
+    global _tooltip_filter
+    a = app or QtWidgets.QApplication.instance()
+    if a is None or isinstance(a, I2PChatQApplication):
+        return
+    if _tooltip_filter is not None:
+        return
+    _tooltip_filter = _TooltipInterceptFilter(a)
+    a.installEventFilter(_tooltip_filter)
+
+
 def apply_tooltip_handling(app: Optional[QtWidgets.QApplication] = None) -> None:
     """If app is not I2PChatQApplication (e.g. tests), fall back to QToolTip.showText patch."""
     a = app or QtWidgets.QApplication.instance()

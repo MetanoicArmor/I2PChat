@@ -14,6 +14,8 @@ from i2pchat.gui.popup_geometry import (
     apply_rounded_rect_mask,
     embedded_popup_top_left_in_window,
     global_position_popup_below_anchor,
+    paint_popup_rounded_bg,
+    update_popup_rounded_mask,
 )
 
 
@@ -473,6 +475,12 @@ class ProfileComboPopup(QtWidgets.QFrame):
         self._opaque_popup_chrome = self._win_menu_chrome or (
             as_embedded_child and sys.platform == "darwin"
         )
+        self._linux_painted_bg = (
+            sys.platform.startswith("linux")
+            and not self._win_menu_chrome
+        )
+        self._popup_bg = QtGui.QColor(246, 247, 250)
+        self._popup_border = QtGui.QColor(208, 211, 218)
         if as_embedded_child:
             self.setWindowFlags(QtCore.Qt.WindowType.Widget)
             self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -529,18 +537,28 @@ class ProfileComboPopup(QtWidgets.QFrame):
         self._keep_editor_focus_last: bool = False
 
     def _apply_win_popup_mask(self) -> None:
-        # Windows: Qt.Popup и встроенный — полигональная маска под QSS radius.
         if self._win_menu_chrome:
             apply_rounded_rect_mask(self, self._WIN_OUTER_RADIUS)
             return
-        # macOS встроенный: непрозрачный хром + QSS (без setMask — иначе «зубцы» по контуру).
         if self._as_embedded_child and sys.platform == "darwin":
             self.clearMask()
             return
 
+    def _apply_linux_mask(self) -> None:
+        if self._linux_painted_bg and not self._as_embedded_child:
+            update_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        if self._linux_painted_bg and not self._as_embedded_child:
+            paint_popup_rounded_bg(
+                self, self._popup_bg, self._popup_border, self._WIN_OUTER_RADIUS,
+            )
+        super().paintEvent(event)
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._apply_win_popup_mask()
+        self._apply_linux_mask()
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
@@ -548,6 +566,8 @@ class ProfileComboPopup(QtWidgets.QFrame):
             self._as_embedded_child and sys.platform == "darwin"
         ):
             QtCore.QTimer.singleShot(0, self._apply_win_popup_mask)
+        elif self._linux_painted_bg and not self._as_embedded_child:
+            QtCore.QTimer.singleShot(0, self._apply_linux_mask)
 
     def _on_item_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
         self.itemChosen.emit(item.text())
@@ -750,27 +770,48 @@ class ProfileComboPopup(QtWidgets.QFrame):
                 ),
             )
             self.setStyleSheet(shell + (list_night if night else list_light))
-        elif night:
+        elif self._linux_painted_bg and not self._as_embedded_child:
+            if night:
+                self._popup_bg = QtGui.QColor(28, 31, 40, 250)
+                self._popup_border = QtGui.QColor(58, 62, 74)
+            else:
+                self._popup_bg = QtGui.QColor(246, 247, 250)
+                self._popup_border = QtGui.QColor(208, 211, 218)
             self.setStyleSheet(
                 """
                 #ProfileComboPopupWindow { background: transparent; }
                 #ProfileComboPopupSurface {
-                    background: rgba(28, 31, 40, 0.98);
-                    border: 1px solid rgba(255, 255, 255, 0.14);
+                    background: transparent;
+                    border: none;
                     border-radius: 12px;
                 }
+                """
+                + (list_night if night else list_light)
+            )
+            self.update()
+        elif night:
+            _border = "#3a3e4a" if self._linux_painted_bg else "rgba(255, 255, 255, 0.14)"
+            self.setStyleSheet(
+                f"""
+                #ProfileComboPopupWindow {{ background: transparent; }}
+                #ProfileComboPopupSurface {{
+                    background: rgba(28, 31, 40, 0.98);
+                    border: 1px solid {_border};
+                    border-radius: 12px;
+                }}
                 """
                 + list_night
             )
         else:
+            _border = "#d0d3da" if self._linux_painted_bg else "rgba(0, 0, 0, 0.12)"
             self.setStyleSheet(
-                """
-                #ProfileComboPopupWindow { background: transparent; }
-                #ProfileComboPopupSurface {
+                f"""
+                #ProfileComboPopupWindow {{ background: transparent; }}
+                #ProfileComboPopupSurface {{
                     background: #f6f7fa;
-                    border: 1px solid rgba(0, 0, 0, 0.12);
+                    border: 1px solid {_border};
                     border-radius: 12px;
-                }
+                }}
                 """
                 + list_light
             )

@@ -8,7 +8,11 @@ from typing import Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from i2pchat.gui.popup_geometry import apply_win_popup_rounded_mask
+from i2pchat.gui.popup_geometry import (
+    apply_win_popup_rounded_mask,
+    paint_popup_rounded_bg,
+    update_popup_rounded_mask,
+)
 from i2pchat.gui.styled_combo_widgets import RoundedVerticalScrollbar
 
 from .emoji_data import EMOJI_CHARS
@@ -149,9 +153,12 @@ class EmojiPickerPopup(QtWidgets.QFrame):
     # Должен совпадать с border-radius у QFrame#EmojiPickerPopupWindow в ветке _win_menu_chrome
     _WIN_OUTER_RADIUS = 8.0
 
+    _LINUX_RADIUS = 14.0
+
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._win_menu_chrome = sys.platform.startswith("win")
+        self._linux_painted_bg = sys.platform.startswith("linux") and not self._win_menu_chrome
         popup_flags = QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
         self.setWindowFlags(popup_flags)
         if self._win_menu_chrome:
@@ -162,6 +169,8 @@ class EmojiPickerPopup(QtWidgets.QFrame):
         self.setObjectName("EmojiPickerPopupWindow")
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self._theme_id = "ligth"
+        self._popup_bg = QtGui.QColor(246, 247, 250)
+        self._popup_border = QtGui.QColor(208, 211, 218)
         self._grid_layout: Optional[QtWidgets.QGridLayout] = None
         self._emoji_buttons: list[QtWidgets.QToolButton] = []
         self._focus_idx: int = 0
@@ -223,14 +232,26 @@ class EmojiPickerPopup(QtWidgets.QFrame):
             return
         apply_win_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
 
+    def _apply_linux_mask(self) -> None:
+        if self._linux_painted_bg:
+            update_popup_rounded_mask(self, self._LINUX_RADIUS)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        if self._linux_painted_bg:
+            paint_popup_rounded_bg(self, self._popup_bg, self._popup_border, self._LINUX_RADIUS)
+        super().paintEvent(event)
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._apply_win_rounded_mask()
+        self._apply_linux_mask()
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
         if self._win_menu_chrome:
             QtCore.QTimer.singleShot(0, self._apply_win_rounded_mask)
+        elif self._linux_painted_bg:
+            QtCore.QTimer.singleShot(0, self._apply_linux_mask)
 
     def _repopulate_grid(self) -> None:
         from i2pchat.gui import emoji_paths as _ep
@@ -386,85 +407,68 @@ class EmojiPickerPopup(QtWidgets.QFrame):
                 )
             self._sync_emoji_scrollbar()
             return
-        if self._theme_id == "night":
+
+        _cell_night = """
+                QToolButton#EmojiCell {
+                    background: transparent; border: none;
+                    border-radius: 10px; padding: 0px; margin: 0px;
+                    color: #e3e8f1; outline: none;
+                }
+                QToolButton#EmojiCell:hover { background: rgba(255, 255, 255, 0.10); }
+                QToolButton#EmojiCell[emojiNavFocus="true"] {
+                    background: #3d424d; border: none; outline: none;
+                }"""
+        _cell_light = """
+                QToolButton#EmojiCell {
+                    background: transparent; border: none;
+                    border-radius: 10px; padding: 0px; margin: 0px;
+                    color: #2c3442; outline: none;
+                }
+                QToolButton#EmojiCell:hover { background: #e5eaf2; }
+                QToolButton#EmojiCell[emojiNavFocus="true"] {
+                    background: #c5d0e0; border: none; outline: none;
+                }"""
+        _common_scroll = """
+                QScrollArea#EmojiPickerScroll { border: none; background: transparent; }
+                QScrollArea#EmojiPickerScroll > QWidget > QWidget { background: transparent; }
+                QWidget#EmojiPickerGridHost { background: transparent; }"""
+
+        if self._linux_painted_bg:
+            if self._theme_id == "night":
+                self._popup_bg = QtGui.QColor(34, 37, 45, 244)
+                self._popup_border = QtGui.QColor(58, 62, 74)
+            else:
+                self._popup_bg = QtGui.QColor(246, 247, 250)
+                self._popup_border = QtGui.QColor(208, 211, 218)
             self.setStyleSheet(
                 """
-                QFrame#EmojiPickerPopupWindow {
-                    background: transparent;
-                }
+                QFrame#EmojiPickerPopupWindow { background: transparent; }
+                QFrame#EmojiPickerPopupSurface {
+                    background: transparent; border: none; border-radius: 14px;
+                }"""
+                + _common_scroll
+                + (_cell_night if self._theme_id == "night" else _cell_light)
+            )
+            self.update()
+        elif self._theme_id == "night":
+            self.setStyleSheet(
+                """
+                QFrame#EmojiPickerPopupWindow { background: transparent; }
                 QFrame#EmojiPickerPopupSurface {
                     background: rgba(34, 37, 45, 0.96);
-                    border: none;
-                    border-radius: 14px;
-                }
-                QScrollArea#EmojiPickerScroll {
-                    border: none;
-                    background: transparent;
-                }
-                QScrollArea#EmojiPickerScroll > QWidget > QWidget {
-                    background: transparent;
-                }
-                QWidget#EmojiPickerGridHost {
-                    background: transparent;
-                }
-                QToolButton#EmojiCell {
-                    background: transparent;
-                    border: none;
-                    border-radius: 10px;
-                    padding: 0px;
-                    margin: 0px;
-                    color: #e3e8f1;
-                    outline: none;
-                }
-                QToolButton#EmojiCell:hover {
-                    background: rgba(255, 255, 255, 0.10);
-                }
-                QToolButton#EmojiCell[emojiNavFocus="true"] {
-                    background: #3d424d;
-                    border: none;
-                    outline: none;
-                }
-                """
+                    border: none; border-radius: 14px;
+                }"""
+                + _common_scroll + _cell_night
             )
         else:
             self.setStyleSheet(
                 """
-                QFrame#EmojiPickerPopupWindow {
-                    background: transparent;
-                }
+                QFrame#EmojiPickerPopupWindow { background: transparent; }
                 QFrame#EmojiPickerPopupSurface {
                     background: #f6f7fa;
-                    border: none;
-                    border-radius: 14px;
-                }
-                QScrollArea#EmojiPickerScroll {
-                    border: none;
-                    background: transparent;
-                }
-                QScrollArea#EmojiPickerScroll > QWidget > QWidget {
-                    background: transparent;
-                }
-                QWidget#EmojiPickerGridHost {
-                    background: transparent;
-                }
-                QToolButton#EmojiCell {
-                    background: transparent;
-                    border: none;
-                    border-radius: 10px;
-                    padding: 0px;
-                    margin: 0px;
-                    color: #2c3442;
-                    outline: none;
-                }
-                QToolButton#EmojiCell:hover {
-                    background: #e5eaf2;
-                }
-                QToolButton#EmojiCell[emojiNavFocus="true"] {
-                    background: #c5d0e0;
-                    border: none;
-                    outline: none;
-                }
-                """
+                    border: none; border-radius: 14px;
+                }"""
+                + _common_scroll + _cell_light
             )
         if self._theme_id == "night":
             self._custom_scrollbar.set_colors(

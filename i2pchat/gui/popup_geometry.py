@@ -33,6 +33,32 @@ def apply_win_popup_rounded_mask(widget: QtWidgets.QWidget, radius: float) -> No
     apply_rounded_rect_mask(widget, radius)
 
 
+def paint_popup_rounded_bg(
+    widget: QtWidgets.QWidget,
+    bg: QtGui.QColor,
+    border: QtGui.QColor,
+    radius: float,
+) -> None:
+    """Anti-aliased rounded background + 1 px border (Linux popups)."""
+    p = QtGui.QPainter(widget)
+    p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+    r = QtCore.QRectF(widget.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+    p.setPen(QtGui.QPen(border, 1.0))
+    p.setBrush(QtGui.QBrush(bg))
+    p.drawRoundedRect(r, radius, radius)
+    p.end()
+
+
+def update_popup_rounded_mask(widget: QtWidgets.QWidget, radius: float) -> None:
+    """Integer-based mask (fallback for non-composited Linux desktops)."""
+    w, h = widget.width(), widget.height()
+    if w < 2 or h < 2:
+        return
+    path = QtGui.QPainterPath()
+    path.addRoundedRect(QtCore.QRectF(0, 0, float(w), float(h)), radius, radius)
+    widget.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
+
+
 def popup_screen_for_anchor(anchor: QtWidgets.QWidget) -> Optional[QtGui.QScreen]:
     """Экран, на котором находится якорь (несколько мониторов); иначе primary."""
     if anchor.width() > 0 and anchor.height() > 0:
