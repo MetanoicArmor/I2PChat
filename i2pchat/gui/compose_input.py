@@ -10,6 +10,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from i2pchat.gui.popup_geometry import (
     apply_win_popup_rounded_mask,
+    disable_dwm_rounded_frame,
     paint_popup_rounded_bg,
     update_popup_rounded_mask,
 )
@@ -142,30 +143,29 @@ def emoji_picker_toolbar_icon(theme_id: str) -> QtGui.QIcon:
 class EmojiPickerPopup(QtWidgets.QFrame):
     """Всплывающая сетка эмодзи; в сообщение уходит Unicode-символ.
 
-    macOS/Linux: прозрачное окно + скруглённая surface.
-    Windows: без WA_TranslucentBackground — иначе нет нормальной рамки; вид «как у меню» (фон + border + тень DWM).
+    Все платформы: WA_TranslucentBackground + QSS border-radius (anti-aliased).
+    На Windows DWM добавляет тень автоматически.
     """
 
     emojiChosen = QtCore.pyqtSignal(str)
     pickerHidden = QtCore.pyqtSignal()
 
     _COLS = 8
-    # Должен совпадать с border-radius у QFrame#EmojiPickerPopupWindow в ветке _win_menu_chrome
     _WIN_OUTER_RADIUS = 8.0
 
     _LINUX_RADIUS = 14.0
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
-        self._win_menu_chrome = sys.platform.startswith("win")
-        self._linux_painted_bg = sys.platform.startswith("linux") and not self._win_menu_chrome
+        self._win_menu_chrome = False
+        self._linux_painted_bg = not sys.platform.startswith("darwin")
         popup_flags = QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
+        if sys.platform.startswith("win"):
+            popup_flags |= QtCore.Qt.WindowType.NoDropShadowWindowHint
         self.setWindowFlags(popup_flags)
-        if self._win_menu_chrome:
-            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        else:
-            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+        self._dwm_patched = False
         self.setObjectName("EmojiPickerPopupWindow")
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self._theme_id = "ligth"
@@ -233,13 +233,13 @@ class EmojiPickerPopup(QtWidgets.QFrame):
         apply_win_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
 
     def _apply_linux_mask(self) -> None:
-        if self._linux_painted_bg:
+        if self._linux_painted_bg and sys.platform.startswith("linux"):
             update_popup_rounded_mask(self, self._LINUX_RADIUS)
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        super().paintEvent(event)
         if self._linux_painted_bg:
             paint_popup_rounded_bg(self, self._popup_bg, self._popup_border, self._LINUX_RADIUS)
-        super().paintEvent(event)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -248,6 +248,9 @@ class EmojiPickerPopup(QtWidgets.QFrame):
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
+        if not self._dwm_patched:
+            disable_dwm_rounded_frame(self)
+            self._dwm_patched = True
         if self._win_menu_chrome:
             QtCore.QTimer.singleShot(0, self._apply_win_rounded_mask)
         elif self._linux_painted_bg:

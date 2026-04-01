@@ -12,6 +12,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from i2pchat.gui.popup_geometry import (
     apply_rounded_rect_mask,
+    disable_dwm_rounded_frame,
     embedded_popup_top_left_in_window,
     global_position_popup_below_anchor,
     paint_popup_rounded_bg,
@@ -471,14 +472,13 @@ class ProfileComboPopup(QtWidgets.QFrame):
     ) -> None:
         super().__init__(parent)
         self._as_embedded_child = as_embedded_child
-        self._win_menu_chrome = sys.platform.startswith("win")
-        self._opaque_popup_chrome = self._win_menu_chrome or (
+        # На Windows и Linux: WA_TranslucentBackground + anti-aliased paintEvent.
+        # На macOS достаточно QSS border-radius.
+        self._win_menu_chrome = False
+        self._opaque_popup_chrome = (
             as_embedded_child and sys.platform == "darwin"
         )
-        self._linux_painted_bg = (
-            sys.platform.startswith("linux")
-            and not self._win_menu_chrome
-        )
+        self._linux_painted_bg = not sys.platform.startswith("darwin")
         self._popup_bg = QtGui.QColor(246, 247, 250)
         self._popup_border = QtGui.QColor(208, 211, 218)
         if as_embedded_child:
@@ -492,11 +492,14 @@ class ProfileComboPopup(QtWidgets.QFrame):
             popup_flags = (
                 QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
             )
+            if sys.platform.startswith("win"):
+                popup_flags |= QtCore.Qt.WindowType.NoDropShadowWindowHint
             self.setWindowFlags(popup_flags)
             if self._opaque_popup_chrome:
                 self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
             else:
                 self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._dwm_patched = False
         self.setObjectName("ProfileComboPopupWindow")
         self.setMinimumWidth(max(200, int(minimum_popup_width)))
 
@@ -545,15 +548,17 @@ class ProfileComboPopup(QtWidgets.QFrame):
             return
 
     def _apply_linux_mask(self) -> None:
-        if self._linux_painted_bg and not self._as_embedded_child:
+        if self._linux_painted_bg and not self._as_embedded_child and sys.platform.startswith("linux"):
             update_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
-        if self._linux_painted_bg and not self._as_embedded_child:
+        super().paintEvent(event)
+        if self._linux_painted_bg and (
+            not self._as_embedded_child or sys.platform.startswith("win")
+        ):
             paint_popup_rounded_bg(
                 self, self._popup_bg, self._popup_border, self._WIN_OUTER_RADIUS,
             )
-        super().paintEvent(event)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -562,6 +567,9 @@ class ProfileComboPopup(QtWidgets.QFrame):
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
+        if not self._dwm_patched:
+            disable_dwm_rounded_frame(self)
+            self._dwm_patched = True
         if self._win_menu_chrome or (
             self._as_embedded_child and sys.platform == "darwin"
         ):
@@ -770,7 +778,9 @@ class ProfileComboPopup(QtWidgets.QFrame):
                 ),
             )
             self.setStyleSheet(shell + (list_night if night else list_light))
-        elif self._linux_painted_bg and not self._as_embedded_child:
+        elif self._linux_painted_bg and (
+            not self._as_embedded_child or sys.platform.startswith("win")
+        ):
             if night:
                 self._popup_bg = QtGui.QColor(28, 31, 40, 250)
                 self._popup_border = QtGui.QColor(58, 62, 74)

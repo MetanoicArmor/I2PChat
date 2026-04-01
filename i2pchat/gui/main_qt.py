@@ -104,6 +104,7 @@ from i2pchat.gui.rounded_qtooltip import (
 from i2pchat.gui.popup_geometry import (
     apply_win_popup_rounded_mask,
     clamp_popup_top_left_to_available_geometry,
+    disable_dwm_rounded_frame,
     global_position_popup_below_anchor,
     paint_popup_rounded_bg,
     update_popup_rounded_mask,
@@ -3480,14 +3481,16 @@ class ActionsPopup(QtWidgets.QFrame):
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
-        self._win_menu_chrome = sys.platform.startswith("win")
-        self._linux_painted_bg = sys.platform.startswith("linux") and not self._win_menu_chrome
+        # На Windows и Linux: WA_TranslucentBackground + anti-aliased paintEvent
+        # (рисуем rounded rect вручную). На macOS достаточно QSS border-radius.
+        self._win_menu_chrome = False
+        self._linux_painted_bg = not sys.platform.startswith("darwin")
         popup_flags = QtCore.Qt.WindowType.Popup | QtCore.Qt.WindowType.FramelessWindowHint
+        if sys.platform.startswith("win"):
+            popup_flags |= QtCore.Qt.WindowType.NoDropShadowWindowHint
         self.setWindowFlags(popup_flags)
-        if self._win_menu_chrome:
-            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        else:
-            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._dwm_patched = False
         self.setObjectName("ActionsPopupWindow")
         self.setMinimumWidth(236)
         self._popup_bg = QtGui.QColor(246, 247, 250)
@@ -3556,13 +3559,13 @@ class ActionsPopup(QtWidgets.QFrame):
         apply_win_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
 
     def _apply_linux_mask(self) -> None:
-        if self._linux_painted_bg:
+        if self._linux_painted_bg and sys.platform.startswith("linux"):
             update_popup_rounded_mask(self, self._WIN_OUTER_RADIUS)
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        super().paintEvent(event)
         if self._linux_painted_bg:
             paint_popup_rounded_bg(self, self._popup_bg, self._popup_border, self._WIN_OUTER_RADIUS)
-        super().paintEvent(event)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -3571,6 +3574,9 @@ class ActionsPopup(QtWidgets.QFrame):
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
+        if not self._dwm_patched:
+            disable_dwm_rounded_frame(self)
+            self._dwm_patched = True
         if self._win_menu_chrome:
             QtCore.QTimer.singleShot(0, self._apply_win_popup_mask)
         elif self._linux_painted_bg:

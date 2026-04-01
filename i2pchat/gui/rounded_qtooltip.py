@@ -9,7 +9,10 @@ from typing import Callable, Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from i2pchat.gui.popup_geometry import clamp_popup_top_left_to_available_geometry
+from i2pchat.gui.popup_geometry import (
+    clamp_popup_top_left_to_available_geometry,
+    disable_dwm_rounded_frame,
+)
 
 _RADIUS_PX = 12.0
 _MAX_LABEL_WIDTH = 440
@@ -48,8 +51,8 @@ def _tooltip_window_flags() -> QtCore.Qt.WindowType:
         | QtCore.Qt.WindowType.WindowDoesNotAcceptFocus
         | QtCore.Qt.WindowType.WindowStaysOnTopHint
     )
-    # macOS: drop shadow is drawn as a square plate around the window — looks like an outer frame.
-    if sys.platform == "darwin":
+    # macOS/Windows: системная тень рисуется как прямоугольная подложка вокруг окна.
+    if sys.platform == "darwin" or sys.platform.startswith("win"):
         flags |= QtCore.Qt.WindowType.NoDropShadowWindowHint
     return flags
 
@@ -61,6 +64,7 @@ class RoundedTooltipWindow(QtWidgets.QWidget):
         super().__init__(None, _tooltip_window_flags())
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
+        self._dwm_patched = False
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self._radius = _RADIUS_PX
         self._label = QtWidgets.QLabel(self)
@@ -78,6 +82,10 @@ class RoundedTooltipWindow(QtWidgets.QWidget):
         self._hide_timer.timeout.connect(self.hide)
 
     def _update_mask(self) -> None:
+        if sys.platform.startswith("win"):
+            # На Windows WA_TranslucentBackground + anti-aliased paintEvent
+            # дают гладкие углы; бинарная маска только портит их.
+            return
         r = self.rect()
         if r.width() < 2 or r.height() < 2:
             return
@@ -89,6 +97,9 @@ class RoundedTooltipWindow(QtWidgets.QWidget):
         del event
         p = QtGui.QPainter(self)
         p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        p.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_Source)
+        p.fillRect(self.rect(), QtGui.QColor(0, 0, 0, 0))
+        p.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_SourceOver)
         rect = QtCore.QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
         app = QtWidgets.QApplication.instance()
         pal = app.palette() if app else self.palette()
@@ -114,6 +125,9 @@ class RoundedTooltipWindow(QtWidgets.QWidget):
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
+        if not self._dwm_patched:
+            disable_dwm_rounded_frame(self)
+            self._dwm_patched = True
         QtCore.QTimer.singleShot(0, self._update_mask)
 
     def present(

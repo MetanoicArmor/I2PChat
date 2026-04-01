@@ -8,13 +8,39 @@ from typing import Optional
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 
+def disable_dwm_rounded_frame(widget: QtWidgets.QWidget) -> None:
+    """Windows 11: убрать системную рамку/скругления DWM вокруг popup-окна.
+
+    Без этого DWM рисует прямоугольную 1 px кайму и/или свои скругления,
+    которые не совпадают с нашим QPainter-рендером и «торчат» наружу.
+    Безопасно вызывать на любой ОС — на не-Windows просто ничего не делает.
+    """
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        hwnd = int(widget.winId())
+        dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+        # DWMWA_WINDOW_CORNER_PREFERENCE = 33; DWMWCP_DONOTROUND = 1
+        pref = ctypes.c_int(1)
+        dwmapi.DwmSetWindowAttribute(
+            hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref),
+        )
+    except Exception:
+        pass
+
+
 def win_rounded_window_region(width: int, height: int, radius: float) -> QtGui.QRegion:
-    """Регион для QWidget.setMask: обрезка Win32-popup по скруглению (убирает «острые» углы подложки)."""
+    """Регион для QWidget.setMask: обрезка Win32-popup по скруглению (убирает «острые» углы подложки).
+
+    NOTE: бинарная маска неизбежно даёт «ступеньки» — на Windows popup-ы
+    теперь используют WA_TranslucentBackground + QSS border-radius (anti-aliased),
+    а эта функция остаётся как fallback для Linux без композитора.
+    """
     path = QtGui.QPainterPath()
     path.addRoundedRect(
         QtCore.QRectF(0, 0, float(width), float(height)), radius, radius
     )
-    # PyQt6: toFillPolygon() → QPolygonF; QRegion ожидает QPolygon (целочисленный).
     poly_f = path.toFillPolygon()
     return QtGui.QRegion(poly_f.toPolygon())
 
@@ -39,9 +65,17 @@ def paint_popup_rounded_bg(
     border: QtGui.QColor,
     radius: float,
 ) -> None:
-    """Anti-aliased rounded background + 1 px border (Linux popups)."""
+    """Anti-aliased rounded background + 1 px border.
+
+    Explicitly clears to transparent first (CompositionMode_Source) so that
+    corners are guaranteed transparent even when the backing pixmap is not
+    pre-filled with alpha=0 (e.g. QGraphicsDropShadowEffect on Windows).
+    """
     p = QtGui.QPainter(widget)
     p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+    p.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_Source)
+    p.fillRect(widget.rect(), QtGui.QColor(0, 0, 0, 0))
+    p.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_SourceOver)
     r = QtCore.QRectF(widget.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
     p.setPen(QtGui.QPen(border, 1.0))
     p.setBrush(QtGui.QBrush(bg))
