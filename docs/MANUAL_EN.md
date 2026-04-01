@@ -105,9 +105,11 @@ The actions bar is located **at the bottom of the window**, below the message in
 
 All controls in the bar have the same height and are laid out in a single row.
 
+**Keyboard shortcuts** (Connect, Disconnect, `⋯`, theme, Saved peers, menu actions, etc.) are tied to **physical US QWERTY key positions** — the same key cap as on a standard English (US) keyboard. **Russian and other layouts still fire the same shortcuts**; you do not need to switch to English. On **Linux**, matching uses typical **evdev** scan codes and common **X11** keycode offsets.
+
 #### 4.1. `⋯` (More actions) menu
 
-Clicking the **`⋯`** button opens a popup menu with profile and connection actions:
+Click the **`⋯`** button or press **Ctrl+.** (Windows/Linux) / **⌘+.** (macOS) to open or close the same popup menu; the button tooltip includes the **Shortcut:** line. The menu lists profile and connection actions:
 
 <img src="../screenshots/2.png" alt="More actions menu (⋯): load profile, send picture/file, BlindBox diagnostics, profile and history backup, lock and trust, history and privacy, notification toggles" width="320" />
 

@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 # --- More actions (⋯) ---
+TT_MORE_ACTIONS_BUTTON = (
+    "Open the ⋯ menu: load profile, send picture or file, backups, BlindBox, lock, "
+    "history, privacy, notifications, and more."
+)
+
 TT_LOAD_PROFILE_DAT = (
     "Open a file dialog to load a profile from a .dat file. "
     "The file is copied into your profiles folder and the app switches to that profile."

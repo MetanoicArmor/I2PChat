@@ -3194,30 +3194,6 @@ class MessageInputEdit(QtWidgets.QTextEdit):
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         key = event.key()
-        if key == QtCore.Qt.Key.Key_B and _event_matches_portable_ctrl_only(
-            event.modifiers()
-        ):
-            win = self.window()
-            if isinstance(win, ChatWindow):
-                win._toggle_contacts_sidebar()
-            event.accept()
-            return
-        if key == QtCore.Qt.Key.Key_T and _event_matches_portable_ctrl_only(
-            event.modifiers()
-        ):
-            win = self.window()
-            if isinstance(win, ChatWindow):
-                win.on_theme_switch_clicked()
-            event.accept()
-            return
-        if key == QtCore.Qt.Key.Key_U and _event_matches_portable_ctrl_only(
-            event.modifiers()
-        ):
-            win = self.window()
-            if isinstance(win, ChatWindow):
-                win._on_check_for_updates_clicked()
-            event.accept()
-            return
         if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
             modifiers = event.modifiers()
             shift_down = bool(modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier)
@@ -4401,6 +4377,7 @@ def _privacy_mode_shortcut_portable() -> str:
 # В QKeySequence строка Ctrl+… на macOS даёт ⌘ (как остальные хоткеи окна).
 _CONNECT_SHORTCUT_PORTABLE = "Ctrl+1"
 _DISCONNECT_SHORTCUT_PORTABLE = "Ctrl+0"
+_MORE_MENU_SHORTCUT_PORTABLE = "Ctrl+."
 
 
 def _event_matches_portable_ctrl_only(modifiers: QtCore.Qt.KeyboardModifier) -> bool:
@@ -4414,6 +4391,58 @@ def _event_matches_portable_ctrl_only(modifiers: QtCore.Qt.KeyboardModifier) -> 
     if sys.platform == "darwin":
         return m == QtCore.Qt.KeyboardModifier.MetaModifier
     return m == QtCore.Qt.KeyboardModifier.ControlModifier
+
+
+def _event_matches_portable_ctrl_shift(modifiers: QtCore.Qt.KeyboardModifier) -> bool:
+    """⌘⇧… на macOS, Ctrl+Shift… иначе (без Alt — избегаем путаницы с AltGr)."""
+    m = modifiers & (
+        QtCore.Qt.KeyboardModifier.ShiftModifier
+        | QtCore.Qt.KeyboardModifier.ControlModifier
+        | QtCore.Qt.KeyboardModifier.AltModifier
+        | QtCore.Qt.KeyboardModifier.MetaModifier
+    )
+    if sys.platform == "darwin":
+        return m == (
+            QtCore.Qt.KeyboardModifier.MetaModifier
+            | QtCore.Qt.KeyboardModifier.ShiftModifier
+        )
+    return m == (
+        QtCore.Qt.KeyboardModifier.ControlModifier
+        | QtCore.Qt.KeyboardModifier.ShiftModifier
+    )
+
+
+def _event_matches_privacy_hotkey(modifiers: QtCore.Qt.KeyboardModifier) -> bool:
+    """Только физический Ctrl (без ⌘/Shift/Alt) — как в подсказке Privacy mode."""
+    m = modifiers & (
+        QtCore.Qt.KeyboardModifier.ShiftModifier
+        | QtCore.Qt.KeyboardModifier.ControlModifier
+        | QtCore.Qt.KeyboardModifier.AltModifier
+        | QtCore.Qt.KeyboardModifier.MetaModifier
+    )
+    return m == QtCore.Qt.KeyboardModifier.ControlModifier
+
+
+def _linux_evdev_scan_matches(event: QtGui.QKeyEvent, evdev_code: int) -> bool:
+    """Скан-код как в Linux evdev; +8 часто даёт X11 keycode на той же физической клавише."""
+    sc = int(event.nativeScanCode())
+    if sc == 0:
+        return False
+    return sc in (evdev_code, evdev_code + 8, evdev_code - 8)
+
+
+def _physical_key_matches(
+    event: QtGui.QKeyEvent, *, win_vk: int, mac_vk: int, linux_evdev: int
+) -> bool:
+    """
+    Совпадение по физической позиции (раскладка US QWERTY): русская и др. не ломают хоткеи.
+    Windows: nativeVirtualKey = VK_*; macOS: kVK_ANSI_*; Linux: evdev / X11 keycode.
+    """
+    if sys.platform == "win32":
+        return int(event.nativeVirtualKey()) == win_vk
+    if sys.platform == "darwin":
+        return int(event.nativeVirtualKey()) == mac_vk
+    return _linux_evdev_scan_matches(event, linux_evdev)
 
 
 def _compose_input_placeholder_text() -> str:
@@ -4830,6 +4859,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_toolbar_button.setObjectName("MoreActionsButton")
         self.more_toolbar_button.setText("⋯")
         self.more_toolbar_button.clicked.connect(self.on_more_actions_clicked)
+        self.more_toolbar_button.setToolTip(
+            _tooltip_with_portable_shortcut(
+                menu_tt.TT_MORE_ACTIONS_BUTTON, _MORE_MENU_SHORTCUT_PORTABLE
+            )
+        )
 
         # Одна «толщина» со строкой статуса и кнопкой темы (_STATUS_ROW_HEIGHT_PX).
         actions_fixed_height = self._STATUS_ROW_HEIGHT_PX
@@ -6027,10 +6061,108 @@ class ChatWindow(QtWidgets.QMainWindow):
         if self.chat_view is not None:
             self.chat_view.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
 
+    def _try_layout_independent_shortcut(
+        self, event: QtGui.QKeyEvent, watched: QtCore.QObject
+    ) -> bool:
+        """
+        Хоткеи по физической клавише (US QWERTY), чтобы русская и другие раскладки
+        не подменяли Qt::Key_* и не ломали QShortcut.
+        """
+        if not isinstance(watched, QtWidgets.QWidget):
+            return False
+        if watched.window() is not self:
+            return False
+        if event.modifiers() & QtCore.Qt.KeyboardModifier.AltModifier:
+            return False
+
+        mod = event.modifiers()
+
+        if _event_matches_portable_ctrl_shift(mod):
+            if _physical_key_matches(event, win_vk=0x45, mac_vk=0x0E, linux_evdev=18):
+                self._export_history_backup()
+                return True
+            if _physical_key_matches(event, win_vk=0x49, mac_vk=0x22, linux_evdev=23):
+                self._import_history_backup()
+                return True
+            if _physical_key_matches(event, win_vk=0x41, mac_vk=0x00, linux_evdev=30):
+                self._on_open_app_dir_clicked()
+                return True
+            if _physical_key_matches(event, win_vk=0x43, mac_vk=0x08, linux_evdev=46):
+                self.on_copy_my_addr_clicked()
+                return True
+            return False
+
+        if _event_matches_privacy_hotkey(mod):
+            if _physical_key_matches(event, win_vk=0x48, mac_vk=0x04, linux_evdev=35):
+                self._on_toggle_privacy_mode_clicked()
+                return True
+            return False
+
+        if not _event_matches_portable_ctrl_only(mod):
+            return False
+
+        chat_focus = watched in (
+            self.chat_view,
+            self.chat_view.viewport(),
+        )
+        if chat_focus and (
+            _physical_key_matches(event, win_vk=0x43, mac_vk=0x08, linux_evdev=46)
+            or event.matches(QtGui.QKeySequence.StandardKey.Copy)
+        ):
+            idx = self.chat_view.currentIndex()
+            if idx.isValid():
+                self.chat_view._copy_index_text(idx, with_meta=False)
+                return True
+            return False
+
+        if _physical_key_matches(event, win_vk=0x31, mac_vk=0x12, linux_evdev=2):
+            self._shortcut_connect_if_enabled()
+            return True
+        if _physical_key_matches(event, win_vk=0x30, mac_vk=0x1D, linux_evdev=11):
+            self._shortcut_disconnect_if_enabled()
+            return True
+        if _physical_key_matches(event, win_vk=0xBE, mac_vk=0x2F, linux_evdev=52):
+            self.on_more_actions_clicked()
+            return True
+        if _physical_key_matches(event, win_vk=0x4F, mac_vk=0x1F, linux_evdev=24):
+            self.on_load_profile_clicked()
+            return True
+        if _physical_key_matches(event, win_vk=0x50, mac_vk=0x23, linux_evdev=25):
+            self.on_send_pic_clicked()
+            return True
+        if _physical_key_matches(event, win_vk=0x46, mac_vk=0x03, linux_evdev=33):
+            self.on_send_file_clicked()
+            return True
+        if _physical_key_matches(event, win_vk=0x44, mac_vk=0x02, linux_evdev=32):
+            self._show_blindbox_diagnostics()
+            return True
+        if _physical_key_matches(event, win_vk=0x45, mac_vk=0x0E, linux_evdev=18):
+            self._export_profile_backup()
+            return True
+        if _physical_key_matches(event, win_vk=0x49, mac_vk=0x22, linux_evdev=23):
+            self._import_profile_backup()
+            return True
+        if _physical_key_matches(event, win_vk=0x4C, mac_vk=0x25, linux_evdev=38):
+            self.on_lock_peer_clicked()
+            return True
+        if _physical_key_matches(event, win_vk=0x54, mac_vk=0x11, linux_evdev=20):
+            self.on_theme_switch_clicked()
+            return True
+        if _physical_key_matches(event, win_vk=0x42, mac_vk=0x0B, linux_evdev=48):
+            self._toggle_contacts_sidebar()
+            return True
+        if _physical_key_matches(event, win_vk=0x55, mac_vk=0x20, linux_evdev=22):
+            self._on_check_for_updates_clicked()
+            return True
+        return False
+
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
         if event.type() == QtCore.QEvent.Type.KeyPress:
             ke = event
             if isinstance(ke, QtGui.QKeyEvent):
+                if isinstance(obj, QtWidgets.QWidget) and obj.window() is self:
+                    if self._try_layout_independent_shortcut(ke, obj):
+                        return True
                 if ke.key() == QtCore.Qt.Key.Key_Escape and (
                     ke.modifiers() == QtCore.Qt.KeyboardModifier.NoModifier
                 ):
@@ -6850,31 +6982,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._chat_search_console.set_console_theme(self.theme_id)
 
     def _setup_more_actions_shortcuts(self) -> None:
-        # В QKeySequence строка Ctrl+… на macOS интерпретируется как ⌘ (не путать с Meta в keyPressEvent).
-        pairs: list[tuple[str, Callable[[], None]]] = [
-            (_CONNECT_SHORTCUT_PORTABLE, self._shortcut_connect_if_enabled),
-            (_DISCONNECT_SHORTCUT_PORTABLE, self._shortcut_disconnect_if_enabled),
-            ("Ctrl+O", self.on_load_profile_clicked),
-            ("Ctrl+P", self.on_send_pic_clicked),
-            ("Ctrl+F", self.on_send_file_clicked),
-            ("Ctrl+D", self._show_blindbox_diagnostics),
-            ("Ctrl+E", self._export_profile_backup),
-            ("Ctrl+I", self._import_profile_backup),
-            ("Ctrl+Shift+E", self._export_history_backup),
-            ("Ctrl+Shift+I", self._import_history_backup),
-            ("Ctrl+Shift+A", self._on_open_app_dir_clicked),
-            ("Ctrl+L", self.on_lock_peer_clicked),
-            # ChatListView: только StandardKey.Copy (Ctrl/Cmd+C без Shift) — конфликта нет.
-            ("Ctrl+Shift+C", self.on_copy_my_addr_clicked),
-            (_privacy_mode_shortcut_portable(), self._on_toggle_privacy_mode_clicked),
-            ("Ctrl+T", self.on_theme_switch_clicked),
-            ("Ctrl+B", self._toggle_contacts_sidebar),
-            ("Ctrl+U", self._on_check_for_updates_clicked),
-        ]
-        for seq_str, slot in pairs:
-            sc = QtGui.QShortcut(QtGui.QKeySequence(seq_str), self)
-            sc.setContext(QtCore.Qt.ShortcutContext.WindowShortcut)
-            sc.activated.connect(slot)
+        """Горячие клавиши обрабатываются в eventFilter → _try_layout_independent_shortcut
+        (физические коды клавиш, чтобы русская и др. раскладки не ломали хоткеи)."""
 
     @QtCore.pyqtSlot()
     def _on_check_for_updates_clicked(self) -> None:
