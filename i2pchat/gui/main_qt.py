@@ -3198,10 +3198,9 @@ class MessageInputEdit(QtWidgets.QTextEdit):
             modifiers = event.modifiers()
             shift_down = bool(modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier)
 
-            # На macOS Command = MetaModifier.
+            # На macOS в Qt ⌘ = ControlModifier, физический Ctrl = MetaModifier.
             if sys.platform == "darwin":
-                # На части macOS-конфигураций ⌘+Enter приходит как ControlModifier.
-                # Поэтому для отправки учитываем и Meta, и Control.
+                # На части конфигураций ⌘+Enter приходит иначе — учитываем оба модификатора.
                 command_like = bool(
                     modifiers
                     & (
@@ -3763,12 +3762,12 @@ class ProfileSelectDialog(QtWidgets.QDialog):
     
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if event.type() == QtCore.QEvent.Type.KeyPress and isinstance(event, QtGui.QKeyEvent):
-            # На macOS Command = MetaModifier; стандартный Quit тоже проверяем
+            # На macOS ⌘Q в Qt: ControlModifier + Q (StandardKey.Quit тоже).
             if event.matches(QtGui.QKeySequence.StandardKey.Quit):
                 QtWidgets.QApplication.quit()
                 return True
             if sys.platform == "darwin" and event.key() == QtCore.Qt.Key.Key_Q and (
-                event.modifiers() == QtCore.Qt.KeyboardModifier.MetaModifier
+                event.modifiers() == QtCore.Qt.KeyboardModifier.ControlModifier
             ):
                 QtWidgets.QApplication.quit()
                 return True
@@ -4381,20 +4380,18 @@ _MORE_MENU_SHORTCUT_PORTABLE = "Ctrl+."
 
 
 def _event_matches_portable_ctrl_only(modifiers: QtCore.Qt.KeyboardModifier) -> bool:
-    """Как у QKeySequence Ctrl+…: на macOS — только ⌘, иначе только Ctrl (без Shift/Alt)."""
+    """«Как Ctrl в хоткеях»: на macOS в Qt это ⌘ Command (ControlModifier), не физический Ctrl."""
     m = modifiers & (
         QtCore.Qt.KeyboardModifier.ShiftModifier
         | QtCore.Qt.KeyboardModifier.ControlModifier
         | QtCore.Qt.KeyboardModifier.AltModifier
         | QtCore.Qt.KeyboardModifier.MetaModifier
     )
-    if sys.platform == "darwin":
-        return m == QtCore.Qt.KeyboardModifier.MetaModifier
     return m == QtCore.Qt.KeyboardModifier.ControlModifier
 
 
 def _event_matches_portable_ctrl_shift(modifiers: QtCore.Qt.KeyboardModifier) -> bool:
-    """⌘⇧… на macOS, Ctrl+Shift… иначе (без Alt — избегаем путаницы с AltGr)."""
+    """⌘⇧… на macOS (Qt: Control+Shift), Ctrl+Shift… на Windows/Linux."""
     m = modifiers & (
         QtCore.Qt.KeyboardModifier.ShiftModifier
         | QtCore.Qt.KeyboardModifier.ControlModifier
@@ -4403,7 +4400,7 @@ def _event_matches_portable_ctrl_shift(modifiers: QtCore.Qt.KeyboardModifier) ->
     )
     if sys.platform == "darwin":
         return m == (
-            QtCore.Qt.KeyboardModifier.MetaModifier
+            QtCore.Qt.KeyboardModifier.ControlModifier
             | QtCore.Qt.KeyboardModifier.ShiftModifier
         )
     return m == (
@@ -4413,13 +4410,15 @@ def _event_matches_portable_ctrl_shift(modifiers: QtCore.Qt.KeyboardModifier) ->
 
 
 def _event_matches_privacy_hotkey(modifiers: QtCore.Qt.KeyboardModifier) -> bool:
-    """Только физический Ctrl (без ⌘/Shift/Alt) — как в подсказке Privacy mode."""
+    """Privacy: физический Ctrl+H. На macOS в Qt физический Ctrl = MetaModifier (⌘ = ControlModifier)."""
     m = modifiers & (
         QtCore.Qt.KeyboardModifier.ShiftModifier
         | QtCore.Qt.KeyboardModifier.ControlModifier
         | QtCore.Qt.KeyboardModifier.AltModifier
         | QtCore.Qt.KeyboardModifier.MetaModifier
     )
+    if sys.platform == "darwin":
+        return m == QtCore.Qt.KeyboardModifier.MetaModifier
     return m == QtCore.Qt.KeyboardModifier.ControlModifier
 
 
