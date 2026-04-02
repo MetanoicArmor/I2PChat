@@ -229,7 +229,7 @@ Practical notes:
 ### 📸 Screenshots
 
 <p align="center">
-  <img src="screenshots/1.png" alt="I2PChat – main window" width="765" /><br>
+  <img src="screenshots/1.png" alt="I2PChat – main window" width="900" /><br>
   <img src="screenshots/4.png" alt="I2PChat – chat and file transfer (sending)" width="900" /><br>
   <img src="screenshots/7.png" alt="I2PChat – chat and image preview" width="900" />
 </p>

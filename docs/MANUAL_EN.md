@@ -57,7 +57,7 @@ After choosing or typing a name, press **OK** to continue or **Cancel** to close
 
 After you choose a profile, the main chat window opens:
 
-<img src="../screenshots/1.png" alt="I2PChat main window: chat area, input, actions bar" width="765" />
+<img src="../screenshots/1.png" alt="I2PChat main window: chat area, input, actions bar" width="900" />
 
 - **Window title** — `I2PChat @ <profile_name>` (e.g. `I2PChat @ alice`).
 - **Status row** — at the top, above the chat: full line includes `Net`, profile (`Prof`), `Link`, `Peer`, `Stored`, `Secure`, current send route (`Send:*`), **BlindBox** state (human‑readable), and `ACKdrop`.  
