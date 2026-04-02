@@ -3465,6 +3465,7 @@ class ActionsPopupButton(QtWidgets.QFrame):
         tf, sf = self._app_menu_fonts()
         self._title_label.setFont(tf)
         self._shortcut_label.setFont(sf)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
 
     def set_shortcut_hint(self, hint: Optional[str]) -> None:
         self._shortcut_hint = (hint or "").strip()
@@ -3498,6 +3499,20 @@ class ActionsPopupButton(QtWidgets.QFrame):
             QLabel#ActionsPopupItemShortcut:disabled {{ color: {sc_dis}; }}
             """
         )
+
+    def set_keyboard_row_highlight(self, on: bool) -> None:
+        """Подсветка строки при навигации с клавиатуры (без Qt focus на строке — без рамок ОС)."""
+        self.setProperty("keyboardRowHighlight", bool(on))
+        st = self.style()
+        if st is not None:
+            st.unpolish(self)
+            st.polish(self)
+
+    def enterEvent(self, event: QtGui.QEnterEvent) -> None:  # type: ignore[override]
+        host = getattr(self, "_actions_popup_host", None)
+        if isinstance(host, ActionsPopup):
+            host._cancel_keyboard_navigation_highlight()
+        super().enterEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if (
@@ -3546,6 +3561,83 @@ class ActionsPopup(QtWidgets.QFrame):
         self.surface_layout.setContentsMargins(8, 8, 8, 8)
         self.surface_layout.setSpacing(4)
         self._actions_popup_theme_night: bool = False
+        self._kb_button_index: int = -1
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.surface.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+
+    def _iter_action_buttons(self) -> list[ActionsPopupButton]:
+        out: list[ActionsPopupButton] = []
+        for i in range(self.surface_layout.count()):
+            w = self.surface_layout.itemAt(i).widget()
+            if isinstance(w, ActionsPopupButton):
+                out.append(w)
+        return out
+
+    def _cancel_keyboard_navigation_highlight(self) -> None:
+        self._kb_button_index = -1
+        for b in self._iter_action_buttons():
+            b.set_keyboard_row_highlight(False)
+
+    def _enabled_button_indices(self) -> list[int]:
+        return [i for i, b in enumerate(self._iter_action_buttons()) if b.isEnabled()]
+
+    def _kb_nav_move(self, delta: int) -> None:
+        buttons = self._iter_action_buttons()
+        enabled = self._enabled_button_indices()
+        if not buttons or not enabled:
+            return
+        if self._kb_button_index not in enabled:
+            nxt = enabled[-1] if delta < 0 else enabled[0]
+        else:
+            pos = enabled.index(self._kb_button_index)
+            pos = (pos + delta) % len(enabled)
+            nxt = enabled[pos]
+        self._cancel_keyboard_navigation_highlight()
+        self._kb_button_index = nxt
+        buttons[nxt].set_keyboard_row_highlight(True)
+
+    def _kb_activate_current(self) -> bool:
+        if self._kb_button_index < 0:
+            return False
+        buttons = self._iter_action_buttons()
+        if self._kb_button_index >= len(buttons):
+            return False
+        b = buttons[self._kb_button_index]
+        if not b.isEnabled():
+            return False
+        b.clicked.emit()
+        return True
+
+    def _request_popup_keyboard_focus(self) -> None:
+        if self.isVisible():
+            self.setFocus(QtCore.Qt.FocusReason.PopupFocusReason)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:  # type: ignore[override]
+        key = event.key()
+        if key in (QtCore.Qt.Key.Key_Up, QtCore.Qt.Key.Key_Down):
+            self._kb_nav_move(-1 if key == QtCore.Qt.Key.Key_Up else 1)
+            event.accept()
+            return
+        if key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+            if not (
+                event.modifiers()
+                & (
+                    QtCore.Qt.KeyboardModifier.ShiftModifier
+                    | QtCore.Qt.KeyboardModifier.ControlModifier
+                    | QtCore.Qt.KeyboardModifier.AltModifier
+                    | QtCore.Qt.KeyboardModifier.MetaModifier
+                )
+            ):
+                if self._kb_activate_current():
+                    event.accept()
+                    return
+        if key == QtCore.Qt.Key.Key_Escape and (
+            event.modifiers() == QtCore.Qt.KeyboardModifier.NoModifier
+        ):
+            self.hide()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _refresh_all_action_row_colors(self) -> None:
         for i in range(self.surface_layout.count()):
@@ -3572,6 +3664,7 @@ class ActionsPopup(QtWidgets.QFrame):
         btn.setEnabled(enabled)
         if tool_tip:
             btn.setToolTip(tool_tip)
+        btn._actions_popup_host = self  # type: ignore[attr-defined]
         btn.clicked.connect(lambda: (self.hide(), callback()))
         self.surface_layout.addWidget(btn)
         btn.apply_action_row_colors(night=self._actions_popup_theme_night)
@@ -3630,6 +3723,7 @@ class ActionsPopup(QtWidgets.QFrame):
             )
         )
         self.show()
+        QtCore.QTimer.singleShot(0, self._request_popup_keyboard_focus)
 
     def show_at_global(self, global_pos: QtCore.QPoint) -> None:
         self.adjustSize()
@@ -3645,8 +3739,10 @@ class ActionsPopup(QtWidgets.QFrame):
             )
         self.move(pos)
         self.show()
+        QtCore.QTimer.singleShot(0, self._request_popup_keyboard_focus)
 
     def hideEvent(self, event: QtGui.QHideEvent) -> None:  # type: ignore[override]
+        self._cancel_keyboard_navigation_highlight()
         super().hideEvent(event)
         self.closed.emit()
 
@@ -3667,6 +3763,12 @@ class ActionsPopup(QtWidgets.QFrame):
                     background: rgba(255, 255, 255, 0.16);
                 }
                 QFrame#ActionsPopupItem:disabled {
+                    background: transparent;
+                }
+                QFrame#ActionsPopupItem[keyboardRowHighlight="true"] {
+                    background: rgba(255, 255, 255, 0.10);
+                }
+                QFrame#ActionsPopupItem[keyboardRowHighlight="true"]:disabled {
                     background: transparent;
                 }
                 QFrame#ActionsPopupSeparator {
@@ -3691,6 +3793,12 @@ class ActionsPopup(QtWidgets.QFrame):
                     background: #dfe6f0;
                 }
                 QFrame#ActionsPopupItem:disabled {
+                    background: transparent;
+                }
+                QFrame#ActionsPopupItem[keyboardRowHighlight="true"] {
+                    background: #e5eaf2;
+                }
+                QFrame#ActionsPopupItem[keyboardRowHighlight="true"]:disabled {
                     background: transparent;
                 }
                 QFrame#ActionsPopupSeparator {
