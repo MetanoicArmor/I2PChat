@@ -11,6 +11,7 @@ from unittest.mock import patch
 if importlib.util.find_spec("i2plib") is None:
     raise unittest.SkipTest("i2plib not installed")
 
+from i2pchat.core.transient_profile import TRANSIENT_PROFILE_NAME
 from i2pchat.core.i2p_chat_core import I2PChatCore
 
 PEER = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
@@ -49,8 +50,9 @@ class ClearLockedPeerTests(unittest.TestCase):
             self.assertIsNone(core.stored_peer)
             self.assertFalse(os.path.isfile(dat))
 
-    def test_default_profile_no_op(self) -> None:
+    def test_transient_profile_clear_locked_peer_no_op(self) -> None:
         core = I2PChatCore(profile="default", on_error=lambda _m: None)
+        self.assertEqual(core.profile, TRANSIENT_PROFILE_NAME)
         core.stored_peer = PEER
         core.clear_locked_peer()
         self.assertEqual(core.stored_peer, PEER)

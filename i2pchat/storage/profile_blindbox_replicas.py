@@ -11,6 +11,7 @@ import logging
 import os
 from typing import Any
 
+from i2pchat.core.transient_profile import is_transient_profile_name
 from i2pchat.storage.blindbox_state import atomic_write_json
 
 logger = logging.getLogger("i2pchat.storage.profile_blindbox_replicas")
@@ -21,7 +22,7 @@ _SUPPORTED_LOAD_VERSIONS = frozenset({1, 2})
 
 def profile_blindbox_replicas_path(profiles_dir: str, profile: str) -> str:
     safe = (profile or "").strip()
-    if not safe or safe == "default":
+    if not safe or is_transient_profile_name(safe):
         raise ValueError("profile must be a named persistent profile")
     return os.path.join(profiles_dir, f"{safe}.blindbox_replicas.json")
 
@@ -63,7 +64,7 @@ def load_profile_blindbox_replicas_bundle(
     profiles_dir: str, profile: str
 ) -> tuple[list[str], dict[str, str]]:
     """Load normalized replicas and per-endpoint auth map. Returns ([], {}) if missing/invalid."""
-    if (profile or "").strip() in ("", "default"):
+    if is_transient_profile_name(profile):
         return [], {}
     path = profile_blindbox_replicas_path(profiles_dir, profile)
     if not os.path.isfile(path):
@@ -119,7 +120,7 @@ def save_profile_blindbox_replicas_list(
 
 
 def delete_profile_blindbox_replicas_file(profiles_dir: str, profile: str) -> None:
-    if (profile or "").strip() in ("", "default"):
+    if is_transient_profile_name(profile):
         return
     path = profile_blindbox_replicas_path(profiles_dir, profile)
     try:

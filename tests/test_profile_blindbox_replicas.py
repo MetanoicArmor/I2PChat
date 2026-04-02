@@ -81,10 +81,12 @@ class ProfileBlindboxReplicasTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             self.assertEqual(load_profile_blindbox_replicas_list(td, "nope"), [])
 
-    def test_default_profile_path_rejected(self) -> None:
+    def test_transient_profile_path_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             with self.assertRaises(ValueError):
                 profile_blindbox_replicas_path(td, "default")
+            with self.assertRaises(ValueError):
+                profile_blindbox_replicas_path(td, "random_address")
 
 
 if __name__ == "__main__":

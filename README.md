@@ -222,7 +222,7 @@ Simple flow:
 Practical notes:
 
 - For named profiles BlindBox is enabled by default.
-- For `default` (transient) profile BlindBox is off.
+- For the transient profile `random_address` (CLI alias `default`) BlindBox is off.
 - Disable explicitly with `I2PCHAT_BLINDBOX_ENABLED=0`.
 - Deployments can set Blind Box endpoints via env (`I2PCHAT_BLINDBOX_REPLICAS`, `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`, or `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`). Built-in release defaults and further options → manuals / release notes above.
 

@@ -10,17 +10,18 @@ When you start the GUI **without** passing a profile name, the profile chooser a
 
 - window title: **I2PChat**;
 - subtitle: **Choose profile**;
-- hint: `Use default for a one-time session, or enter a name to save your identity.`
-- **Profile:** field with a combo box (list + editable), current value `default`;
+- hint: `Use random_address for a one-time session, or enter a name to save your identity.`
+- **Profile:** field with a combo box (list + editable), current value `random_address` (built-in transient profile);
 - helper text: `Click the list on the right to pick an existing profile, or type a new name above.`
 - **Profiles folder: <path>** line (clickable, opens the folder);
 - two buttons: **Cancel** and **OK**.
 
 How to use it:
 
-- **`default`**:
-  - leave this value if you want a one‑time (TRANSIENT) profile without locking to a single peer;
-  - security note: TOFU trust pins are not persisted between app restarts in `default` mode;
+- **`random_address`** (TRANSIENT):
+  - leave this value if you want a one‑time session without locking to a single peer;
+  - security note: TOFU trust pins are not persisted between app restarts in this mode;
+  - the command-line name **`default`** is still accepted as an alias and maps to the same profile and data folder;
 - **pick from the list**:
   - open the drop‑down on the right and select an existing profile (each lives under `profiles/<name>/` with `<name>.dat`);
 - **enter a new name**:
@@ -269,7 +270,7 @@ When you do press **`Lock to peer`**, the profile becomes **bound to a single pe
 
 Rules and behaviour:
 
-1. If the current profile is `default` (mode `TRANSIENT`):
+1. If the current profile is `random_address` (mode `TRANSIENT`; alias CLI `default`):
    - a warning is shown:
 
    ```text
@@ -322,7 +323,7 @@ Using this button you can:
 
 #### 4.9. Optional: BlindBox (offline text)
 
-**BlindBox** is the offline text queue path for your locked peer when there is **no live secure session**. It is enabled by default for **named/persistent** profiles and disabled for `default`/transient mode.
+**BlindBox** is the offline text queue path for your locked peer when there is **no live secure session**. It is enabled by default for **named/persistent** profiles and disabled for the transient profile (`random_address`).
 
 - You must use a **persistent profile** and **lock to peer**. For cross-host offline delivery, configure shared **Blind Box** servers via `I2PCHAT_BLINDBOX_REPLICAS`. For deployment-wide defaults, use `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`. For centrally managed production defaults, use `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`. **Release binaries** also ship a **built-in pair** in `DEFAULT_RELEASE_BLINDBOX_ENDPOINTS` inside `i2pchat/core/i2p_chat_core.py` (`tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444`, `dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444`; override with env vars, disable with `I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`). See [**RELEASE_0.6.0.md**](releases/RELEASE_0.6.0.md) — no duplicate crypto detail here.
   Optional local/dev-only fallback: set `I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1` to start a local Blind Box server (`127.0.0.1:19444`).
@@ -443,7 +444,7 @@ sound notifications (`QSoundEffect`) for incoming messages.
    - **macOS**: move `I2PChat.app` to `/Applications` (or any convenient folder) and open it as a normal app.
 
 3. In the `Choose profile` dialog:
-   - keep `default` or type your own profile name (for example, `alice`).
+   - keep `random_address` or type your own profile name (for example, `alice`).
 4. In the main window:
    - wait until the status row shows **Pending** or **Visible** (then **`Connect`** becomes available);
    - if needed, copy your address via `⋯` → `Copy my address` and send it to your peer via another channel.
@@ -482,7 +483,7 @@ On the receiving side:
 2. Connect to the desired peer using the address field and `Connect`.
 3. Make sure the connection is active and messages are exchanged.
 4. If you want this profile to behave like a **one‑to‑one channel** (only this peer may reach it), click **`Lock to peer`**:
-   - make sure the profile is not `default`;
+   - make sure the profile is not the transient one (`random_address` / alias `default`);
    - on success, you will see:
 
    ```text
@@ -497,7 +498,7 @@ On the receiving side:
 #### 6.4. Importing an existing `.dat` profile
 
 1. Make sure you have a profile file, for example `friend.dat`.
-2. Start the GUI (with any profile or via `default`).
+2. Start the GUI (with any profile or via transient `random_address` / `default`).
 3. Click **`Load .dat`**.
 4. In the file dialog, pick `friend.dat`:
    - the file will be copied to `profiles/friend/friend.dat` (creating `profiles/friend/` if needed, unless it already exists);

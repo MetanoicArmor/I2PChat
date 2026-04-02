@@ -71,6 +71,11 @@ from i2pchat.storage.profile_backup import (
     import_history_bundle,
     import_profile_bundle,
 )
+from i2pchat.core.transient_profile import (
+    TRANSIENT_PROFILE_NAME,
+    coalesce_profile_name,
+    is_transient_profile_name,
+)
 from i2pchat.core.i2p_chat_core import (
     ChatMessage,
     DEFAULT_RELEASE_BLINDBOX_ENDPOINTS,
@@ -2041,6 +2046,8 @@ class ChatListView(QtWidgets.QListView):
         self._context_popup: Optional["ActionsPopup"] = None
         self._context_popup_suppress_until_ms = 0
         self.setMouseTracking(True)
+        # Только по клику — иначе частые dataChanged при прогрессе файла забирают фокус с поля ввода.
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.ClickFocus)
         self.setSelectionMode(
             QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -3971,8 +3978,8 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         layout.addSpacing(8)
         
         hint = QtWidgets.QLabel(
-            "Use <b>default</b> for a one-time session, or enter a name to save your identity.<br>"
-            "<b>Security note:</b> in <b>default</b> mode, TOFU trust is not persisted between app restarts."
+            f"Use <b>{TRANSIENT_PROFILE_NAME}</b> for a one-time session, or enter a name to save your identity.<br>"
+            f"<b>Security note:</b> in <b>{TRANSIENT_PROFILE_NAME}</b> mode, TOFU trust is not persisted between app restarts."
         )
         self.hint = hint
         hint.setWordWrap(True)
@@ -4068,14 +4075,14 @@ class ProfileSelectDialog(QtWidgets.QDialog):
 
     def accept(self) -> None:  # type: ignore[override]
         selected = self.combo.currentText().strip() if self.combo.currentText() else ""
-        if selected == "default":
+        if is_transient_profile_name(selected):
             confirm = QtWidgets.QMessageBox.question(
                 self,
                 "Transient profile warning",
-                "You selected the transient profile 'default'.\n\n"
+                f"You selected the transient profile '{TRANSIENT_PROFILE_NAME}'.\n\n"
                 "TOFU trust pins are not persisted between app restarts in this mode.\n"
                 "For persistent trust continuity, use a named profile.\n\n"
-                "Continue with 'default' anyway?",
+                f"Continue with '{TRANSIENT_PROFILE_NAME}' anyway?",
                 QtWidgets.QMessageBox.StandardButton.Yes
                 | QtWidgets.QMessageBox.StandardButton.Cancel,
                 QtWidgets.QMessageBox.StandardButton.Cancel,
@@ -4847,7 +4854,12 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def __init__(self, profile: Optional[str] = None, theme_id: str = THEME_DEFAULT) -> None:
         super().__init__()
-        self.profile = profile or "default"
+        cp = coalesce_profile_name(profile)
+        self.profile = (
+            TRANSIENT_PROFILE_NAME
+            if cp == TRANSIENT_PROFILE_NAME
+            else ensure_valid_profile_name(cp)
+        )
         self._theme_preference = _normalize_theme_preference(theme_id)
         self.theme_id = effective_theme_id(self._theme_preference)
         self.theme = THEMES[self.theme_id]
@@ -4940,7 +4952,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         # Строка статус-бара (средняя детализация); подсказка при наведении отключена.
         self._status_line_text: str = (
-            "Net:starting | Prof:default (T) | Link:offline | Peer:none | St:none | Sec:off | "
+            f"Net:starting | Prof:{TRANSIENT_PROFILE_NAME} (T) | Link:offline | Peer:none | St:none | Sec:off | "
             "BlindBox: off | ACKdrop:0"
         )
         self._status_line_compact_text: str = (
@@ -6100,8 +6112,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             )
             return
         stored_n = normalize_peer_address(self.core.stored_peer or "")
-        show_lock = self.profile != "default" and bool(stored_n) and stored_n == norm_cb
-        show_bb = self.profile != "default"
+        show_lock = self.profile != TRANSIENT_PROFILE_NAME and bool(stored_n) and stored_n == norm_cb
+        show_bb = self.profile != TRANSIENT_PROFILE_NAME
         dlg = _RemoveSavedPeerDialog(
             self,
             peer_addr=norm_cb,
@@ -6820,7 +6832,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         ts = msg.timestamp.strftime("%H:%M:%S")
         text = msg.text
         if kind == "peer":
-            sender = self.profile if self.profile != "default" else "Peer"
+            sender = self.profile if self.profile != TRANSIENT_PROFILE_NAME else "Peer"
         elif kind == "me":
             sender = "Me"
         elif kind == "error":
@@ -7196,7 +7208,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             | QtWidgets.QMessageBox.StandardButton.No
         )
         box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Yes)
-        box.setModal(True)
+        # Не блокируем всё окно чата: можно писать в поле ввода, пока решаете принять файл.
+        box.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+        box.setModal(False)
         self._active_file_offer_boxes.append(box)
 
         def _finished(result: int) -> None:
@@ -7212,6 +7226,8 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         box.finished.connect(_finished)
         box.open()
+        box.raise_()
+        box.activateWindow()
         return await decision
 
     @QtCore.pyqtSlot(str)
@@ -7355,9 +7371,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.refresh_status_label()
         self._refresh_connection_buttons()
 
-    def _create_core(self, profile: Optional[str]) -> I2PChatCore:
+    def _create_core(self, _profile: Optional[str]) -> I2PChatCore:
         core = I2PChatCore(
-            profile=profile or "default",
+            profile=self.profile,
             on_status=self.handle_status,
             on_message=self.handle_message,
             on_peer_changed=self.handle_peer_changed,
@@ -7836,7 +7852,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 blindbox_sync = "poll" if bb.get("poller_running") else "idle"
                 blindbox_queue = str(int(bb.get("send_index", 0)))
             else:
-                if self.profile == "default":
+                if self.profile == TRANSIENT_PROFILE_NAME:
                     blindbox_hint = "BlindBox is disabled in TRANSIENT mode"
                 elif bb_enabled_source == "env-disabled":
                     blindbox_hint = "BlindBox is disabled by I2PCHAT_BLINDBOX_ENABLED=0"
@@ -7879,7 +7895,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             delivery_state=delivery_state,
             send_in_flight=bool(self._status_send_in_flight),
             profile_name=self.profile,
-            is_transient_profile=self.profile == "default",
+            is_transient_profile=self.profile == TRANSIENT_PROFILE_NAME,
             peer_short=current_peer_disp,
             stored_short=stored_disp,
             link_state=link_state,
@@ -8047,7 +8063,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_lock_peer_clicked(self) -> None:
-        if self.profile == "default":
+        if self.profile == TRANSIENT_PROFILE_NAME:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Lock to peer",
@@ -8242,7 +8258,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     if e.kind == "me":
                         sender = "Me"
                     elif e.kind == "peer":
-                        sender = self.profile if self.profile != "default" else "Peer"
+                        sender = self.profile if self.profile != TRANSIENT_PROFILE_NAME else "Peer"
                     else:
                         continue
                     ts_display = ""
@@ -8671,7 +8687,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
 
         def _bb_replica_endpoint_lines() -> list[str]:
-            if self.profile != "default":
+            if self.profile != TRANSIENT_PROFILE_NAME:
                 app = get_profiles_dir()
                 migrate_legacy_profile_files_if_needed(app_root=app, profile=self.profile)
                 disk = load_profile_blindbox_replicas_list(
@@ -8707,7 +8723,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         can_edit = bb_on and not locked
         replica_edit.setReadOnly(not can_edit)
         _prof = (self.profile or "").strip()
-        if _prof in ("", "default"):
+        if is_transient_profile_name(_prof):
             _bb_rep_tip = menu_tt.TT_BLINDBOX_REPLICA_EDITOR_TRANSIENT_PROFILE
         elif locked:
             _bb_rep_tip = menu_tt.TT_BLINDBOX_REPLICA_EDITOR_ENV_LOCKED
@@ -8729,7 +8745,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
 
         def _bb_replica_auth_field_text() -> str:
-            if (self.profile or "").strip() in ("", "default"):
+            if is_transient_profile_name(self.profile):
                 return ""
             app = get_profiles_dir()
             migrate_legacy_profile_files_if_needed(app_root=app, profile=self.profile)
@@ -8810,7 +8826,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         auth_edit.setPlainText(_bb_replica_auth_field_text())
         auth_edit.setReadOnly(not can_edit)
         _bb_auth_tip = menu_tt.TT_BLINDBOX_REPLICA_AUTH_EDITOR
-        if _prof in ("", "default"):
+        if is_transient_profile_name(_prof):
             _bb_auth_tip = (
                 menu_tt.TT_BLINDBOX_REPLICA_EDITOR_TRANSIENT_PROFILE
                 + " Per-replica auth is saved with named profiles only."
@@ -9083,8 +9099,13 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     async def switch_profile(self, profile: str) -> None:
         """Переключиться на другой профиль (.dat)."""
-        profile = ensure_valid_profile_name(profile)
-        logger.info("switch_profile: -> %r", profile)
+        profile_in = ensure_valid_profile_name(profile)
+        profile_resolved = (
+            TRANSIENT_PROFILE_NAME
+            if is_transient_profile_name(profile_in)
+            else profile_in
+        )
+        logger.info("switch_profile: -> %r", profile_resolved)
         self._flush_compose_drafts_to_disk()
         self._save_history_if_needed()
         self._history_flush_timer.stop()
@@ -9093,7 +9114,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._history_entries = []
         self._history_dirty = False
         self.chat_model.clear_items()
-        self.profile = profile
+        self.profile = profile_resolved
         clean_profile = self.profile.rstrip(" •")
         self._window_title_base = f"I2PChat @ {clean_profile}"
         self._unread_by_peer = {}
@@ -9355,7 +9376,7 @@ def main() -> None:
             save_theme(selected_theme)
     else:
         # 2) для .app / обычного запуска без аргументов показываем диалог выбора профиля
-        profiles = ["default"] + list_profile_names_in_app_data()
+        profiles = [TRANSIENT_PROFILE_NAME] + list_profile_names_in_app_data()
 
         dialog = ProfileSelectDialog(profiles, theme_id=saved_theme)
         app.installEventFilter(dialog)

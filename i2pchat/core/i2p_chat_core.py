@@ -48,6 +48,12 @@ from i2pchat.protocol.protocol_codec import (
     MAGIC,
     ProtocolCodec,
 )
+from i2pchat.core.transient_profile import (
+    LEGACY_TRANSIENT_PROFILE_NAMES,
+    TRANSIENT_PROFILE_NAME,
+    coalesce_profile_name,
+    is_transient_profile_name,
+)
 
 logger = logging.getLogger("i2pchat")
 PROTOCOL_VERSION = 4
@@ -122,7 +128,7 @@ BLINDBOX_LOCAL_WRAP_VERSION_CURRENT = 2
 # I2PCHAT_BLINDBOX_REPLICAS, I2PCHAT_BLINDBOX_DEFAULT_REPLICAS,
 # I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE и нет файла {profile}.blindbox_replicas.json;
 # отключить встроенный набор: I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1.
-# (Профиль default в приложении — отдельно: для него BlindBox выключен, см. __init__.)
+# (Эфемерный профиль TRANSIENT_PROFILE_NAME — отдельно: BlindBox выключен, см. __init__.)
 # Формат строки: <base32>.b32.i2p:19444 — порт TCP сервера Blind Box.
 DEFAULT_RELEASE_BLINDBOX_ENDPOINTS: Tuple[str, ...] = (
     "tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444",
@@ -411,12 +417,17 @@ def migrate_legacy_profile_files_if_needed(
     все связанные файлы профиля в ``profiles/<profile>/``.
     """
     try:
-        p = ensure_valid_profile_name(profile)
+        src_profile = ensure_valid_profile_name(profile)
     except ValueError:
         return
+    dst_profile = (
+        TRANSIENT_PROFILE_NAME
+        if src_profile in LEGACY_TRANSIENT_PROFILE_NAMES
+        else src_profile
+    )
     root = os.path.abspath(app_root or get_profiles_dir())
-    legacy_dat = legacy_flat_profile_dat_path(root, p)
-    new_dat = nested_profile_dat_path(root, p)
+    legacy_dat = legacy_flat_profile_dat_path(root, src_profile)
+    new_dat = nested_profile_dat_path(root, dst_profile)
     if not os.path.isfile(legacy_dat):
         return
     if os.path.isfile(new_dat):
@@ -425,23 +436,31 @@ def migrate_legacy_profile_files_if_needed(
     if os.path.exists(profiles_parent) and not os.path.isdir(profiles_parent):
         logger.warning(
             "Cannot migrate profile %r: %r exists and is not a directory",
-            p,
+            dst_profile,
             profiles_parent,
         )
         return
-    dest_dir = get_profile_data_dir(p, create=True, app_root=root)
+    dest_dir = get_profile_data_dir(dst_profile, create=True, app_root=root)
+
+    def _migrated_basename(name: str) -> str:
+        if dst_profile == src_profile:
+            return name
+        if name.startswith(f"{src_profile}."):
+            return f"{dst_profile}{name[len(src_profile):]}"
+        return name
+
     try:
         names = os.listdir(root)
     except OSError as e:
         logger.warning("Legacy profile migrate listdir failed (%s): %s", root, e)
         return
-    to_move = [n for n in names if _legacy_profile_file_should_migrate(n, p)]
-    to_move.sort(key=lambda x: (x != f"{p}.dat", x))
+    to_move = [n for n in names if _legacy_profile_file_should_migrate(n, src_profile)]
+    to_move.sort(key=lambda x: (x != f"{src_profile}.dat", x))
     for name in to_move:
         src = os.path.join(root, name)
         if not os.path.isfile(src):
             continue
-        dst = os.path.join(dest_dir, name)
+        dst = os.path.join(dest_dir, _migrated_basename(name))
         if os.path.lexists(dst):
             logger.warning(
                 "Skipping migrate %s → %s: destination exists", src, dst
@@ -476,6 +495,68 @@ def legacy_flat_profile_dat_basenames(app_root: str) -> list[str]:
     return sorted(found)
 
 
+def migrate_legacy_transient_profile_directory_if_needed(
+    *, app_root: Optional[str] = None
+) -> None:
+    """
+    Переименовывает ``profiles/default`` → ``profiles/<TRANSIENT_PROFILE_NAME>``,
+    если новый каталог ещё не существует (миграция после смены имени эфемерного профиля).
+    """
+    root = os.path.abspath(app_root if app_root is not None else get_profiles_dir())
+    sub = os.path.join(root, PROFILE_DATA_SUBDIR)
+    old_dir = os.path.join(sub, "default")
+    new_dir = os.path.join(sub, TRANSIENT_PROFILE_NAME)
+    if not os.path.isdir(old_dir) or os.path.lexists(new_dir):
+        return
+    try:
+        os.replace(old_dir, new_dir)
+        logger.info(
+            "Renamed transient profile directory %r -> %r",
+            "default",
+            TRANSIENT_PROFILE_NAME,
+        )
+    except OSError as e:
+        logger.warning(
+            "Transient profile directory migrate default -> %s failed: %s",
+            TRANSIENT_PROFILE_NAME,
+            e,
+        )
+
+
+def _migrate_transient_inner_default_prefixed_files(
+    *, app_root: Optional[str] = None
+) -> None:
+    """
+    После переименования ``profiles/default`` → ``profiles/random_address`` внутри могли
+    остаться файлы ``default.dat``, ``default.contacts.json`` и т.д. — переименовываем
+    в ``random_address.*``.
+    """
+    root = os.path.abspath(app_root if app_root is not None else get_profiles_dir())
+    d = os.path.join(root, PROFILE_DATA_SUBDIR, TRANSIENT_PROFILE_NAME)
+    if not os.path.isdir(d):
+        return
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return
+    for name in names:
+        if not name.startswith("default."):
+            continue
+        new_name = TRANSIENT_PROFILE_NAME + name[len("default") :]
+        if new_name == name:
+            continue
+        src = os.path.join(d, name)
+        dst = os.path.join(d, new_name)
+        if not os.path.isfile(src) or os.path.lexists(dst):
+            continue
+        try:
+            os.replace(src, dst)
+        except OSError as e:
+            logger.warning(
+                "Transient inner file rename %s -> %s failed: %s", name, new_name, e
+            )
+
+
 def migrate_all_legacy_profiles_if_needed(app_root: Optional[str] = None) -> None:
     """
     Переносит **все** профили с плоской раскладкой в ``profiles/<имя>/`` за один проход.
@@ -485,6 +566,8 @@ def migrate_all_legacy_profiles_if_needed(app_root: Optional[str] = None) -> Non
     Повторные вызовы дешёвые: для уже перенесённых профилей
     :func:`migrate_legacy_profile_files_if_needed` сразу выходит.
     """
+    migrate_legacy_transient_profile_directory_if_needed(app_root=app_root)
+    _migrate_transient_inner_default_prefixed_files(app_root=app_root)
     root = os.path.abspath(app_root if app_root is not None else get_profiles_dir())
     for profile in legacy_flat_profile_dat_basenames(root):
         migrate_legacy_profile_files_if_needed(app_root=root, profile=profile)
@@ -511,14 +594,18 @@ def resolve_existing_profile_file(
 
 
 def list_profile_names_in_app_data(app_root: Optional[str] = None) -> list[str]:
-    """Имена сохранённых профилей (есть ``.dat``), без ``default``."""
+    f"""Имена сохранённых профилей (есть ``.dat``), без эфемерного ``{TRANSIENT_PROFILE_NAME}``."""
     root = os.path.abspath(app_root or get_profiles_dir())
     seen: set[str] = set()
     sub_root = os.path.join(root, PROFILE_DATA_SUBDIR)
     if os.path.isdir(sub_root):
         try:
             for entry in os.listdir(sub_root):
-                if entry == "default" or not is_valid_profile_name(entry):
+                if (
+                    entry == TRANSIENT_PROFILE_NAME
+                    or entry in LEGACY_TRANSIENT_PROFILE_NAMES
+                    or not is_valid_profile_name(entry)
+                ):
                     continue
                 dat_path = os.path.join(sub_root, entry, f"{entry}.dat")
                 if os.path.isfile(dat_path):
@@ -530,7 +617,11 @@ def list_profile_names_in_app_data(app_root: Optional[str] = None) -> list[str]:
             if not name.endswith(".dat"):
                 continue
             base = name[: -len(".dat")]
-            if base == "default" or not is_valid_profile_name(base):
+            if (
+                base == TRANSIENT_PROFILE_NAME
+                or base in LEGACY_TRANSIENT_PROFILE_NAMES
+                or not is_valid_profile_name(base)
+            ):
                 continue
             if os.path.isfile(os.path.join(root, name)):
                 seen.add(base)
@@ -610,8 +701,6 @@ BLINDBOX_PRIVACY_DEFAULTS: dict[str, dict[str, float | int]] = {
 
 def is_valid_profile_name(name: str) -> bool:
     candidate = (name or "").strip()
-    if candidate == "default":
-        return True
     return bool(PROFILE_NAME_RE.fullmatch(candidate))
 
 
@@ -641,11 +730,12 @@ def peek_persisted_stored_peer(profile: str) -> Optional[str]:
     В GUI `core.stored_peer` появляется только после загрузки профиля в фоне;
     для начальной вёрстки (свёрнутая боковая панель при Lock to peer) нужен этот peek.
     """
-    try:
-        p = ensure_valid_profile_name(profile or "default")
-    except ValueError:
+    raw = (profile or "").strip()
+    if is_transient_profile_name(raw if raw else None):
         return None
-    if p == "default":
+    try:
+        p = ensure_valid_profile_name(raw)
+    except ValueError:
         return None
     app_root = get_profiles_dir()
     key_file = resolve_existing_profile_file(app_root, p, f"{p}.dat")
@@ -981,7 +1071,12 @@ class I2PChatCore:
         legacy_compat: bool = False,
     ) -> None:
         self.sam_address = sam_address
-        self.profile = ensure_valid_profile_name(profile or "default")
+        cp = coalesce_profile_name(profile)
+        self.profile = (
+            TRANSIENT_PROFILE_NAME
+            if cp == TRANSIENT_PROFILE_NAME
+            else ensure_valid_profile_name(cp)
+        )
 
         self.on_status = on_status
         self.on_message = on_message
@@ -1094,7 +1189,7 @@ class I2PChatCore:
         )
         blindbox_enabled_raw = os.environ.get("I2PCHAT_BLINDBOX_ENABLED", "").strip().lower()
         self._blindbox_enabled_source = "default"
-        if self.profile == "default":
+        if self.profile == TRANSIENT_PROFILE_NAME:
             self.blindbox_enabled = False
             self._blindbox_enabled_source = "transient-disabled"
         elif blindbox_enabled_raw in {"0", "false", "no", "off"}:
@@ -1134,7 +1229,7 @@ class I2PChatCore:
         elif replicas_from_file:
             self._blindbox_replicas_source = "file-default"
             replicas_resolved = replicas_from_file
-        elif self.profile != "default" and (
+        elif self.profile != TRANSIENT_PROFILE_NAME and (
             (_bb_prof := load_profile_blindbox_replicas_bundle(
                 self.get_profile_data_dir(create=False), self.profile
             ))[0]
@@ -1150,7 +1245,7 @@ class I2PChatCore:
             replicas_resolved = []
         if (
             not replicas_resolved
-            and self.profile != "default"
+            and self.profile != TRANSIENT_PROFILE_NAME
             and self.blindbox_enabled
             and local_fallback_enabled
         ):
@@ -1940,7 +2035,7 @@ class I2PChatCore:
     def _load_trust_store(self) -> None:
         """Загружает pinning-таблицу peer_addr -> signing_pub_hex."""
         self.peer_trusted_signing_keys = {}
-        if self.profile == "default":
+        if self.profile == TRANSIENT_PROFILE_NAME:
             return
         path = self._trust_store_path()
         if not os.path.exists(path):
@@ -1956,7 +2051,7 @@ class I2PChatCore:
             logger.warning("Failed to load trust store %s: %s", path, e)
 
     def _save_trust_store(self) -> None:
-        if self.profile == "default":
+        if self.profile == TRANSIENT_PROFILE_NAME:
             return
         path = self._trust_store_path()
         try:
@@ -2075,7 +2170,7 @@ class I2PChatCore:
         stored_peer: Optional[str],
     ) -> None:
         """Сохраняет .dat в каноничном формате: key на 1-й, peer на 2-й строке."""
-        if self.profile == "default":
+        if self.profile == TRANSIENT_PROFILE_NAME:
             return
         lines: list[str] = []
         key = (private_key_base64 or "").strip()
@@ -2097,7 +2192,7 @@ class I2PChatCore:
         - line1=private_key, line2=stored_peer
         - line1=stored_peer (когда identity хранится в keyring)
         """
-        if self.profile == "default":
+        if self.profile == TRANSIENT_PROFILE_NAME:
             raise ValueError("Cannot store peer for transient profile")
         normalized_peer = self._normalize_peer_addr(peer_addr)
         if not normalized_peer:
@@ -2126,7 +2221,7 @@ class I2PChatCore:
         Снять Lock to peer: в .dat остаётся только приватный ключ (или файл с одной строкой
         пира удаляется при сценарии keyring-only .dat).
         """
-        if self.profile == "default":
+        if self.profile == TRANSIENT_PROFILE_NAME:
             return
         private_key_base64: Optional[str] = None
         if self.my_dest is not None:
@@ -2297,7 +2392,7 @@ class I2PChatCore:
         if not crypto.NACL_AVAILABLE:
             raise RuntimeError("PyNaCl is required for handshake signing")
 
-        if self.profile == "default":
+        if self.profile == TRANSIENT_PROFILE_NAME:
             seed, pub = crypto.generate_signing_keypair()
             self.my_signing_seed = seed
             self.my_signing_public = pub
@@ -2395,7 +2490,7 @@ class I2PChatCore:
         self._emit_system(f"Initializing Profile: {self.profile}")
 
         key_file = self._profile_path()
-        is_persistent = self.profile != "default"
+        is_persistent = self.profile != TRANSIENT_PROFILE_NAME
         if not is_persistent:
             self._emit_system(
                 "Security note: TRANSIENT profile does not persist TOFU trust pins between restarts."
@@ -2720,7 +2815,7 @@ class I2PChatCore:
             state = "blindbox-starting-local-session"
         elif self.blindbox_enabled:
             state = "blindbox-initializing"
-        elif self.profile == "default":
+        elif self.profile == TRANSIENT_PROFILE_NAME:
             state = "blindbox-disabled-transient"
         else:
             state = "blindbox-disabled"
@@ -2890,7 +2985,7 @@ class I2PChatCore:
         return tuple(self.blindbox_replicas)
 
     def blindbox_replicas_gui_locked(self) -> bool:
-        if (self.profile or "").strip() in ("", "default"):
+        if is_transient_profile_name(self.profile):
             return True
         src = self._blindbox_replicas_source
         return src in ("env", "env-default", "file-default", "local-auto")
@@ -2920,7 +3015,7 @@ class I2PChatCore:
         Save per-profile replica list (and optional per-replica auth) and restart BlindBox runtime.
         Returns empty string on success, otherwise a user-facing error message.
         """
-        if (self.profile or "").strip() in ("", "default"):
+        if is_transient_profile_name(self.profile):
             return "BlindBox replica editing is only available for named profiles."
         if not self.blindbox_enabled:
             return "BlindBox is disabled for this profile."
@@ -4414,6 +4509,17 @@ class I2PChatCore:
                             self._schedule_disconnect()
                             break
                         raise
+                    except asyncio.TimeoutError:
+                        if self._file_transfer_active:
+                            # Исходящая передача файла/картинки: цикл приёма не глушим — иначе до конца
+                            # отправки не обрабатываются входящие U/P/сигналы собеседника.
+                            continue
+                        if self.incoming_info is not None:
+                            restart_after_timeout = True
+                            return
+                        if self.conn == connection:
+                            self._emit_error("Connection timed out (no data received)")
+                        return
                     msg_type = frame.msg_type
                     msg_id = frame.msg_id
                     body_data = frame.payload
@@ -4995,15 +5101,6 @@ class I2PChatCore:
 
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
-        except asyncio.TimeoutError:
-            if self._file_transfer_active:
-                return
-            if self.incoming_info is not None:
-                # Re-enter receive_loop after this task exits and releases _recv_loop_active.
-                restart_after_timeout = True
-                return
-            if self.conn == connection:
-                self._emit_error("Connection timed out (no data received)")
         except Exception as e:
             if self.conn == connection:
                 self._emit_error(f"Protocol Error: {e}")

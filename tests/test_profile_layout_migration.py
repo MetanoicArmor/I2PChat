@@ -6,11 +6,13 @@ import os
 import tempfile
 import unittest
 
+from i2pchat.core.transient_profile import TRANSIENT_PROFILE_NAME
 from i2pchat.core.i2p_chat_core import (
     get_profile_data_dir,
     legacy_flat_profile_dat_basenames,
     migrate_all_legacy_profiles_if_needed,
     migrate_legacy_profile_files_if_needed,
+    migrate_legacy_transient_profile_directory_if_needed,
     resolve_existing_profile_file,
 )
 
@@ -57,6 +59,49 @@ class ProfileLayoutMigrationTests(unittest.TestCase):
                     os.path.isfile(os.path.join(dest, f"{name}.contacts.json"))
                 )
                 self.assertFalse(os.path.isfile(os.path.join(app, f"{name}.dat")))
+
+    def test_migrate_flat_default_dat_to_transient_named_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as app:
+            with open(os.path.join(app, "default.dat"), "wb") as f:
+                f.write(b"k\n")
+            migrate_legacy_profile_files_if_needed(app_root=app, profile="default")
+            dest = get_profile_data_dir(TRANSIENT_PROFILE_NAME, create=False, app_root=app)
+            self.assertTrue(
+                os.path.isfile(os.path.join(dest, f"{TRANSIENT_PROFILE_NAME}.dat"))
+            )
+            self.assertFalse(os.path.isfile(os.path.join(app, "default.dat")))
+
+    def test_migrate_renames_profiles_default_subdir(self) -> None:
+        from i2pchat.core.i2p_chat_core import PROFILE_DATA_SUBDIR
+
+        with tempfile.TemporaryDirectory() as app:
+            old = os.path.join(app, PROFILE_DATA_SUBDIR, "default")
+            os.makedirs(old)
+            marker = os.path.join(old, "marker.txt")
+            with open(marker, "w", encoding="utf-8") as f:
+                f.write("x")
+            migrate_legacy_transient_profile_directory_if_needed(app_root=app)
+            new = os.path.join(app, PROFILE_DATA_SUBDIR, TRANSIENT_PROFILE_NAME)
+            self.assertTrue(os.path.isfile(os.path.join(new, "marker.txt")))
+            self.assertFalse(os.path.isdir(old))
+
+    def test_migrate_renames_inner_default_prefixed_files(self) -> None:
+        from i2pchat.core.i2p_chat_core import (
+            PROFILE_DATA_SUBDIR,
+            _migrate_transient_inner_default_prefixed_files,
+        )
+
+        with tempfile.TemporaryDirectory() as app:
+            d = os.path.join(app, PROFILE_DATA_SUBDIR, TRANSIENT_PROFILE_NAME)
+            os.makedirs(d)
+            inner = os.path.join(d, "default.dat")
+            with open(inner, "wb") as f:
+                f.write(b"x")
+            _migrate_transient_inner_default_prefixed_files(app_root=app)
+            self.assertTrue(
+                os.path.isfile(os.path.join(d, f"{TRANSIENT_PROFILE_NAME}.dat"))
+            )
+            self.assertFalse(os.path.isfile(inner))
 
 
 if __name__ == "__main__":

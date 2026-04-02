@@ -9,7 +9,7 @@
 ### Sending and profiles
 
 - **`send_text()`** returns a structured result (accepted / queued / blocked and why). The GUI routes **Send** intelligently: if a **live secure session** exists, traffic uses it; if not but BlindBox is ready, text goes to the **offline queue**.
-- For **named (persistent) profiles**, BlindBox is **enabled by default**. The ephemeral **`default`** profile (**TRANSIENT** mode) keeps BlindBox **off** so casual runs do not touch shared boxes. To force-disable everywhere: **`I2PCHAT_BLINDBOX_ENABLED=0`**.
+- For **named (persistent) profiles**, BlindBox is **enabled by default**. The ephemeral **`random_address`** profile (**TRANSIENT** mode; CLI alias **`default`**) keeps BlindBox **off** so casual runs do not touch shared boxes. To force-disable everywhere: **`I2PCHAT_BLINDBOX_ENABLED=0`**.
 - Offline delivery in this release remains **text-only**; file/image transfer through BlindBox is not part of this scope.
 
 ### Blind Box servers (configuration)
@@ -51,7 +51,7 @@ Live (in-tunnel) chat remains compatible with the current client generation. Bli
 ### Отправка и профили
 
 - **`send_text()`** возвращает структурированный результат (принято / в очередь / отклонено и почему). В GUI кнопка **Send** ведёт себя предсказуемо: при активной **live secure**‑сессии идёт онлайн; иначе, если BlindBox готов, текст уходит в **офлайн-очередь**.
-- Для **именованных (persistent) профилей** BlindBox **включён по умолчанию**. Профиль **`default`** (**TRANSIENT**) оставляет BlindBox **выключенным**, чтобы случайный запуск не трогал общие серверы. Полное отключение: **`I2PCHAT_BLINDBOX_ENABLED=0`**.
+- Для **именованных (persistent) профилей** BlindBox **включён по умолчанию**. Профиль **`random_address`** (**TRANSIENT**; в CLI алиас **`default`**) оставляет BlindBox **выключенным**, чтобы случайный запуск не трогал общие серверы. Полное отключение: **`I2PCHAT_BLINDBOX_ENABLED=0`**.
 - В этом релизе офлайн по BlindBox по-прежнему **только текст**; вложения через BlindBox сюда не входят.
 
 ### Серверы Blind Box (настройка)

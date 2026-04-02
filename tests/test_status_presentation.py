@@ -67,7 +67,7 @@ def test_build_status_compact_no_raw_tx() -> None:
         outbound_connect_busy=False,
         delivery_state="offline-ready",
         send_in_flight=False,
-        profile_name="default",
+        profile_name="random_address",
         is_transient_profile=True,
         peer_short="none",
         stored_short="none",

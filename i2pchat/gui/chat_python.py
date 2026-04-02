@@ -13,10 +13,15 @@ from textual.app import App, ComposeResult
 from textual.reactive import reactive
 from textual.widgets import Input, RichLog, Static
 
+from i2pchat.core.transient_profile import (
+    TRANSIENT_PROFILE_NAME,
+    coalesce_profile_name,
+)
 from i2pchat.core.i2p_chat_core import (
     ChatMessage,
     FileTransferInfo,
     I2PChatCore,
+    ensure_valid_profile_name,
     migrate_all_legacy_profiles_if_needed,
     render_braille,
     render_bw,
@@ -49,7 +54,10 @@ class I2PChat(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self.profile = sys.argv[1] if len(sys.argv) > 1 else "default"
+        arg = sys.argv[1] if len(sys.argv) > 1 else ""
+        self.profile = coalesce_profile_name(arg)
+        if self.profile != TRANSIENT_PROFILE_NAME:
+            self.profile = ensure_valid_profile_name(self.profile)
         migrate_all_legacy_profiles_if_needed()
 
         self.core = I2PChatCore(
@@ -82,7 +90,7 @@ class I2PChat(App):
         dot, _, _ = status_map.get(self.network_status, status_map["initializing"])
 
         is_active = "Waiting" not in new_val and "My Addr" not in new_val
-        is_persistent = self.profile != "default"
+        is_persistent = self.profile != TRANSIENT_PROFILE_NAME
 
         if self.core.proven:
             border_col, title = "green", "VERIFIED SESSION"
@@ -238,7 +246,7 @@ class I2PChat(App):
 
         self.post("system", f"Initializing Profile: [bold yellow]{self.profile}[/]")
 
-        is_persistent = self.profile != "default"
+        is_persistent = self.profile != TRANSIENT_PROFILE_NAME
         self.chat_log.write(
             f"[#878700]SYSTEM:[/] [dim #5f5f5f italic]Mode:[/][not bold "
             f"{'yellow' if is_persistent else 'green'}] "
@@ -271,7 +279,7 @@ class I2PChat(App):
                 self.post("error", "No stored contact. Use /connect <address>")
 
         elif msg.strip() == "/save":
-            if self.profile == "default":
+            if self.profile == TRANSIENT_PROFILE_NAME:
                 self.post(
                     "error",
                     "Cannot save in [bold green]TRANSIENT[/] mode. "

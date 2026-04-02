@@ -59,7 +59,7 @@ TT_BLINDBOX_REPLICA_EDITOR_ENV_LOCKED = (
 
 TT_BLINDBOX_REPLICA_EDITOR_TRANSIENT_PROFILE = (
     "These addresses are Blind Box replica servers — shared storage for offline-queued messages "
-    "when there is no live chat session. The built-in transient (default) profile cannot save "
+    "when there is no live chat session. The built-in transient (random_address) profile cannot save "
     "a list here; load or create a named profile to edit. One endpoint per line; "
     "lines starting with # are ignored on save."
 )
@@ -90,7 +90,7 @@ TT_OPEN_APP_DIR = "Open the app data directory in your system file manager."
 
 TT_LOCK_TO_PEER = (
     "Bind this named profile to the connected peer: the address is stored in the profile .dat, "
-    "and later sessions reuse it. Not available in TRANSIENT (default) mode. "
+    "and later sessions reuse it. Not available in TRANSIENT (random_address) mode. "
     "Requires a verified connection first."
 )
 
