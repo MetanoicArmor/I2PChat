@@ -125,6 +125,12 @@ TT_NOTIFICATION_SOUND_TOGGLE = (
     "your custom sound path is kept. Privacy mode can still mute sound while this window is focused."
 )
 
+TT_COMPOSE_ENTER_SENDS_TOGGLE = (
+    "When ON: plain Enter sends the message; Shift+Enter inserts a new line. "
+    "When OFF: Enter starts a new line; Shift+Enter or Ctrl/⌘+Enter sends (default). "
+    "The compose field hint updates to match."
+)
+
 # --- Saved peers context ---
 TT_EDIT_NAME_NOTE = (
     "Edit local display name and note for this contact only; "

@@ -843,6 +843,12 @@ THEMES: dict[str, dict[str, object]] = {
             QWidget#ContactsResizeGrip:hover {
                 background: rgba(0, 0, 0, 0.06);
             }
+            QWidget#ComposeResizeGrip {
+                background: transparent;
+            }
+            QWidget#ComposeResizeGrip:hover {
+                background: rgba(0, 0, 0, 0.06);
+            }
             QPushButton#ContactsSidebarToggle {
                 background-color: #f8f9fc;
                 border: none;
@@ -1320,6 +1326,12 @@ THEMES: dict[str, dict[str, object]] = {
             QWidget#ContactsResizeGrip:hover {
                 background: rgba(255, 255, 255, 0.08);
             }
+            QWidget#ComposeResizeGrip {
+                background: transparent;
+            }
+            QWidget#ComposeResizeGrip:hover {
+                background: rgba(255, 255, 255, 0.08);
+            }
             QPushButton#ContactsSidebarToggle {
                 background-color: rgba(255, 255, 255, 0.06);
                 border: none;
@@ -1653,6 +1665,34 @@ def save_notify_quiet_mode(quiet: bool) -> None:
         data["notify_quiet_mode"] = True
     else:
         data.pop("notify_quiet_mode", None)
+    _save_ui_prefs(data)
+
+
+def load_compose_enter_sends() -> bool:
+    data = _load_ui_prefs()
+    return data.get("compose_enter_sends") is True
+
+
+def save_compose_enter_sends(enter_sends: bool) -> None:
+    data = _load_ui_prefs()
+    if enter_sends:
+        data["compose_enter_sends"] = True
+    else:
+        data.pop("compose_enter_sends", None)
+    _save_ui_prefs(data)
+
+
+def load_compose_split_bottom_height() -> Optional[int]:
+    data = _load_ui_prefs()
+    v = data.get("compose_split_bottom_height")
+    if isinstance(v, int) and v >= 32:
+        return int(v)
+    return None
+
+
+def save_compose_split_bottom_height(h: int) -> None:
+    data = _load_ui_prefs()
+    data["compose_split_bottom_height"] = max(32, int(h))
     _save_ui_prefs(data)
 
 
@@ -3035,11 +3075,12 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
 
 class MessageInputEdit(QtWidgets.QTextEdit):
-    """Многострочное поле ввода: Enter — новая строка; Noto Emoji в документе — как в пикере (PNG).
+    """Многострочное поле ввода; Noto Emoji в документе — как в пикере (PNG).
 
     В протокол и черновики уходит Unicode через plainTextForSend().
 
-    Отправка: Shift+Enter (везде), а также Ctrl+Enter или ⌘+Enter в зависимости от ОС.
+    Режим по умолчанию: Enter — новая строка; Shift+Enter и Ctrl/⌘+Enter — отправка.
+    Режим «Enter отправляет»: Enter — отправка; Shift+Enter — новая строка (Ctrl/⌘+Enter тоже отправка).
     """
     sendRequested = QtCore.pyqtSignal()
     imagePasteReady = QtCore.pyqtSignal(str)
@@ -3063,6 +3104,10 @@ class MessageInputEdit(QtWidgets.QTextEdit):
         self._materialize_timer.setInterval(200)
         self._materialize_timer.timeout.connect(self._materialize_raster_emojis)
         self.document().contentsChanged.connect(self._on_document_contents_changed)
+        self._enter_sends = False
+
+    def set_enter_sends(self, enter_sends: bool) -> None:
+        self._enter_sends = bool(enter_sends)
 
     def plainTextForSend(self) -> str:
         return document_plain_with_raster_emoji_images(self.document())
@@ -3291,21 +3336,24 @@ class MessageInputEdit(QtWidgets.QTextEdit):
             modifiers = event.modifiers()
             shift_down = bool(modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier)
 
-            # На macOS в Qt ⌘ = ControlModifier, физический Ctrl = MetaModifier.
-            if sys.platform == "darwin":
-                # На части конфигураций ⌘+Enter приходит иначе — учитываем оба модификатора.
-                command_like = bool(
-                    modifiers
-                    & (
-                        QtCore.Qt.KeyboardModifier.MetaModifier
-                        | QtCore.Qt.KeyboardModifier.ControlModifier
-                    )
-                )
-                command_down = command_like
-                wants_send = shift_down or command_down
+            if self._enter_sends:
+                wants_send = not shift_down
             else:
-                ctrl_down = bool(modifiers & QtCore.Qt.KeyboardModifier.ControlModifier)
-                wants_send = shift_down or ctrl_down
+                # На macOS в Qt ⌘ = ControlModifier, физический Ctrl = MetaModifier.
+                if sys.platform == "darwin":
+                    command_like = bool(
+                        modifiers
+                        & (
+                            QtCore.Qt.KeyboardModifier.MetaModifier
+                            | QtCore.Qt.KeyboardModifier.ControlModifier
+                        )
+                    )
+                    wants_send = shift_down or command_like
+                else:
+                    ctrl_down = bool(
+                        modifiers & QtCore.Qt.KeyboardModifier.ControlModifier
+                    )
+                    wants_send = shift_down or ctrl_down
 
             if wants_send:
                 self.sendRequested.emit()
@@ -4549,6 +4597,55 @@ class _ContactsSidebarResizeGrip(QtWidgets.QWidget):
         super().mouseReleaseEvent(event)
 
 
+class _ComposeVerticalResizeGrip(QtWidgets.QWidget):
+    """Горизонтальная полоса между лентой чата и полем ввода: тянем по вертикали."""
+
+    def __init__(
+        self,
+        splitter: QtWidgets.QSplitter,
+        parent: Optional[QtWidgets.QWidget] = None,
+        *,
+        host: Optional["ChatWindow"] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._splitter = splitter
+        self._host = host
+        self._dragging = False
+        self._start_global_y = 0
+        self._start_bottom = 0
+        self.setObjectName("ComposeResizeGrip")
+        gh = host._COMPOSE_SPLIT_GRIP_PX if host is not None else 4
+        self.setFixedHeight(max(3, int(gh)))
+        # Горизонтальная граница между панелями — вертикальное изменение размера (↑↓).
+        self.setCursor(QtCore.Qt.CursorShape.SizeVerCursor)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._start_global_y = int(event.globalPosition().y())
+            sizes = self._splitter.sizes()
+            self._start_bottom = int(sizes[1]) if len(sizes) > 1 else 0
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if self._dragging and self._host is not None:
+            dy = int(event.globalPosition().y()) - self._start_global_y
+            self._host._compose_resize_drag_to(self._start_bottom, dy)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if self._dragging and event.button() == QtCore.Qt.MouseButton.LeftButton:
+            sizes = self._splitter.sizes()
+            if len(sizes) > 1:
+                save_compose_split_bottom_height(int(sizes[1]))
+        self._dragging = False
+        super().mouseReleaseEvent(event)
+
+
 class ChatSearchHitsConsoleFrame(QtWidgets.QFrame):
     """Консоль совпадений поиска: полупрозрачность и рамка через QPainter (QSS rgba на macOS часто без альфы)."""
 
@@ -4685,9 +4782,14 @@ def _physical_key_matches(
     return _linux_evdev_scan_matches(event, linux_evdev)
 
 
-def _compose_input_placeholder_text() -> str:
+def _compose_input_placeholder_text(*, enter_sends: bool) -> str:
     """Подсказка в поле ввода: только релевантный модификатор (⌘ на macOS, Ctrl иначе)."""
     send_mod = "⌘" if sys.platform == "darwin" else "Ctrl"
+    if enter_sends:
+        return (
+            "Type message. Enter = send; Shift+Enter = new line. "
+            "Drag and drop images or files to send."
+        )
     return (
         f"Type message. Enter = new line; Shift+Enter or {send_mod}+Enter = send. "
         "Drag and drop images or files to send."
@@ -4738,6 +4840,10 @@ class ChatWindow(QtWidgets.QMainWindow):
     _CONTACTS_SIDEBAR_MAX_OPEN_PX = 520
     _CONTACTS_SIDEBAR_ANIM_MS = 200
     _SPLITTER_RIGHT_MIN_PX = 200
+    _COMPOSE_SPLIT_GRIP_PX = 4
+    _COMPOSE_SPLIT_MIN_CHAT_PX = 120
+    _COMPOSE_SPLIT_MAX_AREA_FRAC = 0.78
+    _COMPOSE_SPLIT_INPUT_MAX_LINES = 16
 
     def __init__(self, profile: Optional[str] = None, theme_id: str = THEME_DEFAULT) -> None:
         super().__init__()
@@ -5046,8 +5152,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         chat_surface_layout.addWidget(self._chat_search_console)
         chat_surface_layout.addWidget(self.chat_view, 1)
 
-        # панель ввода
-        input_container = QtWidgets.QWidget(self)
+        # панель ввода (нижняя зона вертикального сплиттера «чат / ввод»)
+        self._compose_split_bottom = QtWidgets.QWidget(self)
+        input_container = QtWidgets.QWidget(self._compose_split_bottom)
         input_container.setObjectName("ComposeBar")
         input_layout = QtWidgets.QHBoxLayout(input_container)
         # Симметрично с правым краем (раньше слева был col_left — визуально уже).
@@ -5057,7 +5164,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.input_edit = MessageInputEdit(self.compose_input_wrap)
         self.compose_input_wrap.attach_input(self.input_edit)
         self.compose_input_wrap.set_emoji_shortcut_portable(_EMOJI_PICKER_SHORTCUT_PORTABLE)
-        self.input_edit.setPlaceholderText(_compose_input_placeholder_text())
+        self._compose_enter_sends = load_compose_enter_sends()
+        self.input_edit.set_enter_sends(self._compose_enter_sends)
+        self.input_edit.setPlaceholderText(
+            _compose_input_placeholder_text(enter_sends=self._compose_enter_sends)
+        )
         font = self.input_edit.font()
         font.setPointSize(font.pointSize() + 1)
         self.input_edit.setFont(font)
@@ -5065,20 +5176,21 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.send_button = QtWidgets.QPushButton("Send", self)
         self.send_button.setObjectName("PrimaryActionButton")
 
-        compose_h = _compose_bar_input_height_px(self.input_edit, lines=2)
-        self.input_edit.setMinimumHeight(compose_h)
-        self.input_edit.setFixedHeight(compose_h)
-        self.compose_input_wrap.setMinimumHeight(compose_h)
-        self.compose_input_wrap.setFixedHeight(compose_h)
+        _compose_min_h = _compose_bar_input_height_px(self.input_edit, lines=1)
+        self.input_edit.setMinimumHeight(_compose_min_h)
+        self.input_edit.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.compose_input_wrap.setMinimumHeight(_compose_min_h)
         self.compose_input_wrap.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Expanding,
         )
-        self.send_button.setMinimumHeight(compose_h)
-        self.send_button.setFixedHeight(compose_h)
+        self.send_button.setMinimumHeight(_compose_min_h)
         self.send_button.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Minimum,
-            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Expanding,
         )
         input_layout.addWidget(self.compose_input_wrap, 1)
         input_layout.addWidget(self.send_button, 0)
@@ -5192,8 +5304,34 @@ class ChatWindow(QtWidgets.QMainWindow):
         right_column_layout = QtWidgets.QVBoxLayout(self.right_chat_column)
         right_column_layout.setContentsMargins(0, 0, 0, 0)
         right_column_layout.setSpacing(self._UI_GRID_PX)
-        right_column_layout.addWidget(chat_surface, 1)
-        right_column_layout.addWidget(input_container)
+
+        self._compose_vertical_splitter = QtWidgets.QSplitter(
+            QtCore.Qt.Orientation.Vertical, self.right_chat_column
+        )
+        self._compose_vertical_splitter.setHandleWidth(0)
+        self._compose_vertical_splitter.setChildrenCollapsible(False)
+
+        _compose_col = QtWidgets.QVBoxLayout(self._compose_split_bottom)
+        _compose_col.setContentsMargins(0, 0, 0, 0)
+        _compose_col.setSpacing(0)
+        self._compose_resize_grip = _ComposeVerticalResizeGrip(
+            self._compose_vertical_splitter,
+            self._compose_split_bottom,
+            host=self,
+        )
+        self._compose_resize_grip.setToolTip("Drag to resize the message field")
+        _compose_col.addWidget(self._compose_resize_grip)
+        _compose_col.addWidget(input_container, 1)
+
+        self._compose_vertical_splitter.addWidget(chat_surface)
+        self._compose_vertical_splitter.addWidget(self._compose_split_bottom)
+        self._compose_vertical_splitter.setStretchFactor(0, 1)
+        self._compose_vertical_splitter.setStretchFactor(1, 0)
+        _v_split_cursor = QtCore.Qt.CursorShape.SizeVerCursor
+        for _hi in range(self._compose_vertical_splitter.count() - 1):
+            self._compose_vertical_splitter.handle(_hi).setCursor(_v_split_cursor)
+
+        right_column_layout.addWidget(self._compose_vertical_splitter, 1)
         right_column_layout.addWidget(actions_container)
 
         right_pack_layout = QtWidgets.QHBoxLayout(self.contacts_right_pack)
@@ -5396,6 +5534,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             ),
             shortcut_hint=_native_shortcut_text(_privacy_mode_shortcut_portable()),
         )
+        self._compose_enter_sends_toggle_btn = self.more_actions_popup.add_action(
+            self._compose_enter_sends_toggle_label(),
+            self._on_toggle_compose_enter_sends_clicked,
+            tool_tip=menu_tt.TT_COMPOSE_ENTER_SENDS_TOGGLE,
+        )
         self.more_actions_popup.add_separator()
         self._notify_sound_enabled = load_notify_sound_enabled()
         self._notify_sound_toggle_btn = self.more_actions_popup.add_action(
@@ -5424,6 +5567,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.refresh_status_label()
         self._refresh_connection_buttons()
         QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
+        QtCore.QTimer.singleShot(0, self._balance_compose_splitter_initial)
 
     def _load_contacts_book(self) -> None:
         self._contact_book = load_book(_contacts_file_path_for_read(self.profile))
@@ -5477,6 +5621,70 @@ class ChatWindow(QtWidgets.QMainWindow):
         sw = self._contacts_sidebar_open_target_px(total)
         self.contacts_splitter.setSizes([sw, total - sw])
         self._sync_contacts_right_pack_left_margin()
+
+    def _compose_split_bottom_min_height(self) -> int:
+        g = self._UI_GRID_PX
+        inner = _compose_bar_input_height_px(self.input_edit, lines=1)
+        return self._COMPOSE_SPLIT_GRIP_PX + 2 * g + inner
+
+    def _compose_split_bottom_default_height(self) -> int:
+        g = self._UI_GRID_PX
+        inner = _compose_bar_input_height_px(self.input_edit, lines=2)
+        return self._COMPOSE_SPLIT_GRIP_PX + 2 * g + inner
+
+    def _compose_split_bottom_max_height(self, total_split: int) -> int:
+        g = self._UI_GRID_PX
+        inner_max = _compose_bar_input_height_px(
+            self.input_edit, lines=self._COMPOSE_SPLIT_INPUT_MAX_LINES
+        )
+        cap = self._COMPOSE_SPLIT_GRIP_PX + 2 * g + inner_max
+        frac_cap = int(max(80, total_split * self._COMPOSE_SPLIT_MAX_AREA_FRAC))
+        return max(
+            self._compose_split_bottom_min_height(),
+            min(cap, frac_cap),
+        )
+
+    def _compose_split_clamp_and_apply(self, total: int, target_bottom: int) -> None:
+        sp = getattr(self, "_compose_vertical_splitter", None)
+        if sp is None:
+            return
+        mn = self._compose_split_bottom_min_height()
+        mx = self._compose_split_bottom_max_height(total)
+        min_chat = self._COMPOSE_SPLIT_MIN_CHAT_PX
+        if int(total) < mn + min_chat:
+            b = min(mn, int(total))
+            sp.setSizes([int(total) - b, b])
+            return
+        b = max(mn, min(mx, int(target_bottom)))
+        t = int(total) - b
+        if t < min_chat:
+            t = min_chat
+            b = int(total) - t
+            if b < mn:
+                b = mn
+                t = int(total) - b
+        sp.setSizes([t, b])
+
+    def _compose_resize_drag_to(self, start_bottom: int, dy: int) -> None:
+        sp = getattr(self, "_compose_vertical_splitter", None)
+        if sp is None:
+            return
+        sz = sp.sizes()
+        if len(sz) < 2:
+            return
+        total = int(sz[0]) + int(sz[1])
+        self._compose_split_clamp_and_apply(total, start_bottom + dy)
+
+    def _balance_compose_splitter_initial(self) -> None:
+        sp = getattr(self, "_compose_vertical_splitter", None)
+        if sp is None:
+            return
+        total = sum(sp.sizes()) or sp.height() or 1
+        total = max(200, int(total))
+        saved = load_compose_split_bottom_height()
+        default_b = self._compose_split_bottom_default_height()
+        target = default_b if saved is None else int(saved)
+        self._compose_split_clamp_and_apply(total, target)
 
     def _sync_contacts_right_pack_left_margin(self) -> None:
         lay = self.contacts_right_pack.layout()
@@ -8130,6 +8338,28 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _privacy_mode_toggle_label(self) -> str:
         return "Privacy mode: ON" if self._privacy_mode_enabled else "Privacy mode: OFF"
+
+    def _compose_enter_sends_toggle_label(self) -> str:
+        return (
+            "Enter sends message: ON"
+            if self._compose_enter_sends
+            else "Enter sends message: OFF"
+        )
+
+    def _refresh_compose_placeholder_shortcuts(self) -> None:
+        self.input_edit.setPlaceholderText(
+            _compose_input_placeholder_text(enter_sends=self._compose_enter_sends)
+        )
+
+    @QtCore.pyqtSlot()
+    def _on_toggle_compose_enter_sends_clicked(self) -> None:
+        self._compose_enter_sends = not self._compose_enter_sends
+        save_compose_enter_sends(self._compose_enter_sends)
+        self.input_edit.set_enter_sends(self._compose_enter_sends)
+        self._refresh_compose_placeholder_shortcuts()
+        self._compose_enter_sends_toggle_btn.setText(
+            self._compose_enter_sends_toggle_label()
+        )
 
     @QtCore.pyqtSlot()
     def _on_toggle_notify_sound_clicked(self) -> None:
