@@ -223,6 +223,18 @@ def append_plain_with_raster_emoji_at_cursor(
         cursor.insertText(fragment[pos:])
 
 
+def plain_needs_raster_emoji_materialize(plain: str) -> bool:
+    """True if ``plain`` contains a glyph we replace with a bundled PNG in the compose field."""
+    paths = emoji_paths_cached()
+    if not paths:
+        return False
+    rx = emoji_pick_regex()
+    for m in rx.finditer(plain):
+        if paths.get(normalize_emoji_glyph(m.group(0))) is not None:
+            return True
+    return False
+
+
 def fill_document_from_plain(doc: QtGui.QTextDocument, plain: str, font: QtGui.QFont) -> None:
     doc.blockSignals(True)
     try:
