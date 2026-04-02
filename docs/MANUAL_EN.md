@@ -67,7 +67,7 @@ After you choose a profile, the main chat window opens:
 - **Theme switch** — to the right of the status row (sun/moon icon). Toggles `ligth` and `night`.
 - **Saved peers** — optional **left** sidebar with the per-profile contact book; details in **§3.1**.
 - **Chat area** — shows your and peer messages, system notices, and file transfer progress. You can select and copy message text (right‑click or context menu).
-- **Message input** — below the chat: type your text. **Enter** makes a new line, and sending a message uses **Shift+Enter** (also **Ctrl+Enter**, and on macOS **⌘+Enter**). Or use the send button. You can **paste a raster image** from the clipboard (**Ctrl+V** / **⌘V** or **Paste** in the field’s menu); it is sent like **Send picture** (PNG/JPEG/WebP).
+- **Message input** — below the chat: type your text. **By default**, **Enter** starts a new line and you send with **Shift+Enter** (also **Ctrl+Enter**, and on macOS **⌘+Enter**), or with the send button. In the **`⋯`** menu you can turn **Enter sends message: ON** — then **Enter** sends and **Shift+Enter** inserts a new line (**Ctrl/⌘+Enter** still sends in both modes). The placeholder hint under the field matches the active mode. Setting is saved in **`ui_prefs.json`**. You can **paste a raster image** from the clipboard (**Ctrl+V** / **⌘V** or **Paste** in the field’s menu); it is sent like **Send picture** (PNG/JPEG/WebP).
 - **Actions bar** — at the bottom: peer address, connection buttons, and the **`⋯`** menu (see section 4).
 
 Use **Connect** for live chat and the first BlindBox bootstrap session. If BlindBox is already ready, sending text can go straight to the offline queue even without an active live connection.
@@ -102,6 +102,7 @@ The actions bar is located **at the bottom of the window**, below the message in
   - **Clear history**;
   - **History retention…**;
   - **Privacy mode: ON/OFF**;
+  - **Enter sends message: ON/OFF**;
   - **Notification sound: ON/OFF**.
 
 All controls in the bar have the same height and are laid out in a single row.
@@ -127,6 +128,7 @@ Click the **`⋯`** button or press **Ctrl+.** (Windows/Linux) / **⌘+.** (macO
 - **Clear history** — delete the local history file for the current peer.
 - **History retention…** — configure maximum messages per peer and maximum age in days before encrypted history is persisted.
 - **Privacy mode: ON/OFF** — when ON: tray toasts omit message body text (title may still name the peer); while this window is focused, tray toasts and notification sounds are suppressed (including for other chats). When OFF, those behaviours are disabled. Label shows current state.
+- **Enter sends message: ON/OFF** — when **ON**: **Enter** sends the message, **Shift+Enter** inserts a new line (**Ctrl/⌘+Enter** still sends). When **OFF** (default): **Enter** is a new line; **Shift+Enter** or **Ctrl/⌘+Enter** sends. The compose placeholder text updates accordingly; the choice is persisted for the profile (see **`ui_prefs.json`**).
 - **Notification sound: ON/OFF** — enable or mute the incoming-message sound path when it would otherwise play (custom sound path is kept when off; Privacy mode can still mute sound while the window is focused).
 
 #### 4.2. Peer address field
