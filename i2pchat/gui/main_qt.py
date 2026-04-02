@@ -4641,7 +4641,10 @@ class _ComposeVerticalResizeGrip(QtWidgets.QWidget):
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
         if self._dragging and self._host is not None:
             dy = int(event.globalPosition().y()) - self._start_global_y
-            self._host._compose_resize_drag_to(self._start_bottom, dy)
+            # Как у ручки QSplitter: тянем разделитель вниз — нижняя панель (ввод) растёт.
+            # Глобальный Y растёт вниз; для нижнего виджета вертикального сплиттера нужен −dy,
+            # иначе на полосе с tool tip направление ощущается инвертированным относительно ручки.
+            self._host._compose_resize_drag_to(self._start_bottom, -dy)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]

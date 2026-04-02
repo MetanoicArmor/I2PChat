@@ -36,6 +36,7 @@ from i2pchat.storage.profile_blindbox_replicas import (
     normalize_replica_endpoints,
     save_profile_blindbox_replicas_bundle,
 )
+from i2pchat.protocol.chat_text_chunking import split_long_chat_text
 from i2pchat.protocol.message_delivery import (
     DELIVERY_STATE_DELIVERED,
     DELIVERY_STATE_FAILED,
@@ -3244,42 +3245,48 @@ class I2PChatCore:
             peer_id = self._blindbox_peer_id()
             if not peer_id:
                 return None
+            chunks = split_long_chat_text(text)
+            if not chunks:
+                return None
+            last_msg_id: Optional[int] = None
             try:
-                msg_id = self._allocate_msg_id()
-                frame = self._codec.encode(
-                    "U", text.encode("utf-8"), msg_id=msg_id, flags=0
-                )
-                keys = derive_blindbox_message_keys(
-                    self._blindbox_root_secret,
-                    self.my_dest.base32,
-                    peer_id,
-                    "send",
-                    self._blindbox_state.send_index,
-                    epoch=self._blindbox_root_epoch,
-                )
-                blob = encrypt_blindbox_blob(
-                    frame,
-                    keys.blob_key,
-                    "send",
-                    self._blindbox_state.send_index,
-                    keys.state_tag,
-                    padding_bucket=self._blindbox_padding_bucket,
-                )
-                await self._blindbox_client.put(keys.lookup_token, blob)
-                self._blindbox_state.send_index += 1
-                self._blindbox_state.updated_at = int(time.time())
-                self._save_blindbox_state()
-                self._emit_message(
-                    "me",
-                    text,
-                    message_id=str(msg_id),
-                    delivery_state="queued",
-                    delivery_route="offline-queued",
-                    delivery_hint="Message queued for offline delivery.",
-                    delivery_reason="blindbox-ready",
-                    retryable=False,
-                )
-                return msg_id
+                for chunk in chunks:
+                    msg_id = self._allocate_msg_id()
+                    frame = self._codec.encode(
+                        "U", chunk.encode("utf-8"), msg_id=msg_id, flags=0
+                    )
+                    keys = derive_blindbox_message_keys(
+                        self._blindbox_root_secret,
+                        self.my_dest.base32,
+                        peer_id,
+                        "send",
+                        self._blindbox_state.send_index,
+                        epoch=self._blindbox_root_epoch,
+                    )
+                    blob = encrypt_blindbox_blob(
+                        frame,
+                        keys.blob_key,
+                        "send",
+                        self._blindbox_state.send_index,
+                        keys.state_tag,
+                        padding_bucket=self._blindbox_padding_bucket,
+                    )
+                    await self._blindbox_client.put(keys.lookup_token, blob)
+                    self._blindbox_state.send_index += 1
+                    self._blindbox_state.updated_at = int(time.time())
+                    self._save_blindbox_state()
+                    self._emit_message(
+                        "me",
+                        chunk,
+                        message_id=str(msg_id),
+                        delivery_state="queued",
+                        delivery_route="offline-queued",
+                        delivery_hint="Message queued for offline delivery.",
+                        delivery_reason="blindbox-ready",
+                        retryable=False,
+                    )
+                    last_msg_id = msg_id
+                return last_msg_id
             except Exception as e:
                 detail = _exception_user_message(e)
                 logger.warning("BlindBox send failed: %s", detail, exc_info=True)
@@ -3466,37 +3473,41 @@ class I2PChatCore:
             _, writer = self.conn
             if self._blindbox_ready():
                 await self._send_blindbox_root_if_needed(writer)
-            frame, msg_id = self.frame_message_with_id("U", text)
-            writer.write(frame)
-            await writer.drain()
-            self._register_pending_ack(
-                self._pending_text_acks,
-                msg_id,
-                token=text[:128],
-                ack_kind="msg",
-            )
+            chunks = split_long_chat_text(text)
+            last_msg_id: Optional[int] = None
             lifecycle = delivery_lifecycle_from_send_result(
                 route="online-live",
                 accepted=True,
                 reason="live-session",
                 hint="Message sent over live secure session.",
             )
-            self._emit_message(
-                "me",
-                text,
-                message_id=str(msg_id),
-                delivery_state=lifecycle.state,
-                delivery_route="online-live",
-                delivery_hint=lifecycle.hint,
-                delivery_reason=lifecycle.reason,
-                retryable=lifecycle.retryable,
-            )
+            for chunk in chunks:
+                frame, msg_id = self.frame_message_with_id("U", chunk)
+                writer.write(frame)
+                await writer.drain()
+                self._register_pending_ack(
+                    self._pending_text_acks,
+                    msg_id,
+                    token=chunk[:128],
+                    ack_kind="msg",
+                )
+                self._emit_message(
+                    "me",
+                    chunk,
+                    message_id=str(msg_id),
+                    delivery_state=lifecycle.state,
+                    delivery_route="online-live",
+                    delivery_hint=lifecycle.hint,
+                    delivery_reason=lifecycle.reason,
+                    retryable=lifecycle.retryable,
+                )
+                last_msg_id = msg_id
             return SendTextResult(
                 route="online-live",
                 accepted=True,
                 reason="live-session",
                 hint="Message sent over live secure session.",
-                message_id=str(msg_id),
+                message_id=str(last_msg_id) if last_msg_id is not None else None,
                 delivery_state=lifecycle.state,
                 retryable=lifecycle.retryable,
             )

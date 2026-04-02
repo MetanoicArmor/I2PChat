@@ -52,6 +52,17 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.retryable)
         self.assertIsNotNone(result.message_id)
 
+    async def test_send_text_splits_long_live_into_multiple_frames(self) -> None:
+        core = I2PChatCore(profile="alice")
+        writer = _DummyWriter()
+        core.conn = (object(), writer)
+        core.handshake_complete = True
+        long_text = "L" * 5000
+        result = await core.send_text(long_text)
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.route, "online-live")
+        self.assertGreaterEqual(len(writer.frames), 2)
+
     async def test_send_text_queues_offline_when_blindbox_ready(self) -> None:
         with patch.dict(
             os.environ,
