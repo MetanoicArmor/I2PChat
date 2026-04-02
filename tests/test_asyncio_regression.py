@@ -98,7 +98,19 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         strict_core = I2PChatCore(profile="alice", legacy_compat=False)
         legacy_core = I2PChatCore(profile="alice", legacy_compat=True)
         self.assertFalse(strict_core._codec.allow_legacy)  # noqa: SLF001
+        # Legacy parsing stays off until a session with a locked matching peer.
+        self.assertFalse(legacy_core._codec.allow_legacy)  # noqa: SLF001
+        legacy_core.stored_peer = PEER_B32
+        legacy_core.current_peer_addr = OTHER_B32
+        legacy_core.conn = (object(), object())
+        legacy_core._sync_codec_allow_legacy()
+        self.assertFalse(legacy_core._codec.allow_legacy)  # noqa: SLF001
+        legacy_core.current_peer_addr = PEER_B32
+        legacy_core._sync_codec_allow_legacy()
         self.assertTrue(legacy_core._codec.allow_legacy)  # noqa: SLF001
+        legacy_core.conn = None
+        legacy_core._sync_codec_allow_legacy()
+        self.assertFalse(legacy_core._codec.allow_legacy)  # noqa: SLF001
 
     def test_profile_paths_stay_within_profiles_dir(self) -> None:
         import i2pchat.core.i2p_chat_core as core_module

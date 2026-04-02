@@ -4,6 +4,7 @@ Versioned release write-ups for I2PChat live in this directory (`docs/releases/`
 
 | Version | Notes |
 |--------|--------|
+| **1.1.2** | [RELEASE_1.1.2.md](RELEASE_1.1.2.md) — legacy framing gated to locked peer; file/G send `to_thread`; ACK soft-drain; audits |
 | **1.1.1** | [RELEASE_1.1.1.md](RELEASE_1.1.1.md) — long message chunking, compose splitter, file transfer polish, theme auto, docs |
 | **1.1.0** | [RELEASE_1.1.0.md](RELEASE_1.1.0.md) — keyboard shortcuts, I2P update check, compose/search UX, VERSION discovery |
 | **1.0.1** | [RELEASE_1.0.1.md](RELEASE_1.0.1.md) — profile switch race fixes; notification menu (Privacy + sound only) |
