@@ -259,10 +259,15 @@ Requirements:
 
 Quick run commands (from repo root):
 
-**Linux (Debian/Ubuntu)** — if `python3.14` is not installed yet:
+**Linux (Debian/Ubuntu)** — system packages you may need:
 
 ```bash
+# Python 3.14 (if missing)
 sudo apt install python3.14 python3.14-venv
+
+# PyQt6 6.5+ on X11: without this, Qt may fail to load the "xcb" platform plugin
+# (error: xcb-cursor0 / libxcb-cursor0 is needed)
+sudo apt install libxcb-cursor0
 ```
 
 **macOS / Linux**
