@@ -85,7 +85,7 @@ def make_message_qtextdocument(
     doc.setDefaultFont(font)
     doc.setProperty(_DOC_RES_COUNTER_PROP, -1)
     opt = QtGui.QTextOption()
-    opt.setWrapMode(QtGui.QTextOption.WrapMode.WrapAnywhere)
+    opt.setWrapMode(QtGui.QTextOption.WrapMode.WordWrap)
     doc.setDefaultTextOption(opt)
 
     cursor = QtGui.QTextCursor(doc)
@@ -253,6 +253,9 @@ def fill_document_from_plain(doc: QtGui.QTextDocument, plain: str, font: QtGui.Q
     try:
         doc.clear()
         doc.setDefaultFont(font)
+        _opt = QtGui.QTextOption()
+        _opt.setWrapMode(QtGui.QTextOption.WrapMode.WordWrap)
+        doc.setDefaultTextOption(_opt)
         doc.setProperty(_DOC_RES_COUNTER_PROP, -1)
         cur = QtGui.QTextCursor(doc)
         append_plain_with_raster_emoji_at_cursor(cur, doc, plain, font)

@@ -3021,6 +3021,7 @@ class MessageInputEdit(QtWidgets.QTextEdit):
         self.setAcceptDrops(True)
         self.setAcceptRichText(True)
         self.setLineWrapMode(QtWidgets.QTextEdit.LineWrapMode.WidgetWidth)
+        self.setWordWrapMode(QtGui.QTextOption.WrapMode.WordWrap)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._suppress_compose_signal = False
         self._suppress_materialize = False
