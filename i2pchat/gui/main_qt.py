@@ -1425,14 +1425,46 @@ THEMES: dict[str, dict[str, object]] = {
     },
 }
 
+# Stored in ui_prefs.json; maps to ligth/night via effective_theme_id().
+THEME_PREF_AUTO = "auto"
+THEME_PREFERENCE_CYCLE: tuple[str, ...] = ("ligth", "night", THEME_PREF_AUTO)
 
-def _resolve_theme(theme_id: Optional[str]) -> str:
+
+def _normalize_theme_preference(theme_id: Optional[str]) -> str:
     raw = str(theme_id or "").strip().lower()
     if raw in {"macos", "light"}:
         raw = "ligth"
+    if raw in {THEME_PREF_AUTO, "system", "follow"}:
+        return THEME_PREF_AUTO
     if raw in THEMES:
         return raw
     return THEME_DEFAULT
+
+
+def _system_prefers_dark() -> bool:
+    app = QtGui.QGuiApplication.instance()
+    if app is None:
+        return False
+    hints = app.styleHints()
+    scheme = hints.colorScheme()
+    if scheme == QtCore.Qt.ColorScheme.Dark:
+        return True
+    if scheme == QtCore.Qt.ColorScheme.Light:
+        return False
+    bg = app.palette().color(QtGui.QPalette.ColorRole.Window)
+    return int(bg.lightness()) < 128
+
+
+def effective_theme_id(preference: Optional[str]) -> str:
+    pref = _normalize_theme_preference(preference)
+    if pref == THEME_PREF_AUTO:
+        return "night" if _system_prefers_dark() else "ligth"
+    return pref
+
+
+def _resolve_theme(theme_id: Optional[str]) -> str:
+    """Concrete palette key (ligth | night), including resolving system/auto preference."""
+    return effective_theme_id(_normalize_theme_preference(theme_id))
 
 
 # Tooltip colors for QPalette — used by i2pchat.gui.rounded_qtooltip (replaces native QTipLabel on macOS).
@@ -1553,13 +1585,13 @@ def _save_ui_prefs(data: dict[str, object]) -> None:
 
 def load_saved_theme() -> str:
     data = _load_ui_prefs()
-    return _resolve_theme(str(data.get("theme", THEME_DEFAULT)))
+    return _normalize_theme_preference(str(data.get("theme", THEME_PREF_AUTO)))
 
 
-def save_theme(theme_id: str) -> None:
-    theme_id = _resolve_theme(theme_id)
+def save_theme(theme_pref: str) -> None:
+    pref = _normalize_theme_preference(theme_pref)
     data = _load_ui_prefs()
-    data["theme"] = theme_id
+    data["theme"] = pref
     _save_ui_prefs(data)
 
 
@@ -4602,7 +4634,8 @@ class ChatWindow(QtWidgets.QMainWindow):
     def __init__(self, profile: Optional[str] = None, theme_id: str = THEME_DEFAULT) -> None:
         super().__init__()
         self.profile = profile or "default"
-        self.theme_id = _resolve_theme(theme_id)
+        self._theme_preference = _normalize_theme_preference(theme_id)
+        self.theme_id = effective_theme_id(self._theme_preference)
         self.theme = THEMES[self.theme_id]
         # Показываем профиль через разделитель-точку;
         # если вдруг имя профиля уже содержит служебный маркер в конце (" •"),
@@ -4672,6 +4705,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.theme_switch_button.setFixedHeight(self._STATUS_ROW_HEIGHT_PX)
         self.theme_switch_button.setFixedWidth(self._STATUS_ROW_HEIGHT_PX)
         self.theme_switch_button.clicked.connect(self.on_theme_switch_clicked)
+        _app_inst = QtWidgets.QApplication.instance()
+        if _app_inst is not None:
+            try:
+                _app_inst.styleHints().colorSchemeChanged.connect(
+                    self._on_system_color_scheme_changed
+                )
+            except AttributeError:
+                pass
         self.status_row = QtWidgets.QWidget(self)
         status_row_layout = QtWidgets.QHBoxLayout(self.status_row)
         # Горизонтальные поля только у main_layout; иначе статус «уезжает» вправо относительно сплиттера/сайдбара.
@@ -5268,7 +5309,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._refresh_contacts_list()
         self._apply_startup_peer_from_book()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
-        self._apply_theme(self.theme_id, persist=False)
+        self._apply_theme(self._theme_preference, persist=False)
         self._apply_contacts_sidebar_startup_state()
         self._sync_contacts_right_pack_left_margin()
         self._update_peer_lock_indicator()
@@ -7088,8 +7129,27 @@ class ChatWindow(QtWidgets.QMainWindow):
             QtWidgets.QApplication.beep()
 
     def _update_theme_switch_label(self) -> None:
-        next_theme = "night" if self.theme_id == "ligth" else "ligth"
-        # Показываем иконку текущей темы: ligth -> sun, night -> moon.
+        try:
+            _ti = THEME_PREFERENCE_CYCLE.index(self._theme_preference)
+        except ValueError:
+            _ti = 0
+        _next_pref = THEME_PREFERENCE_CYCLE[
+            (_ti + 1) % len(THEME_PREFERENCE_CYCLE)
+        ]
+
+        def _pref_tooltip_label(pref: str) -> str:
+            if pref == THEME_PREF_AUTO:
+                return "system"
+            return pref
+
+        _next_lbl = _pref_tooltip_label(_next_pref)
+        if self._theme_preference == THEME_PREF_AUTO:
+            _cur_lbl = (
+                f"system ({'dark' if self.theme_id == 'night' else 'light'})"
+            )
+        else:
+            _cur_lbl = _pref_tooltip_label(self._theme_preference)
+        # Показываем иконку текущей *эффективной* темы: ligth -> sun, night -> moon.
         icon_name = "sun.max.png" if self.theme_id == "ligth" else "moon.png"
         icon_path = _resolve_gui_icon(icon_name)
         tint = QtGui.QColor("#1f232b") if self.theme_id == "ligth" else QtGui.QColor("#f2f2f7")
@@ -7126,13 +7186,22 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.theme_switch_button.setText("◐")
         self.theme_switch_button.setToolTip(
             _tooltip_with_portable_shortcut(
-                f"Current: {self.theme_id}. Click to switch to {next_theme}",
+                f"Theme: {_cur_lbl}. Click for: {_next_lbl}",
                 "Ctrl+T",
             )
         )
 
-    def _apply_theme(self, theme_id: str, persist: bool = True) -> None:
-        resolved = _resolve_theme(theme_id)
+    def _on_system_color_scheme_changed(self, *_args: object) -> None:
+        if sip.isdeleted(self):
+            return
+        if self._theme_preference != THEME_PREF_AUTO:
+            return
+        self._apply_theme(THEME_PREF_AUTO, persist=False)
+
+    def _apply_theme(self, theme_pref: str, persist: bool = True) -> None:
+        pref = _normalize_theme_preference(theme_pref)
+        self._theme_preference = pref
+        resolved = effective_theme_id(pref)
         self.theme_id = resolved
         self.theme = THEMES[self.theme_id]
         self.setStyleSheet(
@@ -7153,8 +7222,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             delegate.set_bubble_palette(delegate_palette)
             self.chat_view.viewport().update()
         if persist:
-            save_theme(self.theme_id)
-        _apply_application_tooltip_stylesheet(self.theme_id)
+            save_theme(pref)
+        _apply_application_tooltip_stylesheet(resolved)
         self._update_theme_switch_label()
         self.more_actions_popup.apply_theme(self.theme_id)
         self.saved_peers_context_popup.apply_theme(self.theme_id)
@@ -7256,8 +7325,12 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_theme_switch_clicked(self) -> None:
-        next_theme = "night" if self.theme_id == "ligth" else "ligth"
-        self._apply_theme(next_theme, persist=True)
+        try:
+            i = THEME_PREFERENCE_CYCLE.index(self._theme_preference)
+        except ValueError:
+            i = 0
+        next_pref = THEME_PREFERENCE_CYCLE[(i + 1) % len(THEME_PREFERENCE_CYCLE)]
+        self._apply_theme(next_pref, persist=True)
 
     @QtCore.pyqtSlot()
     def _on_more_actions_popup_closed(self) -> None:
@@ -8938,7 +9011,9 @@ def main() -> None:
             return
         profile: Optional[str] = ensure_valid_profile_name(raw_profile)
         if len(sys.argv) > 2:
-            selected_theme = _resolve_theme(sys.argv[2].strip().lower())
+            selected_theme = _normalize_theme_preference(
+                sys.argv[2].strip().lower()
+            )
             save_theme(selected_theme)
     else:
         # 2) для .app / обычного запуска без аргументов показываем диалог выбора профиля
