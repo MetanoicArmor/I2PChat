@@ -14,6 +14,7 @@ import sys
 import tempfile
 import types
 import unittest
+import unittest.mock as mock
 
 # Stub out PIL if not installed
 if "PIL" not in sys.modules:
@@ -436,6 +437,37 @@ class TestImageTransferHardening(unittest.IsolatedAsyncioTestCase):
         await core.receive_loop(conn)
 
         self.assertTrue(any("Image data error" in e for e in errors), errors)
+
+    async def test_inline_image_read_timeout_preserves_connection(self) -> None:
+        """READ_TIMEOUT между чанками G: перезапуск receive_loop, без сброса conn."""
+        errors: list[str] = []
+        core = self._make_core(on_error=errors.append)
+        payload = core.frame_message("G", "photo.png|10")
+        conn = (_Reader(payload), _Writer())
+        core.conn = conn
+
+        _real_wait_for = asyncio.wait_for
+        wf_n = [0]
+
+        async def wf_wrapper(awaitable, timeout=None):
+            wf_n[0] += 1
+            if wf_n[0] == 2:
+                # Как asyncio.wait_for при таймауте — закрыть read_frame, иначе RuntimeWarning
+                if asyncio.iscoroutine(awaitable):
+                    awaitable.close()  # type: ignore[union-attr]
+                raise asyncio.TimeoutError()
+            return await _real_wait_for(awaitable, timeout=timeout)
+
+        with mock.patch("i2pchat.core.i2p_chat_core.asyncio.wait_for", wf_wrapper):
+            await core.receive_loop(conn)
+
+        self.assertIsNotNone(core.conn, "conn cleared after timeout during inline image")
+        self.assertIs(core.conn, conn)
+        self.assertIsNotNone(core.inline_image_info)
+        self.assertFalse(
+            any("connection timed out" in e.lower() for e in errors),
+            errors,
+        )
 
 
 if __name__ == "__main__":

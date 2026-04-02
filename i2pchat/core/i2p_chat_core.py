@@ -158,6 +158,35 @@ def should_emit_file_progress(sent: int, chunk_len: int, total: int) -> bool:
     step = 4096 if total <= 65536 else 65536
     first_chunk_done = sent <= 4096 and sent > 0
     return bool(first_chunk_done or sent % step < chunk_len or sent == total)
+
+
+def _finalize_inline_image_worker(
+    image_bytes: bytes,
+    detected_ext: str,
+    images_dir: str,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Запись и PIL-валидация принятого inline-изображения (вызывать из executor/to_thread).
+    Возвращает (safe_path, error_message); error_message не None при сбое.
+    """
+    import hashlib
+
+    file_hash = hashlib.sha256(image_bytes).hexdigest()[:8]
+    safe_filename = f"img_{int(time.time())}_{file_hash}.{detected_ext}"
+    safe_path = os.path.join(images_dir, safe_filename)
+    try:
+        with open(safe_path, "wb") as f:
+            f.write(image_bytes)
+        is_valid, error_msg, _ = validate_image(safe_path)
+        if not is_valid:
+            try:
+                os.remove(safe_path)
+            except OSError:
+                pass
+            return None, error_msg or "invalid image"
+        return safe_path, None
+    except Exception as e:
+        return None, str(e)
 BLINDBOX_LOCAL_WRAP_VERSION_LEGACY = 1
 BLINDBOX_LOCAL_WRAP_VERSION_CURRENT = 2
 
@@ -4619,6 +4648,10 @@ class I2PChatCore:
                         if self.incoming_info is not None:
                             restart_after_timeout = True
                             return
+                        # Приём inline-картинки (G): как для F/D — не рвём сессию из-за долгой паузы I2P
+                        if self.inline_image_info is not None:
+                            restart_after_timeout = True
+                            return
                         if self.conn == connection:
                             self._emit_error("Connection timed out (no data received)")
                         return
@@ -4791,22 +4824,31 @@ class I2PChatCore:
                                 self._incoming_image_msg_id = None
                                 continue
                             
-                            # Сохраняем изображение
-                            import hashlib
-                            file_hash = hashlib.sha256(self.inline_image_buffer).hexdigest()[:8]
-                            safe_filename = f"img_{int(time.time())}_{file_hash}.{detected_ext}"
-                            safe_path = os.path.join(get_images_dir(), safe_filename)
-                            
+                            # Сохраняем и валидируем в thread pool (hash/PIL не блокируют qasync/Qt)
+                            images_dir = get_images_dir()
+                            payload = bytes(self.inline_image_buffer)
+                            safe_path, disk_err = await asyncio.to_thread(
+                                _finalize_inline_image_worker,
+                                payload,
+                                detected_ext,
+                                images_dir,
+                            )
                             try:
-                                with open(safe_path, 'wb') as f:
-                                    f.write(self.inline_image_buffer)
-                                
-                                # Валидация с PIL
-                                is_valid, error_msg, _ = validate_image(safe_path)
-                                if not is_valid:
-                                    os.remove(safe_path)
-                                    self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
-                                    self._emit_error(f"Received invalid image: {error_msg}")
+                                if safe_path is None:
+                                    self._emit_file_event(
+                                        FileTransferInfo(
+                                            filename=filename,
+                                            size=expected_size,
+                                            received=-1,
+                                            is_sending=False,
+                                            is_inline_image=True,
+                                        )
+                                    )
+                                    self._emit_error(
+                                        f"Received invalid image: {disk_err}"
+                                        if disk_err
+                                        else "Received invalid image"
+                                    )
                                 else:
                                     self._emit_file_event(
                                         FileTransferInfo(
@@ -4831,7 +4873,15 @@ class I2PChatCore:
                                         pass
                                     cleanup_images_cache()
                             except Exception as e:
-                                self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
+                                self._emit_file_event(
+                                    FileTransferInfo(
+                                        filename=filename,
+                                        size=expected_size,
+                                        received=-1,
+                                        is_sending=False,
+                                        is_inline_image=True,
+                                    )
+                                )
                                 self._emit_error(f"Failed to save image: {e}")
                             
                             self.inline_image_buffer = bytearray()
@@ -5230,7 +5280,10 @@ class I2PChatCore:
             if (
                 restart_after_timeout
                 and self.conn == connection
-                and self.incoming_info is not None
+                and (
+                    self.incoming_info is not None
+                    or self.inline_image_info is not None
+                )
                 and not self._file_transfer_active
             ):
                 try:
@@ -5239,12 +5292,13 @@ class I2PChatCore:
                 except RuntimeError:
                     pass
                 skip_cleanup = True
-            # Не сбрасываем соединение если идёт передача или приём файла
+            # Не сбрасываем соединение если идёт передача или приём файла / inline-изображения
             if (
                 not skip_cleanup
                 and self.conn == connection
                 and not self._file_transfer_active
                 and self.incoming_info is None
+                and self.inline_image_info is None
             ):
                 self._cancel_handshake_watchdog()
                 if self._keepalive_task:
