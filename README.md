@@ -256,32 +256,25 @@ Requirements:
 - Python **3.14+** (recommended; this is what the vendored local `i2plib` copy and current builds are tested with)
 - [i2pd](https://i2pd.website) router with **SAM** enabled (default port `7656`)
 
-Create and activate a virtual environment, then install dependencies:
+Quick run commands (from repo root):
+
+**macOS / Linux**
 
 ```bash
-python3.14 -m venv .venv
-source .venv/bin/activate  # on Windows: .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python3.14 -m venv .venv314
+./.venv314/bin/pip install -r requirements.txt
+./.venv314/bin/python -m i2pchat.gui.main_qt
 ```
 
-If `.venv/bin/pip` fails with **bad interpreter** / a path to another project, another virtualenv was probably first on `PATH`. Run `deactivate` (repeat until none is active), then recreate `.venv`. On **macOS + Homebrew** you can pin the interpreter without using a fixed `/opt/homebrew` path:
+**Windows (PowerShell)**
 
-```bash
-rm -rf .venv
-"$(brew --prefix python@3.14)/bin/python3.14" -m venv .venv
+```powershell
+py -3.14 -m venv .venv314
+.\.venv314\Scripts\pip install -r requirements.txt
+.\.venv314\Scripts\python -m i2pchat.gui.main_qt
 ```
 
-Run the application:
-
-```bash
-python -m i2pchat.gui.main_qt
-```
-
-Recommended package-first entrypoint:
-
-```bash
-python -m i2pchat.gui
-```
+If the venv already exists and dependencies are installed, only the last command is needed to launch.
 
 The same code path is available as `python -m i2pchat.run_gui` (matches [`i2pchat/run_gui.py`](i2pchat/run_gui.py), the PyInstaller analyzed script). Prefer `-m` from the repo root; running the `.py` file directly can break package imports.
 
