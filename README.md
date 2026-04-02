@@ -259,6 +259,12 @@ Requirements:
 
 Quick run commands (from repo root):
 
+**Linux (Debian/Ubuntu)** — if `python3.14` is not installed yet:
+
+```bash
+sudo apt install python3.14 python3.14-venv
+```
+
 **macOS / Linux**
 
 ```bash
