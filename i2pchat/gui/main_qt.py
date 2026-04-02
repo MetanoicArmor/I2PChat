@@ -128,7 +128,7 @@ from .raster_emoji_render import (
     make_message_qtextdocument,
     map_plain_offset_to_qt_pos,
     map_qt_pos_to_plain_offset,
-    plain_needs_raster_emoji_materialize,
+    document_needs_raster_emoji_materialize,
 )
 from i2pchat.storage.contact_book import (
     ContactBook,
@@ -3091,10 +3091,9 @@ class MessageInputEdit(QtWidgets.QTextEdit):
     def _materialize_raster_emojis(self) -> None:
         if not emoji_paths_cached():
             return
-        plain = document_plain_with_raster_emoji_images(self.document())
-        # Avoid full document rebuild when there is nothing to rasterize: rebuild clears the
-        # document and cursor restore (map_*_offset) can mis-place the caret after Enter/newline.
-        if not plain_needs_raster_emoji_materialize(plain):
+        # Only rebuild while emoji are still plain text; once they are images, the serialized
+        # plain still contains emoji codepoints — a string-based check would rebuild forever.
+        if not document_needs_raster_emoji_materialize(self.document()):
             return
         self._rebuild_compose_emojis_from_unicode_plain()
 

@@ -223,15 +223,28 @@ def append_plain_with_raster_emoji_at_cursor(
         cursor.insertText(fragment[pos:])
 
 
-def plain_needs_raster_emoji_materialize(plain: str) -> bool:
-    """True if ``plain`` contains a glyph we replace with a bundled PNG in the compose field."""
+def document_needs_raster_emoji_materialize(doc: QtGui.QTextDocument) -> bool:
+    """True if any *text* fragment still contains a glyph we replace with a bundled PNG.
+
+    Do not use the joined Unicode plain string for this check: images are serialized
+    back to emoji characters there, so the string would always look "needing" work
+    after materialize and would trigger a full rebuild on every idle timer tick.
+    """
     paths = emoji_paths_cached()
     if not paths:
         return False
     rx = emoji_pick_regex()
-    for m in rx.finditer(plain):
-        if paths.get(normalize_emoji_glyph(m.group(0))) is not None:
-            return True
+    block = doc.begin()
+    while block.isValid():
+        it = block.begin()
+        while not it.atEnd():
+            frag = it.fragment()
+            if not frag.charFormat().isImageFormat():
+                for m in rx.finditer(frag.text()):
+                    if paths.get(normalize_emoji_glyph(m.group(0))) is not None:
+                        return True
+            it += 1
+        block = block.next()
     return False
 
 
@@ -270,6 +283,38 @@ def document_plain_with_raster_emoji_images(doc: QtGui.QTextDocument) -> str:
     return "".join(parts)
 
 
+def _qchar_width(ch: str) -> int:
+    """QTextDocument positions count UTF-16 code units (QChar), not Unicode codepoints."""
+    if not ch:
+        return 0
+    return 2 if ord(ch) > 0xFFFF else 1
+
+
+def _plain_prefix_qchar_len(txt: str, n_codepoints: int) -> int:
+    """QChar offset after the first ``n_codepoints`` codepoints of ``txt``."""
+    inner = 0
+    for i, ch in enumerate(txt):
+        if i >= n_codepoints:
+            break
+        inner += _qchar_width(ch)
+    return inner
+
+
+def _qchar_inner_to_plain_length(txt: str, q_inner: int) -> int:
+    """Number of codepoints in ``txt`` that lie entirely before QChar offset ``q_inner``."""
+    if q_inner <= 0:
+        return 0
+    used = 0
+    for i, ch in enumerate(txt):
+        n = _qchar_width(ch)
+        if used + n > q_inner:
+            return i
+        used += n
+        if used >= q_inner:
+            return i + 1
+    return len(txt)
+
+
 def map_qt_pos_to_plain_offset(doc: QtGui.QTextDocument, qt_pos: int) -> int:
     plain_off = 0
     first_block = True
@@ -301,7 +346,8 @@ def map_qt_pos_to_plain_offset(doc: QtGui.QTextDocument, qt_pos: int) -> int:
                 if qt_pos <= fs:
                     return plain_off
                 if qt_pos < fe:
-                    return plain_off + len(txt[: qt_pos - fs])
+                    inner = qt_pos - fs
+                    return plain_off + _qchar_inner_to_plain_length(txt, inner)
                 plain_off += len(txt)
             it += 1
         block = block.next()
@@ -342,7 +388,7 @@ def map_plain_offset_to_qt_pos(doc: QtGui.QTextDocument, off: int) -> int:
                 txt = frag.text()
                 tlen = len(txt)
                 if rem < tlen:
-                    return fs + rem
+                    return fs + _plain_prefix_qchar_len(txt, rem)
                 rem -= tlen
                 if rem == 0:
                     return fe
