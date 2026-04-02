@@ -2,6 +2,7 @@ import asyncio
 import html
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -2387,8 +2388,11 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     # Базовая 8‑px сетка: все отступы и скругления кратны 4/8.
     PADDING_X = 12
     PADDING_Y = 8
-    # Вертикальный зазор между баблами (меньше, чем было изначально)
-    BUBBLE_SPACING_Y = 2
+    # Вертикальный зазор между баблами (минимальный; визуальный воздух даёт padding внутри бабла)
+    BUBBLE_SPACING_Y = 0
+    # Внешний отступ закрашенного бабла от верха/низа ячейки (тонкий зазор между соседними баблами).
+    # BUBBLE_SPACING_Y остаётся 0 — только этот inset даёт «чуть-чуть» воздуха. Внутренние PADDING у текста те же.
+    BUBBLE_OUTER_MARGIN_Y = 2
     BUBBLE_RADIUS = 12
     
     # Настройки для inline-изображений
@@ -2477,6 +2481,10 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             min_w = int(cell_width * 0.4)
         return max(min_w, min(max_w, content_px))
 
+    def _bubble_inner_text_width_px(self, bubble_width: int) -> float:
+        """Ширина для QTextDocument в бабле — как text_area.width() в paint() после двойных отступов."""
+        return float(max(10, bubble_width - 3 * self.PADDING_X))
+
     def paint(
         self,
         painter: QtGui.QPainter,
@@ -2553,11 +2561,12 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         painter.setBrush(bg_color)
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        omy = self.BUBBLE_OUTER_MARGIN_Y
         bubble_rect = bubble_rect.adjusted(
             self.PADDING_X / 2,
-            self.PADDING_Y / 2,
+            omy,
             -self.PADDING_X / 2,
-            -self.PADDING_Y / 2,
+            -omy,
         )
         painter.drawRoundedRect(bubble_rect, self.BUBBLE_RADIUS, self.BUBBLE_RADIUS)
 
@@ -2691,11 +2700,12 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         gloss_color = QtGui.QColor(255, 255, 255, 22 if is_sending else 16)
         painter.setBrush(bg_color)
         painter.setPen(QtGui.QPen(border_color, 1.0))
+        omy = self.BUBBLE_OUTER_MARGIN_Y
         bubble_rect = bubble_rect.adjusted(
             self.PADDING_X / 2,
-            self.PADDING_Y / 2,
+            omy,
             -self.PADDING_X / 2,
-            -self.PADDING_Y / 2,
+            -omy,
         )
         painter.drawRoundedRect(bubble_rect, 14, 14)
         gloss_rect = QtCore.QRectF(
@@ -2993,11 +3003,12 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 rect.height(),
             )
         
+        omy = self.BUBBLE_OUTER_MARGIN_Y
         bubble_rect = bubble_rect.adjusted(
             self.PADDING_X / 2,
-            self.PADDING_Y / 2,
+            omy,
             -self.PADDING_X / 2,
-            -self.PADDING_Y / 2,
+            -omy,
         )
         inner_rect = bubble_rect.adjusted(
             self.PADDING_X, self.PADDING_Y, -self.PADDING_X, -self.PADDING_Y
@@ -3056,27 +3067,24 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         cell_width = option.rect.width() if option.rect.width() > 0 else 600
         font = option.font
 
-        # Используем ту же ширину бабла, что и в paint()
         bubble_width = self._bubble_width(cell_width, item.text, font)
-        available_width = max(10, bubble_width - self.PADDING_X * 2)
+        inner_w = self._bubble_inner_text_width_px(bubble_width)
 
         text = item.text or " "
 
         paths = emoji_paths_cached()
         dummy_color = QtGui.QColor("#000000")
         doc = make_message_qtextdocument(
-            text, font, dummy_color, float(available_width), paths
+            text, font, dummy_color, inner_w, paths
         )
-        text_height = doc.size().height()
+        text_height = math.ceil(float(doc.size().height()))
 
-        # Высота самого бабла оставляем приблизительно как раньше —
-        # добавляем вертикальные отступы вокруг текста и внешний зазор.
-        height = int(text_height) + self.PADDING_Y * 3 + self.BUBBLE_SPACING_Y * 2
+        # Высота строки = высота документа + цепочка отступов как в paint():
+        # rect → bubble (−2·OUTER_MARGIN_Y) → inner (−2·PY) → text_area (−ts_height − PY/2 при timestamp).
+        height = int(text_height) + self.PADDING_Y * 2 + 2 * self.BUBBLE_OUTER_MARGIN_Y + self.BUBBLE_SPACING_Y * 2
         if item.timestamp:
-            ts_font = QtGui.QFont(font)
-            ts_font.setPointSize(max(font.pointSize() - 1, 6))
-            ts_metrics = QtGui.QFontMetrics(ts_font)
-            height += ts_metrics.height() + self.PADDING_Y
+            ts_m = QtGui.QFontMetrics(font)
+            height += ts_m.height() + int(self.PADDING_Y / 2)
 
         return QtCore.QSize(int(cell_width), int(height))
 
