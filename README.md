@@ -426,13 +426,13 @@ If you like this project and want to support development, you can send a small d
 
 ### 📥 Prebuilt Downloads
 
-**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt bundles match `VERSION` in the repo (currently **v1.1.2**); no Python installation required.
+**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt bundles match `VERSION` in the repo (currently **v1.1.3**); no Python installation required.
 
 | Platform | Download | Launch |
 |----------|----------|--------|
-| **Windows** | [I2PChat-windows-x64-v1.1.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.1.2.zip) | Unzip → run `I2PChat.exe` |
-| **macOS** | [I2PChat-macOS-arm64-v1.1.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.1.2.zip) | Unzip → open `I2PChat.app` |
-| **Linux** | [I2PChat-linux-x86_64-v1.1.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.1.2.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
+| **Windows** | [I2PChat-windows-x64-v1.1.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.1.3.zip) | Unzip → run `I2PChat.exe` |
+| **macOS** | [I2PChat-macOS-arm64-v1.1.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.1.3.zip) | Unzip → open `I2PChat.app` |
+| **Linux** | [I2PChat-linux-x86_64-v1.1.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.1.3.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
 
 > **Requirement:** [i2pd](https://i2pd.website) router must be running with SAM API enabled (default port 7656).
 

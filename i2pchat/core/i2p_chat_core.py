@@ -1146,7 +1146,6 @@ class I2PChatCore:
         on_file_delivered: Optional[Callable[[str], Any]] = None,
         on_trust_decision: Optional[TrustDecisionCallback] = None,
         on_trust_mismatch_decision: Optional[TrustMismatchDecisionCallback] = None,
-        legacy_compat: bool = False,
     ) -> None:
         self.sam_address = sam_address
         cp = coalesce_profile_name(profile)
@@ -1170,7 +1169,6 @@ class I2PChatCore:
         self.on_file_delivered = on_file_delivered
         self.on_trust_decision = on_trust_decision
         self.on_trust_mismatch_decision = on_trust_mismatch_decision
-        self.legacy_compat = legacy_compat
         self._trust_auto = (
             os.environ.get("I2PCHAT_TRUST_AUTO", "").strip().lower() in TRUTHY_ENV_VALUES
         )
@@ -1266,8 +1264,6 @@ class I2PChatCore:
         self._codec = ProtocolCodec(
             allowed_types={"U", "S", "P", "O", "F", "D", "E", "I", "H", "G"},
             max_frame_body=self.MAX_FRAME_BODY,
-            # Effective allow_legacy is set in _sync_codec_allow_legacy() when a session starts.
-            allow_legacy=False,
         )
         blindbox_enabled_raw = os.environ.get("I2PCHAT_BLINDBOX_ENABLED", "").strip().lower()
         self._blindbox_enabled_source = "default"
@@ -2297,7 +2293,6 @@ class I2PChatCore:
         self._write_profile_dat(private_key_base64, normalized_peer)
         self.stored_peer = normalized_peer
         self._load_blindbox_state()
-        self._sync_codec_allow_legacy()
 
     def clear_locked_peer(self) -> None:
         """
@@ -2331,7 +2326,6 @@ class I2PChatCore:
                     pass
         self.stored_peer = None
         self._load_blindbox_state()
-        self._sync_codec_allow_legacy()
 
     def is_current_peer_verified_for_lock(self) -> bool:
         return bool(
@@ -2582,16 +2576,6 @@ class I2PChatCore:
             self._emit_system(
                 "Use a named profile for persistent peer-key trust continuity."
             )
-        if self.legacy_compat:
-            self._emit_system(
-                "Warning: I2PCHAT_LEGACY_COMPAT=1 may enable legacy framing only when this profile "
-                "is locked to the connected peer (stored peer matches session). "
-                "Unknown or unlocked peers always use vNext-only framing."
-            )
-            self._emit_system(
-                "Use legacy only for interoperability with a specific known peer; vNext-only is safer."
-            )
-
         dest: Optional[i2plib.Destination] = None
 
         if is_persistent:
@@ -3416,7 +3400,6 @@ class I2PChatCore:
 
                 self.conn = (reader, writer)
                 self._activate_ack_session()
-                self._sync_codec_allow_legacy()
                 self._emit_message(
                     "success", "Handshake sent. Establishing secure channel... Wait"
                 )
@@ -4013,7 +3996,6 @@ class I2PChatCore:
             except Exception:
                 pass
             self._reset_crypto_state()
-            self._sync_codec_allow_legacy()
             self._emit_message("disconnect", "You disconnected.")
             self._emit_system("Waiting for incoming connections...")
         finally:
@@ -4058,24 +4040,6 @@ class I2PChatCore:
         self._ack_session_epoch = 0
         self.peer_identity_binding_verified = False
         self.current_peer_dest_b64 = None
-
-    def _peer_eligible_for_legacy_framing(self) -> bool:
-        """True only if the profile is locked to the same peer as the current session (TOFU lock)."""
-        locked = self._normalize_peer_addr(self.stored_peer or "")
-        current = self._normalize_peer_addr(self.current_peer_addr or "")
-        return bool(locked and current and locked == current)
-
-    def _sync_codec_allow_legacy(self) -> None:
-        """
-        Apply legacy framing only for a known locked peer and an active connection.
-
-        Operational rule: do not parse legacy frames against unknown peers even if env requests it.
-        """
-        self._codec.allow_legacy = bool(
-            self.conn
-            and self.legacy_compat
-            and self._peer_eligible_for_legacy_framing()
-        )
 
     async def initiate_secure_handshake(self) -> bool:
         """
@@ -4391,8 +4355,7 @@ class I2PChatCore:
                 parts = payload.split(":")
                 if len(parts) != 4:
                     raise ValueError(
-                        "Handshake payload must contain nonce, ephemeral key, signing key and signature. "
-                        "If the peer runs a pre-0.3.0 (legacy) client, both sides must use 0.3.0 or newer."
+                        "Handshake payload must contain nonce, ephemeral key, signing key and signature."
                     )
                 nonce_hex, eph_hex, sign_pub_hex, signature_hex = [p.strip().lower() for p in parts]
                 nonce = bytes.fromhex(nonce_hex)
@@ -4649,7 +4612,6 @@ class I2PChatCore:
 
                 self.conn = (reader, writer)
                 self._activate_ack_session()
-                self._sync_codec_allow_legacy()
 
                 loop = asyncio.get_running_loop()
                 loop.create_task(self.receive_loop(self.conn))
@@ -5362,7 +5324,6 @@ class I2PChatCore:
                     self._keepalive_task = None
                 self.conn = None
                 self._reset_crypto_state()
-                self._sync_codec_allow_legacy()
                 self._emit_message("disconnect", "Peer disconnected.")
                 self.peer_b32 = "Waiting for incoming connections..."
                 self._emit_system("Waiting for incoming connections...")

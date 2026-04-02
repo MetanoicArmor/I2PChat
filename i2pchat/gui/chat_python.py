@@ -69,7 +69,6 @@ class I2PChat(App):
             on_error=self.handle_error,
             on_file_event=self.handle_file_event,
             on_image_received=self.handle_image_received,
-            legacy_compat=os.environ.get("I2PCHAT_LEGACY_COMPAT", "").strip() in {"1", "true", "yes", "on"},
         )
 
     def compose(self) -> ComposeResult:

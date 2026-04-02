@@ -7428,7 +7428,6 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_file_delivered=self.handle_file_delivered,
             on_trust_decision=self.handle_trust_decision,
             on_trust_mismatch_decision=self.handle_trust_mismatch_decision,
-            legacy_compat=os.environ.get("I2PCHAT_LEGACY_COMPAT", "").strip().lower() in {"1", "true", "yes", "on"},
         )
         # динамически навешиваем колбэк уведомлений,
         # чтобы не менять публичную сигнатуру конструктора ядра

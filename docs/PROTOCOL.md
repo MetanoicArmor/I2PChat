@@ -34,11 +34,10 @@ These two layers are distinct and should not be confused.
 ## Versioning and compatibility
 
 - Current framing version: `PROTOCOL_VERSION = 4`
-- Canonical framing codec: `i2pchat/protocol/protocol_codec.py`
-- Legacy parsing exists only as an explicit compatibility mode (`allow_legacy`)
+- Canonical framing codec: `i2pchat/protocol/protocol_codec.py` (**vNext only**)
 
-The modern protocol should be treated as the source of truth. Legacy support is
-strictly opt-in and is not auto-detected from arbitrary incoming bytes.
+The on-wire live chat format is **vNext** only; streams without a valid `MAGIC`
+header are not accepted as alternate framing modes.
 
 ## vNext frame layout
 

@@ -1,8 +1,8 @@
 # I2PChat — security audit (technical)
 
-**Document version:** 1.1  
+**Document version:** 1.2  
 **Date:** 2026-04-02  
-**Scope revision:** Aligned with **v1.1.2** codebase — legacy framing **policy in code**, outbound file/inline-image disk I/O and ACK **drain batching** on the live path, plus prior scope (`i2pchat/`, GUI entrypoints, storage, protocol, BlindBox, representative tests). This remains a **point-in-time** review, not a formal penetration test or certification.
+**Scope revision:** Aligned with **v1.1.3** codebase — live framing is **vNext-only** (obsolete pre-vNext wire parsing removed); outbound file/inline-image disk I/O and ACK **drain batching** unchanged; scope otherwise (`i2pchat/`, GUI entrypoints, storage, protocol, BlindBox, representative tests). **Point-in-time** review, not a formal penetration test or certification.
 
 **Scope:** Source tree under `i2pchat/`, GUI entrypoints, storage, protocol and BlindBox modules, and representative tests.
 
@@ -12,7 +12,7 @@
 
 ## 1. Product summary
 
-I2PChat is a desktop chat client using **I2P SAM** for streaming connections to peers. It implements a **binary framed protocol** (vNext), optional **legacy framing** (opt-in only), a **NaCl-based handshake** with ephemeral keys, **authenticated encryption** for payloads, **TOFU-style** signing-key pinning for peers, optional **encrypted local chat history**, and **BlindBox** offline message storage via third-party replicas.
+I2PChat is a desktop chat client using **I2P SAM** for streaming connections to peers. It implements a **binary vNext framed protocol**, a **NaCl-based handshake** with ephemeral keys, **authenticated encryption** for payloads, **TOFU-style** signing-key pinning for peers, optional **encrypted local chat history**, and **BlindBox** offline message storage via third-party replicas.
 
 Primary codebase: Python 3, **PyQt6** GUI, **PyNaCl**, **i2plib**, **Pillow** for images.
 
@@ -46,7 +46,7 @@ Primary codebase: Python 3, **PyQt6** GUI, **PyNaCl**, **i2plib**, **Pillow** fo
 | Area | Assessment |
 |------|------------|
 | Live transport crypto | **Strong:** modern NaCl primitives, separate MAC key, sequence checks, downgrade blocked after handshake. |
-| Framing / DoS limits | **Good:** `max_frame_body`, resync limits; large transfers chunked. **Legacy parse path** is **env opt-in** and (as of v1.1.2) **only active** when the profile’s **stored peer** matches the **current session peer** and a connection exists. |
+| Framing / DoS limits | **Good:** `max_frame_body`, resync limits; large transfers chunked. **vNext-only** live codec — no alternate on-wire framing parser. |
 | File receive path | **Good:** filename sanitization, unique paths, size caps; progress/UI throttling reduces jank (availability). |
 | Local history | **Good:** per-file salt, HKDF layering, SecretBox; export uses Argon2id. |
 | BlindBox | **Depends on deployment:** line protocol + optional replica tokens; not TLS in the usual sense—trust is layered on I2P/TCP to replicas. |
@@ -54,7 +54,7 @@ Primary codebase: Python 3, **PyQt6** GUI, **PyNaCl**, **i2plib**, **Pillow** fo
 | Secrets in repo | **No hardcoded API keys** observed; env vars documented for operators. |
 | Subprocess use | **Limited:** notification helpers with fixed command lists; no `shell=True` in application code reviewed. |
 
-**Residual risks:** operator misconfiguration (weak BlindBox tokens; `I2PCHAT_LEGACY_COMPAT` still widens compatibility **only** for locked-peer sessions but is not “free” risk), plaintext `.dat` when keyring unused, update check fetches remote HTML (trust in URL), and **peer trust UX** (user must confirm TOFU changes deliberately).
+**Residual risks:** operator misconfiguration (weak BlindBox tokens), plaintext `.dat` when keyring unused, update check fetches remote HTML (trust in URL), and **peer trust UX** (user must confirm TOFU changes deliberately).
 
 ---
 
@@ -71,7 +71,7 @@ Primary codebase: Python 3, **PyQt6** GUI, **PyNaCl**, **i2plib**, **Pillow** fo
 
 ### 4.2 Live protocol (vNext) and handshake
 
-- **Framing:** `ProtocolCodec` enforces `MAGIC`, version, allowed types, and maximum body size (`i2pchat/protocol/protocol_codec.py`). Legacy parsing is **disabled by default**. The GUI/core pass `legacy_compat` from **`I2PCHAT_LEGACY_COMPAT`**. As of **v1.1.2**, `ProtocolCodec.allow_legacy` is **not** set once at startup to that flag: **`_sync_codec_allow_legacy()`** turns legacy on only when **all** hold: an **active `conn`**, `legacy_compat` true, and **`stored_peer`** (normalized) **equals** **`current_peer_addr`** (normalized). So **unlocked** profiles, **transient** profiles without a stored peer, and **inbound unknown** peers when nothing is locked stay **vNext-only** even if the env var is set. This **operational** recommendation from earlier audits is now **enforced in code**. Legacy still widens the parser surface **for that one locked peer**—treat as **conscious operator choice**.
+- **Framing:** `ProtocolCodec` enforces `MAGIC`, version, allowed types, and maximum body size (`i2pchat/protocol/protocol_codec.py`). The live stream is **vNext only**; there is **no** second parser for obsolete line-oriented frames. Non-`MAGIC` streams fail resync within `resync_limit` or protocol checks.
 
 - **Post-handshake:** Plaintext application frames after encryption are treated as **protocol violation** and lead to disconnect (`receive_loop`).
 
@@ -79,7 +79,7 @@ Primary codebase: Python 3, **PyQt6** GUI, **PyNaCl**, **i2plib**, **Pillow** fo
 
 - **Replay / ordering:** Strict `expected_seq` enforcement; failures emit errors and disconnect.
 
-**Recommendations:** Prefer leaving **`I2PCHAT_LEGACY_COMPAT` unset**; if you need old peers, **lock the profile** to that peer so behaviour matches intent. Monitor logs for downgrade and MAC failure spikes.
+**Recommendations:** Monitor logs for downgrade and MAC failure spikes.
 
 ---
 
@@ -149,7 +149,6 @@ Several flags affect security or privacy posture:
 
 | Variable | Effect |
 |----------|--------|
-| `I2PCHAT_LEGACY_COMPAT` | Requests legacy compatibility in core; **effective** legacy framing **only** with **locked peer == session peer** (v1.1.2+). Still **higher risk** than vNext-only for that session. |
 | `I2PCHAT_MSG_ACK_DRAIN_EVERY` | During **outgoing** file/image send: drain after every **N** automatic **MSG_ACK**/**IMG_ACK** `S` frames (default **16**, **1–256**). Affects **responsiveness vs backpressure**, not crypto. |
 | `I2PCHAT_BLINDBOX_*` | Replica lists, tokens, quorum—**misconfiguration** leaks or weakens offline security. |
 | `I2PCHAT_FILE_XFER_DEBUG` | Logs timing—**may leak transfer patterns** in logs. |
@@ -170,7 +169,7 @@ Operators should avoid debug flags in production unless logs are protected.
 
 ## 5. Prioritized recommendations
 
-1. **High (operational):** **v1.1.2** enforces **no legacy framing** against **unknown / unlocked** peers even if `I2PCHAT_LEGACY_COMPAT=1`; operators should still **avoid** the flag unless interoperating with a **specific** old peer and a **locked** profile. Set **BlindBox tokens** when using TCP/loopback replicas; use **keyring** where OS supports it.
+1. **High (operational):** Set **BlindBox tokens** when using TCP/loopback replicas; use **keyring** where OS supports it.
 2. **Medium:** Periodically run `pip audit` / OS package audits on dependency pins used in releases.
 3. **Medium:** Ensure **release binaries** are signed and hashes published (project already describes this).
 4. **Low:** Consider centralizing a **security.txt** or “Reporting vulnerabilities” section in README linking to this audit and contact.
@@ -180,9 +179,9 @@ Operators should avoid debug flags in production unless logs are protected.
 
 ## 6. Conclusion
 
-I2PChat implements a **credibly designed** stack for encrypted peer chat over I2P: strong framing rules, modern AEAD and MAC, explicit downgrade handling, and encrypted local history. **Legacy framing** is further **constrained** (v1.1.2) to **locked-peer** sessions. Remaining risk is dominated by **deployment and trust choices** (TOFU confirmations, BlindBox operators, optional legacy with a known peer, physical access to profile files), not by an obvious single critical remote code execution flaw in the reviewed paths.
+I2PChat implements a **credibly designed** stack for encrypted peer chat over I2P: strong **vNext-only** framing rules, modern AEAD and MAC, explicit downgrade handling, and encrypted local history. Remaining risk is dominated by **deployment and trust choices** (TOFU confirmations, BlindBox operators, physical access to profile files), not by an obvious single critical remote code execution flaw in the reviewed paths.
 
-This document should be **updated** after major protocol, crypto, BlindBox, or **framing policy** changes.
+This document should be **updated** after major protocol, crypto, BlindBox, or framing changes.
 
 ---
 
@@ -200,4 +199,4 @@ This document should be **updated** after major protocol, crypto, BlindBox, or *
 | Protocol specification | `docs/PROTOCOL.md` |
 | SAM input validation tests | `tests/test_sam_input_validation.py` |
 | Protocol hardening tests | `tests/test_protocol_hardening.py` |
-| Legacy codec gating (env + lock) | `tests/test_asyncio_regression.py` (`test_legacy_compat_controls_codec_legacy_mode`) |
+| vNext-only framing tests | `tests/test_protocol_framing_vnext.py` |

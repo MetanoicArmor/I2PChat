@@ -127,7 +127,6 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         frame = codec.encode("U", b"hello", msg_id=42, flags=FLAG_ENCRYPTED)
         decoded = await codec.read_frame(_Reader(frame))
 
-        self.assertFalse(decoded.is_legacy)
         self.assertEqual(decoded.msg_type, "U")
         self.assertEqual(decoded.payload, b"hello")
         self.assertEqual(decoded.msg_id, 42)
@@ -190,30 +189,16 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             codec.encode("S", b"0123456789", msg_id=1, flags=0)
 
-    async def test_legacy_mode_is_explicit_policy(self) -> None:
+    async def test_ascii_style_stream_hits_resync_limit(self) -> None:
+        """Pre-vNext line-oriented bytes cannot satisfy MAGIC scan within resync_limit."""
         codec = ProtocolCodec(
             allowed_types={"S"},
             max_frame_body=1024,
-            allow_legacy=True,
+            resync_limit=64,
         )
-        vnext_frame = ProtocolCodec(
-            allowed_types={"S"},
-            max_frame_body=1024,
-            allow_legacy=False,
-        ).encode("S", b"hello", msg_id=1, flags=0)
+        bad = b"S0005hello\n" * 20
         with self.assertRaises(ValueError):
-            await codec.read_frame(_Reader(vnext_frame))
-
-    async def test_legacy_desync_rejected_in_legacy_mode(self) -> None:
-        codec = ProtocolCodec(
-            allowed_types={"S"},
-            max_frame_body=1024,
-            allow_legacy=True,
-        )
-        # Legacy frame with wrong delimiter should be rejected.
-        bad_legacy = b"S0002ok!"
-        with self.assertRaises(ValueError):
-            await codec.read_frame(_Reader(bad_legacy))
+            await codec.read_frame(_Reader(bad))
 
     async def test_msg_ack_clears_pending_text_ack_encrypted(self) -> None:
         import i2pchat.core.i2p_chat_core as core_module
