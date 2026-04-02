@@ -120,6 +120,43 @@ def _sam_unreachable_user_message(sam_address: Tuple[str, int]) -> str:
 
 DEFAULT_LOCAL_BLINDBOX_REPLICA = "127.0.0.1:19444"
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+# Диагностика подвисаний при передаче файлов (см. план FILE_XFER):
+#   I2PCHAT_FILE_XFER_DEBUG=1 — логи медленных drain и интервалов emit на приёме
+#   I2PCHAT_FILE_SEND_DRAIN_BATCH=N — сколько D/G-фреймов подряд писать до одного drain (по умолч. 4)
+#   I2PCHAT_FILE_CHUNK_BYTES=N — размер чтения с диска (1024..524288, по умолч. 4096)
+# Фаза 0: при зависании зафиксируйте сторону (отправитель/получатель), размер файла, направление.
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in TRUTHY_ENV_VALUES
+
+
+def _file_send_drain_batch() -> int:
+    raw = os.environ.get("I2PCHAT_FILE_SEND_DRAIN_BATCH", "4").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 4
+    return max(1, min(n, 64))
+
+
+def _file_read_chunk_bytes() -> int:
+    raw = os.environ.get("I2PCHAT_FILE_CHUNK_BYTES", "4096").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 4096
+    return max(1024, min(n, 512 * 1024))
+
+
+def should_emit_file_progress(sent: int, chunk_len: int, total: int) -> bool:
+    """Те же шаги прогресса, что и при исходящей send_file (малые файлы — чаще, крупные — ~64 KiB)."""
+    if total <= 0:
+        return True
+    step = 4096 if total <= 65536 else 65536
+    first_chunk_done = sent <= 4096 and sent > 0
+    return bool(first_chunk_done or sent % step < chunk_len or sent == total)
 BLINDBOX_LOCAL_WRAP_VERSION_LEGACY = 1
 BLINDBOX_LOCAL_WRAP_VERSION_CURRENT = 2
 
@@ -1181,6 +1218,8 @@ class I2PChatCore:
         self._transfer_rejected_by_peer: bool = False
         # Флаг активного receive_loop (предотвращает запуск дублирующих корутин)
         self._recv_loop_active: bool = False
+        self._file_xfer_debug: bool = _env_truthy("I2PCHAT_FILE_XFER_DEBUG")
+        self._file_xfer_debug_last_recv_emit_mono: Optional[float] = None
         self._codec = ProtocolCodec(
             allowed_types={"U", "S", "P", "O", "F", "D", "E", "I", "H", "G"},
             max_frame_body=self.MAX_FRAME_BODY,
@@ -3562,33 +3601,61 @@ class I2PChatCore:
             )
             self._emit_file_event(info)
 
+            chunk_size = _file_read_chunk_bytes()
+            drain_batch = _file_send_drain_batch()
             sent = 0
+            pending_drains = 0
             with open(path, "rb") as f:
                 while True:
                     if self._cancel_transfer:
+                        if pending_drains:
+                            try:
+                                await writer.drain()
+                            except Exception:
+                                pass
                         await self._send_abort_file()
                         raise Exception("Transfer cancelled by user")
                     if self._transfer_aborted_by_peer:
+                        if pending_drains:
+                            try:
+                                await writer.drain()
+                            except Exception:
+                                pass
                         self._emit_system("Receiver cancelled the transfer")
                         raise Exception("Transfer cancelled by receiver")
                     if self._transfer_rejected_by_peer:
+                        if pending_drains:
+                            try:
+                                await writer.drain()
+                            except Exception:
+                                pass
                         raise Exception("Receiver rejected the file")
                     if not self.conn:
                         raise ConnectionError("Connection lost during transfer")
-                    
-                    chunk = f.read(4096)
+
+                    chunk = f.read(chunk_size)
                     if not chunk:
                         break
-                    
+
                     encoded = base64.b64encode(chunk).decode()
                     writer.write(self.frame_message("D", encoded))
-                    await writer.drain()
-                    
+                    pending_drains += 1
+                    if pending_drains >= drain_batch:
+                        t0 = time.monotonic()
+                        await writer.drain()
+                        if self._file_xfer_debug:
+                            dt = time.monotonic() - t0
+                            if dt >= 0.25:
+                                logger.info(
+                                    "file xfer send: slow drain %.3fs bytes_sent=%s batch=%s",
+                                    dt,
+                                    sent + len(chunk),
+                                    drain_batch,
+                                )
+                        pending_drains = 0
+
                     sent += len(chunk)
-                    # Эмитить прогресс: после первого чанка (чтобы виджет успел появиться), затем по шагу
-                    step = 4096 if filesize <= 65536 else 65536
-                    first_chunk_done = sent <= 4096 and sent > 0
-                    if first_chunk_done or sent % step < len(chunk) or sent == filesize:
+                    if should_emit_file_progress(sent, len(chunk), filesize):
                         info = FileTransferInfo(
                             filename=filename,
                             size=filesize,
@@ -3597,6 +3664,9 @@ class I2PChatCore:
                             source_path=path,
                         )
                         self._emit_file_event(info)
+
+            if pending_drains:
+                await writer.drain()
 
             writer.write(self.frame_message("E", ""))
             await writer.drain()
@@ -3725,27 +3795,46 @@ class I2PChatCore:
                 token=os.path.basename(filename),
                 ack_kind="image",
             )
-            
-            # Отправляем данные чанками в base64
+
+            chunk_size = _file_read_chunk_bytes()
+            drain_batch = _file_send_drain_batch()
             sent = 0
-            last_emit_sent = 0
+            pending_drains = 0
             with open(path, "rb") as f:
                 while True:
                     if self._cancel_transfer:
+                        if pending_drains:
+                            try:
+                                await writer.drain()
+                            except Exception:
+                                pass
                         raise Exception("Transfer cancelled by user")
                     if not self.conn:
                         raise ConnectionError("Connection lost during transfer")
-                    
-                    chunk = f.read(4096)
+
+                    chunk = f.read(chunk_size)
                     if not chunk:
                         break
-                    
+
                     encoded = base64.b64encode(chunk).decode()
                     writer.write(self.frame_message("G", encoded))
-                    await writer.drain()
-                    
+                    pending_drains += 1
+                    if pending_drains >= drain_batch:
+                        t0 = time.monotonic()
+                        await writer.drain()
+                        if self._file_xfer_debug:
+                            dt = time.monotonic() - t0
+                            if dt >= 0.25:
+                                logger.info(
+                                    "file xfer image send: slow drain %.3fs bytes_sent=%s batch=%s",
+                                    dt,
+                                    sent + len(chunk),
+                                    drain_batch,
+                                )
+                        pending_drains = 0
+
                     sent += len(chunk)
-                    if sent - last_emit_sent >= 65536:
+                    if should_emit_file_progress(sent, len(chunk), filesize):
                         self._emit_file_event(
                             FileTransferInfo(
                                 filename=filename,
@@ -3756,8 +3845,10 @@ class I2PChatCore:
                                 source_path=path,
                             )
                         )
-                        last_emit_sent = sent
-            
+
+            if pending_drains:
+                await writer.drain()
+
             # Отправляем маркер завершения
             writer.write(self.frame_message("G", "__IMG_END__"))
             await writer.drain()
@@ -4819,6 +4910,7 @@ class I2PChatCore:
                         self.incoming_info = FileTransferInfo(
                             filename=safe_path, size=size, received=0
                         )
+                        self._file_xfer_debug_last_recv_emit_mono = None
                         self._emit_system(
                             f"Receiving file: {final_name} ({size} bytes)"
                         )
@@ -4839,7 +4931,24 @@ class I2PChatCore:
                                 raise ValueError("Decoded file chunk exceeds remaining size")
                             self.incoming_file.write(chunk)
                             self.incoming_info.received += len(chunk)
-                            self._emit_file_event(self.incoming_info)
+                            rcv = self.incoming_info.received
+                            tot = self.incoming_info.size
+                            clen = len(chunk)
+                            if should_emit_file_progress(rcv, clen, tot):
+                                if self._file_xfer_debug:
+                                    now = time.monotonic()
+                                    prev = self._file_xfer_debug_last_recv_emit_mono
+                                    if prev is not None:
+                                        gap = now - prev
+                                        if gap >= 0.25:
+                                            logger.info(
+                                                "file xfer recv: emit gap %.3fs received=%s/%s",
+                                                gap,
+                                                rcv,
+                                                tot,
+                                            )
+                                    self._file_xfer_debug_last_recv_emit_mono = now
+                                self._emit_file_event(self.incoming_info)
                     except Exception as e:
                         self._emit_error(f"File chunk error: {e}")
                         if self.incoming_file:

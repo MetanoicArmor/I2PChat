@@ -7050,6 +7050,27 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def handle_file_event(self, info: FileTransferInfo) -> None:
+        t0 = time.perf_counter()
+        _xfer_dbg = os.environ.get("I2PCHAT_FILE_XFER_DEBUG", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        try:
+            self._handle_file_event_impl(info)
+        finally:
+            if _xfer_dbg:
+                dt = time.perf_counter() - t0
+                if dt >= 0.05:
+                    logger.info(
+                        "file xfer UI: handle_file_event took %.3fs received=%s size=%s",
+                        dt,
+                        info.received,
+                        info.size,
+                    )
+
+    def _handle_file_event_impl(self, info: FileTransferInfo) -> None:
         progress = info.received / info.size if info.size > 0 else 0.0
 
         # Начало передачи
@@ -7372,6 +7393,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._refresh_connection_buttons()
 
     def _create_core(self, _profile: Optional[str]) -> I2PChatCore:
+        # A/B: I2PCHAT_QT_FILE_EVENT_NOOP=1 — отключить колбэки прогресса файла (диагностика подвисаний UI).
+        _file_event_noop = os.environ.get("I2PCHAT_QT_FILE_EVENT_NOOP", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        on_file = (lambda _i: None) if _file_event_noop else self.handle_file_event
         core = I2PChatCore(
             profile=self.profile,
             on_status=self.handle_status,
@@ -7379,7 +7408,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_peer_changed=self.handle_peer_changed,
             on_system=self.handle_system,
             on_error=self.handle_error,
-            on_file_event=self.handle_file_event,
+            on_file_event=on_file,
             on_file_offer=self.ask_incoming_file_accept,
             on_image_received=self.handle_image_received,
             on_inline_image_received=self.handle_inline_image_received,
