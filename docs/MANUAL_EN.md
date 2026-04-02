@@ -549,6 +549,16 @@ Check:
   - `Cmd+C` on macOS;
 - you can also use the context menu (`Copy text` / `Copy with timestamp`).
 
+#### 7.5. Qt cannot load the **xcb** platform plugin (Linux)
+
+When running the GUI from source on **Debian/Ubuntu** under **X11**, **PyQt6 6.5+** needs the system library **`libxcb-cursor0`**. If the terminal shows messages like `xcb-cursor0` / `libxcb-cursor0 is needed` or `Could not load the Qt platform plugin "xcb"`, install it:
+
+```bash
+sudo apt install libxcb-cursor0
+```
+
+Then launch the app again. (The project **README** also lists this next to other Linux setup commands.)
+
 ### 8. Protocol metadata and padding
 
 Even with post-handshake encryption, some transport metadata remains observable:

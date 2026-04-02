@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import errno
 import hashlib
 import json
 import logging
@@ -78,6 +79,37 @@ def _sam_stream_connect_hint(exc: BaseException) -> str:
             "ensure the other side is online with tunnels ready, wait 1–3 minutes, retry."
         )
     return ""
+
+
+def _is_tcp_connection_refused(exc: BaseException) -> bool:
+    if isinstance(exc, ConnectionRefusedError):
+        return True
+    if isinstance(exc, OSError) and exc.errno in (
+        errno.ECONNREFUSED,
+        getattr(errno, "WSAECONNREFUSED", -1),
+    ):
+        return True
+    return False
+
+
+def _tcp_refusal_in_exception_chain(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if _is_tcp_connection_refused(cur):
+            return True
+        cur = cur.__cause__
+    return False
+
+
+def _sam_unreachable_user_message(sam_address: Tuple[str, int]) -> str:
+    host, port = sam_address
+    return (
+        f"The I2P SAM API is not reachable at {host}:{port} (connection refused). "
+        "Start your I2P router (for example i2pd), make sure SAM is enabled on that host and port, "
+        "then try again. If your router listens elsewhere, point I2PChat at the correct SAM address."
+    )
 
 
 DEFAULT_LOCAL_BLINDBOX_REPLICA = "127.0.0.1:19444"
@@ -2342,6 +2374,23 @@ class I2PChatCore:
 
     async def init_session(self) -> None:
         """Создать/загрузить идентичность и SAM-сессию."""
+        try:
+            await self._do_init_session()
+        except Exception as e:
+            if _tcp_refusal_in_exception_chain(e):
+                msg = _sam_unreachable_user_message(self.sam_address)
+                self._emit_error(msg)
+                logger.warning(
+                    "SAM unreachable (connection refused) at %s:%s",
+                    self.sam_address[0],
+                    self.sam_address[1],
+                    exc_info=True,
+                )
+                raise RuntimeError(msg) from e
+            raise
+
+    async def _do_init_session(self) -> None:
+        """Создать/загрузить идентичность и SAM-сессию (тело init_session)."""
         self._emit_status("initializing")
         self._emit_system(f"Initializing Profile: {self.profile}")
 
