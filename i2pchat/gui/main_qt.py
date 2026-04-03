@@ -27,6 +27,12 @@ from i2pchat.blindbox.blindbox_diagnostics import build_blindbox_diagnostics_tex
 from i2pchat.blindbox.local_server_example import (
     get_blindbox_dotenv_example_note,
     get_blindbox_dotenv_example_source,
+    get_production_daemon_env_source,
+    get_production_daemon_install_script_source,
+    get_production_daemon_one_shot_install_source,
+    get_production_daemon_package_script_source,
+    get_production_daemon_package_note,
+    get_production_daemon_systemd_source,
     get_blindbox_standalone_launcher_note,
     get_blindbox_standalone_launcher_source,
     get_fail2ban_filter_example_note,
@@ -9014,6 +9020,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             get_blindbox_standalone_launcher_source(),
         )
         tabs.addTab(launch_page, "Standalone")
+        prod_pkg_page, prod_pkg_edit = _tab_page(
+            get_production_daemon_package_note(),
+            "python3 -m i2pchat.blindbox.daemon\n",
+        )
+        tabs.addTab(prod_pkg_page, "Prod package")
         i2p_page, i2p_edit = _tab_page(
             get_i2pd_blindbox_tunnel_example_note(),
             get_i2pd_blindbox_tunnel_example_source(),
@@ -9029,6 +9040,31 @@ class ChatWindow(QtWidgets.QMainWindow):
             get_blindbox_dotenv_example_source(),
         )
         tabs.addTab(env_page, ".env")
+        prod_sd_page, prod_sd_edit = _tab_page(
+            get_production_daemon_package_note(),
+            get_production_daemon_systemd_source(),
+        )
+        tabs.addTab(prod_sd_page, "Prod systemd")
+        prod_env_page, prod_env_edit = _tab_page(
+            get_production_daemon_package_note(),
+            get_production_daemon_env_source(),
+        )
+        tabs.addTab(prod_env_page, "Prod env")
+        prod_install_page, prod_install_edit = _tab_page(
+            get_production_daemon_package_note(),
+            get_production_daemon_install_script_source(),
+        )
+        tabs.addTab(prod_install_page, "Prod install")
+        one_shot_install_page, one_shot_install_edit = _tab_page(
+            get_production_daemon_package_note(),
+            get_production_daemon_one_shot_install_source(),
+        )
+        tabs.addTab(one_shot_install_page, "install.sh")
+        prod_bundle_page, prod_bundle_edit = _tab_page(
+            get_production_daemon_package_note(),
+            get_production_daemon_package_script_source(),
+        )
+        tabs.addTab(prod_bundle_page, "Prod bundle")
         f2b_filter_page, f2b_filter_edit = _tab_page(
             get_fail2ban_filter_example_note(),
             get_fail2ban_filter_example_source(),
@@ -9043,9 +9079,15 @@ class ChatWindow(QtWidgets.QMainWindow):
         edits = (
             py_edit,
             launch_edit,
+            prod_pkg_edit,
             i2p_edit,
             sd_edit,
             env_edit,
+            prod_sd_edit,
+            prod_env_edit,
+            prod_install_edit,
+            one_shot_install_edit,
+            prod_bundle_edit,
             f2b_filter_edit,
             f2b_jail_edit,
         )

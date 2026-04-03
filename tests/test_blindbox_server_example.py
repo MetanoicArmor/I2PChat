@@ -10,9 +10,13 @@ from unittest.mock import patch
 
 server_example = importlib.import_module("i2pchat.blindbox.blindbox_server_example")
 local_example = importlib.import_module("i2pchat.blindbox.local_server_example")
+daemon_service = importlib.import_module("i2pchat.blindbox.daemon.service")
 
 
 class BlindBoxServerExampleTests(unittest.TestCase):
+    def test_production_daemon_service_exports_main(self) -> None:
+        self.assertTrue(callable(daemon_service.main))
+
     def test_prune_store_drops_expired_and_oldest_for_quota(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             old_base = server_example.BASE
@@ -322,6 +326,26 @@ class LocalServerExampleStringsTests(unittest.TestCase):
         self.assertIn("importlib.util", text)
         note = local_example.get_blindbox_standalone_launcher_note()
         self.assertIn("Standalone wrapper", note)
+
+    def test_production_daemon_package_assets_are_available(self) -> None:
+        note = local_example.get_production_daemon_package_note()
+        self.assertIn("python3 -m i2pchat.blindbox.daemon", note)
+        systemd_text = local_example.get_production_daemon_systemd_source()
+        self.assertIn("ExecStart=/usr/bin/python3 -m i2pchat.blindbox.daemon", systemd_text)
+        env_text = local_example.get_production_daemon_env_source()
+        self.assertIn("BLINDBOX_ADMIN_TOKEN=", env_text)
+        self.assertIn("daemon.env", env_text)
+        install_text = local_example.get_production_daemon_install_script_source()
+        self.assertIn("systemctl --user enable --now i2pchat-blindbox.service", install_text)
+        self.assertIn("daemon.env", install_text)
+        one_shot = local_example.get_production_daemon_one_shot_install_source()
+        self.assertIn("BlindBox mode [public/token]", one_shot)
+        self.assertIn("install.sh [public|token]", one_shot)
+        self.assertIn("python3 -m i2pchat.blindbox.daemon", one_shot)
+        bundle_text = local_example.get_production_daemon_package_script_source()
+        self.assertIn("I2PChat-BlindBox-daemon-v", bundle_text)
+        self.assertIn("install/install.sh", bundle_text)
+        self.assertIn("blindbox_server_example.py", bundle_text)
 
     def test_fail2ban_examples_are_available(self) -> None:
         filter_text = local_example.get_fail2ban_filter_example_source()

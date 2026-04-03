@@ -15,6 +15,11 @@ _EXAMPLE_NAME = "blindbox_server_example.py"
 _STANDALONE_NAME = "blindbox_service_standalone.py"
 _FAIL2BAN_FILTER_NAME = "i2pchat-blindbox.conf"
 _FAIL2BAN_JAIL_NAME = "jail.local.example"
+_PROD_SYSTEMD_NAME = "i2pchat-blindbox.service"
+_PROD_ENV_NAME = "daemon.env.example"
+_PROD_INSTALL_NAME = "install_blindbox_daemon.sh"
+_PROD_PACKAGE_NAME = "package_blindbox_daemon.sh"
+_ONE_SHOT_INSTALL_NAME = "install.sh"
 
 
 def _read_example_via_importlib_resources() -> Optional[str]:
@@ -126,6 +131,41 @@ def get_fail2ban_jail_example_source() -> str:
     return f"# Example file {_FAIL2BAN_JAIL_NAME} not found in the package install.\n"
 
 
+def get_production_daemon_systemd_source() -> str:
+    text = _read_bundled_text("daemon", "systemd", _PROD_SYSTEMD_NAME)
+    if text is not None:
+        return text
+    return f"# Example file {_PROD_SYSTEMD_NAME} not found in the package install.\n"
+
+
+def get_production_daemon_env_source() -> str:
+    text = _read_bundled_text("daemon", "env", _PROD_ENV_NAME)
+    if text is not None:
+        return text
+    return f"# Example file {_PROD_ENV_NAME} not found in the package install.\n"
+
+
+def get_production_daemon_install_script_source() -> str:
+    text = _read_bundled_text("daemon", "install", _PROD_INSTALL_NAME)
+    if text is not None:
+        return text
+    return f"# Example file {_PROD_INSTALL_NAME} not found in the package install.\n"
+
+
+def get_production_daemon_package_script_source() -> str:
+    text = _read_bundled_text("daemon", "install", _PROD_PACKAGE_NAME)
+    if text is not None:
+        return text
+    return f"# Example file {_PROD_PACKAGE_NAME} not found in the package install.\n"
+
+
+def get_production_daemon_one_shot_install_source() -> str:
+    text = _read_bundled_text("daemon", "install", _ONE_SHOT_INSTALL_NAME)
+    if text is not None:
+        return text
+    return f"# Example file {_ONE_SHOT_INSTALL_NAME} not found in the package install.\n"
+
+
 def get_local_blindbox_server_example_note() -> str:
     return (
         "<b>1)</b> On the i2pd host, save this file as <code>.py</code> and keep it running. "
@@ -167,6 +207,16 @@ def get_blindbox_standalone_launcher_note() -> str:
         "<b>Standalone wrapper:</b> copy this file next to <code>blindbox_server_example.py</code> "
         "when you want a cleaner service entrypoint for <code>systemd</code> or manual deployment. "
         "It first tries the sibling file, then falls back to the installed <code>i2pchat</code> package."
+    )
+
+
+def get_production_daemon_package_note() -> str:
+    return (
+        "<b>Production daemon package:</b> this is the supported package-local deployment path. "
+        "Use <code>python3 -m i2pchat.blindbox.daemon</code> or point <code>systemd</code> to the "
+        "same module. The package bundles a dedicated <code>systemd</code> unit, env example, and "
+        "matching fail2ban assets, plus install/package helper scripts. "
+        "If you want a single downloaded server installer, use <code>install.sh</code>."
     )
 
 

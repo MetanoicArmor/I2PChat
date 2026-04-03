@@ -26,6 +26,7 @@ a = Analysis(
         ('i2pchat/blindbox/blindbox_server_example.py', 'i2pchat/blindbox'),
         ('i2pchat/blindbox/blindbox_service_standalone.py', 'i2pchat/blindbox'),
         ('i2pchat/blindbox/fail2ban', 'i2pchat/blindbox/fail2ban'),
+        ('i2pchat/blindbox/daemon', 'i2pchat/blindbox/daemon'),
     ],
     hiddenimports=_local_modules + [
         'rich', 'textual', 'pyperclip',
