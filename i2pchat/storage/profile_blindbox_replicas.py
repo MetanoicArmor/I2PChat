@@ -18,6 +18,18 @@ logger = logging.getLogger("i2pchat.storage.profile_blindbox_replicas")
 
 PROFILE_BLINDBOX_REPLICAS_VERSION = 2
 _SUPPORTED_LOAD_VERSIONS = frozenset({1, 2})
+_DEPRECATED_RELEASE_BLINDBOX_REPLICA = (
+    "tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444"
+)
+_CURRENT_RELEASE_BLINDBOX_REPLICA = (
+    "dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444"
+)
+_OLD_RELEASE_BUILTIN_PAIR = frozenset(
+    {
+        _DEPRECATED_RELEASE_BLINDBOX_REPLICA,
+        _CURRENT_RELEASE_BLINDBOX_REPLICA,
+    }
+)
 
 
 def profile_blindbox_replicas_path(profiles_dir: str, profile: str) -> str:
@@ -60,6 +72,43 @@ def _replica_auth_subset(replicas: list[str], raw: Any) -> dict[str, str]:
     return out
 
 
+def _migrate_deprecated_release_defaults(
+    path: str,
+    replicas: list[str],
+    replica_auth: dict[str, str],
+) -> tuple[list[str], dict[str, str]]:
+    """
+    Auto-prune the deprecated built-in release endpoint when a saved profile file
+    still contains the exact old built-in pair.
+
+    This keeps existing user-edited custom lists intact while transparently
+    migrating the most common stale default case.
+    """
+    if set(replicas) != _OLD_RELEASE_BUILTIN_PAIR:
+        return replicas, replica_auth
+    migrated = [r for r in replicas if r != _DEPRECATED_RELEASE_BLINDBOX_REPLICA]
+    auth_clean = _replica_auth_subset(migrated, replica_auth)
+    try:
+        atomic_write_json(
+            path,
+            {
+                "version": PROFILE_BLINDBOX_REPLICAS_VERSION,
+                "replicas": migrated,
+                "replica_auth": auth_clean,
+            },
+        )
+    except OSError as e:
+        logger.warning(
+            "BlindBox profile replicas migration save failed (%s): %s", path, e
+        )
+    else:
+        logger.info(
+            "Migrated deprecated BlindBox release endpoint from saved profile list: %s",
+            path,
+        )
+    return migrated, auth_clean
+
+
 def load_profile_blindbox_replicas_bundle(
     profiles_dir: str, profile: str
 ) -> tuple[list[str], dict[str, str]]:
@@ -87,7 +136,9 @@ def load_profile_blindbox_replicas_bundle(
     replicas = normalize_replica_endpoints(strings)
     if ver == 1:
         return replicas, {}
-    return replicas, _replica_auth_subset(replicas, data.get("replica_auth"))
+    auth = _replica_auth_subset(replicas, data.get("replica_auth"))
+    replicas, auth = _migrate_deprecated_release_defaults(path, replicas, auth)
+    return replicas, auth
 
 
 def load_profile_blindbox_replicas_list(profiles_dir: str, profile: str) -> list[str]:

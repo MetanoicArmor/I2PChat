@@ -1,72 +1,70 @@
 """
-In-app Blind Box setup examples (Python / i2pd / systemd / .env reference).
-
-Source file: ``i2pchat/blindbox/blindbox_server_example.py`` (same directory).
-PyInstaller: may also ship as ``blindbox_server_example.py`` under ``_MEIPASS``.
+In-app Blind Box setup examples (installer-first deployment guidance).
 """
 
 from __future__ import annotations
 
 import os
-import sys
-from typing import Optional
 
-_EXAMPLE_NAME = "blindbox_server_example.py"
-
-
-def _read_example_via_importlib_resources() -> Optional[str]:
-    """Works for installs where the file is package data (and some frozen layouts)."""
-    try:
-        from importlib.resources import files
-    except ImportError:
-        return None
-    try:
-        candidate = files("i2pchat.blindbox").joinpath(_EXAMPLE_NAME)
-        if candidate.is_file():
-            return candidate.read_text(encoding="utf-8")
-    except (OSError, TypeError, FileNotFoundError, ModuleNotFoundError, ValueError):
-        pass
-    return None
+_INSTALLER_NAME = "scripts/install_blindbox_replica.sh"
+_INSTALLER_BASENAME = "install_blindbox_replica.sh"
 
 
-def resolve_bundled_example_path() -> Optional[str]:
-    """Package file next to this module, or same name under ``_MEIPASS``."""
+def _resolve_repo_root() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
-    p = os.path.join(here, _EXAMPLE_NAME)
-    if os.path.isfile(p):
-        return p
-    meipass = getattr(sys, "_MEIPASS", None)
-    if isinstance(meipass, str) and meipass:
-        alt = os.path.join(meipass, _EXAMPLE_NAME)
-        if os.path.isfile(alt):
-            return alt
-    return None
+    return os.path.abspath(os.path.join(here, "..", ".."))
+
+
+def get_blindbox_installer_script_source() -> str:
+    repo_root = _resolve_repo_root()
+    path = os.path.join(repo_root, "scripts", _INSTALLER_BASENAME)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def get_blindbox_installer_script_basename() -> str:
+    return _INSTALLER_BASENAME
 
 
 def get_local_blindbox_server_example_source() -> str:
-    path = resolve_bundled_example_path()
-    if path:
-        try:
-            with open(path, encoding="utf-8") as f:
-                return f.read()
-        except OSError:
-            pass
-    embedded = _read_example_via_importlib_resources()
-    if embedded is not None:
-        return embedded
     return (
-        f"# Example script {_EXAMPLE_NAME} not found in the package install.\n"
+        "# Protected replica (recommended)\n"
+        "chmod +x ./scripts/install_blindbox_replica.sh\n"
+        "sudo ./scripts/install_blindbox_replica.sh \\\n"
+        "  --user blindbox \\\n"
+        "  --group blindbox \\\n"
+        "  --service blindbox \\\n"
+        "  --install-dir /opt/i2pchat-blindbox \\\n"
+        "  --base-dir /var/lib/blindbox/.i2pchat-blindbox \\\n"
+        "  --bind-host 127.0.0.1 \\\n"
+        "  --port 19444 \\\n"
+        "  --max-blob 1048576 \\\n"
+        "  --ttl-sec 1209600 \\\n"
+        "  --token 'CHANGE_ME_TO_A_LONG_RANDOM_SECRET'\n"
     )
 
 
 def get_local_blindbox_server_example_note() -> str:
     return (
-        "<b>1)</b> On the i2pd host, save this file as <code>.py</code> and keep it running. "
-        "It listens on <code>127.0.0.1:19444</code>. "
-        "<b>2)</b> i2pd: use the next tab, then in I2PChat add that tunnel&apos;s "
-        "<code>*.b32.i2p:19444</code> under Blind Box diagnostics. "
-        "<b>3)</b> Optional password: create <code>~/.i2pchat-blindbox/.env</code> as on the "
-        "<code>.env</code> tab, and the same secret in Replica auth (Tab after the b32 address)."
+        "<p><b>Recommended path:</b> use the installer script "
+        f"<code>{_INSTALLER_NAME}</code>.</p>"
+        "<p>It installs the queue-only BlindBox server, writes the runtime "
+        "<code>.env</code>, creates the systemd unit, and can optionally emit an "
+        "i2pd tunnel snippet.</p>"
+        "<p><b>How to use this tab:</b></p>"
+        "<ol>"
+        "<li>Click <b>Get install</b> to save the real installer script.</li>"
+        "<li>Run the command from the box below on the server host.</li>"
+        "<li>Replace the token placeholder with your own long random secret.</li>"
+        "<li>Use the resulting <code>*.b32.i2p:19444</code> endpoint in Blind Box diagnostics.</li>"
+        "<li>Put the same token into <b>Replica auth</b> for that endpoint in I2PChat.</li>"
+        "</ol>"
+        "<p><b>Tip:</b> this command assumes you already have the i2pd tunnel and only need "
+        "to install or update the BlindBox replica service itself. If you really want a public "
+        "replica without auth, you can replace <code>--token ...</code> with <code>--public</code>.</p>"
     )
 
 
@@ -86,8 +84,9 @@ def get_i2pd_blindbox_tunnel_example_source() -> str:
 def get_i2pd_blindbox_tunnel_example_note() -> str:
     return (
         "<b>Merge into <code>tunnels.conf</code>, restart i2pd.</b> "
-        "I2P traffic hits <code>127.0.0.1:19444</code> where the Python server listens. "
-        "Use this tunnel&apos;s <code>*.b32.i2p:19444</code> in I2PChat (Blind Box diagnostics)."
+        "The server tunnel forwards I2P traffic to <code>127.0.0.1:19444</code>, where the "
+        "queue-only BlindBox Python server listens. Use this tunnel&apos;s "
+        "<code>*.b32.i2p:19444</code> in I2PChat (Blind Box diagnostics)."
     )
 
 
@@ -97,13 +96,17 @@ def get_systemd_blindbox_unit_example_source() -> str:
         "# sudo systemctl daemon-reload && sudo systemctl enable --now blindbox.service\n"
         "\n"
         "[Unit]\n"
-        "Description=I2PChat Blind Box server\n"
+        "Description=I2PChat BlindBox replica\n"
         "After=network.target\n"
         "\n"
         "[Service]\n"
         "Type=simple\n"
-        "User=YOUR_LINUX_USER\n"
-        "ExecStart=/usr/bin/python3 /path/to/blindbox_server_example.py\n"
+        "User=blindbox\n"
+        "Group=blindbox\n"
+        "WorkingDirectory=/opt/i2pchat-blindbox\n"
+        "Environment=HOME=/var/lib/blindbox\n"
+        "Environment=PYTHONUNBUFFERED=1\n"
+        "ExecStart=/usr/bin/python3 /opt/i2pchat-blindbox/blindbox_server_example.py\n"
         "Restart=always\n"
         "RestartSec=2\n"
         "\n"
@@ -114,25 +117,29 @@ def get_systemd_blindbox_unit_example_source() -> str:
 
 def get_systemd_blindbox_unit_example_note() -> str:
     return (
-        "<b>Set <code>User=</code> and the <code>ExecStart</code> path to your <code>.py</code>.</b> "
-        "Put <code>BLINDBOX_AUTH_TOKEN</code> in <code>~/.i2pchat-blindbox/.env</code> (see "
-        "<code>.env</code> tab) — the script loads it. "
-        "Then <code>daemon-reload</code> and enable the service. "
-        "Same secret in Blind Box diagnostics → Replica auth if you use a password."
+        "<b>The installer writes this unit for you.</b> "
+        "Use this tab only as a reference if you need to inspect or customize the generated "
+        "service after installation."
     )
 
 
 def get_blindbox_dotenv_example_note() -> str:
     return (
-        "<b>On the server, save this as <code>~/.i2pchat-blindbox/.env</code></b> "
-        "(create the folder if needed). The Python script reads it at startup. "
-        "I2PChat does not use this file — set the same secret under Blind Box diagnostics → "
-        "Replica auth for your <code>*.b32.i2p:19444</code> line (optional)."
+        "<b>The installer writes this file for you.</b> "
+        "Use this tab only to inspect or tweak the generated runtime settings. "
+        "Public mode does not need <code>BLINDBOX_AUTH_TOKEN</code>; only add it if you want "
+        "a protected replica."
     )
 
 
 def get_blindbox_dotenv_example_source() -> str:
     return (
-        "# File: ~/.i2pchat-blindbox/.env\n"
-        "BLINDBOX_AUTH_TOKEN=\n"
+        "# Example: /opt/i2pchat-blindbox/.env\n"
+        "BLINDBOX_BASE=/var/lib/blindbox/.i2pchat-blindbox\n"
+        "BLINDBOX_BIND_HOST=127.0.0.1\n"
+        "BLINDBOX_PORT=19444\n"
+        "BLINDBOX_MAX_BLOB=1048576\n"
+        "BLINDBOX_TTL_SEC=1209600\n"
+        "# Optional for a protected replica:\n"
+        "# BLINDBOX_AUTH_TOKEN=\n"
     )

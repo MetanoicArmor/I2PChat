@@ -5,6 +5,8 @@ import unittest
 
 from i2pchat.storage.profile_blindbox_replicas import (
     PROFILE_BLINDBOX_REPLICAS_VERSION,
+    _CURRENT_RELEASE_BLINDBOX_REPLICA,
+    _DEPRECATED_RELEASE_BLINDBOX_REPLICA,
     load_profile_blindbox_replicas_bundle,
     load_profile_blindbox_replicas_list,
     normalize_replica_endpoints,
@@ -76,6 +78,28 @@ class ProfileBlindboxReplicasTests(unittest.TestCase):
                 auth,
                 {"x.b32.i2p:1": "tok1", "127.0.0.1:2": "tok2"},
             )
+
+    def test_old_release_builtin_pair_is_migrated(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = profile_blindbox_replicas_path(td, "migr")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "version": PROFILE_BLINDBOX_REPLICAS_VERSION,
+                        "replicas": [
+                            _DEPRECATED_RELEASE_BLINDBOX_REPLICA,
+                            _CURRENT_RELEASE_BLINDBOX_REPLICA,
+                        ],
+                        "replica_auth": {},
+                    },
+                    f,
+                )
+            reps, auth = load_profile_blindbox_replicas_bundle(td, "migr")
+            self.assertEqual(reps, [_CURRENT_RELEASE_BLINDBOX_REPLICA])
+            self.assertEqual(auth, {})
+            with open(path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual(saved["replicas"], [_CURRENT_RELEASE_BLINDBOX_REPLICA])
 
     def test_load_missing_returns_empty(self) -> None:
         with tempfile.TemporaryDirectory() as td:

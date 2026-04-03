@@ -25,6 +25,8 @@ from i2pchat.storage.profile_blindbox_replicas import (
 )
 from i2pchat.blindbox.blindbox_diagnostics import build_blindbox_diagnostics_text
 from i2pchat.blindbox.local_server_example import (
+    get_blindbox_installer_script_basename,
+    get_blindbox_installer_script_source,
     get_blindbox_dotenv_example_note,
     get_blindbox_dotenv_example_source,
     get_i2pd_blindbox_tunnel_example_note,
@@ -8985,6 +8987,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             hl.setTextFormat(QtCore.Qt.TextFormat.RichText)
             hl.setWordWrap(True)
             hl.setOpenExternalLinks(False)
+            hl.setTextInteractionFlags(
+                QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+                | QtCore.Qt.TextInteractionFlag.LinksAccessibleByMouse
+            )
             pl.addWidget(hl)
             te = QtWidgets.QPlainTextEdit(page)
             te.setObjectName("BlindBoxExampleSourceEdit")
@@ -9002,7 +9008,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             get_local_blindbox_server_example_note(),
             get_local_blindbox_server_example_source(),
         )
-        tabs.addTab(py_page, "Python")
+        tabs.addTab(py_page, "Install")
         i2p_page, i2p_edit = _tab_page(
             get_i2pd_blindbox_tunnel_example_note(),
             get_i2pd_blindbox_tunnel_example_source(),
@@ -9019,17 +9025,57 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         tabs.addTab(env_page, ".env")
         v.addWidget(tabs, 1)
-        edits = (py_edit, i2p_edit, sd_edit, env_edit)
         v.addSpacing(6)
         brow = QtWidgets.QHBoxLayout()
         brow.setSpacing(10)
         brow.setContentsMargins(_bb_example_pad, 0, _bb_example_pad, 0)
-        copy_btn = QtWidgets.QPushButton("Copy all", sub)
-        copy_btn.clicked.connect(
-            lambda: QtWidgets.QApplication.clipboard().setText(
-                edits[tabs.currentIndex()].toPlainText()
-            )
-        )
+
+        def _save_install_script() -> None:
+            script_text = get_blindbox_installer_script_source()
+            if not script_text.strip():
+                QtWidgets.QMessageBox.warning(
+                    sub,
+                    "Get install",
+                    "The installer script could not be found in this build.",
+                )
+                return
+            default_name = get_blindbox_installer_script_basename()
+
+            def _save_after_close() -> None:
+                start_dir = os.path.join(get_downloads_dir(), default_name)
+                path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                    self,
+                    "Save install_blindbox_replica.sh",
+                    start_dir,
+                    "Shell script (*.sh);;All Files (*)",
+                )
+                if not path:
+                    return
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(script_text)
+                    try:
+                        os.chmod(path, 0o755)
+                    except OSError:
+                        pass
+                except OSError as exc:
+                    QtWidgets.QMessageBox.critical(
+                        self,
+                        "Get install",
+                        f"Failed to save installer script: {exc}",
+                    )
+                    return
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Get install",
+                    f"Installer script saved to:\n{path}",
+                )
+
+            sub.accept()
+            QtCore.QTimer.singleShot(0, _save_after_close)
+
+        copy_btn = QtWidgets.QPushButton("Get install", sub)
+        copy_btn.clicked.connect(_save_install_script)
         brow.addStretch(1)
         brow.addWidget(copy_btn)
         close_sub = QtWidgets.QPushButton("Close", sub)
