@@ -25,6 +25,7 @@ class BundledI2pdRuntime:
     conf_path: str
     tunconf_path: str
     log_path: str
+    pidfile_path: str
 
 
 _STATE_FILE = "managed-process.json"
@@ -139,6 +140,7 @@ class BundledI2pdManager:
             "conf_path": rt.conf_path,
             "tunconf_path": rt.tunconf_path,
             "log_path": rt.log_path,
+            "pidfile_path": rt.pidfile_path,
         }
 
     @staticmethod
@@ -154,6 +156,7 @@ class BundledI2pdManager:
                 conf_path=str(raw["conf_path"]),
                 tunconf_path=str(raw["tunconf_path"]),
                 log_path=str(raw["log_path"]),
+                pidfile_path=str(raw.get("pidfile_path") or os.path.join(os.path.dirname(str(raw["conf_path"])), "i2pd.pid")),
             )
         except Exception:
             return None
@@ -229,6 +232,15 @@ class BundledI2pdManager:
             await asyncio.sleep(0.2)
 
     @staticmethod
+    def _read_pidfile(path: str) -> Optional[int]:
+        try:
+            raw = Path(path).read_text(encoding="utf-8").strip()
+            pid = int(raw)
+            return pid if pid > 0 else None
+        except Exception:
+            return None
+
+    @staticmethod
     def _infer_runtime_from_existing_conf(root: str) -> Optional[BundledI2pdRuntime]:
         conf_path = os.path.join(root, "i2pd.conf")
         if not os.path.isfile(conf_path):
@@ -252,6 +264,7 @@ class BundledI2pdManager:
                 conf_path=conf_path,
                 tunconf_path=os.path.join(root, "tunnels.conf"),
                 log_path=values.get("logfile", os.path.join(root, "router.log")),
+                pidfile_path=os.path.join(root, "i2pd.pid"),
             )
         except Exception:
             return None
@@ -307,6 +320,7 @@ class BundledI2pdManager:
             conf_path=os.path.join(root, "i2pd.conf"),
             tunconf_path=os.path.join(root, "tunnels.conf"),
             log_path=os.path.join(root, "router.log"),
+            pidfile_path=os.path.join(root, "i2pd.pid"),
         )
 
     def _write_config(self, rt: BundledI2pdRuntime) -> None:
@@ -320,6 +334,7 @@ class BundledI2pdManager:
             f"--datadir={rt.data_dir}",
             f"--conf={rt.conf_path}",
             f"--tunconf={rt.tunconf_path}",
+            f"--pidfile={rt.pidfile_path}",
         ]
 
     async def start(self) -> tuple[str, int]:
@@ -355,7 +370,9 @@ class BundledI2pdManager:
             await self.stop()
             raise
 
-        self._managed_pid = self._proc.pid if self._proc is not None else None
+        self._managed_pid = self._read_pidfile(rt.pidfile_path)
+        if self._managed_pid is None:
+            self._managed_pid = self._proc.pid if self._proc is not None else None
         self._write_state(rt, self._managed_pid)
 
         return (rt.sam_host, rt.sam_port)
@@ -385,3 +402,10 @@ class BundledI2pdManager:
             self._managed_pid = None
             self._runtime = None
             self._clear_state(root)
+            if runtime is not None:
+                try:
+                    os.remove(runtime.pidfile_path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass

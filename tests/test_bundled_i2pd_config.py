@@ -24,6 +24,7 @@ class BundledI2pdConfigTests(unittest.TestCase):
             conf_path="/tmp/i2pd.conf",
             tunconf_path="/tmp/tunnels.conf",
             log_path="/tmp/router.log",
+            pidfile_path="/tmp/i2pd.pid",
         )
         text = render_i2pd_conf(rt)
         self.assertIn("daemon = false", text)
@@ -45,6 +46,7 @@ class BundledI2pdConfigTests(unittest.TestCase):
             conf_path="/tmp/i2pd.conf",
             tunconf_path="/tmp/tunnels.conf",
             log_path="/tmp/router.log",
+            pidfile_path="/tmp/i2pd.pid",
         )
         args = BundledI2pdManager._build_launch_args("/opt/i2pd", rt)
         self.assertEqual(
@@ -54,6 +56,7 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 "--datadir=/tmp/router-data",
                 "--conf=/tmp/i2pd.conf",
                 "--tunconf=/tmp/tunnels.conf",
+                "--pidfile=/tmp/i2pd.pid",
             ],
         )
 
@@ -93,6 +96,7 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 conf_path=f"{td}/i2pd.conf",
                 tunconf_path=f"{td}/tunnels.conf",
                 log_path=f"{td}/router.log",
+                pidfile_path=f"{td}/i2pd.pid",
             )
             manager._write_state(rt, 12345)
             loaded_rt, loaded_pid = manager._read_state(td)
@@ -101,6 +105,7 @@ class BundledI2pdConfigTests(unittest.TestCase):
             assert loaded_rt is not None
             self.assertEqual(loaded_rt.sam_port, 17656)
             self.assertEqual(loaded_rt.http_proxy_port, 14444)
+            self.assertEqual(loaded_rt.pidfile_path, f"{td}/i2pd.pid")
 
     def test_infer_runtime_from_existing_conf(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -124,6 +129,7 @@ class BundledI2pdConfigTests(unittest.TestCase):
             self.assertEqual(rt.sam_port, 17656)
             self.assertEqual(rt.http_proxy_port, 14444)
             self.assertEqual(rt.log_path, "/tmp/router.log")
+            self.assertEqual(rt.pidfile_path, f"{td}/i2pd.pid")
 
     def test_adopt_existing_runtime_from_state(self) -> None:
         settings = RouterSettings(backend="bundled")
@@ -139,6 +145,7 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 conf_path=f"{td}/i2pd.conf",
                 tunconf_path=f"{td}/tunnels.conf",
                 log_path=f"{td}/router.log",
+                pidfile_path=f"{td}/i2pd.pid",
             )
             manager._write_state(rt, 43210)
             with mock.patch.object(manager, "_pid_alive", return_value=True), \
@@ -146,6 +153,12 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 adopted = asyncio.run(manager._adopt_existing_runtime_if_available(td))
             self.assertTrue(adopted)
             self.assertEqual(manager.sam_address(), ("127.0.0.1", 17656))
+
+    def test_read_pidfile(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "i2pd.pid"
+            path.write_text("54321\n", encoding="utf-8")
+            self.assertEqual(BundledI2pdManager._read_pidfile(str(path)), 54321)
 
 
 if __name__ == "__main__":
