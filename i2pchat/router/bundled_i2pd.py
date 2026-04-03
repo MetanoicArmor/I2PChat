@@ -298,6 +298,45 @@ class BundledI2pdManager:
         except Exception:
             return None
 
+    @staticmethod
+    def _spawn_windows_delayed_cleanup(rt: BundledI2pdRuntime) -> None:
+        if sys.platform != "win32":
+            return
+        script = (
+            "$conf=$args[0]; "
+            "$data=$args[1]; "
+            "Start-Sleep -Milliseconds 1500; "
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { "
+            "$_.Name -eq 'i2pd.exe' -and $_.CommandLine -and "
+            "(($_.CommandLine -like ('*' + $conf + '*')) -or ($_.CommandLine -like ('*' + $data + '*'))) "
+            "} | "
+            "ForEach-Object { "
+            "taskkill /PID $_.ProcessId /T /F | Out-Null "
+            "}"
+        )
+        creationflags = 0
+        for attr in ("CREATE_NO_WINDOW", "DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP"):
+            creationflags |= int(getattr(subprocess, attr, 0))
+        try:
+            subprocess.Popen(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    script,
+                    rt.conf_path,
+                    rt.data_dir,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+        except Exception:
+            pass
+
     @classmethod
     def force_cleanup_runtime_root(cls, root: Optional[str] = None) -> None:
         root = root or router_runtime_dir()
@@ -315,6 +354,8 @@ class BundledI2pdManager:
             pid = cls._discover_windows_runtime_pid(runtime)
         if pid is not None:
             cls._terminate_pid_sync(pid)
+        if runtime is not None:
+            cls._spawn_windows_delayed_cleanup(runtime)
         try:
             os.remove(os.path.join(root, _STATE_FILE))
         except FileNotFoundError:

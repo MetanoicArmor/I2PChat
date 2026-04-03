@@ -259,6 +259,30 @@ class BundledI2pdConfigTests(unittest.TestCase):
             self.assertTrue(adopted)
             self.assertEqual(manager._managed_pid, 71111)
 
+    def test_force_cleanup_runtime_root_spawns_windows_delayed_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            conf = Path(td) / "i2pd.conf"
+            conf.write_text(
+                "\n".join(
+                    [
+                        "sam.address = 127.0.0.1",
+                        "sam.port = 17656",
+                        "http.port = 17070",
+                        "httpproxy.port = 14444",
+                        "socksproxy.port = 14447",
+                        f"logfile = {td}/router.log",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                BundledI2pdManager, "_spawn_windows_delayed_cleanup"
+            ) as delayed, mock.patch.object(
+                BundledI2pdManager, "_discover_windows_runtime_pid", return_value=None
+            ):
+                BundledI2pdManager.force_cleanup_runtime_root(td)
+            delayed.assert_called_once()
+
     def test_stop_preserves_state_when_pid_survives(self) -> None:
         settings = RouterSettings(backend="bundled")
         manager = BundledI2pdManager(settings)
