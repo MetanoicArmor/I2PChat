@@ -77,6 +77,12 @@ mkdir -p "${APPDIR}/usr/bin" \
 # Кладём внутрь AppDir бинарник и каталог _internal (с libpython и всеми зависимостями)
 cp "dist/${APP_NAME}/${APP_NAME}" "${APPDIR}/usr/bin/${APP_NAME}"
 cp -r "dist/${APP_NAME}/_internal" "${APPDIR}/usr/bin/_internal"
+if [ -d "dist/${APP_NAME}/vendor" ]; then
+  cp -r "dist/${APP_NAME}/vendor" "${APPDIR}/usr/bin/vendor"
+fi
+if [ -f "${APPDIR}/usr/bin/vendor/i2pd/linux-x86_64/i2pd" ]; then
+  chmod +x "${APPDIR}/usr/bin/vendor/i2pd/linux-x86_64/i2pd"
+fi
 
 # Добрасываем libcrypt, если он есть в системе, чтобы не требовать его снаружи
 for CAND in /usr/lib/libcrypt.so.2 /lib64/libcrypt.so.2 /lib/libcrypt.so.2; do

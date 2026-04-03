@@ -62,6 +62,15 @@ if (Test-Path "dist\I2PChat") { Remove-Item -Recurse -Force "dist\I2PChat" }
 if (Test-Path "build\I2PChat") { Remove-Item -Recurse -Force "build\I2PChat" }
 Invoke-NativeChecked $PythonExe @("-m", "PyInstaller", "--clean", "-y", "I2PChat.spec")
 
+if (Test-Path "vendor\i2pd\windows-x64\i2pd.exe") {
+    $BundledRouterDir = "dist\I2PChat\vendor\i2pd\windows-x64"
+    New-Item -ItemType Directory -Force -Path $BundledRouterDir | Out-Null
+    Copy-Item "vendor\i2pd\windows-x64\i2pd.exe" "$BundledRouterDir\i2pd.exe"
+    Get-ChildItem "vendor\i2pd\windows-x64\*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item $_.FullName $BundledRouterDir
+    }
+}
+
 Write-Host ""
 Write-Host "Done."
 Write-Host "GUI binary: dist\\I2PChat\\I2PChat.exe"

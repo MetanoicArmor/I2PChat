@@ -17,6 +17,13 @@ from typing import Callable, List, Optional
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
+from i2pchat.router.bundled_i2pd import BundledI2pdManager
+from i2pchat.router.settings import (
+    RouterSettings,
+    load_router_settings,
+    router_runtime_dir,
+    save_router_settings,
+)
 from i2pchat.storage.blindbox_state import atomic_write_json
 from i2pchat.storage.profile_blindbox_replicas import (
     load_profile_blindbox_replicas_bundle,
@@ -4488,6 +4495,116 @@ class _HistoryRetentionDialog(QtWidgets.QDialog):
         return self._sp_messages.value(), self._sp_days.value()
 
 
+class _RouterSettingsDialog(QtWidgets.QDialog):
+    def __init__(
+        self,
+        parent: Optional[QtWidgets.QWidget],
+        *,
+        settings: RouterSettings,
+        bundled_status: str,
+        theme_id: Optional[str] = None,
+    ) -> None:
+        super().__init__(parent)
+        _apply_dialog_theme_sheet(self, theme_id)
+        self.setWindowTitle("I2P router")
+        self.setModal(True)
+        v = QtWidgets.QVBoxLayout(self)
+        v.setContentsMargins(20, 16, 20, 16)
+        v.setSpacing(14)
+
+        self._rb_system = QtWidgets.QRadioButton("Use system i2pd", self)
+        self._rb_bundled = QtWidgets.QRadioButton("Use bundled i2pd", self)
+        if settings.backend == "bundled":
+            self._rb_bundled.setChecked(True)
+        else:
+            self._rb_system.setChecked(True)
+        v.addWidget(self._rb_system)
+        v.addWidget(self._rb_bundled)
+
+        form = QtWidgets.QFormLayout()
+        form.setHorizontalSpacing(14)
+        form.setVerticalSpacing(10)
+        form.setLabelAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+        )
+
+        self._system_host = QtWidgets.QLineEdit(settings.system_sam_host, self)
+        self._system_port = QtWidgets.QSpinBox(self)
+        self._system_port.setRange(1, 65535)
+        self._system_port.setValue(int(settings.system_sam_port))
+
+        self._bundled_sam_port = QtWidgets.QSpinBox(self)
+        self._bundled_sam_port.setRange(1, 65535)
+        self._bundled_sam_port.setValue(int(settings.bundled_sam_port))
+
+        self._bundled_http_proxy_port = QtWidgets.QSpinBox(self)
+        self._bundled_http_proxy_port.setRange(1, 65535)
+        self._bundled_http_proxy_port.setValue(int(settings.bundled_http_proxy_port))
+
+        self._bundled_socks_proxy_port = QtWidgets.QSpinBox(self)
+        self._bundled_socks_proxy_port.setRange(1, 65535)
+        self._bundled_socks_proxy_port.setValue(int(settings.bundled_socks_proxy_port))
+
+        form.addRow("System SAM host", self._system_host)
+        form.addRow("System SAM port", self._system_port)
+        form.addRow("Bundled SAM port", self._bundled_sam_port)
+        form.addRow("Bundled HTTP proxy", self._bundled_http_proxy_port)
+        form.addRow("Bundled SOCKS proxy", self._bundled_socks_proxy_port)
+        v.addLayout(form)
+
+        self._status_label = QtWidgets.QLabel(bundled_status, self)
+        self._status_label.setWordWrap(True)
+        self._status_label.setObjectName("RouterStatusLabel")
+        v.addWidget(self._status_label)
+
+        actions_row = QtWidgets.QHBoxLayout()
+        actions_row.setSpacing(8)
+        self._btn_open_data_dir = QtWidgets.QPushButton("Open data dir", self)
+        self._btn_open_log = QtWidgets.QPushButton("Open log", self)
+        self._btn_restart = QtWidgets.QPushButton("Restart bundled router", self)
+        actions_row.addWidget(self._btn_open_data_dir)
+        actions_row.addWidget(self._btn_open_log)
+        actions_row.addWidget(self._btn_restart)
+        actions_row.addStretch(1)
+        v.addLayout(actions_row)
+
+        bb = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        bb.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Save and apply")
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        _add_centered_dialog_buttons(v, bb)
+
+        self._rb_system.toggled.connect(self._sync_enabled)
+        self._rb_bundled.toggled.connect(self._sync_enabled)
+        self._sync_enabled()
+
+    def _sync_enabled(self) -> None:
+        use_system = self._rb_system.isChecked()
+        self._system_host.setEnabled(use_system)
+        self._system_port.setEnabled(use_system)
+        self._bundled_sam_port.setEnabled(not use_system)
+        self._bundled_http_proxy_port.setEnabled(not use_system)
+        self._bundled_socks_proxy_port.setEnabled(not use_system)
+        self._btn_restart.setEnabled(not use_system)
+
+    def settings(self) -> RouterSettings:
+        backend = "bundled" if self._rb_bundled.isChecked() else "system"
+        return RouterSettings(
+            backend=backend,
+            system_sam_host=self._system_host.text().strip() or "127.0.0.1",
+            system_sam_port=int(self._system_port.value()),
+            bundled_sam_host="127.0.0.1",
+            bundled_sam_port=int(self._bundled_sam_port.value()),
+            bundled_http_proxy_port=int(self._bundled_http_proxy_port.value()),
+            bundled_socks_proxy_port=int(self._bundled_socks_proxy_port.value()),
+            bundled_control_http_port=17070,
+            bundled_auto_start=True,
+        )
+
+
 class _BackupPassphraseDialog(QtWidgets.QDialog):
     """Парольная фраза для бэкапа в стиле приложения."""
 
@@ -4815,16 +4932,21 @@ class _UpdateCheckThread(QtCore.QThread):
     finished_with_result = QtCore.pyqtSignal(object)
 
     def __init__(
-        self, current_version: str, parent: Optional[QtWidgets.QWidget] = None
+        self,
+        current_version: str,
+        *,
+        proxy_url: Optional[str] = None,
+        parent: Optional[QtWidgets.QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._current_version = current_version
+        self._proxy_url = proxy_url
 
     def run(self) -> None:
         from i2pchat.updates.release_index import check_for_updates_sync
 
         self.finished_with_result.emit(
-            check_for_updates_sync(self._current_version)
+            check_for_updates_sync(self._current_version, proxy_url=self._proxy_url)
         )
 
 
@@ -5509,6 +5631,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             ),
             shortcut_hint=_native_shortcut_text("Ctrl+Shift+A"),
         )
+        self.more_actions_popup.add_action(
+            "I2P router…",
+            self._open_router_settings_dialog,
+        )
         self.more_actions_popup.add_separator()
         self.more_actions_popup.add_action(
             "Lock to peer",
@@ -5572,8 +5698,13 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.chat_view.replyRequested.connect(self._on_reply_requested)
         self.chat_view.retryRequested.connect(self._on_retry_requested)
 
+        self._router_settings: RouterSettings = load_router_settings()
+        self._bundled_router_manager: Optional[BundledI2pdManager] = None
+        self._active_sam_address: Optional[tuple[str, int]] = None
+        self._active_http_proxy_address: Optional[tuple[str, int]] = None
+
         # ядро
-        self.core = self._create_core(self.profile)
+        self.core = self._create_core(self.profile, ("127.0.0.1", 7656))
         self._load_compose_drafts_from_disk()
         self._load_contacts_book()
         self._ensure_stored_peer_in_contact_book()
@@ -7400,7 +7531,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.refresh_status_label()
         self._refresh_connection_buttons()
 
-    def _create_core(self, _profile: Optional[str]) -> I2PChatCore:
+    def _create_core(
+        self, _profile: Optional[str], sam_address: tuple[str, int]
+    ) -> I2PChatCore:
         # A/B: I2PCHAT_QT_FILE_EVENT_NOOP=1 — отключить колбэки прогресса файла (диагностика подвисаний UI).
         _file_event_noop = os.environ.get("I2PCHAT_QT_FILE_EVENT_NOOP", "").strip().lower() in {
             "1",
@@ -7411,6 +7544,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         on_file = (lambda _i: None) if _file_event_noop else self.handle_file_event
         core = I2PChatCore(
             profile=self.profile,
+            sam_address=sam_address,
             on_status=self.handle_status,
             on_message=self.handle_message,
             on_peer_changed=self.handle_peer_changed,
@@ -7430,6 +7564,196 @@ class ChatWindow(QtWidgets.QMainWindow):
         # чтобы не менять публичную сигнатуру конструктора ядра
         setattr(core, "on_notify", self.handle_notify)
         return core
+
+    async def _ensure_router_backend_ready(self) -> tuple[str, int]:
+        settings = self._router_settings
+        save_router_settings(settings)
+
+        if settings.backend == "system":
+            self._active_http_proxy_address = ("127.0.0.1", 4444)
+            return (settings.system_sam_host, int(settings.system_sam_port))
+
+        if self._bundled_router_manager is None:
+            self._bundled_router_manager = BundledI2pdManager(settings)
+
+        sam_address = await self._bundled_router_manager.start()
+        self._active_http_proxy_address = (
+            self._bundled_router_manager.http_proxy_address()
+        )
+        return sam_address
+
+    async def _shutdown_router_backend(self) -> None:
+        if self._bundled_router_manager is None:
+            return
+        try:
+            await self._bundled_router_manager.stop()
+        finally:
+            self._bundled_router_manager = None
+            self._active_sam_address = None
+            self._active_http_proxy_address = None
+
+    def _bundled_router_status_text(self) -> str:
+        if self._bundled_router_manager is None:
+            return "Bundled router is not running."
+        try:
+            host, port = self._bundled_router_manager.sam_address()
+            return f"Bundled router is running. SAM: {host}:{port}"
+        except Exception:
+            return "Bundled router is configured but not running."
+
+    def _open_router_data_dir_clicked(self) -> None:
+        path = router_runtime_dir()
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception:
+            pass
+        if not os.path.isdir(path):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "I2P router",
+                f"Router data directory is not available:\n{path}",
+            )
+            return
+        ok = QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path))
+        if not ok:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "I2P router",
+                f"Could not open directory:\n{path}",
+            )
+            return
+        self.handle_system(f"Opened router data directory: {path}")
+
+    def _open_router_log_clicked(self) -> None:
+        path = os.path.join(router_runtime_dir(), "router.log")
+        if not os.path.isfile(path):
+            QtWidgets.QMessageBox.information(
+                self,
+                "I2P router",
+                f"Router log file does not exist yet:\n{path}",
+            )
+            return
+        ok = QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path))
+        if not ok:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "I2P router",
+                f"Could not open log file:\n{path}",
+            )
+            return
+        self.handle_system(f"Opened router log: {path}")
+
+    def _restart_bundled_router_clicked(self) -> None:
+        async def _restart_router_async() -> None:
+            try:
+                if self.core is not None:
+                    await self.core.shutdown()
+                await self._shutdown_router_backend()
+                sam_address = await self._ensure_router_backend_ready()
+                self._active_sam_address = sam_address
+                self.core = self._create_core(self.profile, sam_address)
+                await self.core.init_session()
+                self._update_peer_lock_indicator()
+                self.refresh_status_label()
+                self._refresh_connection_buttons()
+                self.handle_system("Bundled router restarted.")
+            except Exception as e:
+                logger.exception("restart bundled router failed")
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "I2P router",
+                    str(e).strip() or type(e).__name__,
+                )
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "I2P router",
+                "No asyncio event loop (qasync). Restart the app and try again.",
+            )
+            return
+        asyncio.create_task(_restart_router_async())
+
+    def _active_update_proxy_url(self) -> Optional[str]:
+        if self._router_settings.backend != "bundled":
+            return None
+        if self._active_http_proxy_address is None:
+            return None
+        host, port = self._active_http_proxy_address
+        return f"http://{host}:{port}"
+
+    def _open_router_settings_dialog(self) -> None:
+        dlg = _RouterSettingsDialog(
+            self,
+            settings=self._router_settings,
+            bundled_status=self._bundled_router_status_text(),
+            theme_id=self.theme_id,
+        )
+        dlg._btn_open_data_dir.clicked.connect(self._open_router_data_dir_clicked)
+        dlg._btn_open_log.clicked.connect(self._open_router_log_clicked)
+        dlg._btn_restart.clicked.connect(self._restart_bundled_router_clicked)
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        new_settings = dlg.settings()
+        if new_settings == self._router_settings:
+            return
+
+        async def _apply_router_settings_async() -> None:
+            old_settings = self._router_settings
+            self._router_settings = new_settings
+            save_router_settings(self._router_settings)
+            restart_bundled = new_settings.backend == "bundled"
+            try:
+                if self.core is not None:
+                    await self.core.shutdown()
+                if self._bundled_router_manager is not None:
+                    await self._shutdown_router_backend()
+                if restart_bundled:
+                    self._bundled_router_manager = None
+                sam_address = await self._ensure_router_backend_ready()
+                self._active_sam_address = sam_address
+                self.core = self._create_core(self.profile, sam_address)
+                await self.core.init_session()
+                self._update_peer_lock_indicator()
+                self.refresh_status_label()
+                self._refresh_connection_buttons()
+                self.handle_system(
+                    f"I2P router backend applied: {self._router_settings.backend}"
+                )
+            except Exception as e:
+                logger.exception("apply router settings failed")
+                self._router_settings = old_settings
+                save_router_settings(self._router_settings)
+                try:
+                    if self._bundled_router_manager is not None:
+                        await self._shutdown_router_backend()
+                    sam_address = await self._ensure_router_backend_ready()
+                    self._active_sam_address = sam_address
+                    self.core = self._create_core(self.profile, sam_address)
+                    await self.core.init_session()
+                    self._update_peer_lock_indicator()
+                    self.refresh_status_label()
+                    self._refresh_connection_buttons()
+                except Exception:
+                    logger.exception("router settings rollback failed")
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "I2P router",
+                    str(e).strip() or type(e).__name__,
+                )
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "I2P router",
+                "No asyncio event loop (qasync). Restart the app and try again.",
+            )
+            return
+        asyncio.create_task(_apply_router_settings_async())
 
     def _reload_notify_sound(self, sound_path: Optional[str]) -> None:
         """Перезагрузить кастомный звук уведомлений из файла."""
@@ -7644,7 +7968,11 @@ class ChatWindow(QtWidgets.QMainWindow):
                 save_releases_custom_url_warn_ack()
             if need_proxy_ack:
                 save_releases_custom_proxy_warn_ack()
-        th = _UpdateCheckThread(APP_VERSION, self)
+        th = _UpdateCheckThread(
+            APP_VERSION,
+            proxy_url=self._active_update_proxy_url(),
+            parent=self,
+        )
         self._update_check_thread = th
         th.finished_with_result.connect(self._on_update_check_finished)
         th.finished.connect(th.deleteLater)
@@ -9197,7 +9525,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         clean_profile = self.profile.rstrip(" •")
         self._window_title_base = f"I2PChat @ {clean_profile}"
         self._unread_by_peer = {}
-        self.core = self._create_core(self.profile)
+        sam_address = await self._ensure_router_backend_ready()
+        self._active_sam_address = sam_address
+        self.core = self._create_core(self.profile, sam_address)
         # До init_session() accept_loop не крутится; иначе handle_peer_changed во время
         # await внутри init_session сохранит в файл НОВОГО профиля ещё СТАРУЮ книгу в памяти.
         self._load_contacts_book()
@@ -9338,6 +9668,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         asyncio.create_task(self.core.send_image_lines(lines))
 
     async def start_core(self) -> None:
+        sam_address = await self._ensure_router_backend_ready()
+        self._active_sam_address = sam_address
+        self.core = self._create_core(self.profile, sam_address)
         await self.core.init_session()
         QtCore.QTimer.singleShot(0, self._update_peer_lock_indicator)
 
@@ -9374,6 +9707,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         async def _shutdown() -> None:
             try:
                 await self.core.shutdown()
+                await self._shutdown_router_backend()
             finally:
                 # Отменяем остальные задачи пока цикл ещё крутится; иначе в main()
                 # finally вызов run_until_complete после loop.stop() даёт RuntimeError

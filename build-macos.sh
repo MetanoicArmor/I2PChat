@@ -76,6 +76,12 @@ echo "==> Собираю I2PChat.app"
 rm -rf "dist/${APP_NAME}.app"
 mkdir -p "dist/${APP_NAME}.app/Contents/MacOS" "dist/${APP_NAME}.app/Contents/Resources"
 cp -R "dist/${APP_NAME}" "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}"
+if [ -f "vendor/i2pd/darwin-arm64/i2pd" ]; then
+  mkdir -p "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/darwin-arm64"
+  cp "vendor/i2pd/darwin-arm64/i2pd" \
+    "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/darwin-arm64/i2pd"
+  chmod +x "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/darwin-arm64/i2pd"
+fi
 if [ -f "I2PChat.icns" ]; then
   cp "I2PChat.icns" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
 else

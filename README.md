@@ -254,7 +254,9 @@ Currently shipped assets use **versioned** zip names, for example:
 Requirements:
 
 - Python **3.14+** (recommended; this is what the vendored local `i2plib` copy and current builds are tested with)
-- [i2pd](https://i2pd.website) router with **SAM** enabled (default port `7656`)
+- one of:
+  - a **system** [i2pd](https://i2pd.website) router with **SAM** enabled (default port `7656`), or
+  - a **bundled** `i2pd` binary shipped with your build/package
 
 Quick run commands (from repo root):
 
@@ -433,7 +435,7 @@ If you like this project and want to support development, you can send a small d
 | **macOS** | [I2PChat-macOS-arm64-v1.1.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.1.3.zip) | Unzip → open `I2PChat.app` |
 | **Linux** | [I2PChat-linux-x86_64-v1.1.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.1.3.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
 
-> **Requirement:** [i2pd](https://i2pd.website) router must be running with SAM API enabled (default port 7656).
+> **Router backend:** I2PChat can work with either a system `i2pd` (SAM, default `127.0.0.1:7656`) or a bundled `i2pd` sidecar. Use **More actions → I2P router…** to choose which backend to use.
 
 ### ℹ️ About
 

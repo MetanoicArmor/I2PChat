@@ -439,7 +439,9 @@ sound notifications (`QSoundEffect`) for incoming messages.
 
 #### 6.1. First start and sending a message
 
-1. Make sure your I2P router with SAM (`127.0.0.1:7656`) is running.
+1. Choose an I2P router backend:
+   - either make sure your system I2P router with SAM (`127.0.0.1:7656`) is running;
+   - or switch I2PChat to the bundled router in **More actions → I2P router…**.
 2. Start I2PChat depending on your platform:
 
    - **Windows**: unpack the release archive and run `I2PChat.exe`.
@@ -528,7 +530,7 @@ If everything looks correct but there is still no traffic, the problem is most l
 
 Make sure that:
 
-- your I2P router is running and the SAM port is reachable;
+- your selected I2P router backend is running and the SAM port is reachable;
 - the peer address is complete (including `.b32.i2p`);
 - the peer is online and using a compatible client (legacy clients below `0.3.x`/`0.4.x` are not supported).
 

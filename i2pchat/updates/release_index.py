@@ -52,12 +52,14 @@ def _env_http_proxy_explicit() -> bool:
     return False
 
 
-def _opener_for_update_fetch(url: str) -> Callable[..., object]:
+def _opener_for_update_fetch(
+    url: str, *, proxy_url: Optional[str] = None
+) -> Callable[..., object]:
     """
     Для *.i2p без явного прокси в окружении — HTTP через 127.0.0.1:4444.
     ``I2PCHAT_UPDATE_HTTP_PROXY`` задаёт URL прокси; пусто/0/none/off/direct — как urllib без доп. прокси.
     """
-    raw = (os.environ.get("I2PCHAT_UPDATE_HTTP_PROXY") or "").strip()
+    raw = proxy_url if proxy_url is not None else (os.environ.get("I2PCHAT_UPDATE_HTTP_PROXY") or "").strip()
     low = raw.lower()
     if low in ("0", "none", "off", "direct", "false"):
         return urllib.request.urlopen
@@ -181,6 +183,7 @@ def fetch_releases_page(
     *,
     timeout: float = 45.0,
     opener: Optional[Callable[..., object]] = None,
+    proxy_url: Optional[str] = None,
 ) -> str:
     """
     GET страницы. opener — для тестов (например urllib.request.build_opener с моком).
@@ -193,7 +196,7 @@ def fetch_releases_page(
     op = (
         opener
         if opener is not None
-        else _opener_for_update_fetch(url)
+        else _opener_for_update_fetch(url, proxy_url=proxy_url)
     )
     with op(req, timeout=timeout) as resp:  # type: ignore[misc]
         raw = resp.read()
@@ -219,6 +222,7 @@ def check_for_updates_sync(
     page_url: Optional[str] = None,
     timeout: float = 45.0,
     opener: Optional[Callable[..., object]] = None,
+    proxy_url: Optional[str] = None,
 ) -> UpdateCheckResult:
     """
     Скачивает страницу, ищет ZIP для текущей платформы, сравнивает с current_version.
@@ -236,7 +240,9 @@ def check_for_updates_sync(
 
     url = page_url if page_url is not None else releases_page_url()
     try:
-        html = fetch_releases_page(url, timeout=timeout, opener=opener)
+        html = fetch_releases_page(
+            url, timeout=timeout, opener=opener, proxy_url=proxy_url
+        )
     except urllib.error.HTTPError as e:
         return UpdateCheckResult(
             ok=False,

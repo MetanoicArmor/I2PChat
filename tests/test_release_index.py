@@ -120,6 +120,12 @@ class ReleaseIndexCheckSyncTests(unittest.TestCase):
 
 
 class OpenerSelectionTests(unittest.TestCase):
+    def test_proxy_override_forces_proxy_handler(self) -> None:
+        op = ri._opener_for_update_fetch(
+            "http://x.b32.i2p/", proxy_url="http://127.0.0.1:14444"
+        )
+        self.assertNotEqual(op, urllib.request.urlopen)
+
     def test_i2p_uses_proxy_opener_when_no_env_proxy(self) -> None:
         with patch.object(ri, "_env_http_proxy_explicit", return_value=False):
             op = ri._opener_for_update_fetch("http://x.b32.i2p/")

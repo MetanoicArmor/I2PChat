@@ -13,10 +13,28 @@ _local_modules = [
 
 _icon_file = 'i2pchat.ico' if sys.platform == 'win32' else 'icon.png'
 
+_i2pd_binaries = []
+if sys.platform == 'darwin':
+    _i2pd_path = os.path.join('vendor', 'i2pd', 'darwin-arm64', 'i2pd')
+    if os.path.isfile(_i2pd_path):
+        _i2pd_binaries.append((_i2pd_path, os.path.join('vendor', 'i2pd', 'darwin-arm64')))
+elif sys.platform == 'win32':
+    _i2pd_path = os.path.join('vendor', 'i2pd', 'windows-x64', 'i2pd.exe')
+    if os.path.isfile(_i2pd_path):
+        _i2pd_binaries.append((_i2pd_path, os.path.join('vendor', 'i2pd', 'windows-x64')))
+    _i2pd_binaries.extend(
+        (dll, os.path.join('vendor', 'i2pd', 'windows-x64'))
+        for dll in glob.glob(os.path.join('vendor', 'i2pd', 'windows-x64', '*.dll'))
+    )
+else:
+    _i2pd_path = os.path.join('vendor', 'i2pd', 'linux-x86_64', 'i2pd')
+    if os.path.isfile(_i2pd_path):
+        _i2pd_binaries.append((_i2pd_path, os.path.join('vendor', 'i2pd', 'linux-x86_64')))
+
 a = Analysis(
     ['i2pchat/run_gui.py'],
     pathex=[],
-    binaries=[],
+    binaries=_i2pd_binaries,
     datas=[
         ('VERSION', '.'),
         ('assets/sounds/notify.wav', 'assets/sounds'),
