@@ -9713,8 +9713,19 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         async def _shutdown() -> None:
             try:
-                await self.core.shutdown()
-                await self._shutdown_router_backend()
+                try:
+                    if self.core is not None:
+                        await asyncio.wait_for(self.core.shutdown(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    logger.warning("core shutdown timed out during closeEvent")
+                except Exception:
+                    logger.exception("core shutdown failed during closeEvent")
+                try:
+                    await asyncio.wait_for(self._shutdown_router_backend(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    logger.warning("bundled router shutdown timed out during closeEvent")
+                except Exception:
+                    logger.exception("bundled router shutdown failed during closeEvent")
             finally:
                 # Отменяем остальные задачи пока цикл ещё крутится; иначе в main()
                 # finally вызов run_until_complete после loop.stop() даёт RuntimeError
