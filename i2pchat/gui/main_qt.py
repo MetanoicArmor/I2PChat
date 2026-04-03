@@ -9051,9 +9051,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             )
 
         get_install_btn.clicked.connect(_save_blindbox_install_script)
-        copy_curl_btn = QtWidgets.QPushButton("Copy curl command", sub)
+        copy_curl_btn = QtWidgets.QPushButton("Copy curl", sub)
         copy_curl_btn.setToolTip(
-            "Copy one command that downloads install.sh from GitHub and runs it on the server."
+            "Copy the one-liner: download install.sh from GitHub and run it on the server."
         )
         copy_curl_btn.clicked.connect(
             lambda: QtWidgets.QApplication.clipboard().setText(
