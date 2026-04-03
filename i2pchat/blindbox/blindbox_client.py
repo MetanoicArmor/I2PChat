@@ -16,7 +16,7 @@ import secrets
 import socket
 import time
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import i2plib
 from i2pchat.blindbox.blindbox_blob import BLINDBOX_MAX_FRAME_SIZE
@@ -40,6 +40,7 @@ def _sam_exc_detail(exc: BaseException) -> str:
 
 StreamPair = tuple[asyncio.StreamReader, asyncio.StreamWriter]
 StreamFactory = Callable[[str], Awaitable[StreamPair]]
+BlobAcceptor = Callable[[bytes], bool | Awaitable[bool]]
 
 
 @dataclass(frozen=True)
@@ -263,45 +264,56 @@ class BlindBoxClient:
         if not isinstance(blob, (bytes, bytearray)) or len(blob) == 0:
             raise ValueError("blob must be non-empty bytes")
 
-        tasks = [
-            asyncio.create_task(self._put_to_blind_box(addr, key, bytes(blob)))
-            for addr in self.blind_boxes
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
         ok_results: list[BlindBoxPutResult] = []
         put_failures: list[tuple[str, Exception]] = []
-        for addr, result in zip(self.blind_boxes, results):
-            if isinstance(result, Exception):
-                put_failures.append((addr, result))
-                continue
-            ok_results.append(result)
         success_count = 0
-        for result in ok_results:
-            if result.status == "OK":
-                success_count += 1
-                continue
-            if result.status != "EXISTS":
-                continue
-            try:
-                existing_blob = await self._get_from_blind_box(result.address, key)
-            except Exception as exc:
-                put_failures.append(
-                    (
-                        result.address,
-                        RuntimeError(f"PUT EXISTS verification failed: {exc}"),
-                    )
+        pending: dict[asyncio.Task[BlindBoxPutResult], str] = {
+            asyncio.create_task(self._put_to_blind_box(addr, key, bytes(blob))): addr
+            for addr in self.blind_boxes
+        }
+        try:
+            while pending:
+                task_addrs = dict(pending)
+                done, pending_set = await asyncio.wait(
+                    pending.keys(), return_when=asyncio.FIRST_COMPLETED
                 )
-                continue
-            if existing_blob == bytes(blob):
-                success_count += 1
-                continue
-            put_failures.append(
-                (
-                    result.address,
-                    RuntimeError("PUT EXISTS verification mismatch"),
-                )
-            )
+                pending = {task: task_addrs[task] for task in pending_set}
+                for task in done:
+                    addr = task_addrs.get(task, "")
+                    try:
+                        result = task.result()
+                    except Exception as exc:
+                        put_failures.append((addr, exc))
+                        continue
+                    ok_results.append(result)
+                    if result.status == "OK":
+                        success_count += 1
+                    elif result.status == "EXISTS":
+                        try:
+                            existing_blob = await self._get_from_blind_box(result.address, key)
+                        except Exception as exc:
+                            put_failures.append(
+                                (
+                                    result.address,
+                                    RuntimeError(f"PUT EXISTS verification failed: {exc}"),
+                                )
+                            )
+                            continue
+                        if existing_blob == bytes(blob):
+                            success_count += 1
+                        else:
+                            put_failures.append(
+                                (
+                                    result.address,
+                                    RuntimeError("PUT EXISTS verification mismatch"),
+                                )
+                            )
+                    if success_count >= self.put_quorum:
+                        await self._cancel_pending_tasks(list(pending.keys()))
+                        pending.clear()
+                        break
+        finally:
+            await self._cancel_pending_tasks(list(pending.keys()))
         if success_count < self.put_quorum:
             for addr, err in put_failures:
                 self._log_box_failure("PUT", addr, err)
@@ -351,6 +363,46 @@ class BlindBoxClient:
                 err,
             )
         return self._dedup_blobs(blobs)
+
+    async def get_first_accepted(
+        self,
+        key: str,
+        *,
+        accept_blob: BlobAcceptor,
+    ) -> Optional[bytes]:
+        if not self._started:
+            await self.start()
+        if not key:
+            raise ValueError("key is required")
+
+        pending: dict[asyncio.Task[Optional[bytes]], str] = {
+            asyncio.create_task(self._get_from_blind_box(addr, key)): addr
+            for addr in self.blind_boxes
+        }
+        try:
+            while pending:
+                task_addrs = dict(pending)
+                done, pending_set = await asyncio.wait(
+                    pending.keys(), return_when=asyncio.FIRST_COMPLETED
+                )
+                pending = {task: task_addrs[task] for task in pending_set}
+                for task in done:
+                    try:
+                        blob = task.result()
+                    except Exception:
+                        continue
+                    if blob is None:
+                        continue
+                    accepted = accept_blob(blob)
+                    if asyncio.iscoroutine(accepted):
+                        accepted = await accepted
+                    if accepted:
+                        await self._cancel_pending_tasks(list(pending.keys()))
+                        pending.clear()
+                        return blob
+            return None
+        finally:
+            await self._cancel_pending_tasks(list(pending.keys()))
 
     async def _put_to_blind_box(
         self, box_addr: str, key: str, blob: bytes
@@ -588,6 +640,14 @@ class BlindBoxClient:
             await writer.wait_closed()
         except Exception:
             pass
+
+    @staticmethod
+    async def _cancel_pending_tasks(tasks: list[asyncio.Task[Any]]) -> None:
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     @staticmethod
     def _dedup_blobs(blobs: list[bytes]) -> list[bytes]:

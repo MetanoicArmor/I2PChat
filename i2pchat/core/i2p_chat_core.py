@@ -3189,16 +3189,10 @@ class I2PChatCore:
                             recv_index,
                             epoch=int(root_item["epoch"]),
                         )
-                        try:
-                            blobs = await client.get(
-                                keys.lookup_token, require_quorum=False
-                            )
-                        except Exception:
-                            continue
-                        for blob in blobs:
+                        async def _accept_blob(blob: bytes) -> bool:
                             digest = hashlib.sha256(blob).hexdigest()
                             if digest in self._blindbox_seen_hashes:
-                                continue
+                                return False
                             try:
                                 frame = decrypt_blindbox_blob(
                                     blob,
@@ -3210,13 +3204,22 @@ class I2PChatCore:
                                     expected_state_tag=keys.state_tag,
                                 )
                             except Exception:
-                                continue
+                                return False
                             accepted = await self._process_blindbox_frame(frame)
                             if accepted:
-                                got_valid = True
                                 self._remember_blindbox_seen_hash(digest)
-                                break
-                        if got_valid:
+                                return True
+                            return False
+
+                        try:
+                            accepted_blob = await client.get_first_accepted(
+                                keys.lookup_token,
+                                accept_blob=_accept_blob,
+                            )
+                        except Exception:
+                            continue
+                        if accepted_blob is not None:
+                            got_valid = True
                             break
                     if got_valid:
                         self._blindbox_state.mark_consumed(recv_index)

@@ -1,5 +1,6 @@
 import asyncio
 import socket
+import time
 import unittest
 from unittest.mock import patch
 
@@ -24,12 +25,16 @@ class _ReplicaServer:
         flaky_first_put: bool = False,
         required_token: str = "",
         get_header_override: str = "",
+        put_delay: float = 0.0,
+        get_delay: float = 0.0,
     ) -> None:
         self.mode = mode
         self.storage = storage
         self.flaky_first_put = flaky_first_put
         self.required_token = required_token
         self.get_header_override = get_header_override
+        self.put_delay = float(put_delay)
+        self.get_delay = float(get_delay)
         self.put_calls = 0
         self.server: asyncio.AbstractServer | None = None
         self.port = _free_port()
@@ -65,6 +70,8 @@ class _ReplicaServer:
                     await writer.wait_closed()
                     return
                 body = await reader.readexactly(size)
+                if self.put_delay > 0:
+                    await asyncio.sleep(self.put_delay)
                 if self.mode == "error":
                     writer.write(b"ERR\n")
                 elif self.mode == "exists_no_store":
@@ -84,9 +91,13 @@ class _ReplicaServer:
                         return
                 key = parts[1]
                 if key not in self.storage:
+                    if self.get_delay > 0:
+                        await asyncio.sleep(self.get_delay)
                     writer.write(b"MISS\n")
                     await writer.drain()
                     return
+                if self.get_delay > 0:
+                    await asyncio.sleep(self.get_delay)
                 if self.get_header_override:
                     writer.write(f"{self.get_header_override}\n".encode("utf-8"))
                     await writer.drain()
@@ -429,6 +440,82 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             await client.close()
         finally:
             await srv.stop()
+
+    async def test_put_returns_after_quorum_without_waiting_for_slow_replica(self) -> None:
+        fast_storage: dict[str, bytes] = {}
+        slow_storage: dict[str, bytes] = {}
+        fast = _ReplicaServer("ok", fast_storage)
+        slow = _ReplicaServer("ok", slow_storage, put_delay=0.35)
+        await fast.start()
+        await slow.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-fast-put",
+                blind_boxes=[f"127.0.0.1:{fast.port}", f"127.0.0.1:{slow.port}"],
+                use_sam=False,
+                put_quorum=1,
+                retry_attempts=1,
+            )
+            started = time.monotonic()
+            result = await client.put("k-fast-put", b"payload")
+            elapsed = time.monotonic() - started
+            self.assertGreaterEqual(len(result), 1)
+            self.assertLess(elapsed, 0.30)
+            await client.close()
+        finally:
+            await fast.stop()
+            await slow.stop()
+
+    async def test_get_first_accepted_returns_before_slow_replica(self) -> None:
+        fast_storage: dict[str, bytes] = {"k-fast-get": b"payload-fast"}
+        slow_storage: dict[str, bytes] = {"k-fast-get": b"payload-slow"}
+        fast = _ReplicaServer("ok", fast_storage)
+        slow = _ReplicaServer("ok", slow_storage, get_delay=0.35)
+        await fast.start()
+        await slow.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-fast-get",
+                blind_boxes=[f"127.0.0.1:{fast.port}", f"127.0.0.1:{slow.port}"],
+                use_sam=False,
+                retry_attempts=1,
+            )
+            started = time.monotonic()
+            blob = await client.get_first_accepted(
+                "k-fast-get",
+                accept_blob=lambda b: b == b"payload-fast",
+            )
+            elapsed = time.monotonic() - started
+            self.assertEqual(blob, b"payload-fast")
+            self.assertLess(elapsed, 0.30)
+            await client.close()
+        finally:
+            await fast.stop()
+            await slow.stop()
+
+    async def test_get_first_accepted_can_skip_first_blob_and_wait_for_valid_one(self) -> None:
+        fast_storage: dict[str, bytes] = {"k-skip": b"bad"}
+        slow_storage: dict[str, bytes] = {"k-skip": b"good"}
+        fast = _ReplicaServer("ok", fast_storage)
+        slow = _ReplicaServer("ok", slow_storage, get_delay=0.05)
+        await fast.start()
+        await slow.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-skip-get",
+                blind_boxes=[f"127.0.0.1:{fast.port}", f"127.0.0.1:{slow.port}"],
+                use_sam=False,
+                retry_attempts=1,
+            )
+            blob = await client.get_first_accepted(
+                "k-skip",
+                accept_blob=lambda b: b == b"good",
+            )
+            self.assertEqual(blob, b"good")
+            await client.close()
+        finally:
+            await fast.stop()
+            await slow.stop()
 
 
 if __name__ == "__main__":
