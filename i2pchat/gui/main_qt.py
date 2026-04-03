@@ -9841,8 +9841,19 @@ def main() -> None:
 
     try:
         loop.run_forever()
+    except KeyboardInterrupt:
+        logger.warning("GUI event loop interrupted during shutdown", exc_info=True)
     finally:
-        loop.close()
+        try:
+            hide_rounded_tooltip()
+        except Exception:
+            logger.debug("failed to hide rounded tooltip during shutdown", exc_info=True)
+        try:
+            loop.close()
+        except KeyboardInterrupt:
+            logger.warning("GUI event loop close interrupted", exc_info=True)
+        except RuntimeError:
+            logger.warning("GUI event loop close raised RuntimeError", exc_info=True)
 
 
 if __name__ == "__main__":

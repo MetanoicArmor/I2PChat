@@ -23,6 +23,18 @@ _orig_hide_text: Optional[Callable[[], None]] = None
 _current_owner: Optional[QtWidgets.QWidget] = None
 
 
+def _panel_alive() -> Optional["RoundedTooltipWindow"]:
+    global _panel
+    if _panel is None:
+        return None
+    try:
+        _panel.isVisible()
+    except RuntimeError:
+        _panel = None
+        return None
+    return _panel
+
+
 def _tooltip_outline_color(bg: QtGui.QColor, fg: QtGui.QColor) -> QtGui.QColor:
     """Тонкий контур: слегка подмешиваем цвет текста к фону (без второй «коробки»)."""
     t = 0.18
@@ -165,7 +177,7 @@ class RoundedTooltipWindow(QtWidgets.QWidget):
 
 def _ensure_panel() -> RoundedTooltipWindow:
     global _panel
-    if _panel is None:
+    if _panel_alive() is None:
         _panel = RoundedTooltipWindow()
     return _panel
 
@@ -187,9 +199,10 @@ def show_rounded_tooltip_at(
 def hide_rounded_tooltip() -> None:
     global _panel, _current_owner
     _current_owner = None
-    if _panel is not None:
-        _panel._hide_timer.stop()
-        _panel.hide()
+    panel = _panel_alive()
+    if panel is not None:
+        panel._hide_timer.stop()
+        panel.hide()
 
 
 def _fallback_show_text(
@@ -258,7 +271,8 @@ class I2PChatQApplication(QtWidgets.QApplication):
             hide_rounded_tooltip()
             return True
 
-        if _panel is not None and _panel.isVisible() and et in _HIDE_ON_EVENTS:
+        panel = _panel_alive()
+        if panel is not None and panel.isVisible() and et in _HIDE_ON_EVENTS:
             hide_rounded_tooltip()
 
         return super().notify(receiver, event)
@@ -282,9 +296,10 @@ class _TooltipInterceptFilter(QtCore.QObject):
             hide_rounded_tooltip()
             return True
 
-        if _panel is not None and et in _HIDE_ON_EVENTS:
+        panel = _panel_alive()
+        if panel is not None and et in _HIDE_ON_EVENTS:
             try:
-                if _panel.isVisible():
+                if panel.isVisible():
                     hide_rounded_tooltip()
             except RuntimeError:
                 pass
