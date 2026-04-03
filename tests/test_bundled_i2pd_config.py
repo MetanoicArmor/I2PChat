@@ -208,6 +208,54 @@ class BundledI2pdConfigTests(unittest.TestCase):
             discover.assert_called_once()
             term.assert_called_once_with(65432)
 
+    def test_stop_preserves_state_when_pid_survives(self) -> None:
+        settings = RouterSettings(backend="bundled")
+        manager = BundledI2pdManager(settings)
+        with tempfile.TemporaryDirectory() as td:
+            rt = BundledI2pdRuntime(
+                sam_host="127.0.0.1",
+                sam_port=17656,
+                http_proxy_port=14444,
+                socks_proxy_port=14447,
+                control_http_port=17070,
+                data_dir=f"{td}/data",
+                conf_path=f"{td}/i2pd.conf",
+                tunconf_path=f"{td}/tunnels.conf",
+                log_path=f"{td}/router.log",
+                pidfile_path=f"{td}/i2pd.pid",
+            )
+            manager._runtime = rt
+            manager._managed_pid = 77777
+            with mock.patch.object(manager, "_terminate_pid", new=mock.AsyncMock()), \
+                    mock.patch.object(manager, "_pid_alive", return_value=True):
+                asyncio.run(manager.stop())
+            self.assertTrue((Path(td) / "managed-process.json").exists())
+            self.assertIsNone(manager._runtime)
+
+    def test_stop_clears_state_when_pid_is_gone(self) -> None:
+        settings = RouterSettings(backend="bundled")
+        manager = BundledI2pdManager(settings)
+        with tempfile.TemporaryDirectory() as td:
+            rt = BundledI2pdRuntime(
+                sam_host="127.0.0.1",
+                sam_port=17656,
+                http_proxy_port=14444,
+                socks_proxy_port=14447,
+                control_http_port=17070,
+                data_dir=f"{td}/data",
+                conf_path=f"{td}/i2pd.conf",
+                tunconf_path=f"{td}/tunnels.conf",
+                log_path=f"{td}/router.log",
+                pidfile_path=f"{td}/i2pd.pid",
+            )
+            manager._runtime = rt
+            manager._managed_pid = 77777
+            manager._write_state(rt, 77777)
+            with mock.patch.object(manager, "_terminate_pid", new=mock.AsyncMock()), \
+                    mock.patch.object(manager, "_pid_alive", return_value=False):
+                asyncio.run(manager.stop())
+            self.assertFalse((Path(td) / "managed-process.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

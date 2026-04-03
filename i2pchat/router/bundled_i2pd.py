@@ -470,16 +470,19 @@ class BundledI2pdManager:
         self._proc = None
         runtime = self._runtime
         root = self._runtime_root(runtime) if runtime is not None else router_runtime_dir()
+        target_pid = self._managed_pid
+        if target_pid is None and proc is not None:
+            target_pid = proc.pid
         try:
-            if proc is not None and proc.returncode is None:
+            if target_pid is not None:
+                await self._terminate_pid(target_pid)
+            elif proc is not None and proc.returncode is None:
                 proc.terminate()
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=10.0)
                 except asyncio.TimeoutError:
                     proc.kill()
                     await proc.wait()
-            elif self._managed_pid is not None:
-                await self._terminate_pid(self._managed_pid)
         finally:
             if self._log_handle is not None:
                 try:
@@ -487,13 +490,19 @@ class BundledI2pdManager:
                 except Exception:
                     pass
                 self._log_handle = None
-            self._managed_pid = None
-            self._runtime = None
-            self._clear_state(root)
-            if runtime is not None:
-                try:
-                    os.remove(runtime.pidfile_path)
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    pass
+            still_alive = bool(target_pid is not None and self._pid_alive(target_pid))
+            if still_alive and runtime is not None:
+                self._managed_pid = target_pid
+                self._write_state(runtime, target_pid)
+                self._runtime = None
+            else:
+                self._managed_pid = None
+                self._runtime = None
+                self._clear_state(root)
+                if runtime is not None:
+                    try:
+                        os.remove(runtime.pidfile_path)
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        pass
