@@ -343,6 +343,38 @@ Using this button you can:
 - **Compatibility:** BlindBox replicas must support the new queue-capability protocol. Endpoints that do not implement it are rejected instead of being used in a weaker fallback mode.
 - **Size limits:** live file transfer allows up to **2000 MB**; BlindBox/offline file delivery is capped at **200 MB**.
 
+How the new BlindBox works in practice:
+
+```mermaid
+flowchart LR
+    A["Alice"] -->|"QPUT to mailbox A→B
+text / file / image"| R["BlindBox replicas"]
+    R -->|"QGET from mailbox A→B"| B["Bob"]
+    B -->|"QPUT deferred receipt
+MSG_ACK / FILE_ACK / IMG_ACK"| R
+    R -->|"QGET receipt from mailbox B→A"| A
+```
+
+Example:
+
+1. Alice wants to send Bob a message, file, or inline image while Bob is offline.
+2. Alice's client derives a **one-way mailbox** for the direction **Alice → Bob**.
+3. That mailbox has separate capabilities for:
+   - putting blobs into the queue;
+   - reading blobs from the queue;
+   - deleting blobs after receipt.
+4. Alice stores encrypted offline blobs in BlindBox with `QPUT`.
+5. When Bob comes back, his client reads the mailbox with `QGET`, reconstructs the message/file/image, and then removes consumed blobs.
+6. Bob's client can later send a deferred receipt back through the reverse mailbox **Bob → Alice**.
+7. When Alice next polls BlindBox, she receives `MSG_ACK`, `FILE_ACK`, or `IMG_ACK` even if no live session existed at the moment Bob read the content.
+
+Why mailbox rotation matters:
+
+- A mailbox is not meant to stay fixed forever.
+- The app can rotate the mailbox for a direction such as **Alice → Bob** into a newer epoch.
+- New offline traffic uses the newer mailbox, while the previous one stays alive for a grace window so delayed blobs are not lost.
+- This reduces long-lived correlation compared with keeping one permanent offline queue forever.
+
 Example **BlindBox diagnostics** window (**⋯ → BlindBox diagnostics**):
 
 <img src="../screenshots/6.png" alt="BlindBox diagnostics: textual summary of offline routing and replicas" width="900" />
