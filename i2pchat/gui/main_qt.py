@@ -9854,6 +9854,10 @@ def main() -> None:
             logger.warning("GUI event loop close interrupted", exc_info=True)
         except RuntimeError:
             logger.warning("GUI event loop close raised RuntimeError", exc_info=True)
+        try:
+            BundledI2pdManager.force_cleanup_runtime_root()
+        except Exception:
+            logger.warning("final bundled router cleanup failed", exc_info=True)
 
 
 if __name__ == "__main__":

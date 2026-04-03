@@ -207,8 +207,39 @@ class BundledI2pdManager:
             return False
         return True
 
+    @staticmethod
+    def _terminate_pid_sync(pid: int) -> None:
+        if pid <= 0:
+            return
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags,
+                )
+            except Exception:
+                pass
+            return
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            return
+
     async def _terminate_pid(self, pid: int, *, timeout: float = 10.0) -> None:
         if not self._pid_alive(pid):
+            return
+        if sys.platform == "win32":
+            self._terminate_pid_sync(pid)
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            while loop.time() < deadline:
+                if not self._pid_alive(pid):
+                    return
+                await asyncio.sleep(0.2)
             return
         try:
             os.kill(pid, signal.SIGTERM)
@@ -239,6 +270,32 @@ class BundledI2pdManager:
             return pid if pid > 0 else None
         except Exception:
             return None
+
+    @classmethod
+    def force_cleanup_runtime_root(cls, root: Optional[str] = None) -> None:
+        root = root or router_runtime_dir()
+        runtime, pid = cls(RouterSettings())._read_state(root)
+        pidfile_path = (
+            runtime.pidfile_path
+            if runtime is not None
+            else os.path.join(root, "i2pd.pid")
+        )
+        if pid is None:
+            pid = cls._read_pidfile(pidfile_path)
+        if pid is not None:
+            cls._terminate_pid_sync(pid)
+        try:
+            os.remove(os.path.join(root, _STATE_FILE))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        try:
+            os.remove(pidfile_path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
     @staticmethod
     def _infer_runtime_from_existing_conf(root: str) -> Optional[BundledI2pdRuntime]:

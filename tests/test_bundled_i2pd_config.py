@@ -160,6 +160,28 @@ class BundledI2pdConfigTests(unittest.TestCase):
             path.write_text("54321\n", encoding="utf-8")
             self.assertEqual(BundledI2pdManager._read_pidfile(str(path)), 54321)
 
+    def test_force_cleanup_runtime_root_uses_state_pid(self) -> None:
+        settings = RouterSettings(backend="bundled")
+        manager = BundledI2pdManager(settings)
+        with tempfile.TemporaryDirectory() as td:
+            rt = BundledI2pdRuntime(
+                sam_host="127.0.0.1",
+                sam_port=17656,
+                http_proxy_port=14444,
+                socks_proxy_port=14447,
+                control_http_port=17070,
+                data_dir=f"{td}/data",
+                conf_path=f"{td}/i2pd.conf",
+                tunconf_path=f"{td}/tunnels.conf",
+                log_path=f"{td}/router.log",
+                pidfile_path=f"{td}/i2pd.pid",
+            )
+            manager._write_state(rt, 45678)
+            with mock.patch.object(BundledI2pdManager, "_terminate_pid_sync") as term:
+                BundledI2pdManager.force_cleanup_runtime_root(td)
+            term.assert_called_once_with(45678)
+            self.assertFalse((Path(td) / "managed-process.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
