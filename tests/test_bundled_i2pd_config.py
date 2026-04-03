@@ -208,6 +208,57 @@ class BundledI2pdConfigTests(unittest.TestCase):
             discover.assert_called_once()
             term.assert_called_once_with(65432)
 
+    def test_force_cleanup_runtime_root_infers_runtime_when_state_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            conf = Path(td) / "i2pd.conf"
+            conf.write_text(
+                "\n".join(
+                    [
+                        "sam.address = 127.0.0.1",
+                        "sam.port = 17656",
+                        "http.port = 17070",
+                        "httpproxy.port = 14444",
+                        "socksproxy.port = 14447",
+                        f"logfile = {td}/router.log",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                BundledI2pdManager, "_discover_windows_runtime_pid", return_value=61234
+            ) as discover, mock.patch.object(
+                BundledI2pdManager, "_terminate_pid_sync"
+            ) as term:
+                BundledI2pdManager.force_cleanup_runtime_root(td)
+            discover.assert_called_once()
+            term.assert_called_once_with(61234)
+
+    def test_adopt_existing_runtime_infers_windows_pid(self) -> None:
+        settings = RouterSettings(backend="bundled")
+        manager = BundledI2pdManager(settings)
+        with tempfile.TemporaryDirectory() as td:
+            conf = Path(td) / "i2pd.conf"
+            conf.write_text(
+                "\n".join(
+                    [
+                        "sam.address = 127.0.0.1",
+                        "sam.port = 17656",
+                        "http.port = 17070",
+                        "httpproxy.port = 14444",
+                        "socksproxy.port = 14447",
+                        f"logfile = {td}/router.log",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch("i2pchat.router.bundled_i2pd.wait_for_sam_ready", new=mock.AsyncMock()), \
+                    mock.patch.object(
+                        BundledI2pdManager, "_discover_windows_runtime_pid", return_value=71111
+                    ):
+                adopted = asyncio.run(manager._adopt_existing_runtime_if_available(td))
+            self.assertTrue(adopted)
+            self.assertEqual(manager._managed_pid, 71111)
+
     def test_stop_preserves_state_when_pid_survives(self) -> None:
         settings = RouterSettings(backend="bundled")
         manager = BundledI2pdManager(settings)

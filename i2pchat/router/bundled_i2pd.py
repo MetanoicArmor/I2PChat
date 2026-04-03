@@ -302,6 +302,8 @@ class BundledI2pdManager:
     def force_cleanup_runtime_root(cls, root: Optional[str] = None) -> None:
         root = root or router_runtime_dir()
         runtime, pid = cls(RouterSettings())._read_state(root)
+        if runtime is None:
+            runtime = cls._infer_runtime_from_existing_conf(root)
         pidfile_path = (
             runtime.pidfile_path
             if runtime is not None
@@ -379,7 +381,7 @@ class BundledI2pdManager:
                     inferred.sam_host, inferred.sam_port, timeout=5.0
                 )
                 self._runtime = inferred
-                self._managed_pid = None
+                self._managed_pid = self._discover_windows_runtime_pid(inferred)
                 return True
             except Exception:
                 pass
