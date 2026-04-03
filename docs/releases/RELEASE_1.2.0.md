@@ -31,6 +31,10 @@ There is also a new keyboard shortcut:
 - **Ctrl+R** on Windows/Linux
 - **⌘R** on macOS
 
+Example dialog:
+
+<img src="../../screenshots/8.png" alt="I2P router dialog: choose system or bundled i2pd backend, adjust ports, open router paths, restart bundled router" width="900" />
+
 #### 2. Router operations are available from the same dialog
 
 The router dialog also exposes direct actions:
@@ -136,6 +140,10 @@ No wire-format break is intended in **v1.2.0**.
 
 - **Ctrl+R** на Windows/Linux
 - **⌘R** на macOS
+
+Пример диалога:
+
+<img src="../../screenshots/8.png" alt="Диалог I2P router: выбор system или bundled i2pd, настройка портов, открытие путей роутера и перезапуск bundled router" width="900" />
 
 #### 2. Операции с роутером доступны прямо из диалога
 

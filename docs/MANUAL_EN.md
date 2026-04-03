@@ -134,6 +134,10 @@ Click the **`⋯`** button or press **Ctrl+.** (Windows/Linux) / **⌘+.** (macO
 - **Enter sends message: ON/OFF** — when **ON**: **Enter** sends the message, **Shift+Enter** inserts a new line (**Ctrl/⌘+Enter** still sends). When **OFF** (default): **Enter** is a new line; **Shift+Enter** or **Ctrl/⌘+Enter** sends. The compose placeholder text updates accordingly; the choice is persisted for the profile (see **`ui_prefs.json`**).
 - **Notification sound: ON/OFF** — enable or mute the incoming-message sound path when it would otherwise play (custom sound path is kept when off; Privacy mode can still mute sound while the window is focused).
 
+Example **I2P router** dialog (**⋯ → I2P router…** / **Ctrl/Cmd+R**):
+
+<img src="../screenshots/8.png" alt="I2P router dialog: choose system or bundled i2pd backend, adjust ports, open router paths, restart bundled router" width="900" />
+
 #### 4.2. Peer address field
 
 The `Peer .b32.i2p address` field is for the full destination of your peer:
