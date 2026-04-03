@@ -17,6 +17,39 @@ function Invoke-NativeChecked {
         throw "Command failed with exit code ${LASTEXITCODE}: $FilePath$argsText"
     }
 }
+
+function Stop-I2PChatProcessesLockingDist {
+    # Запущенный dist\I2PChat\I2PChat.exe держит _sodium.pyd — Remove-Item падает с PermissionDenied.
+    Get-Process -Name "I2PChat" -ErrorAction SilentlyContinue | ForEach-Object {
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 500
+}
+
+function Remove-PathWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [int]$Attempts = 6
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+    $delayMs = 250
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        try {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            return
+        }
+        catch {
+            if ($i -eq $Attempts - 1) {
+                throw "Cannot remove '$Path' after $Attempts attempts: $($_.Exception.Message)"
+            }
+            Start-Sleep -Milliseconds $delayMs
+            $delayMs = [Math]::Min(2000, $delayMs + 250)
+        }
+    }
+}
+
 $VersionFile = "VERSION"
 if (-not (Test-Path $VersionFile)) {
     throw "VERSION file not found: $VersionFile"
@@ -58,8 +91,9 @@ Write-Host "==> Syntax check (packages + helper scripts, same scope as Linux/mac
 Invoke-NativeChecked $PythonExe @("-m", "compileall", "i2pchat", "i2plib", "scripts", "make_icon.py")
 
 Write-Host "==> Build GUI I2PChat.exe using spec file"
-if (Test-Path "dist\I2PChat") { Remove-Item -Recurse -Force "dist\I2PChat" }
-if (Test-Path "build\I2PChat") { Remove-Item -Recurse -Force "build\I2PChat" }
+Stop-I2PChatProcessesLockingDist
+Remove-PathWithRetry -Path "dist\I2PChat"
+Remove-PathWithRetry -Path "build\I2PChat"
 Invoke-NativeChecked $PythonExe @("-m", "PyInstaller", "--clean", "-y", "I2PChat.spec")
 
 if (Test-Path "vendor\i2pd\windows-x64\i2pd.exe") {
