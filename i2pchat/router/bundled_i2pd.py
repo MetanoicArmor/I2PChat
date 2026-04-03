@@ -57,6 +57,10 @@ def resolve_bundled_i2pd_binary() -> Optional[str]:
     return None
 
 
+def _ps_single_quoted(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
 def render_i2pd_conf(rt: BundledI2pdRuntime) -> str:
     return f"""daemon = false
 service = false
@@ -275,20 +279,23 @@ class BundledI2pdManager:
     def _discover_windows_runtime_pid(rt: BundledI2pdRuntime) -> Optional[int]:
         if sys.platform != "win32":
             return None
+        conf = _ps_single_quoted(rt.conf_path)
+        data = _ps_single_quoted(rt.data_dir)
         script = (
-            "$conf=$args[0]; "
-            "$data=$args[1]; "
+            f"$conf={conf}; "
+            f"$data={data}; "
             "Get-CimInstance Win32_Process | "
             "Where-Object { "
             "$_.Name -eq 'i2pd.exe' -and $_.CommandLine -and "
             "(($_.CommandLine -like ('*' + $conf + '*')) -or ($_.CommandLine -like ('*' + $data + '*'))) "
             "} | "
+            "Sort-Object ProcessId -Descending | "
             "Select-Object -First 1 -ExpandProperty ProcessId"
         )
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             out = subprocess.check_output(
-                ["powershell", "-NoProfile", "-Command", script, rt.conf_path, rt.data_dir],
+                ["powershell", "-NoProfile", "-Command", script],
                 stderr=subprocess.DEVNULL,
                 text=True,
                 creationflags=creationflags,
@@ -302,9 +309,11 @@ class BundledI2pdManager:
     def _spawn_windows_delayed_cleanup(rt: BundledI2pdRuntime) -> None:
         if sys.platform != "win32":
             return
+        conf = _ps_single_quoted(rt.conf_path)
+        data = _ps_single_quoted(rt.data_dir)
         script = (
-            "$conf=$args[0]; "
-            "$data=$args[1]; "
+            f"$conf={conf}; "
+            f"$data={data}; "
             "Start-Sleep -Milliseconds 1500; "
             "Get-CimInstance Win32_Process | "
             "Where-Object { "
@@ -312,7 +321,8 @@ class BundledI2pdManager:
             "(($_.CommandLine -like ('*' + $conf + '*')) -or ($_.CommandLine -like ('*' + $data + '*'))) "
             "} | "
             "ForEach-Object { "
-            "taskkill /PID $_.ProcessId /T /F | Out-Null "
+            "try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} ; "
+            "try { taskkill /PID $($_.ProcessId) /T /F | Out-Null } catch {} "
             "}"
         )
         creationflags = 0
@@ -327,8 +337,6 @@ class BundledI2pdManager:
                     "Hidden",
                     "-Command",
                     script,
-                    rt.conf_path,
-                    rt.data_dir,
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
