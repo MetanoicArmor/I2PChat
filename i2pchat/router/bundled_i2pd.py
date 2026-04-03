@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 from typing import Optional
@@ -23,6 +25,9 @@ class BundledI2pdRuntime:
     conf_path: str
     tunconf_path: str
     log_path: str
+
+
+_STATE_FILE = "managed-process.json"
 
 
 def resolve_bundled_i2pd_binary() -> Optional[str]:
@@ -86,6 +91,7 @@ class BundledI2pdManager:
         self._proc: asyncio.subprocess.Process | None = None
         self._runtime: BundledI2pdRuntime | None = None
         self._log_handle = None
+        self._managed_pid: int | None = None
 
     def sam_address(self) -> tuple[str, int]:
         if self._runtime is None:
@@ -113,8 +119,175 @@ class BundledI2pdManager:
             return preferred
         return pick_free_tcp_port(host)
 
-    def _build_runtime(self) -> BundledI2pdRuntime:
-        root = router_runtime_dir()
+    @staticmethod
+    def _runtime_root(rt: BundledI2pdRuntime) -> str:
+        return os.path.dirname(rt.conf_path)
+
+    @staticmethod
+    def _state_path(root: str) -> str:
+        return os.path.join(root, _STATE_FILE)
+
+    @staticmethod
+    def _runtime_to_dict(rt: BundledI2pdRuntime) -> dict[str, object]:
+        return {
+            "sam_host": rt.sam_host,
+            "sam_port": rt.sam_port,
+            "http_proxy_port": rt.http_proxy_port,
+            "socks_proxy_port": rt.socks_proxy_port,
+            "control_http_port": rt.control_http_port,
+            "data_dir": rt.data_dir,
+            "conf_path": rt.conf_path,
+            "tunconf_path": rt.tunconf_path,
+            "log_path": rt.log_path,
+        }
+
+    @staticmethod
+    def _runtime_from_dict(raw: dict[str, object]) -> Optional[BundledI2pdRuntime]:
+        try:
+            return BundledI2pdRuntime(
+                sam_host=str(raw["sam_host"]),
+                sam_port=int(raw["sam_port"]),
+                http_proxy_port=int(raw["http_proxy_port"]),
+                socks_proxy_port=int(raw["socks_proxy_port"]),
+                control_http_port=int(raw["control_http_port"]),
+                data_dir=str(raw["data_dir"]),
+                conf_path=str(raw["conf_path"]),
+                tunconf_path=str(raw["tunconf_path"]),
+                log_path=str(raw["log_path"]),
+            )
+        except Exception:
+            return None
+
+    def _read_state(
+        self, root: str
+    ) -> tuple[Optional[BundledI2pdRuntime], Optional[int]]:
+        path = self._state_path(root)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                return None, None
+            rt_raw = raw.get("runtime")
+            runtime = (
+                self._runtime_from_dict(rt_raw)
+                if isinstance(rt_raw, dict)
+                else None
+            )
+            pid_raw = raw.get("pid")
+            pid = int(pid_raw) if pid_raw is not None else None
+            return runtime, pid
+        except Exception:
+            return None, None
+
+    def _write_state(self, rt: BundledI2pdRuntime, pid: Optional[int]) -> None:
+        root = self._runtime_root(rt)
+        os.makedirs(root, exist_ok=True)
+        payload = {"runtime": self._runtime_to_dict(rt), "pid": pid}
+        with open(self._state_path(root), "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=True, indent=2, sort_keys=True)
+
+    def _clear_state(self, root: str) -> None:
+        try:
+            os.remove(self._state_path(root))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+
+    async def _terminate_pid(self, pid: int, *, timeout: float = 10.0) -> None:
+        if not self._pid_alive(pid):
+            return
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if not self._pid_alive(pid):
+                return
+            await asyncio.sleep(0.2)
+        force_sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+        try:
+            os.kill(pid, force_sig)
+        except OSError:
+            return
+        deadline = loop.time() + 3.0
+        while loop.time() < deadline:
+            if not self._pid_alive(pid):
+                return
+            await asyncio.sleep(0.2)
+
+    @staticmethod
+    def _infer_runtime_from_existing_conf(root: str) -> Optional[BundledI2pdRuntime]:
+        conf_path = os.path.join(root, "i2pd.conf")
+        if not os.path.isfile(conf_path):
+            return None
+        values: dict[str, str] = {}
+        try:
+            with open(conf_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#") or "=" not in stripped:
+                        continue
+                    key, value = stripped.split("=", 1)
+                    values[key.strip()] = value.strip()
+            return BundledI2pdRuntime(
+                sam_host=values.get("sam.address", "127.0.0.1"),
+                sam_port=int(values["sam.port"]),
+                http_proxy_port=int(values["httpproxy.port"]),
+                socks_proxy_port=int(values["socksproxy.port"]),
+                control_http_port=int(values["http.port"]),
+                data_dir=os.path.join(root, "data"),
+                conf_path=conf_path,
+                tunconf_path=os.path.join(root, "tunnels.conf"),
+                log_path=values.get("logfile", os.path.join(root, "router.log")),
+            )
+        except Exception:
+            return None
+
+    async def _adopt_existing_runtime_if_available(self, root: str) -> bool:
+        runtime, pid = self._read_state(root)
+        if runtime is not None:
+            if pid is not None and self._pid_alive(pid):
+                try:
+                    await wait_for_sam_ready(
+                        runtime.sam_host, runtime.sam_port, timeout=5.0
+                    )
+                    self._runtime = runtime
+                    self._managed_pid = pid
+                    return True
+                except Exception:
+                    await self._terminate_pid(pid)
+                    self._clear_state(root)
+            else:
+                self._clear_state(root)
+
+        inferred = self._infer_runtime_from_existing_conf(root)
+        if inferred is not None:
+            try:
+                await wait_for_sam_ready(
+                    inferred.sam_host, inferred.sam_port, timeout=5.0
+                )
+                self._runtime = inferred
+                self._managed_pid = None
+                return True
+            except Exception:
+                pass
+        return False
+
+    def _build_runtime(self, root: Optional[str] = None) -> BundledI2pdRuntime:
+        root = root or router_runtime_dir()
         data_dir = os.path.join(root, "data")
         os.makedirs(data_dir, exist_ok=True)
 
@@ -152,12 +325,18 @@ class BundledI2pdManager:
     async def start(self) -> tuple[str, int]:
         if self._proc is not None and self._proc.returncode is None:
             return self.sam_address()
+        if self._runtime is not None and self._managed_pid is not None and self._pid_alive(self._managed_pid):
+            return self.sam_address()
 
         binary = resolve_bundled_i2pd_binary()
         if not binary:
             raise RuntimeError("Bundled i2pd binary not found")
 
-        rt = self._build_runtime()
+        root = router_runtime_dir()
+        if await self._adopt_existing_runtime_if_available(root):
+            return self.sam_address()
+
+        rt = self._build_runtime(root)
         self._write_config(rt)
         self._runtime = rt
 
@@ -176,11 +355,16 @@ class BundledI2pdManager:
             await self.stop()
             raise
 
+        self._managed_pid = self._proc.pid if self._proc is not None else None
+        self._write_state(rt, self._managed_pid)
+
         return (rt.sam_host, rt.sam_port)
 
     async def stop(self) -> None:
         proc = self._proc
         self._proc = None
+        runtime = self._runtime
+        root = self._runtime_root(runtime) if runtime is not None else router_runtime_dir()
         try:
             if proc is not None and proc.returncode is None:
                 proc.terminate()
@@ -189,6 +373,8 @@ class BundledI2pdManager:
                 except asyncio.TimeoutError:
                     proc.kill()
                     await proc.wait()
+            elif self._managed_pid is not None:
+                await self._terminate_pid(self._managed_pid)
         finally:
             if self._log_handle is not None:
                 try:
@@ -196,3 +382,6 @@ class BundledI2pdManager:
                 except Exception:
                     pass
                 self._log_handle = None
+            self._managed_pid = None
+            self._runtime = None
+            self._clear_state(root)

@@ -1,6 +1,8 @@
+import asyncio
 import tempfile
 import unittest
 from unittest import mock
+from pathlib import Path
 
 from i2pchat.router.bundled_i2pd import (
     BundledI2pdManager,
@@ -76,6 +78,74 @@ class BundledI2pdConfigTests(unittest.TestCase):
         self.assertEqual(rt.http_proxy_port, 20002)
         self.assertEqual(rt.socks_proxy_port, 20003)
         self.assertEqual(rt.control_http_port, 20004)
+
+    def test_state_roundtrip(self) -> None:
+        settings = RouterSettings(backend="bundled")
+        manager = BundledI2pdManager(settings)
+        with tempfile.TemporaryDirectory() as td:
+            rt = BundledI2pdRuntime(
+                sam_host="127.0.0.1",
+                sam_port=17656,
+                http_proxy_port=14444,
+                socks_proxy_port=14447,
+                control_http_port=17070,
+                data_dir=f"{td}/data",
+                conf_path=f"{td}/i2pd.conf",
+                tunconf_path=f"{td}/tunnels.conf",
+                log_path=f"{td}/router.log",
+            )
+            manager._write_state(rt, 12345)
+            loaded_rt, loaded_pid = manager._read_state(td)
+            self.assertEqual(loaded_pid, 12345)
+            self.assertIsNotNone(loaded_rt)
+            assert loaded_rt is not None
+            self.assertEqual(loaded_rt.sam_port, 17656)
+            self.assertEqual(loaded_rt.http_proxy_port, 14444)
+
+    def test_infer_runtime_from_existing_conf(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            conf = Path(td) / "i2pd.conf"
+            conf.write_text(
+                "\n".join(
+                    [
+                        "sam.address = 127.0.0.1",
+                        "sam.port = 17656",
+                        "http.port = 17070",
+                        "httpproxy.port = 14444",
+                        "socksproxy.port = 14447",
+                        "logfile = /tmp/router.log",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            rt = BundledI2pdManager._infer_runtime_from_existing_conf(td)
+            self.assertIsNotNone(rt)
+            assert rt is not None
+            self.assertEqual(rt.sam_port, 17656)
+            self.assertEqual(rt.http_proxy_port, 14444)
+            self.assertEqual(rt.log_path, "/tmp/router.log")
+
+    def test_adopt_existing_runtime_from_state(self) -> None:
+        settings = RouterSettings(backend="bundled")
+        manager = BundledI2pdManager(settings)
+        with tempfile.TemporaryDirectory() as td:
+            rt = BundledI2pdRuntime(
+                sam_host="127.0.0.1",
+                sam_port=17656,
+                http_proxy_port=14444,
+                socks_proxy_port=14447,
+                control_http_port=17070,
+                data_dir=f"{td}/data",
+                conf_path=f"{td}/i2pd.conf",
+                tunconf_path=f"{td}/tunnels.conf",
+                log_path=f"{td}/router.log",
+            )
+            manager._write_state(rt, 43210)
+            with mock.patch.object(manager, "_pid_alive", return_value=True), \
+                    mock.patch("i2pchat.router.bundled_i2pd.wait_for_sam_ready", new=mock.AsyncMock()):
+                adopted = asyncio.run(manager._adopt_existing_runtime_if_available(td))
+            self.assertTrue(adopted)
+            self.assertEqual(manager.sam_address(), ("127.0.0.1", 17656))
 
 
 if __name__ == "__main__":
