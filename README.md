@@ -238,17 +238,16 @@ The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.pn
 
 ### 📦 Prebuilt binaries
 
-**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt binaries for Windows, macOS, and Linux.
+**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt binaries for Windows, macOS, and Linux (version **v1.1.3** matches [`VERSION`](VERSION) in this repo).
 
-Currently available:
+Currently shipped assets use **versioned** zip names, for example:
 
-- **Windows (x64) GUI**
-  - Archive: `I2PChat-windows-x64.zip`
+- **Windows (x64) GUI** — `I2PChat-windows-x64-v1.1.3.zip`
   - Inside: `I2PChat\I2PChat.exe`
   - Built with **Python 3.14** and PyInstaller, includes the Python runtime and all dependencies.
-  - **Python is *not* required on the target system** – just unpack the zip and run `I2PChat.exe`.
+  - **Python is *not* required on the target system** – unpack the zip and run `I2PChat.exe`.
 
-Other platforms are available — see the table below or check [Releases](https://github.com/MetanoicArmor/I2PChat/releases/latest).
+**Linux** (`I2PChat-linux-x86_64-v1.1.3.zip` → AppImage) and **macOS arm64** (`I2PChat-macOS-arm64-v1.1.3.zip` → `.app`) — same release page; **direct download links** are in the **Prebuilt Downloads** table later in this README.
 
 ### 🛠 Running from source
 
