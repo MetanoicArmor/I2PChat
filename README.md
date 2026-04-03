@@ -292,7 +292,7 @@ The same code path is available as `python -m i2pchat.run_gui` (matches [`i2pcha
 PyInstaller builds use [`i2pchat/run_gui.py`](i2pchat/run_gui.py) as the entry script (equivalent
 to `python -m i2pchat.gui` / `python -m i2pchat.gui.main_qt`). All modules live under `i2pchat/`.
 
-**Developer note (BlindBox):** [`i2pchat/blindbox/blindbox_server_example.py`](i2pchat/blindbox/blindbox_server_example.py) is a minimal **loopback-only** (`127.0.0.1`) sample **without authentication**. Do not bind it to all interfaces or expose it on untrusted networks; production-style replicas need the full Blind Box deployment model (see **§4.9** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md)).
+**Developer note (BlindBox):** [`i2pchat/blindbox/blindbox_server_example.py`](i2pchat/blindbox/blindbox_server_example.py) is a minimal **loopback-only** (`127.0.0.1`) sample with **optional** authentication, TTL cleanup, and storage quotas. For a public replica behind an I2P tunnel the token may stay empty; for raw TCP / loopback exposure keep a token. The sample is still intentionally small, so production-style replicas should keep the tighter deployment model from **§4.9** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md).
 
 ### 🔧 Cross‑platform builds
 

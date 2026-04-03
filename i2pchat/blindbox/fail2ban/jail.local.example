@@ -1,0 +1,15 @@
+[i2pchat-blindbox]
+enabled = true
+filter = i2pchat-blindbox
+backend = auto
+logpath = /home/YOUR_LINUX_USER/.i2pchat-blindbox/audit.log
+maxretry = 6
+findtime = 10m
+bantime = 1h
+port = 19444,19445
+action = %(action_)s
+
+# Notes:
+# - Point ``logpath`` to the audit.log created by blindbox_server_example.py.
+# - The example service emits FAIL2BAN lines for auth failures and rate-limit abuse.
+# - Port 19445 is the optional localhost HTTP monitoring endpoint.

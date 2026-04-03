@@ -27,6 +27,12 @@ from i2pchat.blindbox.blindbox_diagnostics import build_blindbox_diagnostics_tex
 from i2pchat.blindbox.local_server_example import (
     get_blindbox_dotenv_example_note,
     get_blindbox_dotenv_example_source,
+    get_blindbox_standalone_launcher_note,
+    get_blindbox_standalone_launcher_source,
+    get_fail2ban_filter_example_note,
+    get_fail2ban_filter_example_source,
+    get_fail2ban_jail_example_note,
+    get_fail2ban_jail_example_source,
     get_i2pd_blindbox_tunnel_example_note,
     get_i2pd_blindbox_tunnel_example_source,
     get_local_blindbox_server_example_note,
@@ -9003,6 +9009,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             get_local_blindbox_server_example_source(),
         )
         tabs.addTab(py_page, "Python")
+        launch_page, launch_edit = _tab_page(
+            get_blindbox_standalone_launcher_note(),
+            get_blindbox_standalone_launcher_source(),
+        )
+        tabs.addTab(launch_page, "Standalone")
         i2p_page, i2p_edit = _tab_page(
             get_i2pd_blindbox_tunnel_example_note(),
             get_i2pd_blindbox_tunnel_example_source(),
@@ -9018,8 +9029,26 @@ class ChatWindow(QtWidgets.QMainWindow):
             get_blindbox_dotenv_example_source(),
         )
         tabs.addTab(env_page, ".env")
+        f2b_filter_page, f2b_filter_edit = _tab_page(
+            get_fail2ban_filter_example_note(),
+            get_fail2ban_filter_example_source(),
+        )
+        tabs.addTab(f2b_filter_page, "Fail2ban filter")
+        f2b_jail_page, f2b_jail_edit = _tab_page(
+            get_fail2ban_jail_example_note(),
+            get_fail2ban_jail_example_source(),
+        )
+        tabs.addTab(f2b_jail_page, "Fail2ban jail")
         v.addWidget(tabs, 1)
-        edits = (py_edit, i2p_edit, sd_edit, env_edit)
+        edits = (
+            py_edit,
+            launch_edit,
+            i2p_edit,
+            sd_edit,
+            env_edit,
+            f2b_filter_edit,
+            f2b_jail_edit,
+        )
         v.addSpacing(6)
         brow = QtWidgets.QHBoxLayout()
         brow.setSpacing(10)
