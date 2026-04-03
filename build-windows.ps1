@@ -4,6 +4,7 @@ Param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$BlindboxInstallSrc = "i2pchat\blindbox\daemon\install\install.sh"
 
 function Invoke-NativeChecked {
     param(
@@ -70,7 +71,17 @@ $ZipFile = "dist\\I2PChat-windows-x64-v$ReleaseVersion.zip"
 if (Test-Path $ZipFile) {
     Remove-Item -Force $ZipFile
 }
-Compress-Archive -Path "dist\\I2PChat" -DestinationPath $ZipFile -CompressionLevel Optimal
+$ZipStage = "dist\\I2PChat-windows-x64-v$ReleaseVersion"
+if (Test-Path $ZipStage) {
+    Remove-Item -Recurse -Force $ZipStage
+}
+New-Item -ItemType Directory -Path $ZipStage | Out-Null
+Copy-Item -Recurse "dist\\I2PChat" "$ZipStage\\I2PChat"
+if (Test-Path $BlindboxInstallSrc) {
+    Copy-Item $BlindboxInstallSrc "$ZipStage\\install.sh"
+}
+Compress-Archive -Path "$ZipStage\\*" -DestinationPath $ZipFile -CompressionLevel Optimal
+Remove-Item -Recurse -Force $ZipStage
 Write-Host "Packed: $ZipFile"
 
 $HashLine = "{0}  {1}" -f (Get-FileHash -Path $ZipFile -Algorithm SHA256).Hash.ToLowerInvariant(), (Split-Path -Path $ZipFile -Leaf)
@@ -103,4 +114,3 @@ else {
         Write-Host "Generated: SHA256SUMS.asc"
     }
 }
-

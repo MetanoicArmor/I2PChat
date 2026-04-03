@@ -25,26 +25,11 @@ from i2pchat.storage.profile_blindbox_replicas import (
 )
 from i2pchat.blindbox.blindbox_diagnostics import build_blindbox_diagnostics_text
 from i2pchat.blindbox.local_server_example import (
-    get_blindbox_dotenv_example_note,
-    get_blindbox_dotenv_example_source,
-    get_production_daemon_env_source,
-    get_production_daemon_install_script_source,
+    get_production_daemon_one_shot_install_curl_command,
     get_production_daemon_one_shot_install_source,
-    get_production_daemon_package_script_source,
     get_production_daemon_package_note,
-    get_production_daemon_systemd_source,
-    get_blindbox_standalone_launcher_note,
-    get_blindbox_standalone_launcher_source,
-    get_fail2ban_filter_example_note,
-    get_fail2ban_filter_example_source,
-    get_fail2ban_jail_example_note,
-    get_fail2ban_jail_example_source,
     get_i2pd_blindbox_tunnel_example_note,
     get_i2pd_blindbox_tunnel_example_source,
-    get_local_blindbox_server_example_note,
-    get_local_blindbox_server_example_source,
-    get_systemd_blindbox_unit_example_note,
-    get_systemd_blindbox_unit_example_source,
 )
 from i2pchat.presentation.compose_drafts import apply_compose_draft_peer_switch
 from i2pchat.protocol.message_delivery import (
@@ -9010,91 +8995,71 @@ class ChatWindow(QtWidgets.QMainWindow):
             pl.addWidget(te, 1)
             return page, te
 
-        py_page, py_edit = _tab_page(
-            get_local_blindbox_server_example_note(),
-            get_local_blindbox_server_example_source(),
-        )
-        tabs.addTab(py_page, "Python")
-        launch_page, launch_edit = _tab_page(
-            get_blindbox_standalone_launcher_note(),
-            get_blindbox_standalone_launcher_source(),
-        )
-        tabs.addTab(launch_page, "Standalone")
-        prod_pkg_page, prod_pkg_edit = _tab_page(
+        install_page, install_edit = _tab_page(
             get_production_daemon_package_note(),
-            "python3 -m i2pchat.blindbox.daemon\n",
+            get_production_daemon_one_shot_install_source(),
         )
-        tabs.addTab(prod_pkg_page, "Prod package")
+        tabs.addTab(install_page, "install.sh")
         i2p_page, i2p_edit = _tab_page(
             get_i2pd_blindbox_tunnel_example_note(),
             get_i2pd_blindbox_tunnel_example_source(),
         )
         tabs.addTab(i2p_page, "I2pd")
-        sd_page, sd_edit = _tab_page(
-            get_systemd_blindbox_unit_example_note(),
-            get_systemd_blindbox_unit_example_source(),
-        )
-        tabs.addTab(sd_page, "Systemd")
-        env_page, env_edit = _tab_page(
-            get_blindbox_dotenv_example_note(),
-            get_blindbox_dotenv_example_source(),
-        )
-        tabs.addTab(env_page, ".env")
-        prod_sd_page, prod_sd_edit = _tab_page(
-            get_production_daemon_package_note(),
-            get_production_daemon_systemd_source(),
-        )
-        tabs.addTab(prod_sd_page, "Prod systemd")
-        prod_env_page, prod_env_edit = _tab_page(
-            get_production_daemon_package_note(),
-            get_production_daemon_env_source(),
-        )
-        tabs.addTab(prod_env_page, "Prod env")
-        prod_install_page, prod_install_edit = _tab_page(
-            get_production_daemon_package_note(),
-            get_production_daemon_install_script_source(),
-        )
-        tabs.addTab(prod_install_page, "Prod install")
-        one_shot_install_page, one_shot_install_edit = _tab_page(
-            get_production_daemon_package_note(),
-            get_production_daemon_one_shot_install_source(),
-        )
-        tabs.addTab(one_shot_install_page, "install.sh")
-        prod_bundle_page, prod_bundle_edit = _tab_page(
-            get_production_daemon_package_note(),
-            get_production_daemon_package_script_source(),
-        )
-        tabs.addTab(prod_bundle_page, "Prod bundle")
-        f2b_filter_page, f2b_filter_edit = _tab_page(
-            get_fail2ban_filter_example_note(),
-            get_fail2ban_filter_example_source(),
-        )
-        tabs.addTab(f2b_filter_page, "Fail2ban filter")
-        f2b_jail_page, f2b_jail_edit = _tab_page(
-            get_fail2ban_jail_example_note(),
-            get_fail2ban_jail_example_source(),
-        )
-        tabs.addTab(f2b_jail_page, "Fail2ban jail")
         v.addWidget(tabs, 1)
         edits = (
-            py_edit,
-            launch_edit,
-            prod_pkg_edit,
+            install_edit,
             i2p_edit,
-            sd_edit,
-            env_edit,
-            prod_sd_edit,
-            prod_env_edit,
-            prod_install_edit,
-            one_shot_install_edit,
-            prod_bundle_edit,
-            f2b_filter_edit,
-            f2b_jail_edit,
         )
         v.addSpacing(6)
         brow = QtWidgets.QHBoxLayout()
         brow.setSpacing(10)
         brow.setContentsMargins(_bb_example_pad, 0, _bb_example_pad, 0)
+        get_install_btn = QtWidgets.QPushButton("Get install", sub)
+        get_install_btn.setToolTip(
+            "Save the one-shot install.sh locally so you can copy it to a server and run it there."
+        )
+
+        def _save_blindbox_install_script() -> None:
+            default_dir = os.path.expanduser("~")
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                sub,
+                "Save BlindBox install.sh",
+                os.path.join(default_dir, "install.sh"),
+                "Shell script (*.sh);;All Files (*)",
+            )
+            if not path:
+                return
+            try:
+                script_text = get_production_daemon_one_shot_install_source()
+                with open(path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(script_text)
+                try:
+                    os.chmod(path, 0o755)
+                except OSError:
+                    pass
+            except OSError as exc:
+                QtWidgets.QMessageBox.critical(
+                    sub,
+                    "Get install",
+                    str(exc).strip() or type(exc).__name__,
+                )
+                return
+            QtWidgets.QMessageBox.information(
+                sub,
+                "Get install",
+                f"Saved install.sh to:\n{path}\n\nCopy it to your server and run:\n\nsudo bash install.sh",
+            )
+
+        get_install_btn.clicked.connect(_save_blindbox_install_script)
+        copy_curl_btn = QtWidgets.QPushButton("Copy curl command", sub)
+        copy_curl_btn.setToolTip(
+            "Copy one command that downloads install.sh from GitHub and runs it on the server."
+        )
+        copy_curl_btn.clicked.connect(
+            lambda: QtWidgets.QApplication.clipboard().setText(
+                get_production_daemon_one_shot_install_curl_command()
+            )
+        )
         copy_btn = QtWidgets.QPushButton("Copy all", sub)
         copy_btn.clicked.connect(
             lambda: QtWidgets.QApplication.clipboard().setText(
@@ -9102,6 +9067,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             )
         )
         brow.addStretch(1)
+        brow.addWidget(get_install_btn)
+        brow.addSpacing(4)
+        brow.addWidget(copy_curl_btn)
+        brow.addSpacing(4)
         brow.addWidget(copy_btn)
         close_sub = QtWidgets.QPushButton("Close", sub)
         close_sub.clicked.connect(sub.accept)

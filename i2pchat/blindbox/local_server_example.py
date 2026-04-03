@@ -20,6 +20,10 @@ _PROD_ENV_NAME = "daemon.env.example"
 _PROD_INSTALL_NAME = "install_blindbox_daemon.sh"
 _PROD_PACKAGE_NAME = "package_blindbox_daemon.sh"
 _ONE_SHOT_INSTALL_NAME = "install.sh"
+_ONE_SHOT_INSTALL_RAW_URL = (
+    "https://raw.githubusercontent.com/MetanoicArmor/I2PChat/main/"
+    "i2pchat/blindbox/daemon/install/install.sh"
+)
 
 
 def _read_example_via_importlib_resources() -> Optional[str]:
@@ -164,6 +168,13 @@ def get_production_daemon_one_shot_install_source() -> str:
     if text is not None:
         return text
     return f"# Example file {_ONE_SHOT_INSTALL_NAME} not found in the package install.\n"
+
+
+def get_production_daemon_one_shot_install_curl_command() -> str:
+    return (
+        f"curl -fsSL {_ONE_SHOT_INSTALL_RAW_URL} -o install.sh && "
+        "sudo bash install.sh"
+    )
 
 
 def get_local_blindbox_server_example_note() -> str:

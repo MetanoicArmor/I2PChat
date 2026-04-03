@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_NAME="I2PChat"
 VENV_DIR=".venv314"
+BLINDBOX_INSTALL_SRC="i2pchat/blindbox/daemon/install/install.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 VERSION_FILE="VERSION"
@@ -113,7 +114,15 @@ echo "✔ GUI собран: dist/${APP_NAME}.app (${ARCH_SUFFIX})"
 
 ZIP_FILE="I2PChat-macOS-${ARCH_SUFFIX}-v${RELEASE_VERSION}.zip"
 rm -f "${ZIP_FILE}"
-ditto -c -k --sequesterRsrc --keepParent "dist/${APP_NAME}.app" "${ZIP_FILE}"
+ZIP_STAGE="dist/${APP_NAME}-macOS-${ARCH_SUFFIX}-bundle"
+rm -rf "${ZIP_STAGE}"
+mkdir -p "${ZIP_STAGE}"
+cp -R "dist/${APP_NAME}.app" "${ZIP_STAGE}/"
+if [ -f "${BLINDBOX_INSTALL_SRC}" ]; then
+  cp "${BLINDBOX_INSTALL_SRC}" "${ZIP_STAGE}/install.sh"
+fi
+ditto -c -k --sequesterRsrc --keepParent "${ZIP_STAGE}" "${ZIP_FILE}"
+rm -rf "${ZIP_STAGE}"
 echo "✔ Packed ${ZIP_FILE}"
 
 # Release integrity artifacts: SHA256SUMS + detached GPG signature (SHA256SUMS.asc)

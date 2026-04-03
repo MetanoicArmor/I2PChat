@@ -5,6 +5,7 @@ APP_NAME="I2PChat"
 APPDIR="${APP_NAME}.AppDir"
 VENV_DIR=".venv314"
 APPIMAGETOOL_VERSION="1.9.1"
+BLINDBOX_INSTALL_SRC="i2pchat/blindbox/daemon/install/install.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 VERSION_FILE="VERSION"
@@ -188,14 +189,16 @@ fi
 # 4) архив для релиза: версия + архитектура в имени zip
 ZIP_FILE="${APP_NAME}-linux-${ARCH_SUFFIX}-v${RELEASE_VERSION}.zip"
 rm -f "${ZIP_FILE}"
-python - "${OUTPUT_FILE}" "${ZIP_FILE}" <<'PY'
+python - "${OUTPUT_FILE}" "${ZIP_FILE}" "${BLINDBOX_INSTALL_SRC}" <<'PY'
 import os
 import sys
 import zipfile
 
-src, dst = sys.argv[1], sys.argv[2]
+src, dst, install_src = sys.argv[1], sys.argv[2], sys.argv[3]
 with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     zf.write(src, arcname=os.path.basename(src))
+    if os.path.isfile(install_src):
+        zf.write(install_src, arcname="install.sh")
 PY
 echo "✔ Packed ${ZIP_FILE}"
 
@@ -239,4 +242,3 @@ else
     echo "⚠ gpg signing failed; continuing without detached signature"
   fi
 fi
-
