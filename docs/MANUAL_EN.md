@@ -323,24 +323,25 @@ Using this button you can:
 - quickly import an existing profile;
 - switch between several profiles without restarting the application.
 
-#### 4.9. Optional: BlindBox (offline text)
+#### 4.9. Optional: BlindBox (offline delivery)
 
-**BlindBox** is the offline text queue path for your locked peer when there is **no live secure session**. It is enabled by default for **named/persistent** profiles and disabled for the transient profile (`random_address`).
+**BlindBox** is the offline delivery path for your locked peer when there is **no live secure session**. It is enabled by default for **named/persistent** profiles and disabled for the transient profile (`random_address`).
 
 - You must use a **persistent profile** and **lock to peer**. For cross-host offline delivery, configure shared **Blind Box** servers via `I2PCHAT_BLINDBOX_REPLICAS`. For deployment-wide defaults, use `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`. For centrally managed production defaults, use `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`. **Release binaries** also ship a **built-in pair** in `DEFAULT_RELEASE_BLINDBOX_ENDPOINTS` inside `i2pchat/core/i2p_chat_core.py` (`tcglilyjadosrez5gu3kqvrdpu6ri622jwrzamtpburtnpge7wgq.b32.i2p:19444`, `dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444`; override with env vars, disable with `I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1`). See [**RELEASE_0.6.0.md**](releases/RELEASE_0.6.0.md) — no duplicate crypto detail here.
   Optional local/dev-only fallback: set `I2PCHAT_BLINDBOX_LOCAL_FALLBACK=1` to start a local Blind Box server (`127.0.0.1:19444`).
   **Local token:** set **`I2PCHAT_BLINDBOX_LOCAL_TOKEN`** in the environment of the **I2PChat** process (use the **same** secret for a separate replica daemon on the same `host:port`, if you run one). In **`local-auto`** mode, if the variable is unset, the core generates a one-shot token per run (handy for quick dev, not for pairing with an external replica process).
-  **Per-replica secrets (named profiles):** in **BlindBox diagnostics**, you can map optional tokens to specific replica endpoints (one line per entry: `endpoint<TAB>token`). They are stored in `<profile>.blindbox_replicas.json` as **`replica_auth`** (file format **version 2**; older **version 1** files load as replicas-only). The client sends the token on `PUT`/`GET` for that endpoint only. On a custom Python replica, set **`BLINDBOX_AUTH_TOKEN`** to the same value (see `i2pchat/blindbox/blindbox_server_example.py`). A line-protocol token does **not** replace trust in the I2P destination — it only gates the raw TCP command line.
+  **Per-replica secrets (named profiles):** in **BlindBox diagnostics**, you can map optional tokens to specific replica endpoints (one line per entry: `endpoint<TAB>token`). They are stored in `<profile>.blindbox_replicas.json` as **`replica_auth`** (file format **version 2**; older **version 1** files load as replicas-only). The client sends the token on capability probe and queue commands (`CAPA` / `QPUT` / `QGET` / `QDEL`) for that endpoint only. On a custom Python replica, set **`BLINDBOX_AUTH_TOKEN`** to the same value (see `i2pchat/blindbox/blindbox_server_example.py`). A line-protocol token does **not** replace trust in the I2P destination — it only gates the raw TCP command line.
   You can force-disable BlindBox with `I2PCHAT_BLINDBOX_ENABLED=0`.
   **PUT quorum:** default `I2PCHAT_BLINDBOX_PUT_QUORUM=1` (success if any **Blind Box** stores the blob). Use `=2` to require every listed Blind Box to ACK (stricter).
 - `Send` in GUI works as a smart route:
-  - with a live secure session, text is sent online;
-  - with `Send: offline queue`, text is queued via BlindBox (without mandatory manual Connect);
+  - with a live secure session, text and files are sent online;
+  - with `Send: offline queue`, text, files, and inline images are queued via BlindBox (without mandatory manual Connect);
   - with `Send: need Connect once`, input text is kept and UI asks for one live Connect to bootstrap root.
 - In offline-ready mode, the send button label switches to `Send offline` (shown on two lines in the button).
 - BlindBox queue/receive debug lines are not shown in the chat feed; delivery details remain in status/tooltips.
 - Runtime state appears in the **status row** (`Send:*` and BlindBox fields); hover for hints if something is misconfigured.
-- **Compatibility:** peers on older builds may not support BlindBox traffic; live chat and file/image transfer work as before.
+- **Compatibility:** BlindBox replicas must support the new queue-capability protocol. Endpoints that do not implement it are rejected instead of being used in a weaker fallback mode.
+- **Size limits:** live file transfer allows up to **2000 MB**; BlindBox/offline file delivery is capped at **200 MB**.
 
 Example **BlindBox diagnostics** window (**⋯ → BlindBox diagnostics**):
 

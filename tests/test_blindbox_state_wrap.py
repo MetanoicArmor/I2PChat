@@ -173,6 +173,55 @@ class BlindBoxStateWrapTests(unittest.TestCase):
             else:
                 os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
 
+    def test_blindbox_state_persists_queue_epoch_metadata(self) -> None:
+        original_get_profiles_dir = core_module.get_profiles_dir
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "peer-box.b32.i2p"
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                core_module.get_profiles_dir = lambda: tmp_dir  # type: ignore[assignment]
+                core = I2PChatCore(profile="alice")
+                core.my_signing_seed = b"C" * 32
+                core.stored_peer = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
+                core._blindbox_root_secret = b"\x77" * 32
+                core._blindbox_root_epoch = 9
+                core._blindbox_send_queue_epoch = 4
+                core._blindbox_send_queue_created_at = 123
+                core._blindbox_send_queue_send_index_base = 10
+                core._blindbox_pending_send_queue_epoch = 5
+                core._blindbox_pending_send_queue_created_at = 124
+                core._blindbox_pending_send_queue_send_index_base = 12
+                core._blindbox_recv_queue_epoch = 7
+                core._blindbox_prev_recv_queue_epochs = [
+                    {"epoch": 6, "expires_at": 4102444800}
+                ]
+
+                core._save_blindbox_state()
+
+                reloaded = I2PChatCore(profile="alice")
+                reloaded.my_signing_seed = b"C" * 32
+                reloaded.stored_peer = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
+                reloaded._load_blindbox_state()
+
+                self.assertEqual(reloaded._blindbox_send_queue_epoch, 4)
+                self.assertEqual(reloaded._blindbox_pending_send_queue_epoch, 5)
+                self.assertEqual(reloaded._blindbox_recv_queue_epoch, 7)
+                self.assertEqual(
+                    reloaded._blindbox_prev_recv_queue_epochs[0]["epoch"], 6
+                )
+        finally:
+            core_module.get_profiles_dir = original_get_profiles_dir  # type: ignore[assignment]
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+
 
 if __name__ == "__main__":
     unittest.main()

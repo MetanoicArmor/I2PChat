@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
+import unittest
+
+try:
+    import pytest
+except ImportError as exc:  # pragma: no cover - environment-dependent test bootstrap
+    raise unittest.SkipTest("pytest is not installed") from exc
 
 from i2pchat.core.i2p_chat_core import detect_inline_image_format, validate_image
 

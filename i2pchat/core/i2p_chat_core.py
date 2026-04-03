@@ -24,7 +24,10 @@ from PIL import Image
 from i2pchat import crypto
 from i2pchat.blindbox.blindbox_blob import decrypt_blindbox_blob, encrypt_blindbox_blob
 from i2pchat.blindbox.blindbox_client import BlindBoxClient
-from i2pchat.blindbox.blindbox_key_schedule import derive_blindbox_message_keys
+from i2pchat.blindbox.blindbox_key_schedule import (
+    derive_blindbox_message_keys,
+    derive_blindbox_queue_capabilities,
+)
 from i2pchat.blindbox.blindbox_local_replica import ensure_local_blindbox_replica
 from i2pchat.storage.blindbox_state import (
     BlindBoxState,
@@ -239,6 +242,7 @@ class FileTransferInfo:
     is_inline_image: bool = False
     rejected_by_peer: bool = False
     source_path: Optional[str] = None
+    ack_token: Optional[str] = None
 
 
 @dataclass
@@ -753,6 +757,10 @@ BLINDBOX_PRIVACY_DEFAULTS: dict[str, dict[str, float | int]] = {
         "root_rotate_seconds": 24 * 60 * 60,
         "root_previous_grace_seconds": 24 * 60 * 60,
         "max_previous_roots": 1,
+        "queue_rotate_messages": 512,
+        "queue_rotate_seconds": 12 * 60 * 60,
+        "queue_previous_grace_seconds": 24 * 60 * 60,
+        "max_previous_queue_epochs": 2,
     },
     BLINDBOX_PRIVACY_MEDIUM: {
         "poll_min_sec": 3.0,
@@ -763,6 +771,10 @@ BLINDBOX_PRIVACY_DEFAULTS: dict[str, dict[str, float | int]] = {
         "root_rotate_seconds": 12 * 60 * 60,
         "root_previous_grace_seconds": 24 * 60 * 60,
         "max_previous_roots": 2,
+        "queue_rotate_messages": 256,
+        "queue_rotate_seconds": 6 * 60 * 60,
+        "queue_previous_grace_seconds": 24 * 60 * 60,
+        "max_previous_queue_epochs": 2,
     },
     BLINDBOX_PRIVACY_HIGH: {
         "poll_min_sec": 5.0,
@@ -773,6 +785,10 @@ BLINDBOX_PRIVACY_DEFAULTS: dict[str, dict[str, float | int]] = {
         "root_rotate_seconds": 6 * 60 * 60,
         "root_previous_grace_seconds": 24 * 60 * 60,
         "max_previous_roots": 2,
+        "queue_rotate_messages": 128,
+        "queue_rotate_seconds": 3 * 60 * 60,
+        "queue_previous_grace_seconds": 24 * 60 * 60,
+        "max_previous_queue_epochs": 3,
     },
 }
 
@@ -1413,6 +1429,14 @@ class I2PChatCore:
         self._blindbox_root_epoch: int = 0
         self._blindbox_root_created_at: int = 0
         self._blindbox_root_send_index_base: int = 0
+        self._blindbox_send_queue_epoch: int = 0
+        self._blindbox_send_queue_created_at: int = 0
+        self._blindbox_send_queue_send_index_base: int = 0
+        self._blindbox_pending_send_queue_epoch: int = 0
+        self._blindbox_pending_send_queue_created_at: int = 0
+        self._blindbox_pending_send_queue_send_index_base: int = 0
+        self._blindbox_recv_queue_epoch: int = 0
+        self._blindbox_prev_recv_queue_epochs: list[dict[str, int]] = []
         self._blindbox_pending_root_secret: Optional[bytes] = None
         self._blindbox_pending_root_epoch: int = 0
         self._blindbox_pending_root_created_at: int = 0
@@ -1496,6 +1520,42 @@ class I2PChatCore:
                 os.environ.get(
                     "I2PCHAT_BLINDBOX_MAX_PREVIOUS_ROOTS",
                     str(int(defaults["max_previous_roots"])),
+                )
+            ),
+        )
+        self._blindbox_queue_rotate_messages = max(
+            1,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_QUEUE_ROTATE_MESSAGES",
+                    str(int(defaults["queue_rotate_messages"])),
+                )
+            ),
+        )
+        self._blindbox_queue_rotate_seconds = max(
+            60,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_QUEUE_ROTATE_SECONDS",
+                    str(int(defaults["queue_rotate_seconds"])),
+                )
+            ),
+        )
+        self._blindbox_queue_previous_grace_seconds = max(
+            300,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_QUEUE_PREVIOUS_GRACE_SECONDS",
+                    str(int(defaults["queue_previous_grace_seconds"])),
+                )
+            ),
+        )
+        self._blindbox_max_previous_queue_epochs = max(
+            0,
+            int(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_MAX_PREVIOUS_QUEUE_EPOCHS",
+                    str(int(defaults["max_previous_queue_epochs"])),
                 )
             ),
         )
@@ -1884,6 +1944,27 @@ class I2PChatCore:
             filtered = filtered[: self._blindbox_max_previous_roots]
         self._blindbox_prev_roots = filtered
 
+    def _blindbox_prune_previous_recv_queue_epochs(self) -> None:
+        now_ts = int(time.time())
+        filtered = [
+            item
+            for item in self._blindbox_prev_recv_queue_epochs
+            if int(item.get("expires_at", 0)) > now_ts
+        ]
+        filtered.sort(key=lambda item: int(item.get("epoch", 0)), reverse=True)
+        if self._blindbox_max_previous_queue_epochs >= 0:
+            filtered = filtered[: self._blindbox_max_previous_queue_epochs]
+        self._blindbox_prev_recv_queue_epochs = filtered
+
+    def _blindbox_recv_queue_epoch_candidates(self) -> list[int]:
+        self._blindbox_prune_previous_recv_queue_epochs()
+        candidates: list[int] = [int(self._blindbox_recv_queue_epoch)]
+        for item in self._blindbox_prev_recv_queue_epochs:
+            epoch = int(item.get("epoch", 0))
+            if epoch not in candidates:
+                candidates.append(epoch)
+        return candidates
+
     def _blindbox_root_candidates(self) -> list[dict[str, Any]]:
         self._blindbox_prune_previous_roots()
         candidates: list[dict[str, Any]] = []
@@ -1919,6 +2000,18 @@ class I2PChatCore:
                 self._blindbox_root_epoch = 0
                 self._blindbox_root_created_at = 0
                 self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
+                self._blindbox_send_queue_epoch = 0
+                self._blindbox_send_queue_created_at = 0
+                self._blindbox_send_queue_send_index_base = int(
+                    self._blindbox_state.send_index
+                )
+                self._blindbox_pending_send_queue_epoch = 0
+                self._blindbox_pending_send_queue_created_at = 0
+                self._blindbox_pending_send_queue_send_index_base = int(
+                    self._blindbox_state.send_index
+                )
+                self._blindbox_recv_queue_epoch = 0
+                self._blindbox_prev_recv_queue_epochs = []
                 self._blindbox_pending_root_secret = None
                 self._blindbox_pending_root_epoch = 0
                 self._blindbox_pending_root_created_at = 0
@@ -1964,6 +2057,53 @@ class I2PChatCore:
                     int(self._blindbox_state.send_index),
                 )
             )
+            self._blindbox_send_queue_epoch = int(raw.get("blindbox_send_queue_epoch", 0))
+            self._blindbox_send_queue_created_at = int(
+                raw.get("blindbox_send_queue_created_at", int(time.time()))
+            )
+            self._blindbox_send_queue_send_index_base = int(
+                raw.get(
+                    "blindbox_send_queue_send_index_base",
+                    int(self._blindbox_state.send_index),
+                )
+            )
+            self._blindbox_pending_send_queue_epoch = int(
+                raw.get("blindbox_pending_send_queue_epoch", 0)
+            )
+            self._blindbox_pending_send_queue_created_at = int(
+                raw.get("blindbox_pending_send_queue_created_at", int(time.time()))
+            )
+            self._blindbox_pending_send_queue_send_index_base = int(
+                raw.get(
+                    "blindbox_pending_send_queue_send_index_base",
+                    int(self._blindbox_state.send_index),
+                )
+            )
+            self._blindbox_recv_queue_epoch = int(raw.get("blindbox_recv_queue_epoch", 0))
+            prev_queue_items = raw.get("blindbox_prev_recv_queue_epochs", [])
+            self._blindbox_prev_recv_queue_epochs = []
+            if isinstance(prev_queue_items, list):
+                for item in prev_queue_items:
+                    if not isinstance(item, dict):
+                        continue
+                    epoch = int(item.get("epoch", 0))
+                    expires_at = int(item.get("expires_at", 0))
+                    if epoch < 0 or expires_at <= 0:
+                        continue
+                    self._blindbox_prev_recv_queue_epochs.append(
+                        {"epoch": epoch, "expires_at": expires_at}
+                    )
+            self._blindbox_prune_previous_recv_queue_epochs()
+            if (
+                self._blindbox_root_secret is not None
+                and self._blindbox_send_queue_created_at <= 0
+            ):
+                self._blindbox_send_queue_created_at = int(
+                    self._blindbox_root_created_at or time.time()
+                )
+                self._blindbox_send_queue_send_index_base = int(
+                    self._blindbox_state.send_index
+                )
             enc_pending_root = raw.get("blindbox_pending_root_secret_enc")
             self._blindbox_pending_root_secret = None
             if isinstance(enc_pending_root, str) and enc_pending_root:
@@ -2032,6 +2172,14 @@ class I2PChatCore:
             self._blindbox_root_epoch = 0
             self._blindbox_root_created_at = 0
             self._blindbox_root_send_index_base = 0
+            self._blindbox_send_queue_epoch = 0
+            self._blindbox_send_queue_created_at = 0
+            self._blindbox_send_queue_send_index_base = 0
+            self._blindbox_pending_send_queue_epoch = 0
+            self._blindbox_pending_send_queue_created_at = 0
+            self._blindbox_pending_send_queue_send_index_base = 0
+            self._blindbox_recv_queue_epoch = 0
+            self._blindbox_prev_recv_queue_epochs = []
             self._blindbox_pending_root_secret = None
             self._blindbox_pending_root_epoch = 0
             self._blindbox_pending_root_created_at = 0
@@ -2062,6 +2210,31 @@ class I2PChatCore:
             payload["blindbox_root_send_index_base"] = int(
                 self._blindbox_root_send_index_base
             )
+            payload["blindbox_send_queue_epoch"] = int(self._blindbox_send_queue_epoch)
+            payload["blindbox_send_queue_created_at"] = int(
+                self._blindbox_send_queue_created_at
+            )
+            payload["blindbox_send_queue_send_index_base"] = int(
+                self._blindbox_send_queue_send_index_base
+            )
+            payload["blindbox_pending_send_queue_epoch"] = int(
+                self._blindbox_pending_send_queue_epoch
+            )
+            payload["blindbox_pending_send_queue_created_at"] = int(
+                self._blindbox_pending_send_queue_created_at
+            )
+            payload["blindbox_pending_send_queue_send_index_base"] = int(
+                self._blindbox_pending_send_queue_send_index_base
+            )
+            payload["blindbox_recv_queue_epoch"] = int(self._blindbox_recv_queue_epoch)
+            self._blindbox_prune_previous_recv_queue_epochs()
+            payload["blindbox_prev_recv_queue_epochs"] = [
+                {
+                    "epoch": int(item.get("epoch", 0)),
+                    "expires_at": int(item.get("expires_at", 0)),
+                }
+                for item in self._blindbox_prev_recv_queue_epochs
+            ]
             if self._blindbox_pending_root_secret is not None:
                 payload["blindbox_pending_root_secret_enc"] = (
                     self._blindbox_encrypt_root_secret(
@@ -2715,8 +2888,10 @@ class I2PChatCore:
     HANDSHAKE_TIMEOUT = 90.0
     # Максимальное количество строк в буфере изображения (защита от OOM)
     MAX_IMAGE_LINES = 500
-    # Максимальный размер принимаемого файла в байтах (защита от заполнения диска)
-    MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+    # Максимальный размер live-передачи файла в байтах (защита от заполнения диска)
+    MAX_FILE_SIZE = 2000 * 1024 * 1024  # 2000 MB
+    # Более строгий лимит для BlindBox/offline queue, чтобы не раздувать relay storage.
+    BLINDBOX_MAX_FILE_SIZE = 200 * 1024 * 1024  # 200 MB
     # Ограничение на размер одного фрейма протокола (защита от memory DoS)
     MAX_FRAME_BODY = 2 * 1024 * 1024  # 2 MB
     # Ограничения на pending ACK-контекст (anti-spoofing / anti-memory-growth)
@@ -2850,6 +3025,11 @@ class I2PChatCore:
             "recv_base": int(self._blindbox_state.recv_base),
             "recv_window": int(self._blindbox_state.recv_window),
             "root_epoch": int(self._blindbox_root_epoch),
+            "send_queue_epoch": int(self._blindbox_send_queue_epoch),
+            "recv_queue_epoch": int(self._blindbox_recv_queue_epoch),
+            "previous_recv_queue_epochs": int(
+                len(self._blindbox_prev_recv_queue_epochs)
+            ),
             "privacy_profile": str(self._blindbox_privacy_profile),
             "poll_min_sec": float(self._blindbox_poll_min_sec),
             "poll_max_sec": float(self._blindbox_poll_max_sec),
@@ -2857,6 +3037,8 @@ class I2PChatCore:
             "padding_bucket": int(self._blindbox_padding_bucket),
             "root_rotate_messages": int(self._blindbox_root_rotate_messages),
             "root_rotate_seconds": int(self._blindbox_root_rotate_seconds),
+            "queue_rotate_messages": int(self._blindbox_queue_rotate_messages),
+            "queue_rotate_seconds": int(self._blindbox_queue_rotate_seconds),
             "max_previous_roots": int(self._blindbox_max_previous_roots),
             "previous_roots_loaded": int(len(self._blindbox_prev_roots)),
         }
@@ -3189,32 +3371,53 @@ class I2PChatCore:
                             recv_index,
                             epoch=int(root_item["epoch"]),
                         )
-                        try:
-                            blobs = await client.get(
-                                keys.lookup_token, require_quorum=False
+                        for queue_epoch in self._blindbox_recv_queue_epoch_candidates():
+                            queue_caps = derive_blindbox_queue_capabilities(
+                                bytes(root_item["secret"]),
+                                local_id,
+                                peer_id,
+                                "recv",
+                                epoch=int(root_item["epoch"]),
+                                queue_epoch=int(queue_epoch),
                             )
-                        except Exception:
-                            continue
-                        for blob in blobs:
-                            digest = hashlib.sha256(blob).hexdigest()
-                            if digest in self._blindbox_seen_hashes:
-                                continue
                             try:
-                                frame = decrypt_blindbox_blob(
-                                    blob,
-                                    keys.blob_key,
-                                    # Blob direction is encoded by sender perspective.
-                                    # Receiver must expect "send" for inbound offline envelopes.
-                                    expected_direction="send",
-                                    expected_index=recv_index,
-                                    expected_state_tag=keys.state_tag,
+                                blobs = await client.get(
+                                    keys.lookup_token,
+                                    require_quorum=False,
+                                    queue_caps=queue_caps,
                                 )
                             except Exception:
                                 continue
-                            accepted = await self._process_blindbox_frame(frame)
-                            if accepted:
-                                got_valid = True
-                                self._remember_blindbox_seen_hash(digest)
+                            for blob in blobs:
+                                digest = hashlib.sha256(blob).hexdigest()
+                                if digest in self._blindbox_seen_hashes:
+                                    continue
+                                try:
+                                    frame = decrypt_blindbox_blob(
+                                        blob,
+                                        keys.blob_key,
+                                        # Blob direction is encoded by sender perspective.
+                                        # Receiver must expect "send" for inbound offline envelopes.
+                                        expected_direction="send",
+                                        expected_index=recv_index,
+                                        expected_state_tag=keys.state_tag,
+                                    )
+                                except Exception:
+                                    continue
+                                accepted = await self._process_blindbox_frame(frame)
+                                if accepted:
+                                    try:
+                                        await client.delete(
+                                            keys.lookup_token,
+                                            queue_caps=queue_caps,
+                                            require_quorum=False,
+                                        )
+                                    except Exception:
+                                        pass
+                                    got_valid = True
+                                    self._remember_blindbox_seen_hash(digest)
+                                    break
+                            if got_valid:
                                 break
                         if got_valid:
                             break
@@ -3246,34 +3449,471 @@ class I2PChatCore:
             return False
         body = payload[:msg_len]
         msg_type = chr(msg_type_raw)
-        if msg_type != "U":
-            return False
-        text = body.decode("utf-8", errors="strict")
+        body_text = body.decode("utf-8", errors="strict")
         sp = (self.stored_peer or self.current_peer_addr or "").strip() or None
-        self._emit_message("peer", text, source_peer=sp)
-        self._emit_notify("peer", text, source_peer=sp)
-        return True
+
+        if msg_type == "U":
+            self._emit_message("peer", body_text, source_peer=sp)
+            self._emit_notify("peer", body_text, source_peer=sp)
+            if msg_id:
+                await self._queue_blindbox_signal(f"MSG_ACK|{msg_id}")
+            return True
+
+        if msg_type == "G":
+            if body_text == "__IMG_END__":
+                if self.inline_image_info and self.inline_image_buffer:
+                    filename, expected_size = self.inline_image_info
+                    actual_size = len(self.inline_image_buffer)
+                    if actual_size > MAX_IMAGE_SIZE:
+                        self._emit_file_event(
+                            FileTransferInfo(
+                                filename=filename,
+                                size=expected_size,
+                                received=-1,
+                                is_sending=False,
+                                is_inline_image=True,
+                            )
+                        )
+                        self._emit_error("Received image too large, discarding")
+                        self.inline_image_buffer = bytearray()
+                        self.inline_image_info = None
+                        self._incoming_image_msg_id = None
+                        return False
+                    if actual_size != expected_size:
+                        self._emit_file_event(
+                            FileTransferInfo(
+                                filename=filename,
+                                size=expected_size,
+                                received=-1,
+                                is_sending=False,
+                                is_inline_image=True,
+                            )
+                        )
+                        self._emit_error(
+                            f"Image transfer incomplete: received {actual_size} of {expected_size} bytes"
+                        )
+                        self.inline_image_buffer = bytearray()
+                        self.inline_image_info = None
+                        self._incoming_image_msg_id = None
+                        return False
+                    header = bytes(self.inline_image_buffer[:12])
+                    detected_ext = detect_inline_image_format(header)
+                    if detected_ext is None:
+                        self._emit_file_event(
+                            FileTransferInfo(
+                                filename=filename,
+                                size=expected_size,
+                                received=-1,
+                                is_sending=False,
+                                is_inline_image=True,
+                            )
+                        )
+                        self._emit_error("Received image has invalid format")
+                        self.inline_image_buffer = bytearray()
+                        self.inline_image_info = None
+                        self._incoming_image_msg_id = None
+                        return False
+                    images_dir = get_images_dir()
+                    payload_bytes = bytes(self.inline_image_buffer)
+                    safe_path, disk_err = await asyncio.to_thread(
+                        _finalize_inline_image_worker,
+                        payload_bytes,
+                        detected_ext,
+                        images_dir,
+                    )
+                    try:
+                        if safe_path is None:
+                            self._emit_file_event(
+                                FileTransferInfo(
+                                    filename=filename,
+                                    size=expected_size,
+                                    received=-1,
+                                    is_sending=False,
+                                    is_inline_image=True,
+                                )
+                            )
+                            self._emit_error(
+                                f"Received invalid image: {disk_err}"
+                                if disk_err
+                                else "Received invalid image"
+                            )
+                            return False
+                        self._emit_file_event(
+                            FileTransferInfo(
+                                filename=filename,
+                                size=expected_size,
+                                received=actual_size,
+                                is_sending=False,
+                                is_inline_image=True,
+                            )
+                        )
+                        self._emit_inline_image(safe_path, is_from_me=False)
+                        ack_id = self._incoming_image_msg_id or 0
+                        await self._queue_blindbox_signal(
+                            f"IMG_ACK|{filename}|{ack_id}"
+                        )
+                        cleanup_images_cache()
+                        return True
+                    finally:
+                        self.inline_image_buffer = bytearray()
+                        self.inline_image_info = None
+                        self._incoming_image_msg_id = None
+                return False
+            if self.inline_image_info is None:
+                try:
+                    parts = body_text.split("|")
+                    if len(parts) == 2:
+                        filename = sanitize_filename(parts[0])
+                        size = int(parts[1])
+                        if size > MAX_IMAGE_SIZE:
+                            self._emit_error(
+                                f"Incoming image too large: {size} bytes "
+                                f"(max {MAX_IMAGE_SIZE // (1024*1024)} MB)"
+                            )
+                            return False
+                        self.inline_image_info = (filename, size)
+                        self._incoming_image_msg_id = msg_id or None
+                        self.inline_image_buffer = bytearray()
+                        self._inline_image_last_emit = 0
+                        self._emit_system(
+                            f"Receiving image: {filename} ({size} bytes)"
+                        )
+                        self._emit_file_event(
+                            FileTransferInfo(
+                                filename=filename,
+                                size=size,
+                                received=0,
+                                is_sending=False,
+                                is_inline_image=True,
+                            )
+                        )
+                        return True
+                except Exception as e:
+                    self._emit_error(f"Invalid image header: {e}")
+                    return False
+                return False
+            try:
+                fn, total = self.inline_image_info
+                remaining = total - len(self.inline_image_buffer)
+                if remaining <= 0:
+                    raise ValueError("Image chunk exceeds declared size")
+                if len(body_text) > max_base64_chars_for_bytes(remaining):
+                    raise ValueError("Image chunk is too large for remaining size")
+                chunk = base64.b64decode(body_text, validate=True)
+                if len(chunk) > remaining:
+                    raise ValueError("Decoded image chunk exceeds remaining size")
+                self.inline_image_buffer.extend(chunk)
+                received = len(self.inline_image_buffer)
+                if (
+                    received - getattr(self, "_inline_image_last_emit", 0) >= 65536
+                    or received == total
+                ):
+                    self._inline_image_last_emit = received
+                    self._emit_file_event(
+                        FileTransferInfo(
+                            filename=fn,
+                            size=total,
+                            received=received,
+                            is_sending=False,
+                            is_inline_image=True,
+                        )
+                    )
+                return True
+            except Exception as e:
+                self._emit_error(f"Image data error: {e}")
+                if self.inline_image_info:
+                    fn, sz = self.inline_image_info
+                    self._emit_file_event(
+                        FileTransferInfo(
+                            filename=fn,
+                            size=sz,
+                            received=-1,
+                            is_sending=False,
+                            is_inline_image=True,
+                        )
+                    )
+                self.inline_image_buffer = bytearray()
+                self.inline_image_info = None
+                self._incoming_image_msg_id = None
+                return False
+
+        if msg_type == "F":
+            try:
+                filename, size_str = body_text.split("|")
+                filename = sanitize_filename(filename)
+                size = int(size_str)
+                if size > self.BLINDBOX_MAX_FILE_SIZE:
+                    self._emit_error(
+                        f"BlindBox file too large: {size} bytes "
+                        f"(max {self.BLINDBOX_MAX_FILE_SIZE // (1024*1024)} MB)"
+                    )
+                    self.incoming_file = None
+                    self.incoming_info = None
+                    return False
+                safe_name = os.path.basename(filename)
+                safe_path = allocate_unique_filename(get_downloads_dir(), safe_name)
+                final_name = os.path.basename(safe_path)
+                accepted = await self._request_file_offer_decision(final_name, size)
+                if not accepted:
+                    self._emit_system(f"Incoming file rejected by user: {final_name}")
+                    self.incoming_file = None
+                    self.incoming_info = None
+                    return False
+                if final_name != safe_name:
+                    self._emit_system(
+                        f"Filename collision detected: saved as {final_name}"
+                    )
+                self.incoming_file = open(safe_path, "xb")
+                self._incoming_file_msg_id = msg_id or None
+                self.incoming_info = FileTransferInfo(
+                    filename=safe_path,
+                    size=size,
+                    received=0,
+                    ack_token=safe_name,
+                )
+                self._file_xfer_debug_last_recv_emit_mono = None
+                self._emit_system(f"Receiving file: {final_name} ({size} bytes)")
+                self._emit_file_event(self.incoming_info)
+                return True
+            except Exception as e:
+                self._emit_error(f"Invalid file header: {e}")
+                return False
+
+        if msg_type == "D":
+            try:
+                if self.incoming_file and self.incoming_info:
+                    remaining = self.incoming_info.size - self.incoming_info.received
+                    if remaining <= 0:
+                        raise ValueError("File chunk exceeds declared size")
+                    if len(body_text) > max_base64_chars_for_bytes(remaining):
+                        raise ValueError("File chunk is too large for remaining size")
+                    chunk = base64.b64decode(body_text, validate=True)
+                    if len(chunk) > remaining:
+                        raise ValueError("Decoded file chunk exceeds remaining size")
+                    self.incoming_file.write(chunk)
+                    self.incoming_info.received += len(chunk)
+                    rcv = self.incoming_info.received
+                    tot = self.incoming_info.size
+                    clen = len(chunk)
+                    if should_emit_file_progress(rcv, clen, tot):
+                        self._emit_file_event(self.incoming_info)
+                    return True
+            except Exception as e:
+                self._emit_error(f"File chunk error: {e}")
+                if self.incoming_file:
+                    try:
+                        self.incoming_file.close()
+                    except Exception:
+                        pass
+                if self.incoming_info:
+                    self._emit_file_event(
+                        FileTransferInfo(
+                            filename=self.incoming_info.filename,
+                            size=self.incoming_info.size,
+                            received=-1,
+                            is_sending=False,
+                        )
+                    )
+                    try:
+                        os.remove(self.incoming_info.filename)
+                    except OSError:
+                        pass
+                self.incoming_file = None
+                self.incoming_info = None
+                self._incoming_file_msg_id = None
+                return False
+            return False
+
+        if msg_type == "E":
+            if self.incoming_file and self.incoming_info:
+                ack_filename = self.incoming_info.filename
+                expected_size = self.incoming_info.size
+                received_size = self.incoming_info.received
+                try:
+                    self.incoming_file.close()
+                except Exception:
+                    pass
+                if received_size != expected_size:
+                    self._emit_error(
+                        f"File transfer incomplete: expected {expected_size} bytes, got {received_size}"
+                    )
+                    self._emit_file_event(
+                        FileTransferInfo(
+                            filename=ack_filename,
+                            size=expected_size,
+                            received=-1,
+                            is_sending=False,
+                        )
+                    )
+                    try:
+                        os.remove(ack_filename)
+                    except OSError:
+                        pass
+                    self.incoming_file = None
+                    self.incoming_info = None
+                    self._incoming_file_msg_id = None
+                    return False
+                self._emit_file_event(
+                    FileTransferInfo(
+                        filename=ack_filename,
+                        size=expected_size,
+                        received=expected_size,
+                        is_sending=False,
+                    )
+                )
+                ack_msg_id = self._incoming_file_msg_id or 0
+                ack_token = (
+                    self.incoming_info.ack_token
+                    if self.incoming_info and self.incoming_info.ack_token
+                    else os.path.basename(ack_filename)
+                )
+                await self._queue_blindbox_signal(f"FILE_ACK|{ack_token}|{ack_msg_id}")
+                self.incoming_file = None
+                self.incoming_info = None
+                self._incoming_file_msg_id = None
+                return True
+            return False
+
+        if msg_type == "S":
+            if "__SIGNAL__:" not in body_text:
+                return False
+            if "MSG_ACK|" in body_text:
+                try:
+                    ack_id_raw = body_text.split("MSG_ACK|", 1)[1].strip().split("|", 1)[0]
+                    ack_id = int(ack_id_raw)
+                    entry = self._pending_text_acks.get(ack_id)
+                    if (
+                        entry is not None
+                        and entry.state == "awaiting_ack"
+                        and entry.ack_kind == "msg"
+                    ):
+                        if self.on_text_delivered:
+                            self.on_text_delivered(str(ack_id))
+                        self._pending_text_acks.pop(ack_id, None)
+                        return True
+                except Exception:
+                    return False
+                return False
+            if "IMG_ACK|" in body_text:
+                try:
+                    ack_payload = body_text.split("IMG_ACK|", 1)[1].strip()
+                    parts = ack_payload.split("|")
+                    ack_filename = parts[0].strip()
+                    if len(parts) > 1:
+                        ack_id = int(parts[1].strip())
+                        entry = self._pending_image_acks.get(ack_id)
+                        ack_name = os.path.basename(ack_filename)
+                        if (
+                            entry is not None
+                            and entry.state == "awaiting_ack"
+                            and entry.ack_kind == "image"
+                            and os.path.basename(entry.token) == ack_name
+                        ):
+                            self._pending_image_acks.pop(ack_id, None)
+                            if self.on_image_delivered:
+                                self.on_image_delivered(ack_filename)
+                            return True
+                except Exception:
+                    return False
+                return False
+            if "FILE_ACK|" in body_text:
+                try:
+                    ack_payload = body_text.split("FILE_ACK|", 1)[1].strip()
+                    parts = ack_payload.split("|")
+                    ack_filename = parts[0].strip()
+                    if len(parts) > 1:
+                        ack_id = int(parts[1].strip())
+                        entry = self._pending_file_acks.get(ack_id)
+                        ack_name = os.path.basename(ack_filename)
+                        if (
+                            entry is not None
+                            and entry.state == "awaiting_ack"
+                            and entry.ack_kind == "file"
+                            and os.path.basename(entry.token) == ack_name
+                        ):
+                            self._pending_file_acks.pop(ack_id, None)
+                            if self.on_file_delivered:
+                                self.on_file_delivered(ack_filename)
+                            return True
+                except Exception:
+                    return False
+                return False
+
+        return False
+
+    def _blindbox_queue_caps(self) -> tuple[BlindBoxClient, str, Any]:
+        if not self._blindbox_ready():
+            raise RuntimeError("BlindBox is not ready")
+        if self._blindbox_root_secret is None:
+            raise RuntimeError("BlindBox root is not initialized")
+        if not self.my_dest or self._blindbox_client is None:
+            raise RuntimeError("BlindBox runtime is not initialized")
+        peer_id = self._blindbox_peer_id()
+        if not peer_id:
+            raise RuntimeError("BlindBox peer id is not available")
+        queue_caps = derive_blindbox_queue_capabilities(
+            self._blindbox_root_secret,
+            self.my_dest.base32,
+            peer_id,
+            "send",
+            epoch=self._blindbox_root_epoch,
+            queue_epoch=self._blindbox_send_queue_epoch,
+        )
+        return self._blindbox_client, peer_id, queue_caps
+
+    async def _queue_blindbox_frame(self, frame: bytes, queue_caps: Any) -> None:
+        if self._blindbox_root_secret is None or not self.my_dest:
+            raise RuntimeError("BlindBox root is not initialized")
+        peer_id = self._blindbox_peer_id()
+        if not peer_id:
+            raise RuntimeError("BlindBox peer id is not available")
+        keys = derive_blindbox_message_keys(
+            self._blindbox_root_secret,
+            self.my_dest.base32,
+            peer_id,
+            "send",
+            self._blindbox_state.send_index,
+            epoch=self._blindbox_root_epoch,
+        )
+        blob = encrypt_blindbox_blob(
+            frame,
+            keys.blob_key,
+            "send",
+            self._blindbox_state.send_index,
+            keys.state_tag,
+            padding_bucket=self._blindbox_padding_bucket,
+        )
+        await self._blindbox_client.put(
+            keys.lookup_token,
+            blob,
+            queue_caps=queue_caps,
+        )
+        self._blindbox_state.send_index += 1
+        self._blindbox_state.updated_at = int(time.time())
+        self._save_blindbox_state()
+
+    async def _queue_blindbox_signal(self, signal: str) -> bool:
+        if not signal:
+            return False
+        try:
+            async with self._blindbox_send_lock:
+                _client, _peer_id, queue_caps = self._blindbox_queue_caps()
+                await self._queue_blindbox_frame(
+                    self.frame_message("S", f"__SIGNAL__:{signal}"),
+                    queue_caps,
+                )
+            return True
+        except Exception:
+            return False
 
     async def _send_text_via_blindbox(self, text: str) -> Optional[int]:
         if not self._blindbox_ready():
             return None
-        if self._blindbox_root_secret is None:
-            return None
-        if not self.my_dest or self._blindbox_client is None:
-            return None
-        peer_id = self._blindbox_peer_id()
-        if not peer_id:
-            return None
 
         async with self._blindbox_send_lock:
-            if not self._blindbox_ready():
-                return None
-            if self._blindbox_root_secret is None:
-                return None
-            if not self.my_dest or self._blindbox_client is None:
-                return None
-            peer_id = self._blindbox_peer_id()
-            if not peer_id:
+            try:
+                _client, _peer_id, queue_caps = self._blindbox_queue_caps()
+            except Exception:
                 return None
             chunks = split_long_chat_text(text)
             if not chunks:
@@ -3285,26 +3925,13 @@ class I2PChatCore:
                     frame = self._codec.encode(
                         "U", chunk.encode("utf-8"), msg_id=msg_id, flags=0
                     )
-                    keys = derive_blindbox_message_keys(
-                        self._blindbox_root_secret,
-                        self.my_dest.base32,
-                        peer_id,
-                        "send",
-                        self._blindbox_state.send_index,
-                        epoch=self._blindbox_root_epoch,
+                    await self._queue_blindbox_frame(frame, queue_caps)
+                    self._register_pending_ack(
+                        self._pending_text_acks,
+                        msg_id,
+                        token=chunk[:128],
+                        ack_kind="msg",
                     )
-                    blob = encrypt_blindbox_blob(
-                        frame,
-                        keys.blob_key,
-                        "send",
-                        self._blindbox_state.send_index,
-                        keys.state_tag,
-                        padding_bucket=self._blindbox_padding_bucket,
-                    )
-                    await self._blindbox_client.put(keys.lookup_token, blob)
-                    self._blindbox_state.send_index += 1
-                    self._blindbox_state.updated_at = int(time.time())
-                    self._save_blindbox_state()
                     self._emit_message(
                         "me",
                         chunk,
@@ -3503,6 +4130,7 @@ class I2PChatCore:
             _, writer = self.conn
             if self._blindbox_ready():
                 await self._send_blindbox_root_if_needed(writer)
+                await self._send_blindbox_queue_epoch_if_needed(writer)
             chunks = split_long_chat_text(text)
             last_msg_id: Optional[int] = None
             lifecycle = delivery_lifecycle_from_send_result(
@@ -3620,12 +4248,208 @@ class I2PChatCore:
             except RuntimeError:
                 pass
 
-    async def send_file(self, path: str) -> None:
-        if not self._require_secure_channel():
-            return
-        
+    async def _send_file_via_blindbox(self, path: str) -> bool:
+        if not self._blindbox_ready():
+            return False
         filename = os.path.basename(path)
         filesize = os.path.getsize(path)
+        if filesize > self.BLINDBOX_MAX_FILE_SIZE:
+            self._emit_error(
+                f"BlindBox file queue limit exceeded: {filesize} bytes "
+                f"(max {self.BLINDBOX_MAX_FILE_SIZE // (1024 * 1024)} MB)"
+            )
+            return False
+
+        async with self._blindbox_send_lock:
+            try:
+                _client, _peer_id, queue_caps = self._blindbox_queue_caps()
+            except Exception:
+                return False
+            try:
+                self._emit_system(
+                    f"Queueing file for offline delivery: {filename} ({filesize} bytes)"
+                )
+                self._emit_file_event(
+                    FileTransferInfo(
+                        filename=filename,
+                        size=filesize,
+                        received=0,
+                        is_sending=True,
+                        source_path=path,
+                    )
+                )
+                header = f"{filename}|{filesize}"
+                header_frame, file_msg_id = self.frame_message_with_id("F", header)
+                await self._queue_blindbox_frame(header_frame, queue_caps)
+                self._register_pending_ack(
+                    self._pending_file_acks,
+                    file_msg_id,
+                    token=os.path.basename(filename),
+                    ack_kind="file",
+                )
+
+                sent = 0
+                chunk_size = _file_read_chunk_bytes()
+                with open(path, "rb") as f:
+                    while True:
+                        chunk = await asyncio.to_thread(f.read, chunk_size)
+                        if not chunk:
+                            break
+                        encoded = base64.b64encode(chunk).decode()
+                        await self._queue_blindbox_frame(
+                            self.frame_message("D", encoded), queue_caps
+                        )
+                        sent += len(chunk)
+                        if should_emit_file_progress(sent, len(chunk), filesize):
+                            self._emit_file_event(
+                                FileTransferInfo(
+                                    filename=filename,
+                                    size=filesize,
+                                    received=sent,
+                                    is_sending=True,
+                                    source_path=path,
+                                )
+                            )
+
+                await self._queue_blindbox_frame(self.frame_message("E", ""), queue_caps)
+                self._emit_file_event(
+                    FileTransferInfo(
+                        filename=filename,
+                        size=filesize,
+                        received=filesize,
+                        is_sending=True,
+                        source_path=path,
+                    )
+                )
+                self._emit_system("File queued for offline delivery.")
+                return True
+            except Exception as e:
+                self._emit_file_event(
+                    FileTransferInfo(
+                        filename=filename,
+                        size=filesize,
+                        received=-1,
+                        is_sending=True,
+                        source_path=path,
+                    )
+                )
+                detail = _exception_user_message(e)
+                self._emit_error(f"BlindBox file queue failed: {detail}")
+                return False
+
+    async def _send_image_via_blindbox(
+        self,
+        path: str,
+        *,
+        filename: str,
+        filesize: int,
+        local_path: str,
+    ) -> bool:
+        if not self._blindbox_ready():
+            return False
+
+        async with self._blindbox_send_lock:
+            try:
+                _client, _peer_id, queue_caps = self._blindbox_queue_caps()
+            except Exception:
+                return False
+            try:
+                self._emit_system(
+                    f"Queueing image for offline delivery: {filename} ({filesize} bytes)"
+                )
+                self._emit_file_event(
+                    FileTransferInfo(
+                        filename=filename,
+                        size=filesize,
+                        received=0,
+                        is_sending=True,
+                        is_inline_image=True,
+                        source_path=path,
+                    )
+                )
+                header = f"{filename}|{filesize}"
+                header_frame, image_msg_id = self.frame_message_with_id("G", header)
+                await self._queue_blindbox_frame(header_frame, queue_caps)
+                self._register_pending_ack(
+                    self._pending_image_acks,
+                    image_msg_id,
+                    token=os.path.basename(filename),
+                    ack_kind="image",
+                )
+
+                sent = 0
+                chunk_size = _file_read_chunk_bytes()
+                with open(path, "rb") as f:
+                    while True:
+                        chunk = await asyncio.to_thread(f.read, chunk_size)
+                        if not chunk:
+                            break
+                        encoded = base64.b64encode(chunk).decode()
+                        await self._queue_blindbox_frame(
+                            self.frame_message("G", encoded), queue_caps
+                        )
+                        sent += len(chunk)
+                        if should_emit_file_progress(sent, len(chunk), filesize):
+                            self._emit_file_event(
+                                FileTransferInfo(
+                                    filename=filename,
+                                    size=filesize,
+                                    received=sent,
+                                    is_sending=True,
+                                    is_inline_image=True,
+                                    source_path=path,
+                                )
+                            )
+
+                await self._queue_blindbox_frame(
+                    self.frame_message("G", "__IMG_END__"), queue_caps
+                )
+                self._emit_file_event(
+                    FileTransferInfo(
+                        filename=filename,
+                        size=filesize,
+                        received=filesize,
+                        is_sending=True,
+                        is_inline_image=True,
+                        source_path=path,
+                    )
+                )
+                self._emit_inline_image(local_path, is_from_me=True, sent_filename=filename)
+                cleanup_images_cache()
+                self._emit_system("Image queued for offline delivery.")
+                return True
+            except Exception as e:
+                self._emit_file_event(
+                    FileTransferInfo(
+                        filename=filename,
+                        size=filesize,
+                        received=-1,
+                        is_sending=True,
+                        is_inline_image=True,
+                        source_path=path,
+                    )
+                )
+                detail = _exception_user_message(e)
+                self._emit_error(f"BlindBox image queue failed: {detail}")
+                return False
+
+    async def send_file(self, path: str) -> None:
+        if not self.conn or not self.handshake_complete:
+            queued = await self._send_file_via_blindbox(path)
+            if not queued:
+                self._emit_error(self._offline_send_block_feedback()[1])
+            return
+        if not self._require_secure_channel():
+            return
+
+        filename = os.path.basename(path)
+        filesize = os.path.getsize(path)
+        if filesize > self.MAX_FILE_SIZE:
+            self._emit_error(
+                f"File too large: {filesize} bytes "
+                f"(max {self.MAX_FILE_SIZE // (1024 * 1024)} MB)"
+            )
+            return
         
         self._file_transfer_active = True
         self._soft_signal_ack_since_drain = 0
@@ -3795,9 +4619,6 @@ class I2PChatCore:
         Returns:
             путь к копии изображения в images/ или None при ошибке
         """
-        if not self._require_secure_channel():
-            return None
-        
         # Валидация изображения
         is_valid, error_msg, detected_ext = validate_image(path)
         if not is_valid:
@@ -3821,7 +4642,22 @@ class I2PChatCore:
         except Exception as e:
             self._emit_error(f"Failed to copy image: {e}")
             return None
-        
+
+        if not self.conn or not self.handshake_complete:
+            queued = await self._send_image_via_blindbox(
+                path,
+                filename=filename,
+                filesize=filesize,
+                local_path=local_path,
+            )
+            if not queued:
+                self._emit_error(self._offline_send_block_feedback()[1])
+                return None
+            return local_path
+
+        if not self._require_secure_channel():
+            return None
+
         self._file_transfer_active = True
         self._soft_signal_ack_since_drain = 0
         self._cancel_transfer = False
@@ -4142,6 +4978,26 @@ class I2PChatCore:
             or sent_since_epoch >= self._blindbox_root_rotate_messages
         )
 
+    def _blindbox_should_rotate_send_queue(self) -> bool:
+        if self._blindbox_root_secret is None:
+            return False
+        now_ts = int(time.time())
+        created_at = int(
+            self._blindbox_send_queue_created_at
+            or self._blindbox_root_created_at
+            or now_ts
+        )
+        elapsed_sec = max(0, now_ts - created_at)
+        sent_since_epoch = max(
+            0,
+            int(self._blindbox_state.send_index)
+            - int(self._blindbox_send_queue_send_index_base),
+        )
+        return (
+            elapsed_sec >= self._blindbox_queue_rotate_seconds
+            or sent_since_epoch >= self._blindbox_queue_rotate_messages
+        )
+
     def _blindbox_has_pending_root(self) -> bool:
         return (
             self._blindbox_pending_root_secret is not None
@@ -4149,11 +5005,23 @@ class I2PChatCore:
             and int(self._blindbox_pending_root_epoch) > 0
         )
 
+    def _blindbox_has_pending_send_queue_epoch(self) -> bool:
+        return int(self._blindbox_pending_send_queue_epoch) > int(
+            self._blindbox_send_queue_epoch
+        )
+
     def _clear_pending_blindbox_root(self) -> None:
         self._blindbox_pending_root_secret = None
         self._blindbox_pending_root_epoch = 0
         self._blindbox_pending_root_created_at = 0
         self._blindbox_pending_root_send_index_base = int(self._blindbox_state.send_index)
+
+    def _clear_pending_blindbox_send_queue_epoch(self) -> None:
+        self._blindbox_pending_send_queue_epoch = 0
+        self._blindbox_pending_send_queue_created_at = 0
+        self._blindbox_pending_send_queue_send_index_base = int(
+            self._blindbox_state.send_index
+        )
 
     def _ensure_pending_blindbox_root(
         self, *, force_rotate: bool = False
@@ -4216,6 +5084,12 @@ class I2PChatCore:
         self._blindbox_root_send_index_base = int(
             self._blindbox_pending_root_send_index_base
         )
+        if self._blindbox_send_queue_created_at <= 0:
+            self._blindbox_send_queue_created_at = int(time.time())
+            self._blindbox_send_queue_send_index_base = int(
+                self._blindbox_state.send_index
+            )
+        self._clear_pending_blindbox_send_queue_epoch()
         self._clear_pending_blindbox_root()
         self._blindbox_prune_previous_roots()
         self._save_blindbox_state()
@@ -4225,11 +5099,59 @@ class I2PChatCore:
             self._emit_system("BlindBox root secret rotated")
         return True
 
+    def _ensure_pending_blindbox_send_queue_epoch(
+        self, *, force_rotate: bool = False
+    ) -> tuple[int, bool] | None:
+        if self._blindbox_has_pending_send_queue_epoch():
+            return (int(self._blindbox_pending_send_queue_epoch), False)
+        should_rotate = force_rotate or self._blindbox_should_rotate_send_queue()
+        if not should_rotate:
+            return None
+        next_epoch = max(
+            int(self._blindbox_send_queue_epoch),
+            int(self._blindbox_pending_send_queue_epoch),
+        ) + 1
+        self._blindbox_pending_send_queue_epoch = next_epoch
+        self._blindbox_pending_send_queue_created_at = int(time.time())
+        self._blindbox_pending_send_queue_send_index_base = int(
+            self._blindbox_state.send_index
+        )
+        self._save_blindbox_state()
+        return (next_epoch, True)
+
+    def _commit_pending_blindbox_send_queue_epoch(self, ack_epoch: int) -> bool:
+        if not self._blindbox_has_pending_send_queue_epoch():
+            return False
+        if int(ack_epoch) != int(self._blindbox_pending_send_queue_epoch):
+            return False
+        self._blindbox_send_queue_epoch = int(self._blindbox_pending_send_queue_epoch)
+        self._blindbox_send_queue_created_at = int(
+            self._blindbox_pending_send_queue_created_at
+        )
+        self._blindbox_send_queue_send_index_base = int(
+            self._blindbox_pending_send_queue_send_index_base
+        )
+        self._clear_pending_blindbox_send_queue_epoch()
+        self._save_blindbox_state()
+        self._emit_system("BlindBox outbound mailbox rotated")
+        return True
+
     async def _send_blindbox_root_ack(
         self, writer: asyncio.StreamWriter, incoming_epoch: int
     ) -> None:
         writer.write(
             self.frame_message("S", f"__SIGNAL__:BLINDBOX_ROOT_ACK|{int(incoming_epoch)}")
+        )
+        await writer.drain()
+
+    async def _send_blindbox_queue_epoch_ack(
+        self, writer: asyncio.StreamWriter, incoming_epoch: int
+    ) -> None:
+        writer.write(
+            self.frame_message(
+                "S",
+                f"__SIGNAL__:BLINDBOX_QUEUE_EPOCH_ACK|{int(incoming_epoch)}",
+            )
         )
         await writer.drain()
 
@@ -4262,6 +5184,11 @@ class I2PChatCore:
             self._blindbox_root_epoch = incoming_epoch
             self._blindbox_root_created_at = int(time.time())
             self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
+            if self._blindbox_send_queue_created_at <= 0:
+                self._blindbox_send_queue_created_at = int(time.time())
+                self._blindbox_send_queue_send_index_base = int(
+                    self._blindbox_state.send_index
+                )
             self._save_blindbox_state()
             self._emit_system(
                 f"BlindBox root secret received (epoch={incoming_epoch})"
@@ -4281,6 +5208,7 @@ class I2PChatCore:
             self._blindbox_root_epoch = incoming_epoch
             self._blindbox_root_created_at = int(time.time())
             self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
+            self._clear_pending_blindbox_send_queue_epoch()
             self._blindbox_prune_previous_roots()
             self._save_blindbox_state()
             self._emit_system("BlindBox root rotated")
@@ -4312,6 +5240,66 @@ class I2PChatCore:
         if not self._commit_pending_blindbox_root(ack_epoch):
             self._emit_system("Ignoring stale BlindBox root ACK.")
 
+    async def _handle_incoming_blindbox_queue_epoch_signal(
+        self,
+        body: str,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        raw_tail = body.split("BLINDBOX_QUEUE_EPOCH|", 1)[1].strip()
+        incoming_raw = raw_tail.split("|", 1)[0]
+        if not incoming_raw.isdigit():
+            raise ValueError("invalid queue epoch")
+        incoming_epoch = int(incoming_raw)
+        if not self._blindbox_ready():
+            self._emit_error(
+                "BlindBox queue epoch received outside persistent locked-peer mode."
+            )
+            return
+        if not self._blindbox_current_peer_matches_locked_peer():
+            self._emit_error(
+                "BlindBox queue epoch ignored: connected peer does not match locked peer."
+            )
+            return
+        if incoming_epoch > int(self._blindbox_recv_queue_epoch):
+            if int(self._blindbox_recv_queue_epoch) > 0:
+                expires_at = int(time.time()) + int(
+                    self._blindbox_queue_previous_grace_seconds
+                )
+                self._blindbox_prev_recv_queue_epochs.append(
+                    {
+                        "epoch": int(self._blindbox_recv_queue_epoch),
+                        "expires_at": expires_at,
+                    }
+                )
+            self._blindbox_recv_queue_epoch = incoming_epoch
+            self._blindbox_prune_previous_recv_queue_epochs()
+            self._save_blindbox_state()
+            self._emit_system(f"BlindBox inbound mailbox rotated (epoch={incoming_epoch})")
+            await self._send_blindbox_queue_epoch_ack(writer, incoming_epoch)
+            return
+        if incoming_epoch == int(self._blindbox_recv_queue_epoch):
+            await self._send_blindbox_queue_epoch_ack(writer, incoming_epoch)
+            return
+        self._emit_system("Ignoring stale BlindBox queue epoch signal.")
+
+    def _handle_blindbox_queue_epoch_ack_signal(self, body: str) -> None:
+        ack_raw = body.split("BLINDBOX_QUEUE_EPOCH_ACK|", 1)[1].strip().split("|", 1)[0]
+        if not ack_raw.isdigit():
+            raise ValueError("invalid queue epoch ack")
+        ack_epoch = int(ack_raw)
+        if not self._blindbox_ready():
+            self._emit_error(
+                "BlindBox queue epoch ACK received outside persistent locked-peer mode."
+            )
+            return
+        if not self._blindbox_current_peer_matches_locked_peer():
+            self._emit_error(
+                "BlindBox queue epoch ACK ignored: connected peer does not match locked peer."
+            )
+            return
+        if not self._commit_pending_blindbox_send_queue_epoch(ack_epoch):
+            self._emit_system("Ignoring stale BlindBox queue epoch ACK.")
+
     async def _send_blindbox_root_if_needed(
         self, writer: asyncio.StreamWriter, *, force_rotate: bool = False
     ) -> None:
@@ -4340,6 +5328,34 @@ class I2PChatCore:
         await writer.drain()
         if is_new_pending:
             self._emit_system(f"BlindBox root secret {reason}; awaiting ACK")
+
+    async def _send_blindbox_queue_epoch_if_needed(
+        self, writer: asyncio.StreamWriter, *, force_rotate: bool = False
+    ) -> None:
+        if not self._blindbox_ready():
+            return
+        if self._blindbox_root_secret is None or self._blindbox_has_pending_root():
+            return
+        if not self._blindbox_current_peer_matches_locked_peer():
+            self._emit_error(
+                "BlindBox queue epoch exchange blocked: connected peer does not match locked peer."
+            )
+            return
+        pending = self._ensure_pending_blindbox_send_queue_epoch(force_rotate=force_rotate)
+        if pending is None:
+            return
+        next_epoch, is_new_pending = pending
+        writer.write(
+            self.frame_message(
+                "S",
+                "__SIGNAL__:BLINDBOX_QUEUE_EPOCH|" + str(int(next_epoch)),
+            )
+        )
+        await writer.drain()
+        if is_new_pending:
+            self._emit_system(
+                f"BlindBox outbound mailbox epoch {int(next_epoch)} pending ACK"
+            )
 
     async def _handle_handshake_message(
         self, body: str, writer: asyncio.StreamWriter
@@ -4446,6 +5462,7 @@ class I2PChatCore:
                 self._emit_message("success", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
                 await self._send_blindbox_root_if_needed(writer)
+                await self._send_blindbox_queue_epoch_if_needed(writer)
                 logger.info("Handshake completed (responder)")
 
             elif body.startswith("RESP:"):
@@ -4501,6 +5518,7 @@ class I2PChatCore:
                 self._emit_message("success", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
                 await self._send_blindbox_root_if_needed(writer)
+                await self._send_blindbox_queue_epoch_if_needed(writer)
                 logger.info("Handshake completed (initiator)")
 
             else:
@@ -4987,7 +6005,10 @@ class I2PChatCore:
                         self.incoming_file = open(safe_path, "xb")
                         self._incoming_file_msg_id = msg_id or None
                         self.incoming_info = FileTransferInfo(
-                            filename=safe_path, size=size, received=0
+                            filename=safe_path,
+                            size=size,
+                            received=0,
+                            ack_token=safe_name,
                         )
                         self._file_xfer_debug_last_recv_emit_mono = None
                         self._emit_system(
@@ -5082,6 +6103,11 @@ class I2PChatCore:
                             self._incoming_file_msg_id = None
                             continue
                         ack_msg_id = self._incoming_file_msg_id or 0
+                        ack_token = (
+                            self.incoming_info.ack_token
+                            if self.incoming_info and self.incoming_info.ack_token
+                            else os.path.basename(ack_filename)
+                        )
                         self._emit_file_event(
                             FileTransferInfo(
                                 filename=ack_filename,
@@ -5097,7 +6123,7 @@ class I2PChatCore:
                             writer.write(
                                 self.frame_message(
                                     "S",
-                                    f"__SIGNAL__:FILE_ACK|{os.path.basename(ack_filename)}|{ack_msg_id}",
+                                    f"__SIGNAL__:FILE_ACK|{ack_token}|{ack_msg_id}",
                                 )
                             )
                             await writer.drain()
@@ -5120,6 +6146,22 @@ class I2PChatCore:
                             except Exception as e:
                                 self._emit_error(
                                     f"Invalid BlindBox root ACK signal: {e}"
+                                )
+                        elif "BLINDBOX_QUEUE_EPOCH|" in body:
+                            try:
+                                await self._handle_incoming_blindbox_queue_epoch_signal(
+                                    body, writer
+                                )
+                            except Exception as e:
+                                self._emit_error(
+                                    f"Invalid BlindBox queue epoch signal: {e}"
+                                )
+                        elif "BLINDBOX_QUEUE_EPOCH_ACK|" in body:
+                            try:
+                                self._handle_blindbox_queue_epoch_ack_signal(body)
+                            except Exception as e:
+                                self._emit_error(
+                                    f"Invalid BlindBox queue epoch ACK signal: {e}"
                                 )
                         elif "MSG_ACK|" in body:
                             try:

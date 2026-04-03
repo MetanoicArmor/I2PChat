@@ -19,8 +19,9 @@ DropAction = str  # one of the three constants above
 
 _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 
-# 100 MB default limit
-_MAX_FILE_SIZE = 100 * 1024 * 1024
+# Generic drag/drop gate uses the live-transfer ceiling; BlindBox applies a
+# stricter route-specific limit later when the app is offline.
+_MAX_FILE_SIZE = 2000 * 1024 * 1024
 
 
 def _is_image_path(path: str) -> bool:

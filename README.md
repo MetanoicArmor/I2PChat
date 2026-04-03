@@ -53,7 +53,7 @@
 - **Profiles (.dat)** — multiple profiles, load and import; each profile’s data lives under **`profiles/<name>/`** in the app data directory (if older **flat** `*.dat` files still sit in the data root, they are **migrated on startup** into that layout — see **§ profile paths** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md))
 - **System notifications** — tray toasts for new messages
 - **Sound notifications** for incoming messages
-- **BlindBox (default-on for named profiles)** — offline message delivery
+- **BlindBox (default-on for named profiles)** — offline delivery for messages, files, and inline images
 - **Optional encrypted chat history** — per-peer local history (toggle **Chat history: ON/OFF** in the **⋯** menu); encrypted at rest with keys derived from your profile identity (see **§4.11** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md))
 - **Contact book (Saved peers)** — left sidebar list backed by **`profiles/<name>/<name>.contacts.json`**: quick switch between saved `.b32.i2p` peers, optional display name/note, unread hints, resize/collapse, and a context menu (edit, trust details, remove). See **§3.1** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md).
 - Cross‑platform build scripts (Linux, macOS, Windows)
@@ -182,7 +182,7 @@ Runtime in practice:
 1. **Startup**: `main_qt.py` runs **profile directory migration** when needed (flat `*.dat` in the data root → `profiles/<name>/`) before the profile picker, then creates `ChatWindow`; `start_core()` calls `I2PChatCore.init_session()`, which loads or creates the profile identity, opens the long-lived SAM session, warms up tunnels, and starts `accept_loop()` / `tunnel_watcher()`.
 2. **Live chat path**: `connect_to_peer()` or `accept_loop()` establishes an I2P stream; `I2PChatCore` runs the plaintext handshake boundary, verifies/pins the peer signing key (TOFU), derives session subkeys, then switches to encrypted vNext frames through `ProtocolCodec` + `crypto`.
 3. **Delivery tracking**: each outgoing text / file / image gets a `MSG_ID` and ACK context; `message_delivery.py` turns low-level outcomes into UI states (`sending`, `queued`, `delivered`, `failed`).
-4. **Offline path (BlindBox)**: when no live secure session is available, `send_text()` can route through BlindBox — derive deterministic lookup/blob keys, encrypt a padded blob, PUT it to one or more BlindBox replicas, and later poll / decrypt GET results back into the chat stream.
+4. **Offline path (BlindBox)**: when no live secure session is available, text, files, and inline images can route through BlindBox — derive a contact-scoped offline queue plus deterministic lookup/blob keys, encrypt padded blobs, PUT them to one or more BlindBox replicas, and later poll / decrypt GET results back into the chat stream. Newer builds also rotate one-way offline mailboxes per contact direction, not just the shared BlindBox root.
 5. **UI responsibility split**: `I2PChatCore` stays UI-agnostic and emits callbacks only; the Qt layer renders chat, status and notifications, while GUI-side storage modules persist chat history, contacts, drafts and backup/export data.
 
 ### 🔌 Protocol overview
@@ -204,7 +204,7 @@ BlindBox, and code-map sections, see [**docs/PROTOCOL.md**](docs/PROTOCOL.md).
 
 ### 📬 BlindBox
 
-BlindBox is your “send now, deliver later” mode for text messages.
+BlindBox is your “send now, deliver later” mode for text messages and core attachments.
 
 Why users like it:
 
@@ -216,13 +216,16 @@ Why users like it:
 Simple flow:
 
 1. If the peer is online, the message is delivered live.
-2. If the peer is offline, the app keeps it in the offline queue.
-3. When the peer returns, the message appears automatically.
+2. If the peer is offline, the app keeps the text, file, or image in the offline queue.
+3. When the peer returns, the content appears automatically.
 
 Practical notes:
 
 - For named profiles BlindBox is enabled by default.
 - For the transient profile `random_address` (CLI alias `default`) BlindBox is off.
+- BlindBox replicas are expected to support the new **contact-scoped queue capabilities** (`put` / `get` / `delete`); unsupported legacy replicas are rejected.
+- Offline mailboxes can now rotate **per direction** (`A -> B` separately from `B -> A`) with a grace window for delayed blobs.
+- Deferred delivery receipts can also come back through BlindBox, so offline text/files/images can eventually transition to delivered without a live session at the moment of receipt.
 - Disable explicitly with `I2PCHAT_BLINDBOX_ENABLED=0`.
 - Deployments can set Blind Box endpoints via env (`I2PCHAT_BLINDBOX_REPLICAS`, `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS`, or `I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE`). Built-in release defaults and further options → manuals / release notes above.
 

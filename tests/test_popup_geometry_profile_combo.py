@@ -6,11 +6,15 @@
 from __future__ import annotations
 
 import os
+import unittest
 import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
+try:
+    import pytest
+except ImportError as exc:  # pragma: no cover - environment-dependent test bootstrap
+    raise unittest.SkipTest("pytest is not installed") from exc
 
 pytest.importorskip("PyQt6.QtWidgets", exc_type=ImportError)
 

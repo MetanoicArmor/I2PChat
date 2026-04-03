@@ -47,6 +47,7 @@ _load_optional_dotenv()
 MAX_BLOB = 1_048_576
 TTL_SEC = 14 * 24 * 3600  # 14 days
 _AUTH_TOKEN = (os.environ.get("BLINDBOX_AUTH_TOKEN") or "").strip()
+_QUEUES: dict[str, dict[str, object]] = {}
 
 
 def path_for_key(key: str) -> str:
@@ -64,6 +65,16 @@ def _token_ok(provided: str) -> bool:
     return hmac.compare_digest(provided, _AUTH_TOKEN)
 
 
+def _queue_record(queue_id: str) -> dict[str, object] | None:
+    rec = _QUEUES.get(queue_id)
+    if rec is None:
+        return None
+    items = rec.get("items")
+    if not isinstance(items, dict):
+        return None
+    return rec
+
+
 async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     try:
         line = await reader.readline()
@@ -74,15 +85,28 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
             return
 
         cmd = parts[0]
-        if cmd == "PUT" and len(parts) >= 3:
-            key = parts[1]
+        if cmd == "CAPA" and len(parts) <= 2:
+            sent_tok = parts[1] if len(parts) >= 2 else ""
+            if not _token_ok(sent_tok):
+                writer.write(b"ERR\n")
+                await writer.drain()
+                return
+            writer.write(b"OK BLINDBOX_QUEUE_CAPS_V1\n")
+            await writer.drain()
+            return
+        if cmd == "QPUT" and len(parts) >= 7:
+            queue_id = parts[1]
+            key = parts[2]
             try:
-                size = int(parts[2])
+                size = int(parts[3])
             except Exception:
                 writer.write(b"ERR\n")
                 await writer.drain()
                 return
-            sent_tok = parts[3] if len(parts) >= 4 else ""
+            put_cap = parts[4]
+            get_cap = parts[5]
+            delete_cap = parts[6]
+            sent_tok = parts[7] if len(parts) >= 8 else ""
             if not _token_ok(sent_tok):
                 writer.write(b"ERR\n")
                 await writer.drain()
@@ -91,44 +115,81 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
                 writer.write(b"ERR\n")
                 await writer.drain()
                 return
-
             body = await reader.readexactly(size)
-            p = path_for_key(key)
-            if os.path.exists(p):
+            rec = _queue_record(queue_id)
+            if rec is None:
+                rec = {
+                    "put_cap": put_cap,
+                    "get_cap": get_cap,
+                    "delete_cap": delete_cap,
+                    "items": {},
+                }
+                _QUEUES[queue_id] = rec
+            elif (
+                not hmac.compare_digest(str(rec["put_cap"]), put_cap)
+                or not hmac.compare_digest(str(rec["get_cap"]), get_cap)
+                or not hmac.compare_digest(str(rec["delete_cap"]), delete_cap)
+            ):
+                writer.write(b"ERR\n")
+                await writer.drain()
+                return
+            items = rec["items"]
+            assert isinstance(items, dict)
+            if key in items:
                 writer.write(b"EXISTS\n")
             else:
-                with open(p, "wb") as f:
-                    f.write(body)
+                items[key] = body
                 writer.write(b"OK\n")
             await writer.drain()
             return
 
-        if cmd == "GET" and len(parts) >= 2:
-            key = parts[1]
-            sent_tok = parts[2] if len(parts) >= 3 else ""
+        if cmd == "QGET" and len(parts) >= 4:
+            queue_id = parts[1]
+            key = parts[2]
+            sent_cap = parts[3]
+            sent_tok = parts[4] if len(parts) >= 5 else ""
             if not _token_ok(sent_tok):
                 writer.write(b"ERR\n")
                 await writer.drain()
                 return
-            p = path_for_key(key)
-            if not os.path.exists(p):
+            rec = _queue_record(queue_id)
+            if rec is None or not hmac.compare_digest(str(rec["get_cap"]), sent_cap):
                 writer.write(b"MISS\n")
                 await writer.drain()
                 return
-            age = time.time() - os.path.getmtime(p)
-            if age > TTL_SEC:
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
+            items = rec["items"]
+            assert isinstance(items, dict)
+            data = items.get(key)
+            if data is None:
                 writer.write(b"MISS\n")
                 await writer.drain()
                 return
-
-            with open(p, "rb") as f:
-                data = f.read()
             writer.write(f"OK {len(data)}\n".encode("utf-8"))
             writer.write(data)
+            await writer.drain()
+            return
+
+        if cmd == "QDEL" and len(parts) >= 4:
+            queue_id = parts[1]
+            key = parts[2]
+            sent_cap = parts[3]
+            sent_tok = parts[4] if len(parts) >= 5 else ""
+            if not _token_ok(sent_tok):
+                writer.write(b"ERR\n")
+                await writer.drain()
+                return
+            rec = _queue_record(queue_id)
+            if rec is None or not hmac.compare_digest(str(rec["delete_cap"]), sent_cap):
+                writer.write(b"MISS\n")
+                await writer.drain()
+                return
+            items = rec["items"]
+            assert isinstance(items, dict)
+            if key in items:
+                del items[key]
+                writer.write(b"OK\n")
+            else:
+                writer.write(b"MISS\n")
             await writer.drain()
             return
 

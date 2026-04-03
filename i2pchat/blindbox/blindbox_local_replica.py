@@ -3,19 +3,32 @@ Local Blind Box server (best-effort convenience fallback).
 
 Protocol:
 - PING\n -> PONG BLINDBOX_LOCAL_REPLICA_V1
+- CAPA\n -> OK BLINDBOX_QUEUE_CAPS_V1 | ERR
 - AUTH <token>\n -> OK | ERR
-- PUT <key> <size> [token]\n + <size bytes> -> OK | EXISTS | FULL | ERR
-- GET <key> [token]\n -> MISS | OK <size>\n + <size bytes>
+- QPUT <queue> <key> <size> <put_cap> <get_cap> <delete_cap> [token]\n + <size bytes>
+  -> OK | EXISTS | FULL | ERR
+- QGET <queue> <key> <get_cap> [token]\n -> MISS | OK <size>\n + <size bytes>
+- QDEL <queue> <key> <delete_cap> [token]\n -> OK | MISS | ERR
 """
 
 from __future__ import annotations
 
 import asyncio
 import hmac
+from dataclasses import dataclass, field
 from typing import Optional
 
 
 BLINDBOX_LOCAL_REPLICA_MAGIC = "PONG BLINDBOX_LOCAL_REPLICA_V1"
+BLINDBOX_QUEUE_CAPS_MAGIC = "OK BLINDBOX_QUEUE_CAPS_V1"
+
+
+@dataclass
+class _QueueRecord:
+    put_cap: str
+    get_cap: str
+    delete_cap: str
+    items: dict[str, bytes] = field(default_factory=dict)
 
 
 class BlindBoxLocalReplicaServer:
@@ -34,7 +47,7 @@ class BlindBoxLocalReplicaServer:
         self.max_entries = int(max_entries)
         self.auth_token = str(auth_token or "").strip()
         self._server: Optional[asyncio.AbstractServer] = None
-        self._storage: dict[str, bytes] = {}
+        self._queues: dict[str, _QueueRecord] = {}
 
     @property
     def endpoint(self) -> str:
@@ -74,6 +87,14 @@ class BlindBoxLocalReplicaServer:
                     writer.write(f"{BLINDBOX_LOCAL_REPLICA_MAGIC}\n".encode("utf-8"))
                     await writer.drain()
                     continue
+                if cmd == "CAPA" and len(parts) <= 2:
+                    if not self._is_authorized(parts, token_index=1):
+                        writer.write(b"ERR\n")
+                        await writer.drain()
+                        return
+                    writer.write(f"{BLINDBOX_QUEUE_CAPS_MAGIC}\n".encode("utf-8"))
+                    await writer.drain()
+                    continue
                 if cmd == "AUTH" and len(parts) == 2:
                     if self._is_probe_authorized(parts[1]):
                         writer.write(b"OK\n")
@@ -81,14 +102,15 @@ class BlindBoxLocalReplicaServer:
                         writer.write(b"ERR\n")
                     await writer.drain()
                     continue
-                if cmd == "PUT" and len(parts) >= 3:
-                    if not self._is_authorized(parts, token_index=3):
+                if cmd == "QPUT" and len(parts) >= 7:
+                    if not self._is_authorized(parts, token_index=7):
                         writer.write(b"ERR\n")
                         await writer.drain()
                         return
-                    key = parts[1]
+                    queue_id = parts[1]
+                    key = parts[2]
                     try:
-                        size = int(parts[2])
+                        size = int(parts[3])
                     except Exception:
                         writer.write(b"ERR\n")
                         await writer.drain()
@@ -97,31 +119,77 @@ class BlindBoxLocalReplicaServer:
                         writer.write(b"ERR\n")
                         await writer.drain()
                         return
+                    put_cap = parts[4]
+                    get_cap = parts[5]
+                    delete_cap = parts[6]
                     body = await reader.readexactly(size)
-                    if key in self._storage:
-                        writer.write(b"EXISTS\n")
-                    else:
-                        if len(self._storage) >= self.max_entries:
-                            writer.write(b"FULL\n")
-                            await writer.drain()
-                            return
-                        self._storage[key] = body
-                        writer.write(b"OK\n")
-                    await writer.drain()
-                    return
-                if cmd == "GET" and len(parts) >= 2:
-                    if not self._is_authorized(parts, token_index=2):
+                    queue = self._queues.get(queue_id)
+                    if queue is None:
+                        queue = _QueueRecord(
+                            put_cap=put_cap,
+                            get_cap=get_cap,
+                            delete_cap=delete_cap,
+                        )
+                        self._queues[queue_id] = queue
+                    elif (
+                        not hmac.compare_digest(queue.put_cap, put_cap)
+                        or not hmac.compare_digest(queue.get_cap, get_cap)
+                        or not hmac.compare_digest(queue.delete_cap, delete_cap)
+                    ):
                         writer.write(b"ERR\n")
                         await writer.drain()
                         return
-                    key = parts[1]
-                    data = self._storage.get(key)
+                    if key in queue.items:
+                        writer.write(b"EXISTS\n")
+                    else:
+                        if self._entry_count() >= self.max_entries:
+                            writer.write(b"FULL\n")
+                            await writer.drain()
+                            return
+                        queue.items[key] = body
+                        writer.write(b"OK\n")
+                    await writer.drain()
+                    return
+                if cmd == "QGET" and len(parts) >= 4:
+                    if not self._is_authorized(parts, token_index=4):
+                        writer.write(b"ERR\n")
+                        await writer.drain()
+                        return
+                    queue_id = parts[1]
+                    key = parts[2]
+                    queue = self._queues.get(queue_id)
+                    if queue is None or not hmac.compare_digest(queue.get_cap, parts[3]):
+                        writer.write(b"MISS\n")
+                        await writer.drain()
+                        return
+                    data = queue.items.get(key)
                     if data is None:
                         writer.write(b"MISS\n")
                         await writer.drain()
                         return
                     writer.write(f"OK {len(data)}\n".encode("utf-8"))
                     writer.write(data)
+                    await writer.drain()
+                    return
+                if cmd == "QDEL" and len(parts) >= 4:
+                    if not self._is_authorized(parts, token_index=4):
+                        writer.write(b"ERR\n")
+                        await writer.drain()
+                        return
+                    queue_id = parts[1]
+                    key = parts[2]
+                    queue = self._queues.get(queue_id)
+                    if queue is None or not hmac.compare_digest(
+                        queue.delete_cap, parts[3]
+                    ):
+                        writer.write(b"MISS\n")
+                        await writer.drain()
+                        return
+                    if key in queue.items:
+                        del queue.items[key]
+                        writer.write(b"OK\n")
+                    else:
+                        writer.write(b"MISS\n")
                     await writer.drain()
                     return
                 writer.write(b"ERR\n")
@@ -142,6 +210,9 @@ class BlindBoxLocalReplicaServer:
         if not self.auth_token:
             return True
         return hmac.compare_digest(str(token), self.auth_token)
+
+    def _entry_count(self) -> int:
+        return sum(len(queue.items) for queue in self._queues.values())
 
 
 _LOCAL_REPLICA_SERVER: Optional[BlindBoxLocalReplicaServer] = None

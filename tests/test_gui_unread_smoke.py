@@ -20,13 +20,17 @@ Manual QA checklist (two peers, notifications / 0.6.5 behavior)
 from __future__ import annotations
 
 import os
+import unittest
 
 # Before any Qt import
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from datetime import datetime, timezone
 
-import pytest
+try:
+    import pytest
+except ImportError as exc:  # pragma: no cover - environment-dependent test bootstrap
+    raise unittest.SkipTest("pytest is not installed") from exc
 
 pytest.importorskip("PyQt6.QtWidgets", exc_type=ImportError)
 

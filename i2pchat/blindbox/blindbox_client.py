@@ -20,10 +20,12 @@ from typing import Awaitable, Callable, Dict, List, Optional
 
 import i2plib
 from i2pchat.blindbox.blindbox_blob import BLINDBOX_MAX_FRAME_SIZE
+from i2pchat.blindbox.blindbox_key_schedule import BlindBoxQueueCapabilities
 from i2plib.exceptions import SAMException
 from i2plib.sam import session_create
 
 logger = logging.getLogger("i2pchat")
+BLINDBOX_QUEUE_CAPS_MAGIC = "OK BLINDBOX_QUEUE_CAPS_V1"
 
 
 def _sam_exc_detail(exc: BaseException) -> str:
@@ -133,6 +135,7 @@ class BlindBoxClient:
         self._start_lock = asyncio.Lock()
         # Throttle identical Blind Box failure logs (poller hammers GET).
         self._box_warn_next: dict[str, float] = {}
+        self._queue_caps_support: dict[str, bool] = {}
 
     def _log_box_failure(self, op: str, box_addr: str, err: Exception) -> None:
         now = time.monotonic()
@@ -255,16 +258,31 @@ class BlindBoxClient:
             except Exception:
                 pass
 
-    async def put(self, key: str, blob: bytes) -> list[BlindBoxPutResult]:
+    async def put(
+        self,
+        key: str,
+        blob: bytes,
+        *,
+        queue_caps: Optional[BlindBoxQueueCapabilities] = None,
+    ) -> list[BlindBoxPutResult]:
         if not self._started:
             await self.start()
         if not key:
             raise ValueError("key is required")
         if not isinstance(blob, (bytes, bytearray)) or len(blob) == 0:
             raise ValueError("blob must be non-empty bytes")
+        if queue_caps is None:
+            raise ValueError("queue_caps is required")
 
         tasks = [
-            asyncio.create_task(self._put_to_blind_box(addr, key, bytes(blob)))
+            asyncio.create_task(
+                self._put_to_blind_box(
+                    addr,
+                    key,
+                    bytes(blob),
+                    queue_caps=queue_caps,
+                )
+            )
             for addr in self.blind_boxes
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -284,7 +302,11 @@ class BlindBoxClient:
             if result.status != "EXISTS":
                 continue
             try:
-                existing_blob = await self._get_from_blind_box(result.address, key)
+                existing_blob = await self._get_from_blind_box(
+                    result.address,
+                    key,
+                    queue_caps=queue_caps,
+                )
             except Exception as exc:
                 put_failures.append(
                     (
@@ -317,14 +339,28 @@ class BlindBoxClient:
             )
         return ok_results
 
-    async def get(self, key: str, *, require_quorum: bool = True) -> list[bytes]:
+    async def get(
+        self,
+        key: str,
+        *,
+        require_quorum: bool = True,
+        queue_caps: Optional[BlindBoxQueueCapabilities] = None,
+    ) -> list[bytes]:
         if not self._started:
             await self.start()
         if not key:
             raise ValueError("key is required")
+        if queue_caps is None:
+            raise ValueError("queue_caps is required")
 
         tasks = [
-            asyncio.create_task(self._get_from_blind_box(addr, key))
+            asyncio.create_task(
+                self._get_from_blind_box(
+                    addr,
+                    key,
+                    queue_caps=queue_caps,
+                )
+            )
             for addr in self.blind_boxes
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -352,15 +388,75 @@ class BlindBoxClient:
             )
         return self._dedup_blobs(blobs)
 
+    async def delete(
+        self,
+        key: str,
+        *,
+        queue_caps: Optional[BlindBoxQueueCapabilities] = None,
+        require_quorum: bool = False,
+    ) -> int:
+        if not self._started:
+            await self.start()
+        if not key:
+            raise ValueError("key is required")
+        if queue_caps is None:
+            raise ValueError("queue_caps is required")
+
+        tasks = [
+            asyncio.create_task(
+                self._delete_from_blind_box(
+                    addr,
+                    key,
+                    queue_caps=queue_caps,
+                )
+            )
+            for addr in self.blind_boxes
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        deleted = 0
+        delete_failures: list[tuple[str, Exception]] = []
+        for addr, result in zip(self.blind_boxes, results):
+            if isinstance(result, Exception):
+                delete_failures.append((addr, result))
+                continue
+            if result:
+                deleted += 1
+
+        if require_quorum and deleted < self.get_quorum:
+            for addr, err in delete_failures:
+                self._log_box_failure("DEL", addr, err)
+            raise RuntimeError(
+                f"Blind Box DEL quorum not reached: {deleted}/{self.get_quorum}"
+            )
+        for addr, err in delete_failures:
+            logger.debug(
+                "Blind Box DEL: %s failed (non-fatal): %s",
+                addr,
+                err,
+            )
+        return deleted
+
     async def _put_to_blind_box(
-        self, box_addr: str, key: str, blob: bytes
+        self,
+        box_addr: str,
+        key: str,
+        blob: bytes,
+        *,
+        queue_caps: Optional[BlindBoxQueueCapabilities] = None,
     ) -> BlindBoxPutResult:
         async def _op() -> BlindBoxPutResult:
             reader, writer = await self._connect(box_addr)
             try:
                 auth_suffix = self._command_auth_suffix(box_addr)
+                await self._require_queue_caps(box_addr)
                 writer.write(
-                    f"PUT {key} {len(blob)}{auth_suffix}\n".encode("utf-8")
+                    (
+                        "QPUT "
+                        f"{queue_caps.queue_id} {key} {len(blob)} "
+                        f"{queue_caps.put_cap} {queue_caps.get_cap} {queue_caps.delete_cap}"
+                        f"{auth_suffix}\n"
+                    ).encode("utf-8")
                 )
                 writer.write(blob)
                 await writer.drain()
@@ -374,12 +470,24 @@ class BlindBoxClient:
 
         return await self._with_retries(_op, op_name=f"PUT {box_addr}")
 
-    async def _get_from_blind_box(self, box_addr: str, key: str) -> Optional[bytes]:
+    async def _get_from_blind_box(
+        self,
+        box_addr: str,
+        key: str,
+        *,
+        queue_caps: Optional[BlindBoxQueueCapabilities] = None,
+    ) -> Optional[bytes]:
         async def _op() -> Optional[bytes]:
             reader, writer = await self._connect(box_addr)
             try:
                 auth_suffix = self._command_auth_suffix(box_addr)
-                writer.write(f"GET {key}{auth_suffix}\n".encode("utf-8"))
+                await self._require_queue_caps(box_addr)
+                writer.write(
+                    (
+                        f"QGET {queue_caps.queue_id} {key} {queue_caps.get_cap}"
+                        f"{auth_suffix}\n"
+                    ).encode("utf-8")
+                )
                 await writer.drain()
                 line = await asyncio.wait_for(reader.readline(), timeout=self.io_timeout)
                 header = line.decode("utf-8", errors="ignore").strip()
@@ -402,6 +510,70 @@ class BlindBoxClient:
                 await self._safe_close(writer)
 
         return await self._with_retries(_op, op_name=f"GET {box_addr}")
+
+    async def _delete_from_blind_box(
+        self,
+        box_addr: str,
+        key: str,
+        *,
+        queue_caps: BlindBoxQueueCapabilities,
+    ) -> bool:
+        await self._require_queue_caps(box_addr)
+
+        async def _op() -> bool:
+            reader, writer = await self._connect(box_addr)
+            try:
+                auth_suffix = self._command_auth_suffix(box_addr)
+                writer.write(
+                    (
+                        f"QDEL {queue_caps.queue_id} {key} {queue_caps.delete_cap}"
+                        f"{auth_suffix}\n"
+                    ).encode("utf-8")
+                )
+                await writer.drain()
+                line = await asyncio.wait_for(reader.readline(), timeout=self.io_timeout)
+                status = line.decode("utf-8", errors="ignore").strip()
+                if status == "OK":
+                    return True
+                if status == "MISS":
+                    return False
+                raise RuntimeError(f"Unexpected DEL response: {status!r}")
+            finally:
+                await self._safe_close(writer)
+
+        return await self._with_retries(_op, op_name=f"DEL {box_addr}")
+
+    async def _require_queue_caps(self, box_addr: str) -> None:
+        if await self._supports_queue_caps(box_addr):
+            return
+        raise RuntimeError(
+            f"Blind Box replica does not support required queue capabilities: {box_addr}"
+        )
+
+    async def _supports_queue_caps(self, box_addr: str) -> bool:
+        cached = self._queue_caps_support.get(box_addr)
+        if cached is not None:
+            return cached
+
+        try:
+            reader, writer = await self._connect(box_addr)
+        except Exception:
+            self._queue_caps_support[box_addr] = False
+            return False
+        try:
+            auth_suffix = self._command_auth_suffix(box_addr)
+            writer.write(f"CAPA{auth_suffix}\n".encode("utf-8"))
+            await writer.drain()
+            line = await asyncio.wait_for(reader.readline(), timeout=self.io_timeout)
+            status = line.decode("utf-8", errors="ignore").strip()
+            supported = status == BLINDBOX_QUEUE_CAPS_MAGIC
+            self._queue_caps_support[box_addr] = supported
+            return supported
+        except Exception:
+            self._queue_caps_support[box_addr] = False
+            return False
+        finally:
+            await self._safe_close(writer)
 
     def _token_for_endpoint(self, box_addr: str) -> str:
         addr = (box_addr or "").strip()

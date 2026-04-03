@@ -63,6 +63,10 @@ class BlindBoxCoreTelemetryTests(unittest.TestCase):
             self.assertEqual(int(telemetry["root_epoch"]), 0)
             self.assertEqual(int(telemetry["root_rotate_messages"]), 256)
             self.assertEqual(int(telemetry["root_rotate_seconds"]), 6 * 60 * 60)
+            self.assertEqual(int(telemetry["send_queue_epoch"]), 0)
+            self.assertEqual(int(telemetry["recv_queue_epoch"]), 0)
+            self.assertEqual(int(telemetry["queue_rotate_messages"]), 128)
+            self.assertEqual(int(telemetry["queue_rotate_seconds"]), 3 * 60 * 60)
             self.assertEqual(int(telemetry["max_previous_roots"]), 2)
             self.assertEqual(int(telemetry["previous_roots_loaded"]), 0)
         finally:
@@ -294,6 +298,30 @@ class BlindBoxCoreTelemetryTests(unittest.TestCase):
             core._blindbox_state.consumed_recv = {11, 14}  # noqa: SLF001 - internal behavior test
             candidates = core._blindbox_recv_candidates()  # noqa: SLF001 - internal behavior test
             self.assertEqual(set(candidates), {10, 12, 13})
+        finally:
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+
+    def test_blindbox_recv_queue_epoch_candidates_include_previous_epochs(self) -> None:
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "r1.b32.i2p"
+        try:
+            core = I2PChatCore(profile="alice")
+            core._blindbox_recv_queue_epoch = 5  # noqa: SLF001 - internal behavior test
+            core._blindbox_prev_recv_queue_epochs = [  # noqa: SLF001 - internal behavior test
+                {"epoch": 4, "expires_at": 4_102_444_800},
+                {"epoch": 3, "expires_at": 4_102_444_800},
+            ]
+            candidates = core._blindbox_recv_queue_epoch_candidates()  # noqa: SLF001
+            self.assertEqual(candidates, [5, 4, 3])
         finally:
             if old_enabled is None:
                 os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)

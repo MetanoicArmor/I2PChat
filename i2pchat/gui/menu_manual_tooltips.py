@@ -42,8 +42,8 @@ TT_BLINDBOX_REPLICA_EDITOR = (
 
 TT_BLINDBOX_REPLICA_AUTH_EDITOR = (
     "Optional shared secret per replica endpoint for custom Blind Box servers that require "
-    "authentication (same wire format as the local replica: token as an extra argument on "
-    "PUT/GET). Set the same value as BLINDBOX_AUTH_TOKEN in the server environment.\n"
+    "authentication (same wire format as the local replica: token on CAPA / QPUT / QGET / QDEL). "
+    "Set the same value as BLINDBOX_AUTH_TOKEN in the server environment.\n"
     "One line per protected replica: type the endpoint exactly as in the list above, press "
     "the Tab key once, then the secret (not spaces instead of Tab). "
     "Replicas without a token need no line here (e.g. public defaults). "

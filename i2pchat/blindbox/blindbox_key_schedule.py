@@ -15,6 +15,10 @@ from i2pchat import crypto
 BLINDBOX_LOOKUP_V1 = b"BLINDBOX_LOOKUP_V1"
 BLINDBOX_BLOB_V1 = b"BLINDBOX_BLOB_V1"
 BLINDBOX_STATE_V1 = b"BLINDBOX_STATE_V1"
+BLINDBOX_QUEUE_ID_V1 = b"BLINDBOX_QUEUE_ID_V1"
+BLINDBOX_QUEUE_PUT_CAP_V1 = b"BLINDBOX_QUEUE_PUT_CAP_V1"
+BLINDBOX_QUEUE_GET_CAP_V1 = b"BLINDBOX_QUEUE_GET_CAP_V1"
+BLINDBOX_QUEUE_DELETE_CAP_V1 = b"BLINDBOX_QUEUE_DELETE_CAP_V1"
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,16 @@ class BlindBoxMessageKeys:
     state_tag: bytes
     direction_label: str
     index: int
+    epoch: int
+
+
+@dataclass(frozen=True)
+class BlindBoxQueueCapabilities:
+    queue_id: str
+    put_cap: str
+    get_cap: str
+    delete_cap: str
+    direction_label: str
     epoch: int
 
 
@@ -61,6 +75,58 @@ def _direction_label(local_peer_id: str, remote_peer_id: str, direction: str) ->
     return send_label if normalized_direction == "send" else recv_label
 
 
+def _derive_root_prk(root_secret: bytes, local_peer_id: str, remote_peer_id: str) -> tuple[bytes, str, str]:
+    low_id, high_id = _canonical_pair(local_peer_id, remote_peer_id)
+    salt = hashlib.sha256(
+        b"BLINDBOX-SALT-V1|" + low_id.encode("utf-8") + b"|" + high_id.encode("utf-8")
+    ).digest()
+    prk = crypto.hkdf_extract(salt, bytes(root_secret))
+    return prk, low_id, high_id
+
+
+def derive_blindbox_queue_capabilities(
+    root_secret: bytes,
+    local_peer_id: str,
+    remote_peer_id: str,
+    direction: str,
+    *,
+    epoch: int = 0,
+    queue_epoch: int = 0,
+) -> BlindBoxQueueCapabilities:
+    if not isinstance(root_secret, (bytes, bytearray)) or len(root_secret) < 16:
+        raise ValueError("root_secret must be bytes and at least 16 bytes long")
+    if epoch < 0:
+        raise ValueError("epoch must be non-negative")
+    if queue_epoch < 0:
+        raise ValueError("queue_epoch must be non-negative")
+
+    prk, low_id, high_id = _derive_root_prk(root_secret, local_peer_id, remote_peer_id)
+    direction_label = _direction_label(local_peer_id, remote_peer_id, direction)
+    context = b"|".join(
+        [
+            low_id.encode("utf-8"),
+            high_id.encode("utf-8"),
+            direction_label.encode("ascii"),
+            f"epoch={int(epoch)}".encode("ascii"),
+            f"queue_epoch={int(queue_epoch)}".encode("ascii"),
+        ]
+    )
+    queue_key = crypto.hkdf_expand(prk, BLINDBOX_QUEUE_ID_V1 + b"|" + context, 32)
+    put_cap = crypto.hkdf_expand(prk, BLINDBOX_QUEUE_PUT_CAP_V1 + b"|" + context, 32)
+    get_cap = crypto.hkdf_expand(prk, BLINDBOX_QUEUE_GET_CAP_V1 + b"|" + context, 32)
+    delete_cap = crypto.hkdf_expand(
+        prk, BLINDBOX_QUEUE_DELETE_CAP_V1 + b"|" + context, 32
+    )
+    return BlindBoxQueueCapabilities(
+        queue_id=hashlib.sha256(queue_key).hexdigest(),
+        put_cap=put_cap.hex(),
+        get_cap=get_cap.hex(),
+        delete_cap=delete_cap.hex(),
+        direction_label=direction_label,
+        epoch=int(epoch),
+    )
+
+
 def derive_blindbox_message_keys(
     root_secret: bytes,
     local_peer_id: str,
@@ -77,14 +143,9 @@ def derive_blindbox_message_keys(
     if epoch < 0:
         raise ValueError("epoch must be non-negative")
 
-    low_id, high_id = _canonical_pair(local_peer_id, remote_peer_id)
+    prk, low_id, high_id = _derive_root_prk(root_secret, local_peer_id, remote_peer_id)
     direction_label = _direction_label(local_peer_id, remote_peer_id, direction)
     index_bytes = int(index).to_bytes(8, "big", signed=False)
-
-    salt = hashlib.sha256(
-        b"BLINDBOX-SALT-V1|" + low_id.encode("utf-8") + b"|" + high_id.encode("utf-8")
-    ).digest()
-    prk = crypto.hkdf_extract(salt, bytes(root_secret))
 
     context = b"|".join(
         [

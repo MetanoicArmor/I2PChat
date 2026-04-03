@@ -295,7 +295,8 @@ traffic, with additional local validation on size, dimensions, and format.
 
 ## BlindBox offline-delivery protocol
 
-BlindBox is a separate delayed-delivery mechanism for text messages.
+BlindBox is a separate delayed-delivery mechanism for offline text and
+attachment transport.
 
 Important boundary:
 
@@ -310,9 +311,16 @@ Key derivation is documented in:
 
 The schedule derives:
 
+- contact-scoped queue identifier
+- queue capabilities for `put` / `get` / `delete`
 - lookup token
 - blob encryption key
 - state-related keys
+
+Queue derivation inputs now include both:
+
+- `root epoch` — changes when the shared BlindBox root secret rotates;
+- `queue epoch` — changes when a one-way mailbox for that contact direction rotates.
 
 ### BlindBox blob format
 
@@ -329,15 +337,30 @@ The blob layer includes:
 - explicit header;
 - encrypted body;
 - padding to fixed buckets (256-byte profile in current implementation).
+- an embedded vNext frame, so offline delivery can carry more than plain text.
 
 ### BlindBox replica wire protocol
 
 Replica protocol is line-oriented and intentionally simple.
 
-Core commands:
+BlindBox replicas are now required to support the capability-aware queue
+protocol.
 
-- `PUT key size [token]\n`
-- `GET key [token]\n`
+Commands:
+
+- `CAPA\n` -> `OK BLINDBOX_QUEUE_CAPS_V1`
+- `QPUT queue key size put_cap get_cap delete_cap [token]\n`
+- `QGET queue key get_cap [token]\n`
+- `QDEL queue key delete_cap [token]\n`
+
+Queue semantics:
+
+- `queue` is a contact-scoped one-way offline mailbox identifier derived from the
+  BlindBox root, pair direction, and queue epoch;
+- `put_cap`, `get_cap`, and `delete_cap` are separate operation capabilities for
+  that queue;
+- clients probe support with `CAPA` and fail closed when a replica does not
+  implement the required queue commands.
 
 Reference implementations:
 
@@ -354,13 +377,57 @@ channel using dedicated signals such as:
 
 This is distinct from the replica `PUT`/`GET` traffic.
 
+### Mailbox rotation over live channel
+
+Per-direction offline mailboxes can rotate independently from the BlindBox root.
+
+Signals:
+
+- `BLINDBOX_QUEUE_EPOCH`
+- `BLINDBOX_QUEUE_EPOCH_ACK`
+
+Semantics:
+
+- each peer manages its own outbound mailbox epoch;
+- receiving a newer queue epoch advances the inbound mailbox for that direction;
+- older inbound mailbox epochs stay in a grace window so delayed blobs can still
+  be fetched and deleted;
+- root rotation and mailbox rotation are separate events: a new root changes key
+  material, while a new queue epoch changes the mailbox namespace under that root.
+
+### Offline attachment carriage
+
+BlindBox can now carry selected live-protocol attachment frames directly inside
+offline blobs:
+
+- text: `U`
+- file transfer: `F` + `D` + `E`
+- inline image transfer: `G`
+
+Current behavior:
+
+- offline files reuse the live file offer/chunk/end sequence;
+- offline inline images reuse the live image header/chunk/end sequence;
+- receiver-side validation, filename collision handling, and image finalization
+  stay aligned with the live receive path as much as possible;
+- BlindBox can also carry deferred receipt signals back to the sender:
+  `MSG_ACK`, `FILE_ACK`, and `IMG_ACK`;
+- sender-side delivery confirmation for offline attachments is therefore
+  available again, but it is still delayed and depends on the reverse BlindBox
+  lane being initialized and reachable.
+
 ## Security notes
 
 - Post-handshake plaintext traffic is treated as suspicious / downgrade-like.
 - Some metadata necessarily remains visible (type, length, preface).
 - Padding reduces but does not eliminate traffic analysis leakage.
-- BlindBox is intentionally narrower than the live protocol and is aimed at
-  offline text delivery, not arbitrary protocol generalization.
+- Capability-aware queues are now mandatory for BlindBox replicas; unsupported
+  endpoints are rejected instead of being used in a weaker fallback mode.
+- Mailbox rotation reduces long-lived queue correlation, but it is still weaker
+  than a fully generalized SimpleX-style relay design with per-operation address
+  churn everywhere.
+- BlindBox is still narrower than the full live protocol: it currently targets
+  offline text plus core attachment transport, not arbitrary protocol tunneling.
 
 ## Code map
 

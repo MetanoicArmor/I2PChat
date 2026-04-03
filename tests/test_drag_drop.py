@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from i2pchat.presentation.drag_drop import (
     REJECT,
@@ -75,6 +76,17 @@ class TestValidateDropFile(unittest.TestCase):
             ok, reason = validate_drop_file(d)
             self.assertFalse(ok)
             self.assertIn("regular", reason.lower())
+
+    def test_large_file_uses_2000mb_limit(self):
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            path = f.name
+        try:
+            with patch("i2pchat.presentation.drag_drop.os.path.getsize", return_value=2001 * 1024 * 1024):
+                ok, reason = validate_drop_file(path)
+            self.assertFalse(ok)
+            self.assertIn("2000 MB", reason)
+        finally:
+            os.unlink(path)
 
 
 class TestValidateDropImage(unittest.TestCase):

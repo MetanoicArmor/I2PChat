@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
+import unittest
+
+try:
+    import pytest
+except ImportError as exc:  # pragma: no cover - environment-dependent test bootstrap
+    raise unittest.SkipTest("pytest is not installed") from exc
 
 pytest.importorskip("i2plib")
 
