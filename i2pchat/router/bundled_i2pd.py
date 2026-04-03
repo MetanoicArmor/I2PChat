@@ -271,6 +271,33 @@ class BundledI2pdManager:
         except Exception:
             return None
 
+    @staticmethod
+    def _discover_windows_runtime_pid(rt: BundledI2pdRuntime) -> Optional[int]:
+        if sys.platform != "win32":
+            return None
+        script = (
+            "$conf=$args[0]; "
+            "$data=$args[1]; "
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { "
+            "$_.Name -eq 'i2pd.exe' -and $_.CommandLine -and "
+            "(($_.CommandLine -like ('*' + $conf + '*')) -or ($_.CommandLine -like ('*' + $data + '*'))) "
+            "} | "
+            "Select-Object -First 1 -ExpandProperty ProcessId"
+        )
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", script, rt.conf_path, rt.data_dir],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                creationflags=creationflags,
+            ).strip()
+            pid = int(out) if out else None
+            return pid if pid and pid > 0 else None
+        except Exception:
+            return None
+
     @classmethod
     def force_cleanup_runtime_root(cls, root: Optional[str] = None) -> None:
         root = root or router_runtime_dir()
@@ -282,6 +309,8 @@ class BundledI2pdManager:
         )
         if pid is None:
             pid = cls._read_pidfile(pidfile_path)
+        if pid is None and runtime is not None:
+            pid = cls._discover_windows_runtime_pid(runtime)
         if pid is not None:
             cls._terminate_pid_sync(pid)
         try:
@@ -428,6 +457,8 @@ class BundledI2pdManager:
             raise
 
         self._managed_pid = self._read_pidfile(rt.pidfile_path)
+        if self._managed_pid is None:
+            self._managed_pid = self._discover_windows_runtime_pid(rt)
         if self._managed_pid is None:
             self._managed_pid = self._proc.pid if self._proc is not None else None
         self._write_state(rt, self._managed_pid)
