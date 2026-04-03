@@ -82,11 +82,16 @@ TT_IMPORT_HISTORY_BACKUP = (
 
 TT_CHECK_UPDATES = (
     "Compare this app’s version to release files on the I2P project site. "
-    "For .i2p URLs the check uses the I2P HTTP proxy at http://127.0.0.1:4444 "
-    "when no system http_proxy is set; override with I2PCHAT_UPDATE_HTTP_PROXY if needed."
+    "For .i2p URLs the check uses the active router backend’s HTTP proxy; "
+    "override with I2PCHAT_UPDATE_HTTP_PROXY if needed."
 )
 
 TT_OPEN_APP_DIR = "Open the app data directory in your system file manager."
+
+TT_I2P_ROUTER = (
+    "Choose whether I2PChat uses a system i2pd SAM endpoint or the bundled i2pd sidecar. "
+    "You can also open the router data directory or log and restart the bundled router here."
+)
 
 TT_LOCK_TO_PEER = (
     "Bind this named profile to the connected peer: the address is stored in the profile .dat, "

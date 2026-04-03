@@ -121,6 +121,9 @@ Click the **`⋯`** button or press **Ctrl+.** (Windows/Linux) / **⌘+.** (macO
 - **BlindBox diagnostics** — opens a textual summary of BlindBox/offline routing and replica health (complements the status row and section 4.9).
 - **Export profile backup…** / **Import profile backup…** — password-protected bundles of the current profile (`.dat` and supported sidecar data); import avoids name collisions by choosing a free profile name when needed.
 - **Export history backup…** / **Import history backup…** — export or restore encrypted per-peer history files only; the import flow asks whether to overwrite matching files or add only missing ones.
+- **Check for updates…** — compare the running build with release ZIP names from the project release page (see section 4.12).
+- **Open App dir** — open the application data directory in the system file manager.
+- **I2P router…** — open the router backend dialog (**Ctrl/Cmd+R**): switch between a system `i2pd` SAM endpoint and the bundled router, change backend ports, open the router data/log paths, or restart the bundled router.
 - **Lock to peer** — bind the current profile to the connected peer (see section 4.7).
 - **Forget pinned peer key** — remove the saved TOFU signing-key pin for the current peer (see section 4.10).
 - **Copy my address** — copy your I2P destination to the clipboard.
@@ -397,7 +400,7 @@ Size limit:
 
 #### 4.12. Check for updates and verifying downloads
 
-The **`⋯` → Check for updates…** action (**Ctrl/Cmd+U**) fetches the **HTML** releases page (for `*.i2p` hosts, typically via the I2P HTTP proxy; see `I2PCHAT_UPDATE_HTTP_PROXY`), discovers ZIP filenames by pattern, and **compares version numbers** with the local build (the root **`VERSION`** file when running from source). The app **does not download** the archive or **verify** hashes or signatures.
+The **`⋯` → Check for updates…** action (**Ctrl/Cmd+U**) fetches the **HTML** releases page, discovers ZIP filenames by pattern, and **compares version numbers** with the local build (the root **`VERSION`** file when running from source). For `*.i2p` hosts the request follows the **active router backend’s HTTP proxy** by default (or `I2PCHAT_UPDATE_HTTP_PROXY` if you override it). The app **does not download** the archive or **verify** hashes or signatures.
 
 **Trust chain when you install manually:**
 

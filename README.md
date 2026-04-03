@@ -238,16 +238,17 @@ The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.pn
 
 ### 📦 Prebuilt binaries
 
-**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt binaries for Windows, macOS, and Linux (version **v1.1.3** matches [`VERSION`](VERSION) in this repo).
+**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt binaries for Windows, macOS, and Linux (version **v1.2.0** matches [`VERSION`](VERSION) in this repo).
 
 Currently shipped assets use **versioned** zip names, for example:
 
-- **Windows (x64) GUI** — `I2PChat-windows-x64-v1.1.3.zip`
+- **Windows (x64) GUI** — `I2PChat-windows-x64-v1.2.0.zip`
   - Inside: `I2PChat\I2PChat.exe`
   - Built with **Python 3.14** and PyInstaller, includes the Python runtime and all dependencies.
   - **Python is *not* required on the target system** – unpack the zip and run `I2PChat.exe`.
+  - Release bundles can now include a **bundled `i2pd` sidecar**, so the app can work either with a system router or an embedded router backend.
 
-**Linux** (`I2PChat-linux-x86_64-v1.1.3.zip` → AppImage) and **macOS arm64** (`I2PChat-macOS-arm64-v1.1.3.zip` → `.app`) — same release page; **direct download links** are in the **Prebuilt Downloads** table later in this README.
+**Linux** (`I2PChat-linux-x86_64-v1.2.0.zip` → AppImage) and **macOS arm64** (`I2PChat-macOS-arm64-v1.2.0.zip` → `.app`) — same release page; **direct download links** are in the **Prebuilt Downloads** table later in this README.
 
 ### 🛠 Running from source
 
@@ -427,15 +428,15 @@ If you like this project and want to support development, you can send a small d
 
 ### 📥 Prebuilt Downloads
 
-**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt bundles match `VERSION` in the repo (currently **v1.1.3**); no Python installation required.
+**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt bundles match `VERSION` in the repo (currently **v1.2.0**); no Python installation required.
 
 | Platform | Download | Launch |
 |----------|----------|--------|
-| **Windows** | [I2PChat-windows-x64-v1.1.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.1.3.zip) | Unzip → run `I2PChat.exe` |
-| **macOS** | [I2PChat-macOS-arm64-v1.1.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.1.3.zip) | Unzip → open `I2PChat.app` |
-| **Linux** | [I2PChat-linux-x86_64-v1.1.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.1.3.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
+| **Windows** | [I2PChat-windows-x64-v1.2.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.0.zip) | Unzip → run `I2PChat.exe` |
+| **macOS** | [I2PChat-macOS-arm64-v1.2.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.0.zip) | Unzip → open `I2PChat.app` |
+| **Linux** | [I2PChat-linux-x86_64-v1.2.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.0.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
 
-> **Router backend:** I2PChat can work with either a system `i2pd` (SAM, default `127.0.0.1:7656`) or a bundled `i2pd` sidecar. Use **More actions → I2P router…** to choose which backend to use.
+> **Router backend:** I2PChat can work with either a system `i2pd` (SAM, default `127.0.0.1:7656`) or a bundled `i2pd` sidecar. Use **More actions → I2P router…** (shortcut **Cmd/Ctrl+R**) to choose which backend to use, open the router data/log paths, or restart the bundled router.
 
 ### ℹ️ About
 

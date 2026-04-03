@@ -5634,6 +5634,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_actions_popup.add_action(
             "I2P router…",
             self._open_router_settings_dialog,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_I2P_ROUTER, "Ctrl+R"
+            ),
+            shortcut_hint=_native_shortcut_text("Ctrl+R"),
         )
         self.more_actions_popup.add_separator()
         self.more_actions_popup.add_action(
@@ -6791,6 +6795,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             return True
         if _physical_key_matches(event, win_vk=0x55, mac_vk=0x20, linux_evdev=22):
             self._on_check_for_updates_clicked()
+            return True
+        if _physical_key_matches(event, win_vk=0x52, mac_vk=0x0F, linux_evdev=19):
+            self._open_router_settings_dialog()
             return True
         if self._is_emoji_picker_keyboard_toggle(event):
             self.compose_input_wrap.toggle_emoji_picker()

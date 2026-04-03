@@ -4,6 +4,7 @@ Versioned release write-ups for I2PChat live in this directory (`docs/releases/`
 
 | Version | Notes |
 |--------|--------|
+| **1.2.0** | [RELEASE_1.2.0.md](RELEASE_1.2.0.md) — bundled/system i2pd backend, router dialog + shortcuts, bundled packaging, update-check proxy alignment |
 | **1.1.4** | [RELEASE_1.1.4.md](RELEASE_1.1.4.md) — BlindBox diagnostics rewrite, production daemon package, one-shot install flow, lower slow-replica latency |
 | **1.1.3** | [RELEASE_1.1.3.md](RELEASE_1.1.3.md) — vNext-only wire codec; remove `I2PCHAT_LEGACY_COMPAT` / legacy parser |
 | **1.1.2** | [RELEASE_1.1.2.md](RELEASE_1.1.2.md) — legacy framing gated to locked peer; file/G send `to_thread`; ACK soft-drain; audits |
