@@ -2627,11 +2627,10 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         option: QtWidgets.QStyleOptionViewItem,
         item: ChatItem,
     ) -> None:
-        """Служебные строки без бабла: по центру, приглушённый курсив."""
+        """Служебные строки без бабла: по центру, приглушённый цвет."""
         base_font = painter.font()
         text_color = self._c("system_text", "#5f6673")
         sys_font = QtGui.QFont(base_font)
-        sys_font.setItalic(True)
         sys_font.setPointSize(max(base_font.pointSize() - 1, 8))
 
         rect = option.rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
@@ -3286,7 +3285,6 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         if item.kind in {"system", "info"}:
             cell_width = option.rect.width() if option.rect.width() > 0 else 600
             font = QtGui.QFont(option.font)
-            font.setItalic(True)
             font.setPointSize(max(font.pointSize() - 1, 8))
             inner_w = float(max(10, cell_width - 2 * self.SYSTEM_INLINE_MARGIN_X))
             text = item.text or " "
