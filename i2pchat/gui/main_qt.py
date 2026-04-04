@@ -918,7 +918,7 @@ THEMES: dict[str, dict[str, object]] = {
                 border: none;
                 border-radius: 10px;
                 color: #525966;
-                font-size: %(status_font_px)spx;
+%(status_ui_font_family_qss)s                font-size: %(status_font_px)spx;
                 font-weight: normal;
                 min-width: %(contacts_toggle_btn_width_px)spx;
                 max-width: %(contacts_toggle_btn_width_px)spx;
@@ -943,7 +943,7 @@ THEMES: dict[str, dict[str, object]] = {
                 padding: 0px %(ui_grid_px)dpx;
                 min-height: 30px;
                 color: #525966;
-                font-size: %(status_font_px)spx;
+%(status_ui_font_family_qss)s                font-size: %(status_font_px)spx;
             }
             QMessageBox { background-color: #f5f5f7; color: #1d1d1f; }
             QMessageBox QLabel { color: #1d1d1f; }
@@ -1455,7 +1455,7 @@ THEMES: dict[str, dict[str, object]] = {
                 border: none;
                 border-radius: 10px;
                 color: #9fa1b5;
-                font-size: %(status_font_px)spx;
+%(status_ui_font_family_qss)s                font-size: %(status_font_px)spx;
                 font-weight: normal;
                 min-width: %(contacts_toggle_btn_width_px)spx;
                 max-width: %(contacts_toggle_btn_width_px)spx;
@@ -1480,7 +1480,7 @@ THEMES: dict[str, dict[str, object]] = {
                 padding: 0px %(ui_grid_px)dpx;
                 min-height: 30px;
                 color: #9fa1b5;
-                font-size: %(status_font_px)spx;
+%(status_ui_font_family_qss)s                font-size: %(status_font_px)spx;
             }
             QMessageBox { background-color: #1f1f23; color: #f5f5f7; }
             QMessageBox QLabel { color: #f5f5f7; }
@@ -1900,7 +1900,23 @@ COMPOSE_DRAFTS_DEBOUNCE_MS = 1500
 
 def _status_label_font_pixel_size() -> int:
     """Кегль QLabel#StatusLabel в QSS (px); тот же источник, что ChatWindow._status_font_px."""
-    return 10 if sys.platform == "win32" else 11
+    # На Windows 10px часто выглядит «рваным»; 11px совпадает с остальными платформами.
+    return 11
+
+
+def _status_ui_font_family() -> Optional[str]:
+    """Системный UI-шрифт для мелких подписей (статус-бар, system/info в чате)."""
+    if sys.platform == "win32":
+        return "Segoe UI"
+    return None
+
+
+def _status_ui_font_family_qss() -> str:
+    """Вставка в window_stylesheet перед font-size; пусто вне Windows."""
+    fam = _status_ui_font_family()
+    if fam is None:
+        return ""
+    return f'                font-family: "{fam}";\n'
 
 
 # kind=info с этим текстом завершает сессию чата (раньше шло как disconnect).
@@ -2637,6 +2653,9 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         base_font = painter.font()
         text_color = self._c("system_text", "#5f6673")
         sys_font = QtGui.QFont(base_font)
+        fam = _status_ui_font_family()
+        if fam:
+            sys_font.setFamily(fam)
         sys_font.setPixelSize(_status_label_font_pixel_size())
 
         rect = option.rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
@@ -3291,6 +3310,9 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         if item.kind in {"system", "info"}:
             cell_width = option.rect.width() if option.rect.width() > 0 else 600
             font = QtGui.QFont(option.font)
+            sfam = _status_ui_font_family()
+            if sfam:
+                font.setFamily(sfam)
             font.setPixelSize(_status_label_font_pixel_size())
             inner_w = float(max(10, cell_width - 2 * self.SYSTEM_INLINE_MARGIN_X))
             text = item.text or " "
@@ -8268,6 +8290,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             str(self.theme["window_stylesheet"])
             % {
                 "status_font_px": self._status_font_px,
+                "status_ui_font_family_qss": _status_ui_font_family_qss(),
                 "status_row_height_px": self._STATUS_ROW_HEIGHT_PX,
                 "contacts_toggle_btn_width_px": self._CONTACTS_TOGGLE_BTN_WIDTH_PX,
                 "ui_grid_px": self._UI_GRID_PX,
