@@ -2516,6 +2516,9 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     PADDING_Y = 8
     # Горизонтальные поля для system/info без бабла (почти на всю ширину списка).
     SYSTEM_INLINE_MARGIN_X = 20
+    # Вертикальные поля только для system/info — меньше, чем у баблов, чтобы сгустить служебные строки.
+    SYSTEM_INLINE_PADDING_Y = 4
+    SYSTEM_INLINE_OUTER_MARGIN_Y = 1
     # Вертикальный зазор между баблами (минимальный; визуальный воздух даёт padding внутри бабла)
     BUBBLE_SPACING_Y = 0
     # Внешний отступ закрашенного бабла от верха/низа ячейки (тонкий зазор между соседними баблами).
@@ -2628,8 +2631,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         rect = option.rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
         mx = float(self.SYSTEM_INLINE_MARGIN_X)
-        omy = self.BUBBLE_OUTER_MARGIN_Y
-        py = self.PADDING_Y
+        omy = float(self.SYSTEM_INLINE_OUTER_MARGIN_Y)
+        py = float(self.SYSTEM_INLINE_PADDING_Y)
 
         metrics = QtGui.QFontMetrics(sys_font)
         outer = QtCore.QRectF(
@@ -2641,7 +2644,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         if item.timestamp:
             ts_height = float(metrics.height())
-            gap = float(py) / 2.0
+            gap = py / 2.0
             text_area = QtCore.QRectF(
                 outer.left(),
                 outer.top(),
@@ -3289,13 +3292,13 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             text_height = math.ceil(float(doc.size().height()))
             height = (
                 int(text_height)
-                + self.PADDING_Y * 2
-                + 2 * self.BUBBLE_OUTER_MARGIN_Y
+                + self.SYSTEM_INLINE_PADDING_Y * 2
+                + 2 * self.SYSTEM_INLINE_OUTER_MARGIN_Y
                 + self.BUBBLE_SPACING_Y * 2
             )
             if item.timestamp:
                 ts_m = QtGui.QFontMetrics(font)
-                height += ts_m.height() + int(self.PADDING_Y / 2)
+                height += ts_m.height() + int(self.SYSTEM_INLINE_PADDING_Y / 2)
             return QtCore.QSize(int(cell_width), int(height))
 
         cell_width = option.rect.width() if option.rect.width() > 0 else 600
