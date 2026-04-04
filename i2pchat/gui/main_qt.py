@@ -485,6 +485,60 @@ THEMES: dict[str, dict[str, object]] = {
                 selection-background-color: #0a84ff;
                 selection-color: #ffffff;
             }
+            QLabel#RouterStatusLabel {
+                color: #626875;
+                font-size: 12px;
+            }
+            QLabel#RouterSectionTitle {
+                color: #2d3442;
+                font-size: 13px;
+                font-weight: 600;
+                margin-top: 4px;
+            }
+            QLabel#RouterSectionSecondaryTitle {
+                color: #626875;
+                font-size: 12px;
+                font-weight: 600;
+                margin-top: 8px;
+            }
+            QFrame#RouterBackendPanel {
+                border: 1px solid #d8dce6;
+                border-radius: 12px;
+                background: #eef1f7;
+            }
+            QLabel#RouterBackendPickTitle {
+                color: #626875;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton#RouterBackendOption {
+                border: 1px solid #d0d5de;
+                border-radius: 10px;
+                background: #ffffff;
+                color: #1d1d1f;
+                padding: 10px 12px;
+                text-align: left;
+                min-height: 48px;
+                min-width: 0px;
+                font-weight: 600;
+            }
+            QPushButton#RouterBackendOption:hover:!checked {
+                background: #f7f8fb;
+                border-color: #c0c8d4;
+            }
+            QPushButton#RouterBackendOption:checked {
+                background: #e8f2ff;
+                border: 2px solid #0a84ff;
+                color: #0a3d7a;
+                padding: 9px 11px;
+            }
+            QPushButton#RouterBackendOption:checked:hover {
+                background: #ddeaf8;
+            }
+            QRadioButton {
+                color: #1d1d1f;
+                spacing: 8px;
+            }
             QComboBox {
                 background: #ffffff;
                 border: none;
@@ -976,6 +1030,60 @@ THEMES: dict[str, dict[str, object]] = {
                 border: none;
                 selection-background-color: #0a84ff;
                 selection-color: #ffffff;
+            }
+            QLabel#RouterStatusLabel {
+                color: #8d95a6;
+                font-size: 12px;
+            }
+            QLabel#RouterSectionTitle {
+                color: #f5f5f7;
+                font-size: 13px;
+                font-weight: 600;
+                margin-top: 4px;
+            }
+            QLabel#RouterSectionSecondaryTitle {
+                color: #9aa3b5;
+                font-size: 12px;
+                font-weight: 600;
+                margin-top: 8px;
+            }
+            QFrame#RouterBackendPanel {
+                border: 1px solid #3d4450;
+                border-radius: 12px;
+                background: rgba(255, 255, 255, 0.05);
+            }
+            QLabel#RouterBackendPickTitle {
+                color: #8d95a6;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton#RouterBackendOption {
+                border: 1px solid #4a505c;
+                border-radius: 10px;
+                background: #1f1f23;
+                color: #f5f5f7;
+                padding: 10px 12px;
+                text-align: left;
+                min-height: 48px;
+                min-width: 0px;
+                font-weight: 600;
+            }
+            QPushButton#RouterBackendOption:hover:!checked {
+                background: #2a2d36;
+                border-color: #5c6470;
+            }
+            QPushButton#RouterBackendOption:checked {
+                background: rgba(10, 132, 255, 0.2);
+                border: 2px solid #0a84ff;
+                color: #f5f5f7;
+                padding: 9px 11px;
+            }
+            QPushButton#RouterBackendOption:checked:hover {
+                background: rgba(10, 132, 255, 0.28);
+            }
+            QRadioButton {
+                color: #f5f5f7;
+                spacing: 8px;
             }
             QComboBox {
                 background: #1f1f23;
@@ -4495,6 +4603,15 @@ class _HistoryRetentionDialog(QtWidgets.QDialog):
         return self._sp_messages.value(), self._sp_days.value()
 
 
+def _router_form_section_label(text: str, *, secondary: bool = False) -> QtWidgets.QLabel:
+    lab = QtWidgets.QLabel(text)
+    lab.setObjectName(
+        "RouterSectionSecondaryTitle" if secondary else "RouterSectionTitle"
+    )
+    lab.setWordWrap(True)
+    return lab
+
+
 class _RouterSettingsDialog(QtWidgets.QDialog):
     def __init__(
         self,
@@ -4511,19 +4628,17 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         v = QtWidgets.QVBoxLayout(self)
         v.setContentsMargins(20, 16, 20, 16)
         v.setSpacing(14)
-
-        self._rb_system = QtWidgets.QRadioButton("Use system i2pd", self)
-        self._rb_bundled = QtWidgets.QRadioButton("Use bundled i2pd", self)
-        if settings.backend == "bundled":
-            self._rb_bundled.setChecked(True)
-        else:
-            self._rb_system.setChecked(True)
-        v.addWidget(self._rb_system)
-        v.addWidget(self._rb_bundled)
+        self.setMinimumWidth(560)
 
         form = QtWidgets.QFormLayout()
         form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(10)
+        form.setVerticalSpacing(12)
+        form.setRowWrapPolicy(
+            QtWidgets.QFormLayout.RowWrapPolicy.DontWrapRows
+        )
+        form.setFieldGrowthPolicy(
+            QtWidgets.QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint
+        )
         form.setLabelAlignment(
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
         )
@@ -4545,12 +4660,85 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         self._bundled_socks_proxy_port.setRange(1, 65535)
         self._bundled_socks_proxy_port.setValue(int(settings.bundled_socks_proxy_port))
 
-        form.addRow("System SAM host", self._system_host)
-        form.addRow("System SAM port", self._system_port)
-        form.addRow("Bundled SAM port", self._bundled_sam_port)
-        form.addRow("Bundled HTTP proxy", self._bundled_http_proxy_port)
-        form.addRow("Bundled SOCKS proxy", self._bundled_socks_proxy_port)
-        v.addLayout(form)
+        self._system_host.setMinimumWidth(260)
+
+        form.addRow(_router_form_section_label("Built-in router (Bundled i2pd)"))
+        form.addRow("SAM port", _wrap_history_numeric_row(self._bundled_sam_port))
+        form.addRow("HTTP proxy", _wrap_history_numeric_row(self._bundled_http_proxy_port))
+        form.addRow("SOCKS proxy", _wrap_history_numeric_row(self._bundled_socks_proxy_port))
+        form.addRow(
+            _router_form_section_label(
+                "External router (System i2pd)", secondary=True
+            )
+        )
+        form.addRow("SAM host", self._system_host)
+        form.addRow("SAM port", _wrap_history_numeric_row(self._system_port))
+
+        form_wrap = QtWidgets.QWidget(self)
+        form_outer = QtWidgets.QVBoxLayout(form_wrap)
+        form_outer.setContentsMargins(0, 0, 0, 0)
+        form_outer.addLayout(form)
+
+        backend_panel = QtWidgets.QFrame(self)
+        backend_panel.setObjectName("RouterBackendPanel")
+        backend_panel.setFixedWidth(212)
+        bp_lay = QtWidgets.QVBoxLayout(backend_panel)
+        bp_lay.setContentsMargins(12, 12, 12, 12)
+        bp_lay.setSpacing(10)
+        pick_title = QtWidgets.QLabel("Router source", backend_panel)
+        pick_title.setObjectName("RouterBackendPickTitle")
+        pick_title.setWordWrap(True)
+        bp_lay.addWidget(pick_title)
+
+        self._opt_bundled = QtWidgets.QPushButton(
+            "Bundled i2pd\nIncluded with I2PChat", backend_panel
+        )
+        self._opt_bundled.setObjectName("RouterBackendOption")
+        self._opt_bundled.setCheckable(True)
+        self._opt_bundled.setAutoDefault(False)
+        self._opt_bundled.setDefault(False)
+        self._opt_bundled.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+
+        self._opt_system = QtWidgets.QPushButton(
+            "System i2pd\nExisting install", backend_panel
+        )
+        self._opt_system.setObjectName("RouterBackendOption")
+        self._opt_system.setCheckable(True)
+        self._opt_system.setAutoDefault(False)
+        self._opt_system.setDefault(False)
+        self._opt_system.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+
+        self._backend_group = QtWidgets.QButtonGroup(self)
+        self._backend_group.setExclusive(True)
+        self._backend_group.addButton(self._opt_bundled, 0)
+        self._backend_group.addButton(self._opt_system, 1)
+        if settings.backend == "bundled":
+            self._opt_bundled.setChecked(True)
+        else:
+            self._opt_system.setChecked(True)
+
+        bp_lay.addWidget(self._opt_bundled)
+        bp_lay.addWidget(self._opt_system)
+
+        # Right column: vertical slack split ~2:1 (top:bottom) so the panel sits slightly
+        # lower than pure center — matches optical weight of the form (labels + fields).
+        router_pick_column = QtWidgets.QWidget(self)
+        router_pick_lay = QtWidgets.QVBoxLayout(router_pick_column)
+        router_pick_lay.setContentsMargins(0, 0, 0, 0)
+        router_pick_lay.setSpacing(0)
+        router_pick_lay.addStretch(2)
+        router_pick_lay.addWidget(
+            backend_panel,
+            0,
+            QtCore.Qt.AlignmentFlag.AlignHCenter,
+        )
+        router_pick_lay.addStretch(1)
+
+        body_row = QtWidgets.QHBoxLayout()
+        body_row.setSpacing(18)
+        body_row.addWidget(form_wrap, 1)
+        body_row.addWidget(router_pick_column, 0)
+        v.addLayout(body_row)
 
         self._status_label = QtWidgets.QLabel(bundled_status, self)
         self._status_label.setWordWrap(True)
@@ -4560,8 +4748,11 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         actions_row = QtWidgets.QHBoxLayout()
         actions_row.setSpacing(8)
         self._btn_open_data_dir = QtWidgets.QPushButton("Open data dir", self)
+        self._btn_open_data_dir.setObjectName("SecondaryButton")
         self._btn_open_log = QtWidgets.QPushButton("Open log", self)
+        self._btn_open_log.setObjectName("SecondaryButton")
         self._btn_restart = QtWidgets.QPushButton("Restart bundled router", self)
+        self._btn_restart.setObjectName("SecondaryButton")
         actions_row.addWidget(self._btn_open_data_dir)
         actions_row.addWidget(self._btn_open_log)
         actions_row.addWidget(self._btn_restart)
@@ -4573,16 +4764,21 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
             | QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
         bb.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Save and apply")
+        bb.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setObjectName(
+            "PrimaryButton"
+        )
+        bb.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel).setObjectName(
+            "SecondaryButton"
+        )
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         _add_centered_dialog_buttons(v, bb)
 
-        self._rb_system.toggled.connect(self._sync_enabled)
-        self._rb_bundled.toggled.connect(self._sync_enabled)
+        self._backend_group.idClicked.connect(lambda _i: self._sync_enabled())
         self._sync_enabled()
 
     def _sync_enabled(self) -> None:
-        use_system = self._rb_system.isChecked()
+        use_system = self._opt_system.isChecked()
         self._system_host.setEnabled(use_system)
         self._system_port.setEnabled(use_system)
         self._bundled_sam_port.setEnabled(not use_system)
@@ -4591,7 +4787,7 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         self._btn_restart.setEnabled(not use_system)
 
     def settings(self) -> RouterSettings:
-        backend = "bundled" if self._rb_bundled.isChecked() else "system"
+        backend = "bundled" if self._opt_bundled.isChecked() else "system"
         return RouterSettings(
             backend=backend,
             system_sam_host=self._system_host.text().strip() or "127.0.0.1",
