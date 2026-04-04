@@ -2494,12 +2494,28 @@ class FlowLayout(QtWidgets.QLayout):
         return y + line_height - rect.y() + bottom
 
 
+def _center_qtextdocument_blocks(doc: QtGui.QTextDocument) -> None:
+    """Выравнивание по центру для многострочного служебного текста (system/info)."""
+    cursor = QtGui.QTextCursor(doc)
+    cursor.beginEditBlock()
+    block = doc.firstBlock()
+    while block.isValid():
+        cursor.setPosition(block.position())
+        fmt = QtGui.QTextBlockFormat(block.blockFormat())
+        fmt.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
+        cursor.setBlockFormat(fmt)
+        block = block.next()
+    cursor.endEditBlock()
+
+
 class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     """Делегат, рисующий сообщения в виде цветных «баблов»."""
 
     # Базовая 8‑px сетка: все отступы и скругления кратны 4/8.
     PADDING_X = 12
     PADDING_Y = 8
+    # Горизонтальные поля для system/info без бабла (почти на всю ширину списка).
+    SYSTEM_INLINE_MARGIN_X = 20
     # Вертикальный зазор между баблами (минимальный; визуальный воздух даёт padding внутри бабла)
     BUBBLE_SPACING_Y = 0
     # Внешний отступ закрашенного бабла от верха/низа ячейки (тонкий зазор между соседними баблами).
@@ -2597,6 +2613,87 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         """Ширина для QTextDocument в бабле — как text_area.width() в paint() после двойных отступов."""
         return float(max(10, bubble_width - 3 * self.PADDING_X))
 
+    def _paint_system_info(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionViewItem,
+        item: ChatItem,
+    ) -> None:
+        """Служебные строки без бабла: по центру, приглушённый курсив."""
+        base_font = painter.font()
+        text_color = self._c("system_text", "#5f6673")
+        sys_font = QtGui.QFont(base_font)
+        sys_font.setItalic(True)
+        sys_font.setPointSize(max(base_font.pointSize() - 1, 8))
+
+        rect = option.rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
+        mx = float(self.SYSTEM_INLINE_MARGIN_X)
+        omy = self.BUBBLE_OUTER_MARGIN_Y
+        py = self.PADDING_Y
+
+        metrics = QtGui.QFontMetrics(sys_font)
+        outer = QtCore.QRectF(
+            rect.left() + mx,
+            rect.top() + omy + py,
+            rect.width() - 2.0 * mx,
+            rect.height() - 2.0 * omy - 2.0 * py,
+        )
+
+        if item.timestamp:
+            ts_height = float(metrics.height())
+            gap = float(py) / 2.0
+            text_area = QtCore.QRectF(
+                outer.left(),
+                outer.top(),
+                outer.width(),
+                max(1.0, outer.height() - ts_height - gap),
+            )
+            ts_rect = QtCore.QRectF(
+                outer.left(),
+                outer.bottom() - ts_height,
+                outer.width(),
+                ts_height,
+            )
+        else:
+            text_area = outer
+            ts_rect = None
+
+        paths = emoji_paths_cached()
+        doc = make_message_qtextdocument(
+            item.text,
+            sys_font,
+            text_color,
+            float(text_area.width()),
+            paths,
+        )
+        _center_qtextdocument_blocks(doc)
+
+        painter.setPen(text_color)
+        painter.setFont(sys_font)
+        painter.save()
+        painter.translate(text_area.left(), text_area.top())
+        tw, th = int(text_area.width()), int(text_area.height())
+        painter.setClipRect(0, 0, tw, th)
+        doc.drawContents(painter, QtCore.QRectF(0, 0, tw, th))
+        painter.restore()
+
+        meta_text = _chat_item_delivery_meta_text(item)
+        if ts_rect is not None and meta_text:
+            ts_font = QtGui.QFont(sys_font)
+            ts_font.setPointSize(max(sys_font.pointSize() - 1, 6))
+            painter.setFont(ts_font)
+            ts_color = QtGui.QColor(text_color)
+            ts_color = ts_color.lighter(130)
+            painter.setPen(ts_color)
+            painter.drawText(
+                ts_rect.toRect(),
+                int(
+                    QtCore.Qt.AlignmentFlag.AlignHCenter
+                    | QtCore.Qt.AlignmentFlag.AlignVCenter
+                ),
+                meta_text,
+            )
+
     def paint(
         self,
         painter: QtGui.QPainter,
@@ -2616,6 +2713,11 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         if item.kind == "image_inline" and item.image_path:
             self._paint_image(painter, option, item)
+            painter.restore()
+            return
+
+        if item.kind in {"system", "info"}:
+            self._paint_system_info(painter, option, item)
             painter.restore()
             return
 
@@ -2650,9 +2752,6 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         elif item.kind == "peer":
             bg_color = self._c("peer_bg", "#7c3aed")
             text_color = self._c("peer_text", "#f8f8f2")
-        elif item.kind in {"system", "info"}:
-            bg_color = self._c("system_bg", "#282a36")
-            text_color = self._c("system_text", "#8be9fd")
         elif item.kind == "error" or item.kind == "disconnect":
             bg_color = self._c("error_bg", "#ff5555")
             text_color = self._c("error_text", "#f8f8f2")
@@ -3174,6 +3273,29 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 height = img_height + self.PADDING_Y * 2 + self.BUBBLE_SPACING_Y * 2
             else:
                 height = 60 + self.BUBBLE_SPACING_Y * 2
+            return QtCore.QSize(int(cell_width), int(height))
+
+        if item.kind in {"system", "info"}:
+            cell_width = option.rect.width() if option.rect.width() > 0 else 600
+            font = QtGui.QFont(option.font)
+            font.setItalic(True)
+            font.setPointSize(max(font.pointSize() - 1, 8))
+            inner_w = float(max(10, cell_width - 2 * self.SYSTEM_INLINE_MARGIN_X))
+            text = item.text or " "
+            paths = emoji_paths_cached()
+            dummy_color = QtGui.QColor("#000000")
+            doc = make_message_qtextdocument(text, font, dummy_color, inner_w, paths)
+            _center_qtextdocument_blocks(doc)
+            text_height = math.ceil(float(doc.size().height()))
+            height = (
+                int(text_height)
+                + self.PADDING_Y * 2
+                + 2 * self.BUBBLE_OUTER_MARGIN_Y
+                + self.BUBBLE_SPACING_Y * 2
+            )
+            if item.timestamp:
+                ts_m = QtGui.QFontMetrics(font)
+                height += ts_m.height() + int(self.PADDING_Y / 2)
             return QtCore.QSize(int(cell_width), int(height))
 
         cell_width = option.rect.width() if option.rect.width() > 0 else 600
