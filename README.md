@@ -230,8 +230,7 @@ Practical notes:
 
 <p align="center">
   <img src="screenshots/1.png" alt="I2PChat – main window" width="900" /><br>
-  <img src="screenshots/4.png" alt="I2PChat – chat and file transfer (sending)" width="900" /><br>
-  <img src="screenshots/7.png" alt="I2PChat – chat and image preview" width="900" />
+  <img src="screenshots/4.png" alt="I2PChat – chat and file transfer (sending)" width="900" />
 </p>
 
 The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.png`** (profile picker), **`5.png`** (emoji picker), **`6.png`** (BlindBox diagnostics), **`8.png`** (I2P router dialog), and **`9.png`** (Blind Box setup examples — `install.sh` / **Copy curl** for a custom replica) are documented inline in [**MANUAL_EN.md**](docs/MANUAL_EN.md) / [**MANUAL_RU.md**](docs/MANUAL_RU.md).
