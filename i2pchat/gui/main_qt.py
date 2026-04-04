@@ -109,6 +109,7 @@ from i2pchat.gui.rounded_qtooltip import (
     apply_tooltip_handling,
     hide_rounded_tooltip,
     install_tooltip_event_filter,
+    install_tooltip_wakeup_delay_style,
     show_rounded_tooltip_at,
 )
 from i2pchat.gui.popup_geometry import (
@@ -5190,6 +5191,12 @@ def _tooltip_with_portable_shortcut(base: str, portable_sequence: str) -> str:
     return f"{base}\n\nShortcut: {native}"
 
 
+def _set_tooltip_if_changed(widget: QtWidgets.QWidget, text: str) -> None:
+    """Не вызывать setToolTip с тем же текстом: Qt сбрасывает задержку первого показа (SH_ToolTip_WakeUpDelay)."""
+    if widget.toolTip() != text:
+        widget.setToolTip(text)
+
+
 def _privacy_mode_shortcut_portable() -> str:
     """macOS: ⌘H занято системой (Hide); используем физический Control+H → в QKeySequence это Meta+H."""
     return "Meta+H" if sys.platform == "darwin" else "Ctrl+H"
@@ -6722,10 +6729,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             tooltip_lines.append(
                 "TOFU pin: present" if info.pinned else "TOFU pin: not stored"
             )
-        self.peer_lock_label.setToolTip(
+        _set_tooltip_if_changed(
+            self.peer_lock_label,
             _tooltip_with_portable_shortcut(
                 "\n".join(tooltip_lines), _LOCK_TO_PEER_SHORTCUT_PORTABLE
-            )
+            ),
         )
 
     def _peer_target_available(self) -> bool:
@@ -6741,7 +6749,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         can_connect = (
             (not connected) and (not busy) and has_target and network_ready
         )
-        self.connect_button.setEnabled(can_connect)
+        if self.connect_button.isEnabled() != can_connect:
+            self.connect_button.setEnabled(can_connect)
         if connected:
             c_tip = "Already connected — use Disconnect to end the session."
         elif busy:
@@ -6765,20 +6774,23 @@ class ChatWindow(QtWidgets.QMainWindow):
             else:
                 c_tip = ""
         connect_base = c_tip or "Establish a live secure connection to the peer."
-        self.connect_button.setToolTip(
-            _tooltip_with_portable_shortcut(connect_base, _CONNECT_SHORTCUT_PORTABLE)
+        _set_tooltip_if_changed(
+            self.connect_button,
+            _tooltip_with_portable_shortcut(connect_base, _CONNECT_SHORTCUT_PORTABLE),
         )
         can_disconnect = connected
-        self.disconnect_button.setEnabled(can_disconnect)
+        if self.disconnect_button.isEnabled() != can_disconnect:
+            self.disconnect_button.setEnabled(can_disconnect)
         disconnect_base = (
             "End the current live session."
             if can_disconnect
             else "No active connection."
         )
-        self.disconnect_button.setToolTip(
+        _set_tooltip_if_changed(
+            self.disconnect_button,
             _tooltip_with_portable_shortcut(
                 disconnect_base, _DISCONNECT_SHORTCUT_PORTABLE
-            )
+            ),
         )
         self._refresh_send_controls()
 
@@ -6790,9 +6802,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.send_button.setText("Send\noffline")
         else:
             self.send_button.setText("Send")
-        self.send_button.setToolTip(route_tip)
-        self.input_edit.setToolTip(
-            "Current mode: " + short_route + ". " + route_tip
+        _set_tooltip_if_changed(self.send_button, route_tip)
+        _set_tooltip_if_changed(
+            self.input_edit,
+            "Current mode: " + short_route + ". " + route_tip,
         )
 
     def _append_item(self, item: ChatItem) -> None:
@@ -8266,11 +8279,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         else:
             self.theme_switch_button.setIcon(QtGui.QIcon())
             self.theme_switch_button.setText("◐")
-        self.theme_switch_button.setToolTip(
+        _set_tooltip_if_changed(
+            self.theme_switch_button,
             _tooltip_with_portable_shortcut(
                 f"Theme: {_cur_lbl}. Click for: {_next_lbl}",
                 "Ctrl+T",
-            )
+            ),
         )
 
     def _on_system_color_scheme_changed(self, *_args: object) -> None:
@@ -8531,7 +8545,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             available,
         )
         self.status_label.setText(elided)
-        self.status_label.setToolTip("")
+        _set_tooltip_if_changed(self.status_label, "")
 
     def refresh_status_label(self) -> None:
         """Обновить строку статуса с учётом профиля и persist-режима."""
@@ -10305,6 +10319,7 @@ def main() -> None:
 
     # Единый стиль и шрифт для всех платформ (более предсказуемый рендеринг)
     app.setStyle("Fusion")
+    install_tooltip_wakeup_delay_style(app)
     # На Windows шрифты по умолчанию выглядят крупнее — задаём меньший размер
     font_pt = 10 if sys.platform == "win32" else 13
     if sys.platform == "darwin":
@@ -10377,7 +10392,7 @@ def main() -> None:
         logger.warning("GUI event loop interrupted during shutdown", exc_info=True)
     finally:
         try:
-            hide_rounded_tooltip()
+            hide_rounded_tooltip(immediate=True)
         except Exception:
             logger.debug("failed to hide rounded tooltip during shutdown", exc_info=True)
         try:

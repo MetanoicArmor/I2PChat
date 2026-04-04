@@ -56,6 +56,64 @@ def _clamp_global_top_left(top_left: QtCore.QPoint, w: int, h: int) -> QtCore.QP
     )
 
 
+# Совпадает с дефолтом qFadeEffect при time < 0 (qtbase qeffects.cpp).
+_FALLBACK_TOOLTIP_FADE_MS = 150
+# Как QTipLabel::hideTip() — короткая задержка перед скрытием (qtbase qtooltip.cpp).
+_TOOLTIP_DISMISS_DEBOUNCE_MS = 300
+# Добавляется к SH_ToolTip_WakeUpDelay стиля (задержка до первого QEvent.ToolTip).
+_TOOLTIP_WAKEUP_EXTRA_MS = 500
+# Только macOS: там задержка и fade подсказок часто ощущаются короче, чем в меню Fusion.
+_TOOLTIP_WAKEUP_EXTRA_DARWIN_MS = 350
+
+
+def _cursor_over_owner_or_tip(owner: Optional[QtWidgets.QWidget]) -> bool:
+    """True, если курсор над якорным виджетом (или его потомком) либо над окном подсказки."""
+    wu = QtWidgets.QApplication.widgetAt(QtGui.QCursor.pos())
+    if wu is None:
+        return False
+    panel = _panel_alive()
+    if panel is not None and (wu is panel or panel.isAncestorOf(wu)):
+        return True
+    if owner is not None and (wu is owner or owner.isAncestorOf(wu)):
+        return True
+    return False
+
+
+def _tooltip_fade_delays_ms(widget: QtWidgets.QWidget) -> tuple[int, int]:
+    """Длительности fade in/out как у QTipLabel при включённом Qt::UI_FadeTooltip.
+
+    В ряде сборок PyQt6 для Qt6 в enum нет SH_ToolTip_FadeInDelay / SH_ToolTip_FadeOutDelay;
+    при их наличии читаем через styleHint; иначе — _FALLBACK_TOOLTIP_FADE_MS.
+
+    На macOS UI_FadeTooltip часто выключен — без локального fade окно подсказки «вспыхивает»
+    с полной непрозрачностью; для darwin даём мягкий fade (как qFadeEffect), на других ОС не трогаем.
+    """
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return 0, 0
+    if not app.isEffectEnabled(QtCore.Qt.UIEffect.UI_FadeTooltip):
+        if sys.platform == "darwin":
+            return _FALLBACK_TOOLTIP_FADE_MS, _FALLBACK_TOOLTIP_FADE_MS
+        return 0, 0
+    opt = QtWidgets.QStyleOption()
+    opt.initFrom(widget)
+    style = app.style()
+    h_enum = QtWidgets.QStyle.StyleHint
+    fade_in = _FALLBACK_TOOLTIP_FADE_MS
+    fade_out = _FALLBACK_TOOLTIP_FADE_MS
+    hi = getattr(h_enum, "SH_ToolTip_FadeInDelay", None)
+    ho = getattr(h_enum, "SH_ToolTip_FadeOutDelay", None)
+    if hi is not None:
+        v = style.styleHint(hi, opt, widget)
+        if v > 0:
+            fade_in = int(v)
+    if ho is not None:
+        v = style.styleHint(ho, opt, widget)
+        if v > 0:
+            fade_out = int(v)
+    return max(0, fade_in), max(0, fade_out)
+
+
 def _tooltip_window_flags() -> QtCore.Qt.WindowType:
     flags = (
         QtCore.Qt.WindowType.ToolTip
@@ -91,7 +149,82 @@ class RoundedTooltipWindow(QtWidgets.QWidget):
         lay.addWidget(self._label)
         self._hide_timer = QtCore.QTimer(self)
         self._hide_timer.setSingleShot(True)
-        self._hide_timer.timeout.connect(self.hide)
+        self._hide_timer.timeout.connect(self._on_autohide_timer)
+        linear = QtCore.QEasingCurve(QtCore.QEasingCurve.Type.Linear)
+        self._fade_in = QtCore.QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade_in.setEasingCurve(linear)
+        self._fade_out = QtCore.QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade_out.setEasingCurve(linear)
+        self._dismiss_debounce = QtCore.QTimer(self)
+        self._dismiss_debounce.setSingleShot(True)
+        self._dismiss_debounce.timeout.connect(self._start_fade_out)
+
+    def _cancel_dismiss_debounce(self) -> None:
+        self._dismiss_debounce.stop()
+
+    def _schedule_dismiss_debounced(self) -> None:
+        if self._dismiss_debounce.isActive():
+            return
+        self._dismiss_debounce.start(_TOOLTIP_DISMISS_DEBOUNCE_MS)
+
+    def _stop_opacity_animations(self) -> None:
+        self._fade_in.stop()
+        self._fade_out.stop()
+        try:
+            self._fade_out.finished.disconnect(self._after_fade_out_hide)
+        except TypeError:
+            pass
+
+    def _on_autohide_timer(self) -> None:
+        self._start_fade_out()
+
+    def _after_fade_out_hide(self) -> None:
+        global _current_owner
+        try:
+            self._fade_out.finished.disconnect(self._after_fade_out_hide)
+        except TypeError:
+            pass
+        if self.isVisible():
+            QtWidgets.QWidget.hide(self)
+        self.setWindowOpacity(1.0)
+        _current_owner = None
+
+    def _force_hide_immediate(self) -> None:
+        global _current_owner
+        self._cancel_dismiss_debounce()
+        self._hide_timer.stop()
+        self._stop_opacity_animations()
+        self.setWindowOpacity(1.0)
+        if self.isVisible():
+            QtWidgets.QWidget.hide(self)
+        _current_owner = None
+
+    def _start_fade_out(self) -> None:
+        self._cancel_dismiss_debounce()
+        self._hide_timer.stop()
+        if not self.isVisible():
+            self.setWindowOpacity(1.0)
+            return
+        if self._fade_out.state() == QtCore.QAbstractAnimation.State.Running:
+            return
+        _, fade_out_ms = _tooltip_fade_delays_ms(self)
+        self._fade_in.stop()
+        if fade_out_ms <= 0:
+            self._force_hide_immediate()
+            return
+        cur = float(self.windowOpacity())
+        if cur <= 0.01:
+            self._force_hide_immediate()
+            return
+        try:
+            self._fade_out.finished.disconnect(self._after_fade_out_hide)
+        except TypeError:
+            pass
+        self._fade_out.finished.connect(self._after_fade_out_hide)
+        self._fade_out.setDuration(int(fade_out_ms))
+        self._fade_out.setStartValue(cur)
+        self._fade_out.setEndValue(0.0)
+        self._fade_out.start()
 
     def _update_mask(self) -> None:
         if sys.platform.startswith("win"):
@@ -161,14 +294,27 @@ class RoundedTooltipWindow(QtWidgets.QWidget):
         )
         global _current_owner
         _current_owner = owner
+        self._stop_opacity_animations()
+        self.setWindowOpacity(1.0)
+        fade_in_ms, _ = _tooltip_fade_delays_ms(self)
         self._label.setText(text)
         self.adjustSize()
         w, h = self.width(), self.height()
         pos = _clamp_global_top_left(global_top_left, w, h)
         self.move(pos)
         self._update_mask()
+        if fade_in_ms > 0:
+            self.setWindowOpacity(0.0)
+        else:
+            self.setWindowOpacity(1.0)
         self.show()
         self.raise_()
+        if fade_in_ms > 0:
+            self._fade_in.setDuration(int(fade_in_ms))
+            self._fade_in.setStartValue(0.0)
+            self._fade_in.setEndValue(1.0)
+            self._fade_in.start()
+        self._cancel_dismiss_debounce()
         self._hide_timer.stop()
         # Qt hides msec=-1 tips on mouse move; we approximate with a long timeout.
         hide_ms = msec if msec > 0 else 30000
@@ -196,13 +342,16 @@ def show_rounded_tooltip_at(
     _ensure_panel().present(global_pos, text.strip(), msec, owner=owner)
 
 
-def hide_rounded_tooltip() -> None:
-    global _panel, _current_owner
+def hide_rounded_tooltip(*, immediate: bool = False) -> None:
+    global _current_owner
     _current_owner = None
     panel = _panel_alive()
-    if panel is not None:
-        panel._hide_timer.stop()
-        panel.hide()
+    if panel is None:
+        return
+    if immediate:
+        panel._force_hide_immediate()
+    else:
+        panel._start_fade_out()
 
 
 def _fallback_show_text(
@@ -250,6 +399,55 @@ _HIDE_ON_EVENTS = frozenset((
 ))
 
 
+def _handle_tooltip_dismiss_events(receiver: QtCore.QObject, event: QtCore.QEvent) -> None:
+    """Скрытие скруглённой подсказки по событиям приложения (как QTipLabel, без hide на каждый MouseMove)."""
+    panel = _panel_alive()
+    if panel is None or not panel.isVisible():
+        return
+    et = event.type()
+    if et not in _HIDE_ON_EVENTS:
+        return
+    owner = _current_owner
+
+    if et in (
+        QtCore.QEvent.Type.MouseButtonPress,
+        QtCore.QEvent.Type.Wheel,
+        QtCore.QEvent.Type.KeyPress,
+        QtCore.QEvent.Type.FocusOut,
+        QtCore.QEvent.Type.WindowDeactivate,
+    ):
+        panel._cancel_dismiss_debounce()
+        hide_rounded_tooltip()
+        return
+
+    if et == QtCore.QEvent.Type.MouseMove:
+        if _cursor_over_owner_or_tip(owner):
+            panel._cancel_dismiss_debounce()
+        else:
+            panel._schedule_dismiss_debounced()
+        return
+
+    if et == QtCore.QEvent.Type.Leave:
+        if _cursor_over_owner_or_tip(owner):
+            panel._cancel_dismiss_debounce()
+        else:
+            panel._schedule_dismiss_debounced()
+        return
+
+    if et in (QtCore.QEvent.Type.Hide, QtCore.QEvent.Type.Close):
+        if isinstance(receiver, QtWidgets.QWidget) and owner is not None:
+            if (
+                receiver is owner
+                or owner.isAncestorOf(receiver)
+                or receiver.isAncestorOf(owner)
+            ):
+                panel._cancel_dismiss_debounce()
+                hide_rounded_tooltip()
+        elif owner is None:
+            panel._cancel_dismiss_debounce()
+            hide_rounded_tooltip()
+
+
 class I2PChatQApplication(QtWidgets.QApplication):
     """Intercept standard QWidget tooltips before Qt opens native QTipLabel."""
 
@@ -271,9 +469,7 @@ class I2PChatQApplication(QtWidgets.QApplication):
             hide_rounded_tooltip()
             return True
 
-        panel = _panel_alive()
-        if panel is not None and panel.isVisible() and et in _HIDE_ON_EVENTS:
-            hide_rounded_tooltip()
+        _handle_tooltip_dismiss_events(receiver, event)
 
         return super().notify(receiver, event)
 
@@ -296,13 +492,10 @@ class _TooltipInterceptFilter(QtCore.QObject):
             hide_rounded_tooltip()
             return True
 
-        panel = _panel_alive()
-        if panel is not None and et in _HIDE_ON_EVENTS:
-            try:
-                if panel.isVisible():
-                    hide_rounded_tooltip()
-            except RuntimeError:
-                pass
+        try:
+            _handle_tooltip_dismiss_events(obj, event)
+        except RuntimeError:
+            pass
 
         return False
 
@@ -333,3 +526,40 @@ def apply_tooltip_handling(app: Optional[QtWidgets.QApplication] = None) -> None
         return
     if not isinstance(a, I2PChatQApplication):
         _install_monkey_patch_if_needed()
+
+
+class _TooltipWakeUpProxyStyle(QtWidgets.QProxyStyle):
+    """Удлиняет только SH_ToolTip_WakeUpDelay (первый показ подсказки после наведения)."""
+
+    def __init__(self, base_style: QtWidgets.QStyle, extra_wakeup_ms: int) -> None:
+        super().__init__(base_style)
+        self._extra_wakeup_ms = max(0, int(extra_wakeup_ms))
+
+    def styleHint(
+        self,
+        hint: QtWidgets.QStyle.StyleHint,
+        option: Optional[QtWidgets.QStyleOption] = None,
+        widget: Optional[QtWidgets.QWidget] = None,
+        returnData: Optional[QtWidgets.QStyleHintReturn] = None,
+    ) -> int:
+        v = super().styleHint(hint, option, widget, returnData)
+        if hint == QtWidgets.QStyle.StyleHint.SH_ToolTip_WakeUpDelay:
+            return int(v) + self._extra_wakeup_ms
+        return int(v)
+
+
+def install_tooltip_wakeup_delay_style(app: Optional[QtWidgets.QApplication] = None) -> None:
+    """Увеличить задержку до первого показа встроенных подсказок (QHelpEvent ToolTip).
+
+    Нужно вызывать после app.setStyle(...), иначе выбранный стиль перезапишет прокси.
+    """
+    a = app or QtWidgets.QApplication.instance()
+    if a is None:
+        return
+    cur = a.style()
+    if isinstance(cur, _TooltipWakeUpProxyStyle):
+        return
+    extra = _TOOLTIP_WAKEUP_EXTRA_MS
+    if sys.platform == "darwin":
+        extra += _TOOLTIP_WAKEUP_EXTRA_DARWIN_MS
+    a.setStyle(_TooltipWakeUpProxyStyle(cur, extra))
