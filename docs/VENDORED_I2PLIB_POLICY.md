@@ -9,15 +9,15 @@ moves patch responsibility to this repository.
 ## Required Maintenance Workflow
 
 1. Review upstream `i2plib` releases and security advisories at least monthly.
-2. Compare local `i2plib/` against upstream baseline and document notable diffs.
+2. Compare local `vendor/i2plib/` against upstream baseline and document notable diffs.
 3. Re-validate local asyncio compatibility changes after each upstream review.
-4. Update `i2plib/VENDORED_UPSTREAM.json` with the latest review date.
+4. Update `vendor/i2plib/VENDORED_UPSTREAM.json` with the latest review date.
 
 ## Provenance Record
 
 The machine-readable provenance file is:
 
-- `i2plib/VENDORED_UPSTREAM.json`
+- `vendor/i2plib/VENDORED_UPSTREAM.json`
 
 It must include:
 

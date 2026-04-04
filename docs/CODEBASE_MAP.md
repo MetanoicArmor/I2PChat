@@ -1,8 +1,9 @@
 # I2PChat codebase map
 
 This document is a low-risk navigation guide for the current repository layout.
-All application code lives under `i2pchat/`; the repo root keeps only tooling,
-docs, and `i2plib/`.
+All application code lives under `i2pchat/`; the repo root keeps tooling and
+docs; vendored third-party code lives under `vendor/` (including `vendor/i2plib`
+and `vendor/i2pd`).
 
 ## Canonical source tree
 

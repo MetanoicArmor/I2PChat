@@ -86,9 +86,9 @@ jobs:
           import json
           from pathlib import Path
 
-          provenance_path = Path("i2plib/VENDORED_UPSTREAM.json")
+          provenance_path = Path("vendor/i2plib/VENDORED_UPSTREAM.json")
           if not provenance_path.exists():
-              raise SystemExit("Missing vendored provenance file: i2plib/VENDORED_UPSTREAM.json")
+              raise SystemExit("Missing vendored provenance file: vendor/i2plib/VENDORED_UPSTREAM.json")
 
           data = json.loads(provenance_path.read_text(encoding="utf-8"))
           required_top = ("component", "strategy", "upstream", "review_policy", "last_reviewed_utc")

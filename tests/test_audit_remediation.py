@@ -41,7 +41,7 @@ class AuditRemediationPolicyTests(unittest.TestCase):
         self.assertIn("I2PCHAT_PADDING_PROFILE=off", en_manual)
 
     def test_vendored_i2plib_provenance_policy_files_exist(self) -> None:
-        provenance = _read("i2plib/VENDORED_UPSTREAM.json")
+        provenance = _read("vendor/i2plib/VENDORED_UPSTREAM.json")
         policy_doc = _read("docs/VENDORED_I2PLIB_POLICY.md")
         data = json.loads(provenance)
         self.assertEqual(data.get("strategy"), "vendored")

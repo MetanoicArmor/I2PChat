@@ -1,13 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 import glob, os, sys
 
+_SPECDIR = os.path.dirname(os.path.abspath(SPEC))
+
 _local_modules = [
     os.path.splitext(os.path.relpath(f, '.'))[0].replace(os.sep, '.')
     for f in glob.glob('i2pchat/**/*.py', recursive=True)
     if not f.endswith('__init__.py')
 ] + [
-    os.path.splitext(os.path.relpath(f, '.'))[0].replace(os.sep, '.')
-    for f in glob.glob('i2plib/**/*.py', recursive=True)
+    os.path.splitext(os.path.relpath(f, 'vendor'))[0].replace(os.sep, '.')
+    for f in glob.glob('vendor/i2plib/**/*.py', recursive=True)
     if not f.endswith('__init__.py')
 ]
 
@@ -33,7 +35,7 @@ else:
 
 a = Analysis(
     ['i2pchat/run_gui.py'],
-    pathex=[],
+    pathex=[os.path.join(_SPECDIR, 'vendor')],
     binaries=_i2pd_binaries,
     datas=[
         ('VERSION', '.'),
