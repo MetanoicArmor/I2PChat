@@ -8,7 +8,8 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
-from typing import Optional
+import time
+from typing import Iterable, Optional
 
 from .runtime import is_tcp_open, pick_free_tcp_port, wait_for_sam_ready
 from .settings import RouterSettings, router_runtime_dir
@@ -97,6 +98,7 @@ class BundledI2pdManager:
         self._runtime: BundledI2pdRuntime | None = None
         self._log_handle = None
         self._managed_pid: int | None = None
+        self._launch_pid: int | None = None
 
     def sam_address(self) -> tuple[str, int]:
         if self._runtime is None:
@@ -167,13 +169,13 @@ class BundledI2pdManager:
 
     def _read_state(
         self, root: str
-    ) -> tuple[Optional[BundledI2pdRuntime], Optional[int], Optional[int]]:
+    ) -> tuple[Optional[BundledI2pdRuntime], Optional[int], Optional[int], Optional[int]]:
         path = self._state_path(root)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 raw = json.load(f)
             if not isinstance(raw, dict):
-                return None, None, None
+                return None, None, None, None
             rt_raw = raw.get("runtime")
             runtime = (
                 self._runtime_from_dict(rt_raw)
@@ -184,12 +186,18 @@ class BundledI2pdManager:
             pid = int(pid_raw) if pid_raw is not None else None
             owner_raw = raw.get("owner_pid")
             owner_pid = int(owner_raw) if owner_raw is not None else None
-            return runtime, pid, owner_pid
+            launch_raw = raw.get("launch_pid")
+            launch_pid = int(launch_raw) if launch_raw is not None else None
+            return runtime, pid, owner_pid, launch_pid
         except Exception:
-            return None, None, None
+            return None, None, None, None
 
     def _write_state(
-        self, rt: BundledI2pdRuntime, pid: Optional[int], owner_pid: Optional[int] = None
+        self,
+        rt: BundledI2pdRuntime,
+        pid: Optional[int],
+        owner_pid: Optional[int] = None,
+        launch_pid: Optional[int] = None,
     ) -> None:
         root = self._runtime_root(rt)
         os.makedirs(root, exist_ok=True)
@@ -197,6 +205,7 @@ class BundledI2pdManager:
             "runtime": self._runtime_to_dict(rt),
             "pid": pid,
             "owner_pid": owner_pid,
+            "launch_pid": launch_pid,
         }
         with open(self._state_path(root), "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=True, indent=2, sort_keys=True)
@@ -241,6 +250,159 @@ class BundledI2pdManager:
         except OSError:
             return
 
+    @staticmethod
+    def _unique_pids(pids: Iterable[int | None]) -> list[int]:
+        seen: set[int] = set()
+        unique: list[int] = []
+        for pid in pids:
+            if pid is None or pid <= 0 or pid in seen:
+                continue
+            seen.add(pid)
+            unique.append(pid)
+        return unique
+
+    @classmethod
+    def _windows_pid_array_literal(cls, pids: Iterable[int | None]) -> str:
+        unique = cls._unique_pids(pids)
+        if not unique:
+            return "@()"
+        return "@(" + ", ".join(str(pid) for pid in unique) + ")"
+
+    @staticmethod
+    def _candidate_bundled_i2pd_binaries() -> list[str]:
+        candidate = resolve_bundled_i2pd_binary()
+        return [candidate] if candidate else []
+
+    @staticmethod
+    def _windows_string_array_literal(values: Iterable[str]) -> str:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            unique.append(value)
+        if not unique:
+            return "@()"
+        return "@(" + ", ".join(_ps_single_quoted(value) for value in unique) + ")"
+
+    @staticmethod
+    def _snapshot_windows_i2pd_processes() -> list[dict[str, object]]:
+        if sys.platform != "win32":
+            return []
+        script = (
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { $_.Name -eq 'i2pd.exe' } | "
+            "Select-Object ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine | "
+            "ConvertTo-Json -Compress"
+        )
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", script],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                creationflags=creationflags,
+            ).strip()
+            if not out:
+                return []
+            raw = json.loads(out)
+            rows = raw if isinstance(raw, list) else [raw]
+            snapshot: list[dict[str, object]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    snapshot.append(
+                        {
+                            "pid": int(row.get("ProcessId")),
+                            "parent_pid": int(row.get("ParentProcessId")),
+                            "name": str(row.get("Name") or ""),
+                            "exe": str(row.get("ExecutablePath") or ""),
+                            "cmd": str(row.get("CommandLine") or ""),
+                        }
+                    )
+                except Exception:
+                    continue
+            snapshot.sort(key=lambda item: int(item.get("pid", 0)), reverse=True)
+            return snapshot
+        except Exception:
+            return []
+
+    @classmethod
+    def _build_windows_owned_i2pd_query_script(
+        cls, rt: BundledI2pdRuntime, *, extra_pids: Iterable[int | None] = ()
+    ) -> str:
+        conf = _ps_single_quoted(rt.conf_path)
+        data = _ps_single_quoted(rt.data_dir)
+        extra = cls._windows_pid_array_literal(extra_pids)
+        binaries = cls._windows_string_array_literal(cls._candidate_bundled_i2pd_binaries())
+        return (
+            f"$conf={conf}; "
+            f"$data={data}; "
+            f"$extra={extra}; "
+            f"$binaries={binaries}; "
+            "$procs = @(Get-CimInstance Win32_Process); "
+            "$owned = New-Object 'System.Collections.Generic.HashSet[int]'; "
+            "foreach ($pid in $extra) { "
+            "if ([int]$pid -gt 0) { [void]$owned.Add([int]$pid) } "
+            "} "
+            "foreach ($proc in $procs) { "
+            "$matchesRuntime = $proc.CommandLine -and "
+            "(($proc.CommandLine -like ('*' + $conf + '*')) -or ($proc.CommandLine -like ('*' + $data + '*'))); "
+            "$matchesBinary = $proc.ExecutablePath -and ($binaries -contains $proc.ExecutablePath); "
+            "if ($proc.Name -eq 'i2pd.exe' -and ($matchesRuntime -or $matchesBinary)) { "
+            "[void]$owned.Add([int]$proc.ProcessId) "
+            "} "
+            "} "
+            "$added = $true; "
+            "while ($added) { "
+            "$added = $false; "
+            "foreach ($proc in $procs) { "
+            "$procPid = [int]$proc.ProcessId; "
+            "$parentPid = [int]$proc.ParentProcessId; "
+            "if ($owned.Contains($parentPid) -and -not $owned.Contains($procPid)) { "
+            "[void]$owned.Add($procPid); "
+            "$added = $true "
+            "} "
+            "} "
+            "} "
+            "$procs | "
+            "Where-Object { $_.Name -eq 'i2pd.exe' -and $owned.Contains([int]$_.ProcessId) } | "
+            "Sort-Object ProcessId -Descending | "
+            "Select-Object -ExpandProperty ProcessId"
+        )
+
+    @classmethod
+    def _build_windows_owned_i2pd_kill_script(
+        cls,
+        rt: BundledI2pdRuntime,
+        *,
+        extra_pids: Iterable[int | None] = (),
+        max_wait_ms: int = 20000,
+        quiet_window_ms: int = 4000,
+        sleep_ms: int = 500,
+    ) -> str:
+        query = cls._build_windows_owned_i2pd_query_script(rt, extra_pids=extra_pids)
+        return (
+            f"$deadline = [DateTime]::UtcNow.AddMilliseconds({max(max_wait_ms, 1000)}); "
+            f"$quietUntil = [DateTime]::UtcNow.AddMilliseconds({max(quiet_window_ms, 0)}); "
+            f"$sleepMs={max(sleep_ms, 0)}; "
+            "while ([DateTime]::UtcNow -lt $deadline) { "
+            f"$targets = @({query}); "
+            "if ($targets -and $targets.Count -gt 0) { "
+            "$quietUntil = [DateTime]::UtcNow.AddMilliseconds(" + str(max(quiet_window_ms, 0)) + "); "
+            "foreach ($pid in $targets) { "
+            "try { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } catch {} "
+            "try { taskkill /PID $pid /T /F | Out-Null } catch {} "
+            "} "
+            "} elseif ([DateTime]::UtcNow -ge $quietUntil) { "
+            "break "
+            "} "
+            "if ($sleepMs -gt 0) { Start-Sleep -Milliseconds $sleepMs } "
+            "} "
+        )
+
     async def _terminate_pid(self, pid: int, *, timeout: float = 10.0) -> None:
         if not self._pid_alive(pid):
             return
@@ -283,23 +445,13 @@ class BundledI2pdManager:
         except Exception:
             return None
 
-    @staticmethod
-    def _discover_windows_runtime_pid(rt: BundledI2pdRuntime) -> Optional[int]:
+    @classmethod
+    def _discover_windows_runtime_pids(
+        cls, rt: BundledI2pdRuntime, *, extra_pids: Iterable[int | None] = ()
+    ) -> list[int]:
         if sys.platform != "win32":
-            return None
-        conf = _ps_single_quoted(rt.conf_path)
-        data = _ps_single_quoted(rt.data_dir)
-        script = (
-            f"$conf={conf}; "
-            f"$data={data}; "
-            "Get-CimInstance Win32_Process | "
-            "Where-Object { "
-            "$_.Name -eq 'i2pd.exe' -and $_.CommandLine -and "
-            "(($_.CommandLine -like ('*' + $conf + '*')) -or ($_.CommandLine -like ('*' + $data + '*'))) "
-            "} | "
-            "Sort-Object ProcessId -Descending | "
-            "Select-Object -First 1 -ExpandProperty ProcessId"
-        )
+            return []
+        script = cls._build_windows_owned_i2pd_query_script(rt, extra_pids=extra_pids)
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             out = subprocess.check_output(
@@ -307,31 +459,100 @@ class BundledI2pdManager:
                 stderr=subprocess.DEVNULL,
                 text=True,
                 creationflags=creationflags,
-            ).strip()
-            pid = int(out) if out else None
-            return pid if pid and pid > 0 else None
+            )
+            return cls._unique_pids(
+                int(line.strip())
+                for line in out.splitlines()
+                if line.strip()
+            )
         except Exception:
-            return None
+            return []
+
+    @classmethod
+    def _discover_windows_runtime_pid(cls, rt: BundledI2pdRuntime) -> Optional[int]:
+        pids = cls._discover_windows_runtime_pids(rt)
+        return pids[0] if pids else None
+
+    @classmethod
+    def _terminate_windows_runtime_processes_sync(
+        cls,
+        rt: BundledI2pdRuntime,
+        *,
+        extra_pids: Iterable[int | None] = (),
+        timeout: float = 20.0,
+        quiet_window: float = 4.0,
+        delay: float = 0.5,
+    ) -> list[int]:
+        remaining = cls._unique_pids(extra_pids)
+        deadline = time.monotonic() + max(timeout, delay, 0.5)
+        quiet_until = time.monotonic() + max(quiet_window, 0.0)
+        while True:
+            targets = cls._discover_windows_runtime_pids(rt, extra_pids=remaining)
+            now = time.monotonic()
+            if targets:
+                quiet_until = now + max(quiet_window, 0.0)
+                for pid in targets:
+                    cls._terminate_pid_sync(pid)
+            else:
+                if now >= quiet_until or now >= deadline:
+                    return []
+            remaining = cls._discover_windows_runtime_pids(rt, extra_pids=remaining)
+            if remaining:
+                quiet_until = time.monotonic() + max(quiet_window, 0.0)
+            elif time.monotonic() >= quiet_until or time.monotonic() >= deadline:
+                return []
+            if time.monotonic() >= deadline:
+                return remaining
+            time.sleep(delay)
+
+    async def _terminate_windows_runtime_processes(
+        self,
+        rt: BundledI2pdRuntime,
+        *,
+        extra_pids: Iterable[int | None] = (),
+        timeout: float = 20.0,
+        quiet_window: float = 4.0,
+        interval: float = 0.5,
+    ) -> list[int]:
+        remaining = self._unique_pids(extra_pids)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(timeout, interval, 0.5)
+        quiet_until = loop.time() + max(quiet_window, 0.0)
+        while True:
+            targets = self._discover_windows_runtime_pids(rt, extra_pids=remaining)
+            now = loop.time()
+            if targets:
+                quiet_until = now + max(quiet_window, 0.0)
+                for pid in targets:
+                    self._terminate_pid_sync(pid)
+            else:
+                if now >= quiet_until or now >= deadline:
+                    return []
+            remaining = self._discover_windows_runtime_pids(rt, extra_pids=remaining)
+            now = loop.time()
+            if remaining:
+                quiet_until = now + max(quiet_window, 0.0)
+            elif now >= quiet_until or now >= deadline:
+                return []
+            if now >= deadline:
+                return remaining
+            await asyncio.sleep(interval)
 
     @staticmethod
-    def _spawn_windows_delayed_cleanup(rt: BundledI2pdRuntime) -> None:
+    def _spawn_windows_delayed_cleanup(
+        rt: BundledI2pdRuntime, *, extra_pids: Iterable[int | None] = ()
+    ) -> None:
         if sys.platform != "win32":
             return
-        conf = _ps_single_quoted(rt.conf_path)
-        data = _ps_single_quoted(rt.data_dir)
         script = (
-            f"$conf={conf}; "
-            f"$data={data}; "
             "Start-Sleep -Milliseconds 1500; "
-            "Get-CimInstance Win32_Process | "
-            "Where-Object { "
-            "$_.Name -eq 'i2pd.exe' -and $_.CommandLine -and "
-            "(($_.CommandLine -like ('*' + $conf + '*')) -or ($_.CommandLine -like ('*' + $data + '*'))) "
-            "} | "
-            "ForEach-Object { "
-            "try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} ; "
-            "try { taskkill /PID $($_.ProcessId) /T /F | Out-Null } catch {} "
-            "}"
+            + BundledI2pdManager._build_windows_owned_i2pd_kill_script(
+                rt,
+                extra_pids=extra_pids,
+                max_wait_ms=90000,
+                quiet_window_ms=15000,
+                sleep_ms=1000,
+            )
         )
         creationflags = 0
         for attr in ("CREATE_NO_WINDOW", "DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP"):
@@ -359,15 +580,11 @@ class BundledI2pdManager:
     ) -> None:
         if sys.platform != "win32" or owner_pid <= 0:
             return
-        conf = _ps_single_quoted(rt.conf_path)
-        data = _ps_single_quoted(rt.data_dir)
         state = _ps_single_quoted(
             os.path.join(os.path.dirname(rt.conf_path), _STATE_FILE)
         )
         script = (
             f"$owner={owner_pid}; "
-            f"$conf={conf}; "
-            f"$data={data}; "
             f"$state={state}; "
             "while (Get-Process -Id $owner -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 } "
             "Start-Sleep -Milliseconds 1500; "
@@ -379,15 +596,13 @@ class BundledI2pdManager:
             "} catch {} "
             "} "
             "if (-not $shouldKill) { exit 0 } "
-            "Get-CimInstance Win32_Process | "
-            "Where-Object { "
-            "$_.Name -eq 'i2pd.exe' -and $_.CommandLine -and "
-            "(($_.CommandLine -like ('*' + $conf + '*')) -or ($_.CommandLine -like ('*' + $data + '*'))) "
-            "} | "
-            "ForEach-Object { "
-            "try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} ; "
-            "try { taskkill /PID $($_.ProcessId) /T /F | Out-Null } catch {} "
-            "}"
+            + BundledI2pdManager._build_windows_owned_i2pd_kill_script(
+                rt,
+                extra_pids=[],
+                max_wait_ms=90000,
+                quiet_window_ms=15000,
+                sleep_ms=1000,
+            )
         )
         creationflags = 0
         for attr in ("CREATE_NO_WINDOW", "DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP"):
@@ -412,7 +627,7 @@ class BundledI2pdManager:
     @classmethod
     def force_cleanup_runtime_root(cls, root: Optional[str] = None) -> None:
         root = root or router_runtime_dir()
-        runtime, pid, _owner_pid = cls(RouterSettings())._read_state(root)
+        runtime, pid, _owner_pid, launch_pid = cls(RouterSettings())._read_state(root)
         if runtime is None:
             runtime = cls._infer_runtime_from_existing_conf(root)
         pidfile_path = (
@@ -422,12 +637,15 @@ class BundledI2pdManager:
         )
         if pid is None:
             pid = cls._read_pidfile(pidfile_path)
-        if pid is None and runtime is not None:
-            pid = cls._discover_windows_runtime_pid(runtime)
-        if pid is not None:
+        if runtime is not None and sys.platform == "win32":
+            cls._terminate_windows_runtime_processes_sync(
+                runtime,
+                extra_pids=[launch_pid, pid],
+            )
+        elif pid is not None:
             cls._terminate_pid_sync(pid)
         if runtime is not None:
-            cls._spawn_windows_delayed_cleanup(runtime)
+            cls._spawn_windows_delayed_cleanup(runtime, extra_pids=[launch_pid, pid])
         try:
             os.remove(os.path.join(root, _STATE_FILE))
         except FileNotFoundError:
@@ -471,7 +689,7 @@ class BundledI2pdManager:
             return None
 
     async def _adopt_existing_runtime_if_available(self, root: str) -> bool:
-        runtime, pid, _owner_pid = self._read_state(root)
+        runtime, pid, _owner_pid, launch_pid = self._read_state(root)
         if runtime is not None:
             if pid is not None and self._pid_alive(pid):
                 try:
@@ -480,7 +698,8 @@ class BundledI2pdManager:
                     )
                     self._runtime = runtime
                     self._managed_pid = pid
-                    self._write_state(runtime, pid, os.getpid())
+                    self._launch_pid = launch_pid
+                    self._write_state(runtime, pid, os.getpid(), launch_pid)
                     self._spawn_windows_parent_exit_cleanup(runtime, os.getpid())
                     return True
                 except Exception:
@@ -497,7 +716,13 @@ class BundledI2pdManager:
                 )
                 self._runtime = inferred
                 self._managed_pid = self._discover_windows_runtime_pid(inferred)
-                self._write_state(inferred, self._managed_pid, os.getpid())
+                self._launch_pid = launch_pid
+                self._write_state(
+                    inferred,
+                    self._managed_pid,
+                    os.getpid(),
+                    launch_pid,
+                )
                 self._spawn_windows_parent_exit_cleanup(inferred, os.getpid())
                 return True
             except Exception:
@@ -568,6 +793,7 @@ class BundledI2pdManager:
             stderr=self._log_handle,
             creationflags=creationflags,
         )
+        self._launch_pid = self._proc.pid if self._proc is not None else None
 
         try:
             await wait_for_sam_ready(rt.sam_host, rt.sam_port, timeout=60.0)
@@ -580,7 +806,7 @@ class BundledI2pdManager:
             self._managed_pid = self._discover_windows_runtime_pid(rt)
         if self._managed_pid is None:
             self._managed_pid = self._proc.pid if self._proc is not None else None
-        self._write_state(rt, self._managed_pid, os.getpid())
+        self._write_state(rt, self._managed_pid, os.getpid(), self._launch_pid)
         self._spawn_windows_parent_exit_cleanup(rt, os.getpid())
 
         return (rt.sam_host, rt.sam_port)
@@ -591,10 +817,19 @@ class BundledI2pdManager:
         runtime = self._runtime
         root = self._runtime_root(runtime) if runtime is not None else router_runtime_dir()
         target_pid = self._managed_pid
+        launch_pid = self._launch_pid
         if target_pid is None and proc is not None:
             target_pid = proc.pid
+        if launch_pid is None and proc is not None:
+            launch_pid = proc.pid
         try:
-            if target_pid is not None:
+            if runtime is not None and sys.platform == "win32":
+                remaining_pids = await self._terminate_windows_runtime_processes(
+                    runtime,
+                    extra_pids=[launch_pid, target_pid],
+                )
+                target_pid = remaining_pids[0] if remaining_pids else None
+            elif target_pid is not None:
                 await self._terminate_pid(target_pid)
             elif proc is not None and proc.returncode is None:
                 proc.terminate()
@@ -610,13 +845,28 @@ class BundledI2pdManager:
                 except Exception:
                     pass
                 self._log_handle = None
-            still_alive = bool(target_pid is not None and self._pid_alive(target_pid))
+            if runtime is not None and sys.platform == "win32":
+                remaining_pids = self._discover_windows_runtime_pids(
+                    runtime,
+                    extra_pids=[launch_pid, target_pid],
+                )
+                still_alive = bool(remaining_pids)
+                target_pid = remaining_pids[0] if remaining_pids else None
+            else:
+                still_alive = bool(target_pid is not None and self._pid_alive(target_pid))
             if still_alive and runtime is not None:
                 self._managed_pid = target_pid
-                self._write_state(runtime, target_pid, os.getpid())
+                self._launch_pid = launch_pid
+                self._write_state(runtime, target_pid, os.getpid(), launch_pid)
+                if sys.platform == "win32":
+                    self._spawn_windows_delayed_cleanup(
+                        runtime,
+                        extra_pids=[launch_pid, target_pid],
+                    )
                 self._runtime = None
             else:
                 self._managed_pid = None
+                self._launch_pid = None
                 self._runtime = None
                 self._clear_state(root)
                 if runtime is not None:
@@ -626,3 +876,5 @@ class BundledI2pdManager:
                         pass
                     except OSError:
                         pass
+                elif proc is None:
+                    self._launch_pid = None

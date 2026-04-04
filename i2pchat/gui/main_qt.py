@@ -5000,6 +5000,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._window_title_base = f"I2PChat @ {clean_profile}"
         self._unread_by_peer: dict[str, int] = {}
         self._status_send_in_flight = False
+        # closeEvent: один раз планируем async shutdown; не вызываем event.accept()
+        # до его завершения — иначе Qt закрывает окно и qasync выходит из run_forever()
+        # раньше, чем отработают core/router shutdown.
+        self._close_shutdown_scheduled = False
         self.setWindowTitle(self._window_title_base)
         self.resize(900, 600)
 
@@ -9701,6 +9705,13 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         """Останавливаем ядро и event loop при закрытии окна."""
+        if self._close_shutdown_scheduled:
+            event.ignore()
+            return
+        self._close_shutdown_scheduled = True
+        # Не закрываем окно в Qt до конца async shutdown — иначе цикл событий
+        # может завершиться до await core/router (Windows/qasync).
+        event.ignore()
         _app = QtWidgets.QApplication.instance()
         if _app is not None:
             _app.removeEventFilter(self)
@@ -9743,7 +9754,6 @@ class ChatWindow(QtWidgets.QMainWindow):
                 loop.stop()
 
         asyncio.ensure_future(_shutdown())
-        event.accept()
 
 
 def main() -> None:

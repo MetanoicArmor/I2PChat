@@ -1,4 +1,6 @@
 import asyncio
+import json
+import os
 import tempfile
 import unittest
 from unittest import mock
@@ -99,9 +101,10 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 pidfile_path=f"{td}/i2pd.pid",
             )
             manager._write_state(rt, 12345)
-            loaded_rt, loaded_pid, loaded_owner = manager._read_state(td)
+            loaded_rt, loaded_pid, loaded_owner, loaded_launch = manager._read_state(td)
             self.assertEqual(loaded_pid, 12345)
             self.assertIsNone(loaded_owner)
+            self.assertIsNone(loaded_launch)
             self.assertIsNotNone(loaded_rt)
             assert loaded_rt is not None
             self.assertEqual(loaded_rt.sam_port, 17656)
@@ -130,7 +133,7 @@ class BundledI2pdConfigTests(unittest.TestCase):
             self.assertEqual(rt.sam_port, 17656)
             self.assertEqual(rt.http_proxy_port, 14444)
             self.assertEqual(rt.log_path, "/tmp/router.log")
-            self.assertEqual(rt.pidfile_path, f"{td}/i2pd.pid")
+            self.assertEqual(rt.pidfile_path, os.path.join(td, "i2pd.pid"))
 
     def test_adopt_existing_runtime_from_state(self) -> None:
         settings = RouterSettings(backend="bundled")
@@ -150,7 +153,10 @@ class BundledI2pdConfigTests(unittest.TestCase):
             )
             manager._write_state(rt, 43210)
             with mock.patch.object(manager, "_pid_alive", return_value=True), \
-                    mock.patch("i2pchat.router.bundled_i2pd.wait_for_sam_ready", new=mock.AsyncMock()):
+                    mock.patch("i2pchat.router.bundled_i2pd.wait_for_sam_ready", new=mock.AsyncMock()), \
+                    mock.patch.object(
+                        BundledI2pdManager, "_spawn_windows_parent_exit_cleanup"
+                    ):
                 adopted = asyncio.run(manager._adopt_existing_runtime_if_available(td))
             self.assertTrue(adopted)
             self.assertEqual(manager.sam_address(), ("127.0.0.1", 17656))
@@ -172,15 +178,132 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 pidfile_path=f"{td}/i2pd.pid",
             )
             manager._write_state(rt, 22222, 33333)
-            _rt, pid, owner_pid = manager._read_state(td)
+            _rt, pid, owner_pid, launch_pid = manager._read_state(td)
             self.assertEqual(pid, 22222)
             self.assertEqual(owner_pid, 33333)
+            self.assertIsNone(launch_pid)
+
+    def test_write_state_records_launch_pid(self) -> None:
+        settings = RouterSettings(backend="bundled")
+        manager = BundledI2pdManager(settings)
+        with tempfile.TemporaryDirectory() as td:
+            rt = BundledI2pdRuntime(
+                sam_host="127.0.0.1",
+                sam_port=17656,
+                http_proxy_port=14444,
+                socks_proxy_port=14447,
+                control_http_port=17070,
+                data_dir=f"{td}/data",
+                conf_path=f"{td}/i2pd.conf",
+                tunconf_path=f"{td}/tunnels.conf",
+                log_path=f"{td}/router.log",
+                pidfile_path=f"{td}/i2pd.pid",
+            )
+            manager._write_state(rt, 22222, 33333, 44444)
+            _rt, pid, owner_pid, launch_pid = manager._read_state(td)
+            self.assertEqual(pid, 22222)
+            self.assertEqual(owner_pid, 33333)
+            self.assertEqual(launch_pid, 44444)
 
     def test_read_pidfile(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "i2pd.pid"
             path.write_text("54321\n", encoding="utf-8")
             self.assertEqual(BundledI2pdManager._read_pidfile(str(path)), 54321)
+
+    def test_discover_windows_runtime_pids_parses_all_matches(self) -> None:
+        rt = BundledI2pdRuntime(
+            sam_host="127.0.0.1",
+            sam_port=17656,
+            http_proxy_port=14444,
+            socks_proxy_port=14447,
+            control_http_port=17070,
+            data_dir="C:/Users/test/AppData/Roaming/I2PChat/router/data",
+            conf_path="C:/Users/test/AppData/Roaming/I2PChat/router/i2pd.conf",
+            tunconf_path="C:/Users/test/AppData/Roaming/I2PChat/router/tunnels.conf",
+            log_path="C:/Users/test/AppData/Roaming/I2PChat/router/router.log",
+            pidfile_path="C:/Users/test/AppData/Roaming/I2PChat/router/i2pd.pid",
+        )
+        with mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "win32"), \
+                mock.patch(
+                    "i2pchat.router.bundled_i2pd.subprocess.check_output",
+                    return_value="65433\r\n65432\r\n65433\r\n",
+                ):
+            pids = BundledI2pdManager._discover_windows_runtime_pids(rt)
+        self.assertEqual(pids, [65433, 65432])
+
+    def test_windows_owned_i2pd_query_script_tracks_descendants_and_extra_pids(self) -> None:
+        rt = BundledI2pdRuntime(
+            sam_host="127.0.0.1",
+            sam_port=17656,
+            http_proxy_port=14444,
+            socks_proxy_port=14447,
+            control_http_port=17070,
+            data_dir="C:/Users/test/AppData/Roaming/I2PChat/router/data",
+            conf_path="C:/Users/test/AppData/Roaming/I2PChat/router/i2pd.conf",
+            tunconf_path="C:/Users/test/AppData/Roaming/I2PChat/router/tunnels.conf",
+            log_path="C:/Users/test/AppData/Roaming/I2PChat/router/router.log",
+            pidfile_path="C:/Users/test/AppData/Roaming/I2PChat/router/i2pd.pid",
+        )
+        with mock.patch.object(
+            BundledI2pdManager,
+            "_candidate_bundled_i2pd_binaries",
+            return_value=["C:/bundle/i2pd.exe"],
+        ):
+            script = BundledI2pdManager._build_windows_owned_i2pd_query_script(
+                rt, extra_pids=[123, 456]
+            )
+        self.assertIn("$extra=@(123, 456)", script)
+        self.assertIn("$binaries=@('C:/bundle/i2pd.exe')", script)
+        self.assertIn("$matchesBinary", script)
+        self.assertIn("$proc.ExecutablePath", script)
+        self.assertIn("ParentProcessId", script)
+        self.assertIn("$owned.Contains($parentPid)", script)
+
+    def test_windows_owned_i2pd_kill_script_waits_for_quiet_window(self) -> None:
+        rt = BundledI2pdRuntime(
+            sam_host="127.0.0.1",
+            sam_port=17656,
+            http_proxy_port=14444,
+            socks_proxy_port=14447,
+            control_http_port=17070,
+            data_dir="C:/Users/test/AppData/Roaming/I2PChat/router/data",
+            conf_path="C:/Users/test/AppData/Roaming/I2PChat/router/i2pd.conf",
+            tunconf_path="C:/Users/test/AppData/Roaming/I2PChat/router/tunnels.conf",
+            log_path="C:/Users/test/AppData/Roaming/I2PChat/router/router.log",
+            pidfile_path="C:/Users/test/AppData/Roaming/I2PChat/router/i2pd.pid",
+        )
+        script = BundledI2pdManager._build_windows_owned_i2pd_kill_script(
+            rt, max_wait_ms=15000, quiet_window_ms=3000, sleep_ms=250
+        )
+        self.assertIn("$deadline = [DateTime]::UtcNow.AddMilliseconds(15000)", script)
+        self.assertIn("$quietUntil = [DateTime]::UtcNow.AddMilliseconds(3000)", script)
+        self.assertIn("$quietUntil = [DateTime]::UtcNow.AddMilliseconds(3000);", script)
+        self.assertIn("$sleepMs=250;", script)
+
+    def test_snapshot_windows_i2pd_processes_parses_json(self) -> None:
+        raw = (
+            '[{"ProcessId":65433,"ParentProcessId":65432,"Name":"i2pd.exe",'
+            '"ExecutablePath":"C:/bundle/i2pd.exe","CommandLine":"i2pd --conf=x"}]'
+        )
+        with mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "win32"), \
+                mock.patch(
+                    "i2pchat.router.bundled_i2pd.subprocess.check_output",
+                    return_value=raw,
+                ):
+            snapshot = BundledI2pdManager._snapshot_windows_i2pd_processes()
+        self.assertEqual(
+            snapshot,
+            [
+                {
+                    "pid": 65433,
+                    "parent_pid": 65432,
+                    "name": "i2pd.exe",
+                    "exe": "C:/bundle/i2pd.exe",
+                    "cmd": "i2pd --conf=x",
+                }
+            ],
+        )
 
     def test_force_cleanup_runtime_root_uses_state_pid(self) -> None:
         settings = RouterSettings(backend="bundled")
@@ -198,8 +321,9 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 log_path=f"{td}/router.log",
                 pidfile_path=f"{td}/i2pd.pid",
             )
-            manager._write_state(rt, 45678)
-            with mock.patch.object(BundledI2pdManager, "_terminate_pid_sync") as term:
+            manager._write_state(rt, 45678, None, 45679)
+            with mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "linux"), \
+                    mock.patch.object(BundledI2pdManager, "_terminate_pid_sync") as term:
                 BundledI2pdManager.force_cleanup_runtime_root(td)
             term.assert_called_once_with(45678)
             self.assertFalse((Path(td) / "managed-process.json").exists())
@@ -221,14 +345,44 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 pidfile_path=f"{td}/i2pd.pid",
             )
             manager._write_state(rt, None)
-            with mock.patch.object(
-                BundledI2pdManager, "_discover_windows_runtime_pid", return_value=65432
-            ) as discover, mock.patch.object(
-                BundledI2pdManager, "_terminate_pid_sync"
-            ) as term:
+            with mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "win32"), \
+                    mock.patch.object(
+                BundledI2pdManager, "_terminate_windows_runtime_processes_sync"
+            ) as terminate, mock.patch.object(
+                BundledI2pdManager, "_spawn_windows_delayed_cleanup"
+            ):
                 BundledI2pdManager.force_cleanup_runtime_root(td)
-            discover.assert_called_once()
-            term.assert_called_once_with(65432)
+            terminate.assert_called_once()
+            args, kwargs = terminate.call_args
+            self.assertEqual(args[0].conf_path, rt.conf_path)
+            self.assertEqual(kwargs["extra_pids"], [None, None])
+
+    def test_force_cleanup_runtime_root_uses_launch_pid_from_state(self) -> None:
+        settings = RouterSettings(backend="bundled")
+        manager = BundledI2pdManager(settings)
+        with tempfile.TemporaryDirectory() as td:
+            rt = BundledI2pdRuntime(
+                sam_host="127.0.0.1",
+                sam_port=17656,
+                http_proxy_port=14444,
+                socks_proxy_port=14447,
+                control_http_port=17070,
+                data_dir=f"{td}/data",
+                conf_path=f"{td}/i2pd.conf",
+                tunconf_path=f"{td}/tunnels.conf",
+                log_path=f"{td}/router.log",
+                pidfile_path=f"{td}/i2pd.pid",
+            )
+            manager._write_state(rt, 45678, None, 45679)
+            with mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "win32"), \
+                    mock.patch.object(
+                        BundledI2pdManager, "_terminate_windows_runtime_processes_sync"
+                    ) as terminate, mock.patch.object(
+                        BundledI2pdManager, "_spawn_windows_delayed_cleanup"
+                    ):
+                BundledI2pdManager.force_cleanup_runtime_root(td)
+            _args, kwargs = terminate.call_args
+            self.assertEqual(kwargs["extra_pids"], [45679, 45678])
 
     def test_force_cleanup_runtime_root_infers_runtime_when_state_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -246,14 +400,17 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with mock.patch.object(
-                BundledI2pdManager, "_discover_windows_runtime_pid", return_value=61234
-            ) as discover, mock.patch.object(
-                BundledI2pdManager, "_terminate_pid_sync"
-            ) as term:
+            with mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "win32"), \
+                    mock.patch.object(
+                BundledI2pdManager, "_terminate_windows_runtime_processes_sync"
+            ) as terminate, mock.patch.object(
+                BundledI2pdManager, "_spawn_windows_delayed_cleanup"
+            ):
                 BundledI2pdManager.force_cleanup_runtime_root(td)
-            discover.assert_called_once()
-            term.assert_called_once_with(61234)
+            terminate.assert_called_once()
+            args, kwargs = terminate.call_args
+            self.assertTrue(args[0].conf_path.endswith("i2pd.conf"))
+            self.assertEqual(kwargs["extra_pids"], [None, None])
 
     def test_adopt_existing_runtime_infers_windows_pid(self) -> None:
         settings = RouterSettings(backend="bundled")
@@ -274,6 +431,9 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with mock.patch("i2pchat.router.bundled_i2pd.wait_for_sam_ready", new=mock.AsyncMock()), \
+                    mock.patch.object(
+                        BundledI2pdManager, "_spawn_windows_parent_exit_cleanup"
+                    ), \
                     mock.patch.object(
                         BundledI2pdManager, "_discover_windows_runtime_pid", return_value=71111
                     ):
@@ -297,10 +457,11 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with mock.patch.object(
+            with mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "win32"), \
+                    mock.patch.object(
                 BundledI2pdManager, "_spawn_windows_delayed_cleanup"
             ) as delayed, mock.patch.object(
-                BundledI2pdManager, "_discover_windows_runtime_pid", return_value=None
+                BundledI2pdManager, "_discover_windows_runtime_pids", return_value=[]
             ):
                 BundledI2pdManager.force_cleanup_runtime_root(td)
             delayed.assert_called_once()
@@ -323,11 +484,61 @@ class BundledI2pdConfigTests(unittest.TestCase):
             )
             manager._runtime = rt
             manager._managed_pid = 77777
-            with mock.patch.object(manager, "_terminate_pid", new=mock.AsyncMock()), \
-                    mock.patch.object(manager, "_pid_alive", return_value=True):
+            manager._launch_pid = 66666
+            with mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "win32"), \
+                    mock.patch.object(
+                        manager,
+                        "_terminate_windows_runtime_processes",
+                        new=mock.AsyncMock(return_value=[88888]),
+                    ), \
+                    mock.patch.object(
+                        BundledI2pdManager, "_spawn_windows_delayed_cleanup"
+                    ), \
+                    mock.patch.object(
+                        BundledI2pdManager,
+                        "_discover_windows_runtime_pids",
+                        return_value=[88888],
+                    ):
                 asyncio.run(manager.stop())
             self.assertTrue((Path(td) / "managed-process.json").exists())
+            self.assertEqual(manager._managed_pid, 88888)
+            self.assertEqual(manager._launch_pid, 66666)
             self.assertIsNone(manager._runtime)
+
+    def test_stop_windows_uses_launch_pid_and_managed_pid_for_force_kill(self) -> None:
+        settings = RouterSettings(backend="bundled")
+        manager = BundledI2pdManager(settings)
+        with tempfile.TemporaryDirectory() as td:
+            rt = BundledI2pdRuntime(
+                sam_host="127.0.0.1",
+                sam_port=17656,
+                http_proxy_port=14444,
+                socks_proxy_port=14447,
+                control_http_port=17070,
+                data_dir=f"{td}/data",
+                conf_path=f"{td}/i2pd.conf",
+                tunconf_path=f"{td}/tunnels.conf",
+                log_path=f"{td}/router.log",
+                pidfile_path=f"{td}/i2pd.pid",
+            )
+            manager._runtime = rt
+            manager._managed_pid = 77777
+            manager._launch_pid = 66666
+            terminate = mock.AsyncMock(return_value=[])
+            with mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "win32"), \
+                    mock.patch.object(
+                        manager,
+                        "_terminate_windows_runtime_processes",
+                        new=terminate,
+                    ), \
+                    mock.patch.object(
+                        BundledI2pdManager,
+                        "_discover_windows_runtime_pids",
+                        return_value=[],
+                    ):
+                asyncio.run(manager.stop())
+            _args, kwargs = terminate.call_args
+            self.assertEqual(kwargs["extra_pids"], [66666, 77777])
 
     def test_stop_clears_state_when_pid_is_gone(self) -> None:
         settings = RouterSettings(backend="bundled")
@@ -347,11 +558,22 @@ class BundledI2pdConfigTests(unittest.TestCase):
             )
             manager._runtime = rt
             manager._managed_pid = 77777
+            manager._launch_pid = 66666
             manager._write_state(rt, 77777)
-            with mock.patch.object(manager, "_terminate_pid", new=mock.AsyncMock()), \
-                    mock.patch.object(manager, "_pid_alive", return_value=False):
+            with mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "win32"), \
+                    mock.patch.object(
+                        manager,
+                        "_terminate_windows_runtime_processes",
+                        new=mock.AsyncMock(return_value=[]),
+                    ), \
+                    mock.patch.object(
+                        BundledI2pdManager,
+                        "_discover_windows_runtime_pids",
+                        return_value=[],
+                    ):
                 asyncio.run(manager.stop())
             self.assertFalse((Path(td) / "managed-process.json").exists())
+            self.assertIsNone(manager._launch_pid)
 
 
 if __name__ == "__main__":
