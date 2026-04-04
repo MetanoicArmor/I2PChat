@@ -350,9 +350,13 @@ Using this button you can:
 - Runtime state appears in the **status row** (`Send:*` and BlindBox fields); hover for hints if something is misconfigured.
 - **Compatibility:** peers on older builds may not support BlindBox traffic; live chat and file/image transfer work as before.
 
-Example **BlindBox diagnostics** window (**⋯ → BlindBox diagnostics**):
+Example **BlindBox diagnostics** window (**⋯ → BlindBox diagnostics**): telemetry summary, editable replica endpoints (when allowed), per-replica auth, and **Example server…** / **Save and restart**.
 
-<img src="../screenshots/6.png" alt="BlindBox diagnostics: textual summary of offline routing and replicas" width="900" />
+<img src="../screenshots/6.png" alt="BlindBox diagnostics window: summary text, replica endpoints, auth block, Example server and Save and restart" width="900" />
+
+**Blind Box setup examples** (**BlindBox diagnostics → Example server…**): tabbed notes and sources (e.g. **`install.sh`** / **I2pd**), plus **Get install** (save the script) and **Copy curl** (one-liner to fetch and run it on a server) for rolling your own replica.
+
+<img src="../screenshots/9.png" alt="Blind Box setup examples: install.sh tab, Get install and Copy curl for custom replica deployment" width="900" />
 
 #### 4.10. `Forget pinned peer key` action (`⋯` menu)
 

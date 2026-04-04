@@ -28,6 +28,12 @@ class RouterSettingsTests(unittest.TestCase):
                 self.assertEqual(loaded.bundled_sam_port, 17657)
                 self.assertEqual(loaded.bundled_http_proxy_port, 14445)
 
+    def test_load_missing_prefs_defaults_to_bundled(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch("i2pchat.router.settings.get_profiles_dir", return_value=td):
+                loaded = load_router_settings()
+                self.assertEqual(loaded.backend, "bundled")
+
     def test_runtime_dir_created(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             with mock.patch("i2pchat.router.settings.get_profiles_dir", return_value=td):

@@ -234,7 +234,7 @@ Practical notes:
   <img src="screenshots/7.png" alt="I2PChat – chat and image preview" width="900" />
 </p>
 
-The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.png`** (profile picker), **`5.png`** (emoji picker), **`6.png`** (BlindBox diagnostics), and **`8.png`** (I2P router dialog) are documented inline in [**MANUAL_EN.md**](docs/MANUAL_EN.md) / [**MANUAL_RU.md**](docs/MANUAL_RU.md).
+The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.png`** (profile picker), **`5.png`** (emoji picker), **`6.png`** (BlindBox diagnostics), **`8.png`** (I2P router dialog), and **`9.png`** (Blind Box setup examples — `install.sh` / **Copy curl** for a custom replica) are documented inline in [**MANUAL_EN.md**](docs/MANUAL_EN.md) / [**MANUAL_RU.md**](docs/MANUAL_RU.md).
 
 ### 📦 Prebuilt binaries
 
@@ -436,7 +436,7 @@ If you like this project and want to support development, you can send a small d
 | **macOS** | [I2PChat-macOS-arm64-v1.2.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.0.zip) | Unzip → open `I2PChat.app` |
 | **Linux** | [I2PChat-linux-x86_64-v1.2.0.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.0.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
 
-> **Router backend:** I2PChat can work with either a system `i2pd` (SAM, default `127.0.0.1:7656`) or a bundled `i2pd` sidecar. Use **More actions → I2P router…** (shortcut **Cmd/Ctrl+R**) to choose which backend to use, open the router data/log paths, or restart the bundled router.
+> **Router backend:** On a **fresh profile** (no saved preference), I2PChat defaults to the **bundled** `i2pd` sidecar. You can switch to a system `i2pd` (SAM, typically `127.0.0.1:7656`) via **More actions → I2P router…** (shortcut **Cmd/Ctrl+R**); that choice is persisted. The same dialog opens the router data/log paths and can restart the bundled router.
 
 ### ℹ️ About
 

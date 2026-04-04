@@ -350,9 +350,13 @@
 - Состояние видно в **строке статуса** (поля `Send:*` и BlindBox); при наведении — подсказки, если что-то не настроено.
 - **Совместимость:** у пиров на старых сборках BlindBox может не поддерживаться; обычный чат, файлы и картинки работают как раньше.
 
-Пример окна **BlindBox diagnostics** (**⋯ → BlindBox diagnostics**):
+Пример окна **BlindBox diagnostics** (**⋯ → BlindBox diagnostics**): сводка телеметрии, список endpoint’ов реплик (если можно править), опциональная **replica auth**, кнопки **Example server…** и **Save and restart**.
 
-<img src="../screenshots/6.png" alt="BlindBox diagnostics: текстовая сводка офлайн-маршрута и реплик" width="900" />
+<img src="../screenshots/6.png" alt="Окно BlindBox diagnostics: сводка, реплики, auth, Example server и Save and restart" width="900" />
+
+Окно **Blind Box setup examples** (**BlindBox diagnostics → Example server…**): вкладки с текстами (в т.ч. **`install.sh`** и **I2pd**), кнопки **Get install** (сохранить скрипт) и **Copy curl** (однострочник для сервера) для своей реплики.
+
+<img src="../screenshots/9.png" alt="Blind Box setup examples: вкладка install.sh, Get install и Copy curl для кастомной реплики" width="900" />
 
 #### 4.10. Действие `Forget pinned peer key` (меню `⋯`)
 

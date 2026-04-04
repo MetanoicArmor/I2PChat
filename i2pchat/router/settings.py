@@ -14,7 +14,7 @@ _ROUTER_SETTINGS_FILE = "router_prefs.json"
 
 @dataclass
 class RouterSettings:
-    backend: str = "system"  # "system" | "bundled"
+    backend: str = "bundled"  # "system" | "bundled"; default until router_prefs.json is saved from the UI
 
     system_sam_host: str = "127.0.0.1"
     system_sam_port: int = 7656
