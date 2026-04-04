@@ -10033,6 +10033,24 @@ class ChatWindow(QtWidgets.QMainWindow):
         ov.show()
         self._shutdown_overlay = ov
 
+    def finalize_shutdown_chrome(self) -> None:
+        """Снять курсор/оверлей после полного выхода (в т.ч. sync force_cleanup в main)."""
+        try:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        except Exception:
+            pass
+        try:
+            if self._shutdown_overlay is not None:
+                self._shutdown_overlay.hide()
+                self._shutdown_overlay.deleteLater()
+                self._shutdown_overlay = None
+        except Exception:
+            pass
+        try:
+            self.setWindowTitle(self._window_title_base)
+        except Exception:
+            pass
+
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         """Останавливаем ядро и event loop при закрытии окна."""
         if self._close_shutdown_scheduled:
@@ -10076,17 +10094,8 @@ class ChatWindow(QtWidgets.QMainWindow):
                 except Exception:
                     logger.exception("bundled router shutdown failed during closeEvent")
             finally:
-                try:
-                    QtWidgets.QApplication.restoreOverrideCursor()
-                except Exception:
-                    pass
-                try:
-                    if self._shutdown_overlay is not None:
-                        self._shutdown_overlay.hide()
-                        self._shutdown_overlay.deleteLater()
-                        self._shutdown_overlay = None
-                except Exception:
-                    pass
+                # Оверлей и wait-cursor снимаем в main() после force_cleanup —
+                # иначе на Windows заставка пропадает, а окно ещё висит несколько секунд.
                 # Отменяем остальные задачи пока цикл ещё крутится; иначе в main()
                 # finally вызов run_until_complete после loop.stop() даёт RuntimeError
                 # с qasync/Qt («Event loop stopped before Future completed»).
@@ -10217,6 +10226,10 @@ def main() -> None:
             BundledI2pdManager.force_cleanup_runtime_root()
         except Exception:
             logger.warning("final bundled router cleanup failed", exc_info=True)
+        try:
+            window.finalize_shutdown_chrome()
+        except Exception:
+            logger.debug("finalize shutdown chrome failed", exc_info=True)
 
 
 if __name__ == "__main__":
