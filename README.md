@@ -277,6 +277,8 @@ python3.14 -m venv .venv314
 ./.venv314/bin/python -m i2pchat.gui.main_qt
 # Terminal UI (ncurses, same venv):
 ./.venv314/bin/python -m i2pchat.gui.chat_python
+# Optional first argument: existing saved profile name (omit = TRANSIENT / random_address).
+# New .dat: run the TUI, then /profile import-dat /path/to/file.dat ProfileName (or F2 → Import profile .dat).
 ```
 
 **Windows (PowerShell)**
@@ -288,6 +290,8 @@ py -3.14 -m venv .venv314
 .\.venv314\Scripts\python -m i2pchat.gui.main_qt
 # Terminal UI (ncurses, same venv):
 .\.venv314\Scripts\python -m i2pchat.gui.chat_python
+# Optional first argument: existing saved profile name (omit = TRANSIENT / random_address).
+# New .dat: run the TUI, then /profile import-dat C:\path\to\file.dat ProfileName (or F2 → Import profile .dat).
 ```
 
 If the venv already exists and dependencies are installed, run only the `python -m …` line you need (GUI or terminal).
