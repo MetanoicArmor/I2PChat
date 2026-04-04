@@ -1897,6 +1897,12 @@ def save_privacy_mode_enabled(enabled: bool) -> None:
 COMPOSE_DRAFTS_MAX_KEYS = 100
 COMPOSE_DRAFTS_DEBOUNCE_MS = 1500
 
+
+def _status_label_font_pixel_size() -> int:
+    """Кегль QLabel#StatusLabel в QSS (px); тот же источник, что ChatWindow._status_font_px."""
+    return 10 if sys.platform == "win32" else 11
+
+
 # kind=info с этим текстом завершает сессию чата (раньше шло как disconnect).
 _SESSION_END_INFO_TEXTS: frozenset[str] = frozenset(
     {"Peer disconnected.", "You disconnected."}
@@ -2631,7 +2637,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         base_font = painter.font()
         text_color = self._c("system_text", "#5f6673")
         sys_font = QtGui.QFont(base_font)
-        sys_font.setPointSize(max(base_font.pointSize() - 1, 8))
+        sys_font.setPixelSize(_status_label_font_pixel_size())
 
         rect = option.rect.adjusted(0, self.BUBBLE_SPACING_Y, 0, -self.BUBBLE_SPACING_Y)
         mx = float(self.SYSTEM_INLINE_MARGIN_X)
@@ -2687,7 +2693,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         meta_text = _chat_item_delivery_meta_text(item)
         if ts_rect is not None and meta_text:
             ts_font = QtGui.QFont(sys_font)
-            ts_font.setPointSize(max(sys_font.pointSize() - 1, 6))
+            ts_font.setPixelSize(max(_status_label_font_pixel_size() - 1, 8))
             painter.setFont(ts_font)
             ts_color = QtGui.QColor(text_color)
             ts_color = ts_color.lighter(130)
@@ -3285,7 +3291,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         if item.kind in {"system", "info"}:
             cell_width = option.rect.width() if option.rect.width() > 0 else 600
             font = QtGui.QFont(option.font)
-            font.setPointSize(max(font.pointSize() - 1, 8))
+            font.setPixelSize(_status_label_font_pixel_size())
             inner_w = float(max(10, cell_width - 2 * self.SYSTEM_INLINE_MARGIN_X))
             text = item.text or " "
             paths = emoji_paths_cached()
@@ -3300,7 +3306,9 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 + self.BUBBLE_SPACING_Y * 2
             )
             if item.timestamp:
-                ts_m = QtGui.QFontMetrics(font)
+                ts_f = QtGui.QFont(font)
+                ts_f.setPixelSize(max(_status_label_font_pixel_size() - 1, 8))
+                ts_m = QtGui.QFontMetrics(ts_f)
                 height += ts_m.height() + int(self.SYSTEM_INLINE_PADDING_Y / 2)
             return QtCore.QSize(int(cell_width), int(height))
 
@@ -5347,7 +5355,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(self._window_title_base)
         self.resize(900, 600)
 
-        self._status_font_px = 10 if sys.platform == "win32" else 11
+        self._status_font_px = _status_label_font_pixel_size()
 
         # UI
         central = QtWidgets.QWidget(self)
