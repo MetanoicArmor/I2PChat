@@ -5215,6 +5215,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         # до его завершения — иначе Qt закрывает окно и qasync выходит из run_forever()
         # раньше, чем отработают core/router shutdown.
         self._close_shutdown_scheduled = False
+        self._shutdown_overlay: Optional[QtWidgets.QWidget] = None
         self.setWindowTitle(self._window_title_base)
         self.resize(900, 600)
 
@@ -8509,6 +8510,8 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # type: ignore[override]
         super().resizeEvent(event)
+        if self._shutdown_overlay is not None:
+            self._shutdown_overlay.setGeometry(self.rect())
         self._update_status_label_visible_text()
 
     # ----- обработчики UI -----
@@ -9918,6 +9921,118 @@ class ChatWindow(QtWidgets.QMainWindow):
         if event.type() == QtCore.QEvent.Type.WindowActivate:
             QtCore.QTimer.singleShot(0, self._clear_unread_if_active_chat_visible)
 
+    def _show_shutdown_overlay(self, *, stopping_bundled_router: bool) -> None:
+        """Сразу после запроса закрытия: объясняем задержку при остановке роутера/ядра."""
+        if self._shutdown_overlay is not None:
+            return
+        ov = QtWidgets.QFrame(self)
+        ov.setObjectName("ShutdownOverlay")
+        ov.setGeometry(self.rect())
+        night = self.theme_id == "night"
+        if night:
+            ov.setStyleSheet(
+                """
+                QFrame#ShutdownOverlay {
+                    background-color: rgba(18, 19, 24, 0.88);
+                }
+                QLabel#ShutdownTitle {
+                    color: #f5f5f7;
+                    font-size: 17px;
+                    font-weight: 600;
+                }
+                QLabel#ShutdownSubtitle {
+                    color: #9aa3b5;
+                    font-size: 13px;
+                }
+                QProgressBar {
+                    background-color: rgba(255, 255, 255, 0.12);
+                    border: none;
+                    border-radius: 3px;
+                    max-height: 5px;
+                }
+                QProgressBar::chunk {
+                    background-color: #0a84ff;
+                }
+                """
+            )
+        else:
+            ov.setStyleSheet(
+                """
+                QFrame#ShutdownOverlay {
+                    background-color: rgba(245, 245, 247, 0.94);
+                }
+                QLabel#ShutdownTitle {
+                    color: #1d1d1f;
+                    font-size: 17px;
+                    font-weight: 600;
+                }
+                QLabel#ShutdownSubtitle {
+                    color: #626875;
+                    font-size: 13px;
+                }
+                QProgressBar {
+                    background-color: rgba(0, 0, 0, 0.08);
+                    border: none;
+                    border-radius: 3px;
+                    max-height: 5px;
+                }
+                QProgressBar::chunk {
+                    background-color: #0a84ff;
+                }
+                """
+            )
+        lay = QtWidgets.QVBoxLayout(ov)
+        lay.setContentsMargins(40, 32, 40, 32)
+        lay.setSpacing(14)
+        lay.addStretch(1)
+        title = QtWidgets.QLabel("Shutting down…", ov)
+        title.setObjectName("ShutdownTitle")
+        title.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignHCenter
+            | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        lay.addWidget(title)
+        if stopping_bundled_router:
+            sub = QtWidgets.QLabel(
+                "Stopping the bundled I2P router can take a few seconds.\n"
+                "Please wait — the app will exit when shutdown finishes.",
+                ov,
+            )
+            sub.setObjectName("ShutdownSubtitle")
+            sub.setAlignment(
+                QtCore.Qt.AlignmentFlag.AlignHCenter
+                | QtCore.Qt.AlignmentFlag.AlignVCenter
+            )
+            sub.setWordWrap(True)
+            lay.addWidget(sub)
+        else:
+            sub = QtWidgets.QLabel(
+                "Saving state and closing connections…",
+                ov,
+            )
+            sub.setObjectName("ShutdownSubtitle")
+            sub.setAlignment(
+                QtCore.Qt.AlignmentFlag.AlignHCenter
+                | QtCore.Qt.AlignmentFlag.AlignVCenter
+            )
+            sub.setWordWrap(True)
+            lay.addWidget(sub)
+        bar = QtWidgets.QProgressBar(ov)
+        bar.setRange(0, 0)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(5)
+        bar.setFixedWidth(min(420, max(220, self.width() - 120)))
+        bar_row = QtWidgets.QHBoxLayout()
+        bar_row.setContentsMargins(0, 0, 0, 0)
+        bar_row.addStretch(1)
+        bar_row.addWidget(bar)
+        bar_row.addStretch(1)
+        lay.addLayout(bar_row)
+        lay.addStretch(1)
+        ov.raise_()
+        ov.show()
+        self._shutdown_overlay = ov
+
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         """Останавливаем ядро и event loop при закрытии окна."""
         if self._close_shutdown_scheduled:
@@ -9934,6 +10049,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._compose_drafts_save_timer.stop()
         self._flush_compose_drafts_to_disk()
         self._save_history_if_needed()
+
+        stopping_bundled = self._bundled_router_manager is not None
+        self._show_shutdown_overlay(stopping_bundled_router=stopping_bundled)
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        self.setWindowTitle(f"{self._window_title_base} — Shutting down…")
+        QtCore.QCoreApplication.processEvents(
+            QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+        )
 
         loop = asyncio.get_event_loop()
 
@@ -9953,6 +10076,17 @@ class ChatWindow(QtWidgets.QMainWindow):
                 except Exception:
                     logger.exception("bundled router shutdown failed during closeEvent")
             finally:
+                try:
+                    QtWidgets.QApplication.restoreOverrideCursor()
+                except Exception:
+                    pass
+                try:
+                    if self._shutdown_overlay is not None:
+                        self._shutdown_overlay.hide()
+                        self._shutdown_overlay.deleteLater()
+                        self._shutdown_overlay = None
+                except Exception:
+                    pass
                 # Отменяем остальные задачи пока цикл ещё крутится; иначе в main()
                 # finally вызов run_until_complete после loop.stop() даёт RuntimeError
                 # с qasync/Qt («Event loop stopped before Future completed»).
