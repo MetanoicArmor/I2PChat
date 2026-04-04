@@ -273,12 +273,9 @@ sudo apt install libxcb-cursor0
 ```bash
 python3.14 -m venv .venv314
 ./.venv314/bin/pip install -r requirements.txt
+# PyQt6 GUI:
 ./.venv314/bin/python -m i2pchat.gui.main_qt
-```
-
-**Terminal UI** (ncurses, same venv — no PyQt window):
-
-```bash
+# Terminal UI (ncurses, same venv):
 ./.venv314/bin/python -m i2pchat.gui.chat_python
 ```
 
@@ -287,16 +284,13 @@ python3.14 -m venv .venv314
 ```powershell
 py -3.14 -m venv .venv314
 .\.venv314\Scripts\pip install -r requirements.txt
+# PyQt6 GUI:
 .\.venv314\Scripts\python -m i2pchat.gui.main_qt
-```
-
-**Terminal UI (Windows):**
-
-```powershell
+# Terminal UI (ncurses, same venv):
 .\.venv314\Scripts\python -m i2pchat.gui.chat_python
 ```
 
-If the venv already exists and dependencies are installed, only the last `python -m …` line you need (GUI or terminal) is required to launch.
+If the venv already exists and dependencies are installed, run only the `python -m …` line you need (GUI or terminal).
 
 The same code path is available as `python -m i2pchat.run_gui` (matches [`i2pchat/run_gui.py`](i2pchat/run_gui.py), the PyInstaller analyzed script). Prefer `-m` from the repo root; running the `.py` file directly can break package imports.
 
