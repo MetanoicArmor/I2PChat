@@ -4892,16 +4892,29 @@ def _event_matches_privacy_hotkey(modifiers: QtCore.Qt.KeyboardModifier) -> bool
     return m == QtCore.Qt.KeyboardModifier.ControlModifier
 
 
-def _linux_evdev_scan_matches(event: QtGui.QKeyEvent, evdev_code: int) -> bool:
-    """Скан-код как в Linux evdev; +8 часто даёт X11 keycode на той же физической клавише."""
+def _linux_evdev_scan_matches(
+    event: QtGui.QKeyEvent, evdev_code: int, *, allow_below: bool = True
+) -> bool:
+    """Скан-код как в Linux evdev; +8 часто даёт X11 keycode на той же физической клавише.
+
+    allow_below=False: не использовать evdev−8 — иначе KEY_H (35) даёт 27, то же что
+    KEY_R+8 (19+8) на X11, и Ctrl+R ошибочно срабатывает как privacy до разбора роутера.
+    """
     sc = int(event.nativeScanCode())
     if sc == 0:
         return False
-    return sc in (evdev_code, evdev_code + 8, evdev_code - 8)
+    if allow_below:
+        return sc in (evdev_code, evdev_code + 8, evdev_code - 8)
+    return sc in (evdev_code, evdev_code + 8)
 
 
 def _physical_key_matches(
-    event: QtGui.QKeyEvent, *, win_vk: int, mac_vk: int, linux_evdev: int
+    event: QtGui.QKeyEvent,
+    *,
+    win_vk: int,
+    mac_vk: int,
+    linux_evdev: int,
+    linux_allow_evdev_below: bool = True,
 ) -> bool:
     """
     Совпадение по физической позиции (раскладка US QWERTY): русская и др. не ломают хоткеи.
@@ -4911,7 +4924,9 @@ def _physical_key_matches(
         return int(event.nativeVirtualKey()) == win_vk
     if sys.platform == "darwin":
         return int(event.nativeVirtualKey()) == mac_vk
-    return _linux_evdev_scan_matches(event, linux_evdev)
+    return _linux_evdev_scan_matches(
+        event, linux_evdev, allow_below=linux_allow_evdev_below
+    )
 
 
 def _compose_input_placeholder_text(*, enter_sends: bool) -> str:
@@ -6739,7 +6754,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Windows/Linux любой Ctrl+буква сойдёт за «privacy-модификаторы» и остальные
         # хоткеи (Ctrl+O, …) никогда не обработаются.
         if _event_matches_privacy_hotkey(mod) and _physical_key_matches(
-            event, win_vk=0x48, mac_vk=0x04, linux_evdev=35
+            event,
+            win_vk=0x48,
+            mac_vk=0x04,
+            linux_evdev=35,
+            linux_allow_evdev_below=False,
         ):
             self._on_toggle_privacy_mode_clicked()
             return True
