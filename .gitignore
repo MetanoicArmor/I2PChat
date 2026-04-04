@@ -18,6 +18,9 @@ __pycache__/
 .venv*/
 venv/
 env/
+# BlindBox daemon ships an env template under a directory literally named env/
+!i2pchat/blindbox/daemon/env/
+!i2pchat/blindbox/daemon/env/daemon.env.example
 
 # Build / dist (PyInstaller etc.)
 build/
