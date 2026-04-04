@@ -1,6 +1,8 @@
 import asyncio
+import errno
 import json
 import os
+import signal
 import tempfile
 import unittest
 from unittest import mock
@@ -10,6 +12,8 @@ from i2pchat.router.bundled_i2pd import (
     BundledI2pdManager,
     BundledI2pdRuntime,
     render_i2pd_conf,
+    unix_reaper_main,
+    _unix_find_i2pd_pids_for_runtime,
 )
 from i2pchat.router.settings import RouterSettings
 
@@ -156,6 +160,9 @@ class BundledI2pdConfigTests(unittest.TestCase):
                     mock.patch("i2pchat.router.bundled_i2pd.wait_for_sam_ready", new=mock.AsyncMock()), \
                     mock.patch.object(
                         BundledI2pdManager, "_spawn_windows_parent_exit_cleanup"
+                    ), \
+                    mock.patch.object(
+                        BundledI2pdManager, "_spawn_unix_parent_exit_cleanup"
                     ):
                 adopted = asyncio.run(manager._adopt_existing_runtime_if_available(td))
             self.assertTrue(adopted)
@@ -435,6 +442,9 @@ class BundledI2pdConfigTests(unittest.TestCase):
                         BundledI2pdManager, "_spawn_windows_parent_exit_cleanup"
                     ), \
                     mock.patch.object(
+                        BundledI2pdManager, "_spawn_unix_parent_exit_cleanup"
+                    ), \
+                    mock.patch.object(
                         BundledI2pdManager, "_discover_windows_runtime_pid", return_value=71111
                     ):
                 adopted = asyncio.run(manager._adopt_existing_runtime_if_available(td))
@@ -574,6 +584,72 @@ class BundledI2pdConfigTests(unittest.TestCase):
                 asyncio.run(manager.stop())
             self.assertFalse((Path(td) / "managed-process.json").exists())
             self.assertIsNone(manager._launch_pid)
+
+    def test_unix_find_i2pd_pids_matches_ps_command(self) -> None:
+        with mock.patch(
+            "i2pchat.router.bundled_i2pd._unix_ps_pid_command_lines",
+            return_value=[
+                (100, "sleep 1"),
+                (555, "/opt/i2pd --conf=/tmp/qq/i2pd.conf"),
+            ],
+        ):
+            pids = _unix_find_i2pd_pids_for_runtime(
+                "/tmp/qq/i2pd.conf", "/tmp/qq/data", "/no/such.pid"
+            )
+        self.assertEqual(pids, [555])
+
+    def test_spawn_unix_parent_exit_cleanup_popen_env(self) -> None:
+        rt = BundledI2pdRuntime(
+            sam_host="127.0.0.1",
+            sam_port=1,
+            http_proxy_port=2,
+            socks_proxy_port=3,
+            control_http_port=4,
+            data_dir="/d",
+            conf_path="/c/i2pd.conf",
+            tunconf_path="/c/tunnels.conf",
+            log_path="/c/log",
+            pidfile_path="/c/pid",
+        )
+        with mock.patch("subprocess.Popen") as popen, \
+                mock.patch("i2pchat.router.bundled_i2pd.sys.platform", "darwin"):
+            BundledI2pdManager._spawn_unix_parent_exit_cleanup(rt, 4242)
+        popen.assert_called_once()
+        _a, kw = popen.call_args
+        self.assertEqual(kw["env"]["I2PCHAT_ROUTER_REAPER"], "1")
+        self.assertEqual(kw["env"]["I2PCHAT_REAPER_OWNER"], "4242")
+        self.assertEqual(kw["env"]["I2PCHAT_REAPER_CONF"], "/c/i2pd.conf")
+        self.assertIn("managed-process.json", kw["env"]["I2PCHAT_REAPER_STATE"])
+
+    def test_unix_reaper_main_skips_when_new_session_owner(self) -> None:
+        fake_owner = 12345
+        with tempfile.TemporaryDirectory() as td:
+            state = Path(td) / "managed-process.json"
+            state.write_text(
+                json.dumps({"owner_pid": 99999}),
+                encoding="utf-8",
+            )
+
+            def fake_kill(pid: int, sig: int) -> None:
+                if pid == fake_owner and sig == 0:
+                    raise OSError(errno.ESRCH, "no such process")
+                if sig == signal.SIGINT:
+                    return
+
+            env = {
+                "I2PCHAT_REAPER_OWNER": str(fake_owner),
+                "I2PCHAT_REAPER_STATE": str(state),
+                "I2PCHAT_REAPER_CONF": "",
+                "I2PCHAT_REAPER_DATADIR": "",
+                "I2PCHAT_REAPER_PIDFILE": "",
+            }
+            with mock.patch.dict(os.environ, env, clear=False), \
+                    mock.patch("os.kill", side_effect=fake_kill), \
+                    mock.patch(
+                        "i2pchat.router.bundled_i2pd._unix_find_i2pd_pids_for_runtime"
+                    ) as find:
+                unix_reaper_main()
+            find.assert_not_called()
 
 
 if __name__ == "__main__":

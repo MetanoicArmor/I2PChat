@@ -31,6 +31,131 @@ class BundledI2pdRuntime:
 
 _STATE_FILE = "managed-process.json"
 
+_REAPER_ENV_FLAG = "I2PCHAT_ROUTER_REAPER"
+_REAPER_ENV_OWNER = "I2PCHAT_REAPER_OWNER"
+_REAPER_ENV_STATE = "I2PCHAT_REAPER_STATE"
+_REAPER_ENV_CONF = "I2PCHAT_REAPER_CONF"
+_REAPER_ENV_DATADIR = "I2PCHAT_REAPER_DATADIR"
+_REAPER_ENV_PIDFILE = "I2PCHAT_REAPER_PIDFILE"
+
+
+def unix_reaper_main() -> None:
+    """Wait until GUI owner exits, then SIGINT bundled i2pd for this runtime (Unix only).
+
+    Invoked from a detached subprocess (see ``run_gui`` when ``I2PCHAT_ROUTER_REAPER=1``).
+    Environment: ``I2PCHAT_REAPER_OWNER``, ``I2PCHAT_REAPER_STATE``, ``I2PCHAT_REAPER_CONF``,
+    ``I2PCHAT_REAPER_DATADIR``, ``I2PCHAT_REAPER_PIDFILE``.
+    """
+    if sys.platform == "win32":
+        return
+    try:
+        owner = int(os.environ[_REAPER_ENV_OWNER])
+    except (KeyError, ValueError):
+        return
+    if owner <= 0:
+        return
+    state_path = os.environ.get(_REAPER_ENV_STATE, "")
+    conf = os.environ.get(_REAPER_ENV_CONF, "")
+    datadir = os.environ.get(_REAPER_ENV_DATADIR, "")
+    pidfile = os.environ.get(_REAPER_ENV_PIDFILE, "")
+
+    def _owner_alive() -> bool:
+        try:
+            os.kill(owner, 0)
+            return True
+        except OSError:
+            return False
+
+    while _owner_alive():
+        time.sleep(0.5)
+    time.sleep(0.3)
+
+    if state_path and os.path.isfile(state_path):
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                op = raw.get("owner_pid")
+                if op is not None and int(op) != owner:
+                    return
+        except Exception:
+            pass
+
+    for pid in _unix_find_i2pd_pids_for_runtime(conf, datadir, pidfile):
+        try:
+            os.kill(pid, signal.SIGINT)
+        except OSError:
+            pass
+
+
+def _unix_ps_pid_command_lines() -> list[tuple[int, str]]:
+    if sys.platform == "win32":
+        return []
+    if sys.platform == "darwin":
+        cmd = ["ps", "-ax", "-o", "pid=", "-o", "command="]
+    else:
+        cmd = ["ps", "-A", "-o", "pid=", "-o", "args="]
+    try:
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    rows: list[tuple[int, str]] = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if not parts:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        args = parts[1] if len(parts) > 1 else ""
+        rows.append((pid, args))
+    return rows
+
+
+def _unix_find_i2pd_pids_for_runtime(
+    conf_path: str, data_dir: str, pidfile_path: str
+) -> list[int]:
+    """PIDs for i2pd using this bundled runtime (pidfile first, else ps match)."""
+    seen: set[int] = set()
+    ordered: list[int] = []
+    if pidfile_path:
+        try:
+            raw = Path(pidfile_path).read_text(encoding="utf-8").strip().split()
+            if raw:
+                p = int(raw[0])
+                if p > 0:
+                    try:
+                        os.kill(p, 0)
+                        seen.add(p)
+                        ordered.append(p)
+                        return ordered
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+    if not conf_path and not data_dir:
+        return ordered
+    needle_conf = conf_path or ""
+    needle_data = data_dir or ""
+    for pid, cmd in _unix_ps_pid_command_lines():
+        if pid in seen:
+            continue
+        low = cmd.lower()
+        if "i2pd" not in low:
+            continue
+        if needle_conf and needle_conf in cmd:
+            seen.add(pid)
+            ordered.append(pid)
+            continue
+        if needle_data and needle_data in cmd:
+            seen.add(pid)
+            ordered.append(pid)
+    return ordered
+
 
 def resolve_bundled_i2pd_binary() -> Optional[str]:
     rel = {
@@ -246,7 +371,26 @@ class BundledI2pdManager:
                 pass
             return
         try:
+            os.kill(pid, signal.SIGINT)
+        except OSError:
+            return
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if not BundledI2pdManager._pid_alive(pid):
+                return
+            time.sleep(0.2)
+        try:
             os.kill(pid, signal.SIGTERM)
+        except OSError:
+            return
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if not BundledI2pdManager._pid_alive(pid):
+                return
+            time.sleep(0.2)
+        force_sig = getattr(signal, "SIGKILL", signal.SIGTERM)
+        try:
+            os.kill(pid, force_sig)
         except OSError:
             return
 
@@ -415,12 +559,21 @@ class BundledI2pdManager:
                     return
                 await asyncio.sleep(0.2)
             return
+        loop = asyncio.get_running_loop()
+        try:
+            os.kill(pid, signal.SIGINT)
+        except OSError:
+            return
+        int_deadline = loop.time() + min(5.0, max(timeout * 0.4, 1.0))
+        while loop.time() < int_deadline:
+            if not self._pid_alive(pid):
+                return
+            await asyncio.sleep(0.2)
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             return
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
+        deadline = loop.time() + max(timeout, 5.0)
         while loop.time() < deadline:
             if not self._pid_alive(pid):
                 return
@@ -624,6 +777,38 @@ class BundledI2pdManager:
         except Exception:
             pass
 
+    @staticmethod
+    def _reaper_child_argv() -> list[str]:
+        if getattr(sys, "frozen", False):
+            return [sys.executable]
+        return [sys.executable, "-m", "i2pchat.run_gui"]
+
+    @staticmethod
+    def _spawn_unix_parent_exit_cleanup(
+        rt: BundledI2pdRuntime, owner_pid: int
+    ) -> None:
+        if sys.platform == "win32" or owner_pid <= 0:
+            return
+        root = BundledI2pdManager._runtime_root(rt)
+        env = os.environ.copy()
+        env[_REAPER_ENV_FLAG] = "1"
+        env[_REAPER_ENV_OWNER] = str(owner_pid)
+        env[_REAPER_ENV_STATE] = os.path.join(root, _STATE_FILE)
+        env[_REAPER_ENV_CONF] = rt.conf_path
+        env[_REAPER_ENV_DATADIR] = rt.data_dir
+        env[_REAPER_ENV_PIDFILE] = rt.pidfile_path
+        try:
+            subprocess.Popen(
+                BundledI2pdManager._reaper_child_argv(),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            pass
+
     @classmethod
     def force_cleanup_runtime_root(cls, root: Optional[str] = None) -> None:
         root = root or router_runtime_dir()
@@ -701,6 +886,7 @@ class BundledI2pdManager:
                     self._launch_pid = launch_pid
                     self._write_state(runtime, pid, os.getpid(), launch_pid)
                     self._spawn_windows_parent_exit_cleanup(runtime, os.getpid())
+                    self._spawn_unix_parent_exit_cleanup(runtime, os.getpid())
                     return True
                 except Exception:
                     await self._terminate_pid(pid)
@@ -724,6 +910,7 @@ class BundledI2pdManager:
                     launch_pid,
                 )
                 self._spawn_windows_parent_exit_cleanup(inferred, os.getpid())
+                self._spawn_unix_parent_exit_cleanup(inferred, os.getpid())
                 return True
             except Exception:
                 pass
@@ -808,6 +995,7 @@ class BundledI2pdManager:
             self._managed_pid = self._proc.pid if self._proc is not None else None
         self._write_state(rt, self._managed_pid, os.getpid(), self._launch_pid)
         self._spawn_windows_parent_exit_cleanup(rt, os.getpid())
+        self._spawn_unix_parent_exit_cleanup(rt, os.getpid())
 
         return (rt.sam_host, rt.sam_port)
 
@@ -832,12 +1020,19 @@ class BundledI2pdManager:
             elif target_pid is not None:
                 await self._terminate_pid(target_pid)
             elif proc is not None and proc.returncode is None:
-                proc.terminate()
                 try:
-                    await asyncio.wait_for(proc.wait(), timeout=10.0)
+                    proc.send_signal(signal.SIGINT)
+                except (ProcessLookupError, OSError):
+                    pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
                 except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
+                    proc.terminate()
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=10.0)
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                        await proc.wait()
         finally:
             if self._log_handle is not None:
                 try:
