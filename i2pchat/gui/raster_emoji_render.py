@@ -1,4 +1,4 @@
-"""Рендер текста сообщений с подстановкой PNG Noto Emoji (как в пикере)."""
+"""Рендер текста сообщений с подстановкой PNG Fluent UI Emoji (как в пикере)."""
 
 from __future__ import annotations
 

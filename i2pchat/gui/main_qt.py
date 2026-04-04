@@ -3202,7 +3202,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
 
 class MessageInputEdit(QtWidgets.QTextEdit):
-    """Многострочное поле ввода; Noto Emoji в документе — как в пикере (PNG).
+    """Многострочное поле ввода; Fluent UI Emoji в документе — как в пикере (PNG).
 
     В протокол и черновики уходит Unicode через plainTextForSend().
 

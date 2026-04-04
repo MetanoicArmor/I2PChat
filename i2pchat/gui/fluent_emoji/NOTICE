@@ -1,0 +1,16 @@
+Fluent UI Emoji (raster pack)
+=============================
+
+The files under ``png/`` and ``manifest.json`` are produced by
+``scripts/vendor_fluent_emoji.py`` from a clone of:
+
+  https://github.com/microsoft/fluentui-emoji
+
+See ``LICENSE-FLUENT-EMOJI`` in this directory and the upstream ``LICENSE`` in
+that repository (MIT).
+
+To refresh PNGs after changing ``EMOJI_CHARS``, from the repo root::
+
+  python3 scripts/vendor_fluent_emoji.py /path/to/fluentui-emoji --style 3d
+
+Other ``--style`` values: ``color``, ``flat``, ``high_contrast``.

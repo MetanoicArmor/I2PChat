@@ -40,7 +40,7 @@ a = Analysis(
     datas=[
         ('VERSION', '.'),
         ('assets/sounds/notify.wav', 'assets/sounds'),
-        ('i2pchat/gui/noto_emoji', 'i2pchat/gui/noto_emoji'),
+        ('i2pchat/gui/fluent_emoji', 'i2pchat/gui/fluent_emoji'),
         ('i2pchat/gui/icons', 'i2pchat/gui/icons'),
         # Blind Box deployment assets are not imported anywhere; bundle explicitly for setup dialog.
         ('i2pchat/blindbox/blindbox_server_example.py', 'i2pchat/blindbox'),
