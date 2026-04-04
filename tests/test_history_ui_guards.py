@@ -25,7 +25,8 @@ class HistoryUiGuardsTests(unittest.TestCase):
 
     def test_disconnect_resets_loaded_peer(self) -> None:
         src = self._main_qt_source()
-        self.assertIn("if kind == \"disconnect\":", src)
+        self.assertIn("_SESSION_END_INFO_TEXTS", src)
+        self.assertIn("kind == \"disconnect\"", src)
         self.assertIn("self._history_loaded_for_peer = None", src)
         self.assertIn("self._history_flush_timer.stop()", src)
 

@@ -1897,6 +1897,11 @@ def save_privacy_mode_enabled(enabled: bool) -> None:
 COMPOSE_DRAFTS_MAX_KEYS = 100
 COMPOSE_DRAFTS_DEBOUNCE_MS = 1500
 
+# kind=info с этим текстом завершает сессию чата (раньше шло как disconnect).
+_SESSION_END_INFO_TEXTS: frozenset[str] = frozenset(
+    {"Peer disconnected.", "You disconnected."}
+)
+
 
 def _compose_drafts_file_path_for_read(profile: str) -> str:
     app = get_profiles_dir()
@@ -7359,10 +7364,15 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self._history_entries = self._history_entries[-max_messages:]
             self._history_dirty = True
 
-        if kind == "success" and "Secure channel" in text:
+        if (
+            kind in ("success", "info")
+            and "Secure channel with PFS established" in text
+        ):
             self._try_load_history()
 
-        if kind == "disconnect":
+        if kind == "disconnect" or (
+            kind == "info" and text in _SESSION_END_INFO_TEXTS
+        ):
             self._save_history_if_needed()
             self._history_loaded_for_peer = None
             self._history_entries = []

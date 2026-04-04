@@ -3404,7 +3404,7 @@ class I2PChatCore:
                 self.conn = (reader, writer)
                 self._activate_ack_session()
                 self._emit_message(
-                    "success", "Handshake sent. Establishing secure channel... Wait"
+                    "info", "Handshake sent. Establishing secure channel... Wait"
                 )
 
                 loop = asyncio.get_running_loop()
@@ -3999,7 +3999,7 @@ class I2PChatCore:
             except Exception:
                 pass
             self._reset_crypto_state()
-            self._emit_message("disconnect", "You disconnected.")
+            self._emit_message("info", "You disconnected.")
             self._emit_system("Waiting for incoming connections...")
         finally:
             self._disconnecting = False
@@ -4446,7 +4446,7 @@ class I2PChatCore:
                 self._recv_seq = 0
                 self._send_seq = 0
                 self._cancel_handshake_watchdog()
-                self._emit_message("success", "Secure channel with PFS established")
+                self._emit_message("info", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
                 await self._send_blindbox_root_if_needed(writer)
                 logger.info("Handshake completed (responder)")
@@ -4501,7 +4501,7 @@ class I2PChatCore:
                 self._recv_seq = 0
                 self._send_seq = 0
                 self._cancel_handshake_watchdog()
-                self._emit_message("success", "Secure channel with PFS established")
+                self._emit_message("info", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
                 await self._send_blindbox_root_if_needed(writer)
                 logger.info("Handshake completed (initiator)")
@@ -4599,7 +4599,7 @@ class I2PChatCore:
                         continue
                     self.peer_b32 = peer_addr
                     self._emit_message(
-                        "success", f"Connection accepted from {peer_addr[:12]}..."
+                        "info", f"Connection accepted from {peer_addr[:12]}..."
                     )
                     # Отдельное событие для системного уведомления о входящем подключении.
                     self._emit_notify("connect", peer_addr)
@@ -5327,7 +5327,7 @@ class I2PChatCore:
                     self._keepalive_task = None
                 self.conn = None
                 self._reset_crypto_state()
-                self._emit_message("disconnect", "Peer disconnected.")
+                self._emit_message("info", "Peer disconnected.")
                 self.peer_b32 = "Waiting for incoming connections..."
                 self._emit_system("Waiting for incoming connections...")
                 try:
