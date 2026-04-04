@@ -1,13 +1,9 @@
 # Authors
 
-**Stanley** (I2P Community)  
-Original `termchat-i2p-python` prototype  
-http://git.community.i2p/stan/termchat-i2p-python
-
 **Vade** (2026)  
-I2PChat — cross-platform GUI, another protocol, security rewrite  
+I2PChat — cross-platform GUI, protocol, security  
 https://github.com/MetanoicArmor/I2PChat
 
 ---
 
-Both projects are licensed under MIT. No license conflicts.
+Licensed under the GNU Affero General Public License v3.0 (see the LICENSE file in this repository).

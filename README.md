@@ -442,8 +442,6 @@ If you like this project and want to support development, you can send a small d
 I2PChat is a cross‑platform chat client for the [I2P](https://i2pd.website) anonymity network, using the SAM interface.  
 PyQt6 GUI with light and dark themes.
 
-Originally derived from [`termchat-i2p-python`](http://git.community.i2p/stan/termchat-i2p-python) by Stanley (I2P community), substantially rewritten.
-
 ### Audit / Аудит
 
 [![English audit](https://img.shields.io/badge/🔍%20Audit-EN-green.svg)](docs/AUDIT_EN.md)
