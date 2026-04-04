@@ -75,8 +75,6 @@ i2pchat/run_gui.py"]
         qt["PyQt6 GUI
 i2pchat/gui/main_qt.py
 ChatWindow + qasync event loop"]
-        tui["Textual TUI
-i2pchat/gui/chat_python.py"]
         present["Presentation helpers
 i2pchat/presentation/*
 status / drafts / replies / unread / notification policy"]
@@ -87,7 +85,6 @@ profile_backup.py"]
         run --> qt
         qt --> present
         qt --> guiStore
-        tui -->|"commands + callbacks"| core
         qt -->|"commands + callbacks"| core
     end
 
@@ -279,6 +276,12 @@ python3.14 -m venv .venv314
 ./.venv314/bin/python -m i2pchat.gui.main_qt
 ```
 
+**Terminal UI** (ncurses, same venv — no PyQt window):
+
+```bash
+./.venv314/bin/python -m i2pchat.gui.chat_python
+```
+
 **Windows (PowerShell)**
 
 ```powershell
@@ -287,7 +290,13 @@ py -3.14 -m venv .venv314
 .\.venv314\Scripts\python -m i2pchat.gui.main_qt
 ```
 
-If the venv already exists and dependencies are installed, only the last command is needed to launch.
+**Terminal UI (Windows):**
+
+```powershell
+.\.venv314\Scripts\python -m i2pchat.gui.chat_python
+```
+
+If the venv already exists and dependencies are installed, only the last `python -m …` line you need (GUI or terminal) is required to launch.
 
 The same code path is available as `python -m i2pchat.run_gui` (matches [`i2pchat/run_gui.py`](i2pchat/run_gui.py), the PyInstaller analyzed script). Prefer `-m` from the repo root; running the `.py` file directly can break package imports.
 
