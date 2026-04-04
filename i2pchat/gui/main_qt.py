@@ -2522,8 +2522,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     # Горизонтальные поля для system/info без бабла (почти на всю ширину списка).
     SYSTEM_INLINE_MARGIN_X = 20
     # Вертикальные поля только для system/info — меньше, чем у баблов, чтобы сгустить служебные строки.
-    SYSTEM_INLINE_PADDING_Y = 4
-    SYSTEM_INLINE_OUTER_MARGIN_Y = 1
+    SYSTEM_INLINE_PADDING_Y = 0
+    SYSTEM_INLINE_OUTER_MARGIN_Y = 0
     # Вертикальный зазор между баблами (минимальный; визуальный воздух даёт padding внутри бабла)
     BUBBLE_SPACING_Y = 0
     # Внешний отступ закрашенного бабла от верха/низа ячейки (тонкий зазор между соседними баблами).
