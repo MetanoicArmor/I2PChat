@@ -65,114 +65,16 @@
 
 ### 🧠 Core architecture
 
-The runtime is built around one shared async engine — `I2PChatCore` — with thin UI adapters on top and protocol / crypto / BlindBox services below:
+The runtime is built around one shared async engine — `I2PChatCore` — with thin UI adapters on top and protocol / crypto / BlindBox services below.
 
-```mermaid
-flowchart TB
-    subgraph Entry["UI / entrypoints"]
-        run["python -m i2pchat.gui
-i2pchat/run_gui.py"]
-        qt["PyQt6 GUI
-i2pchat/gui/main_qt.py
-ChatWindow + qasync event loop"]
-        present["Presentation helpers
-i2pchat/presentation/*
-status / drafts / replies / unread / notification policy"]
-        guiStore["GUI-side persistence
-chat_history.py
-contact_book.py
-profile_backup.py"]
-        run --> qt
-        qt --> present
-        qt --> guiStore
-        qt -->|"commands + callbacks"| core
-    end
+Plain-text map (avoids GitHub’s Mermaid viewer, which can fail to load assets such as `viewscreen.githubusercontent.com/.../2038-*.js` in some browsers or networks):
 
-    subgraph CoreRuntime["Shared async core"]
-        core["i2pchat/core/i2p_chat_core.py
-I2PChatCore
-• profile/session bootstrap
-• accept/connect orchestration
-• secure handshake + TOFU pinning
-• send/receive loops
-• ACK tracking + delivery telemetry
-• text / file / image flows
-• BlindBox root exchange"]
-        retry["Retry helpers
-send_retry_policy.py
-transfer_retry.py"]
-        core --> retry
-    end
-
-    subgraph ProtocolSecurity["Protocol + security"]
-        codec["Framing codec
-protocol/protocol_codec.py
-vNext header / flags / msg_id / len"]
-        delivery["Delivery state model
-protocol/message_delivery.py
-sending / queued / delivered / failed"]
-        crypto["i2pchat/crypto.py
-X25519 + Ed25519
-HKDF
-SecretBox + HMAC"]
-    end
-
-    subgraph BlindBox["Offline delivery subsystem"]
-        bbclient["blindbox_client.py
-quorum PUT / GET
-SAM or direct TCP"]
-        bbkeys["blindbox_key_schedule.py
-lookup / blob / state keys"]
-        bbblob["blindbox_blob.py
-encrypted padded offline blob"]
-        bbstate["storage/blindbox_state.py
-send_index / recv window / consumed set"]
-        bblocal["blindbox_local_replica.py
-optional local BlindBox"]
-    end
-
-    subgraph Transport["Network / external boundary"]
-        i2plib["Vendored i2plib
-SESSION CREATE
-STREAM CONNECT / ACCEPT
-DEST LOOKUP"]
-        sam["I2P router
-SAM API"]
-        peer["Remote peer
-live secure chat stream"]
-        boxes["BlindBox replicas
-I2P or loopback endpoints"]
-    end
-
-    subgraph ProfileState["Profile / local identity"]
-        profile["profiles/<name>/ per profile
-<name>.dat + keyring
-stored peer lock
-trust store
-signing seed"]
-    end
-
-    profile -->|"load / save identity,
-trust pins, peer lock"| core
-    core -->|"encode / decode frames"| codec
-    core -->|"derive UI delivery semantics"| delivery
-    core -->|"handshake, encryption,
-MAC, replay checks"| crypto
-    core -->|"queue offline text,
-root rotation, polling"| bbclient
-    core -->|"derive per-message keys"| bbkeys
-    bbkeys --> bbblob
-    core -->|"persist offline counters
-and root metadata"| bbstate
-    core -.->|"optional local fallback"| bblocal
-    bbclient -->|"stores / fetches blobs"| bbblob
-    bbclient <-->|"SAM streams or TCP"| i2plib
-    i2plib <--> sam
-    sam <--> peer
-    bbclient <--> boxes
-    core -->|"status / message / file /
-delivery callbacks"| qt
-```
+- **UI / entrypoints** — `i2pchat/run_gui.py`, `python -m i2pchat.gui`, PyQt6 [`i2pchat/gui/main_qt.py`](i2pchat/gui/main_qt.py) (`ChatWindow` + qasync), [`i2pchat/presentation/`](i2pchat/presentation/) (status, drafts, replies, unread, notifications), GUI-side persistence (`chat_history`, `contact_book`, `profile_backup`). The Qt layer calls into **I2PChatCore** and receives status / message / file / delivery callbacks.
+- **Shared async core** — [`i2pchat/core/i2p_chat_core.py`](i2pchat/core/i2p_chat_core.py): profile/session bootstrap, accept/connect, secure handshake + TOFU pinning, send/receive loops, ACKs and delivery telemetry, text/file/image, BlindBox root exchange; retry helpers [`send_retry_policy.py`](i2pchat/core/send_retry_policy.py), [`transfer_retry.py`](i2pchat/core/transfer_retry.py).
+- **Protocol + security** — framing in [`protocol/protocol_codec.py`](i2pchat/protocol/protocol_codec.py); delivery semantics in [`protocol/message_delivery.py`](i2pchat/protocol/message_delivery.py); [`i2pchat/crypto.py`](i2pchat/crypto.py) (X25519, Ed25519, HKDF, SecretBox, HMAC).
+- **BlindBox** — client ([`blindbox_client.py`](i2pchat/blindbox/blindbox_client.py)), key schedule, blobs, [`storage/blindbox_state.py`](i2pchat/storage/blindbox_state.py), optional [`blindbox_local_replica.py`](i2pchat/blindbox/blindbox_local_replica.py); replicas over I2P or loopback.
+- **Transport** — vendored **i2plib** (SAM session, streams, DEST LOOKUP) ↔ **I2P router (SAM)** ↔ **remote peer**; BlindBox traffic to **replica endpoints**.
+- **Profile / local identity** — `profiles/<name>/` (`.dat`, keyring, peer lock, trust store, signing seed) loaded into **I2PChatCore**.
 
 Runtime in practice:
 
