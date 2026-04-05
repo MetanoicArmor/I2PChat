@@ -803,6 +803,10 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QPushButton#PrimaryActionButton:hover { background-color: #2d95ff; }
             QPushButton#PrimaryActionButton:pressed { background-color: #0076e9; }
+            QPushButton#PrimaryActionButton:disabled {
+                background-color: #c8d9f2;
+                color: rgba(255, 255, 255, 0.82);
+            }
             QPushButton#ConnectPeerButton {
                 background-color: #0a84ff;
                 color: #ffffff;
@@ -1346,6 +1350,10 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QPushButton#PrimaryActionButton:hover { background-color: #3a9eff; }
             QPushButton#PrimaryActionButton:pressed { background-color: #0069d9; }
+            QPushButton#PrimaryActionButton:disabled {
+                background-color: rgba(10, 132, 255, 0.32);
+                color: rgba(255, 255, 255, 0.5);
+            }
             QPushButton#ConnectPeerButton {
                 background-color: #0a84ff;
                 color: #ffffff;
@@ -5719,6 +5727,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         self.send_button = QtWidgets.QPushButton("Send", self)
         self.send_button.setObjectName("PrimaryActionButton")
+        self.send_button.setEnabled(False)
 
         _compose_min_h = _compose_bar_input_height_px(self.input_edit, lines=1)
         self.input_edit.setMinimumHeight(_compose_min_h)
@@ -6763,6 +6772,17 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _peer_target_available(self) -> bool:
         return bool(self.addr_edit.text().strip()) or bool(self.core.stored_peer)
 
+    def _send_action_allowed(self) -> bool:
+        """Разрешить Send: live-сессия или готовый BlindBox (очередь офлайн)."""
+        d = self.core.get_delivery_telemetry()
+        if bool(d.get("secure_live")):
+            return True
+        return bool(
+            d.get("blindbox_enabled")
+            and d.get("blindbox_ready")
+            and d.get("blindbox_runtime_ready")
+        )
+
     def _refresh_connection_buttons(self) -> None:
         """Connect — когда сеть уже Pending/Visible, есть адрес и нет сессии; Disconnect — при активной сессии."""
         connected = self.core.conn is not None
@@ -6789,7 +6809,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             delivery_state = str(self.core.get_delivery_telemetry().get("state", "unknown"))
             if delivery_state == "offline-ready":
                 c_tip = (
-                    "Optional: Connect starts a live chat. Send can already queue offline via BlindBox."
+                    "Optional: Connect starts a live chat. "
+                    "Send can already queue offline via BlindBox."
                 )
             elif delivery_state == "await-live-root":
                 c_tip = (
@@ -6825,13 +6846,29 @@ class ChatWindow(QtWidgets.QMainWindow):
         shortcut_tip = _compose_send_shortcut_tooltip_text(
             enter_sends=self._compose_enter_sends
         )
-        if state == "offline-ready" and not bool(delivery.get("secure_live")):
+        secure_live = bool(delivery.get("secure_live"))
+        bb_runtime = bool(delivery.get("blindbox_runtime_ready"))
+        can_send = self._send_action_allowed()
+        self.send_button.setEnabled(can_send)
+        if (
+            state == "offline-ready"
+            and not secure_live
+            and bb_runtime
+        ):
             self.send_button.setText("Send\noffline")
         else:
             self.send_button.setText("Send")
+        send_tip = (
+            route_tip
+            if can_send
+            else (
+                "Send needs a finished live secure session (Connect + handshake) "
+                "or a started BlindBox runtime (lock peer, I2P up, replicas)."
+            )
+        )
         _set_tooltip_if_changed(
             self.send_button,
-            f"{route_tip}\n\n{shortcut_tip}",
+            f"{send_tip}\n\n{shortcut_tip}",
         )
         _set_tooltip_if_changed(
             self.input_edit,
@@ -8729,6 +8766,8 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_send_clicked(self) -> None:
+        if not self._send_action_allowed():
+            return
         text = self.input_edit.plainTextForSend().strip()
         if not text:
             return

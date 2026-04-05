@@ -40,6 +40,41 @@ class _DummyDest:
 
 
 class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_send_text_live_route_blocks_without_session(self) -> None:
+        core = I2PChatCore(profile="alice")
+        result = await core.send_text("x", route="live")
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.reason, "needs-live-session")
+
+    async def test_send_text_live_route_blocks_during_handshake(self) -> None:
+        core = I2PChatCore(profile="alice")
+        core.conn = (object(), _DummyWriter())
+        core.handshake_complete = False
+        result = await core.send_text("x", route="live")
+        self.assertFalse(result.accepted)
+        self.assertEqual(result.reason, "handshake-in-progress")
+
+    async def test_send_text_offline_route_uses_blindbox_when_live_connected(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = I2PChatCore(profile="alice")
+            core.stored_peer = STORED_PEER_1
+            core.my_dest = _DummyDest()
+            core.conn = (object(), _DummyWriter())
+            core.handshake_complete = True
+            core._send_text_via_blindbox = AsyncMock(return_value=99)  # type: ignore[method-assign]
+            result = await core.send_text("q-offline-while-live", route="offline")
+            self.assertTrue(result.accepted)
+            self.assertEqual(result.route, "offline-queued")
+            self.assertEqual(result.message_id, "99")
+            core._send_text_via_blindbox.assert_awaited_once()  # type: ignore[attr-defined]
+
     async def test_send_text_uses_live_route_when_secure_connected(self) -> None:
         core = I2PChatCore(profile="alice")
         core.conn = (object(), _DummyWriter())

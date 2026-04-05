@@ -17,7 +17,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, List, Literal, Optional, Tuple
 
 import i2plib
 from PIL import Image
@@ -2875,6 +2875,10 @@ class I2PChatCore:
         has_target = bool(self.current_peer_addr or self.stored_peer)
         ready = bool(self._blindbox_ready())
         has_root_secret = self._blindbox_root_secret is not None
+        bb_client = self._blindbox_client
+        blindbox_runtime_ready = bool(
+            bb_client is not None and bb_client.is_runtime_ready()
+        )
 
         if connected and not self.handshake_complete:
             state = "connecting-handshake"
@@ -2909,6 +2913,7 @@ class I2PChatCore:
             "blindbox_use_sam_for_replicas": bool(self._blindbox_use_sam),
             "blindbox_use_sam_for_blind_boxes": bool(self._blindbox_use_sam),
             "blindbox_ready": ready,
+            "blindbox_runtime_ready": blindbox_runtime_ready,
             "has_root_secret": has_root_secret,
             "stored_peer": bool(self.stored_peer),
             "blind_boxes": len(self.blindbox_replicas),
@@ -3444,7 +3449,12 @@ class I2PChatCore:
         if deferred_system:
             self._emit_system(deferred_system)
 
-    async def send_text(self, text: str) -> SendTextResult:
+    async def send_text(
+        self,
+        text: str,
+        *,
+        route: Literal["auto", "live", "offline"] = "auto",
+    ) -> SendTextResult:
         if not text:
             lifecycle = delivery_lifecycle_from_send_result(
                 route="blocked",
@@ -3460,7 +3470,76 @@ class I2PChatCore:
                 delivery_state=lifecycle.state,
                 retryable=lifecycle.retryable,
             )
-        if not self.conn or not self.handshake_complete:
+        r = route if route in ("auto", "live", "offline") else "auto"
+
+        if r == "offline":
+            sent_offline = await self._send_text_via_blindbox(text)
+            if sent_offline is None:
+                reason, hint = self._offline_send_block_feedback()
+                self._emit_error(hint)
+                lifecycle = delivery_lifecycle_from_send_result(
+                    route="blocked",
+                    accepted=False,
+                    reason=reason,
+                    hint=hint,
+                )
+                return SendTextResult(
+                    route="blocked",
+                    accepted=False,
+                    reason=reason,
+                    hint=hint,
+                    delivery_state=lifecycle.state,
+                    retryable=lifecycle.retryable,
+                )
+            lifecycle = delivery_lifecycle_from_send_result(
+                route="offline-queued",
+                accepted=True,
+                reason="blindbox-ready",
+                hint="Message queued for offline delivery.",
+            )
+            return SendTextResult(
+                route="offline-queued",
+                accepted=True,
+                reason="blindbox-ready",
+                hint="Message queued for offline delivery.",
+                message_id=str(sent_offline),
+                delivery_state=lifecycle.state,
+                retryable=lifecycle.retryable,
+            )
+
+        secure_live = bool(self.conn and self.handshake_complete)
+
+        if r == "live":
+            if not secure_live:
+                if self.conn is not None and not self.handshake_complete:
+                    hint = (
+                        "Secure channel handshake is in progress. "
+                        "Please wait before sending live."
+                    )
+                    reason = "handshake-in-progress"
+                else:
+                    hint = (
+                        "Live send needs an active secure session. "
+                        "Press Connect and wait until the session is ready."
+                    )
+                    reason = "needs-live-session"
+                self._emit_error(hint)
+                lifecycle = delivery_lifecycle_from_send_result(
+                    route="blocked",
+                    accepted=False,
+                    reason=reason,
+                    hint=hint,
+                )
+                return SendTextResult(
+                    route="blocked",
+                    accepted=False,
+                    reason=reason,
+                    hint=hint,
+                    delivery_state=lifecycle.state,
+                    retryable=lifecycle.retryable,
+                )
+
+        if r == "auto" and not secure_live:
             sent_offline = await self._send_text_via_blindbox(text)
             if sent_offline is None:
                 reason, hint = self._offline_send_block_feedback()
