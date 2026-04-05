@@ -40,6 +40,7 @@
 - [🛠 Running from source](#-running-from-source)
 - [🔧 Cross‑platform builds](#-crossplatform-builds)
 - [📄 License](#-license)
+- [☕ Buy me a coffee](#-buy-me-a-coffee)
 
 ### ✨ Features
 
@@ -328,6 +329,16 @@ nix develop github:MetanoicArmor/I2PChat
 I2PChat is licensed under the **GNU Affero General Public License v3.0** (or any later version — see section 14 of the license). The full text is in [`LICENSE`](LICENSE).
 
 The vendored [`vendor/i2plib/`](vendor/i2plib/) package (alongside [`vendor/i2pd/`](vendor/i2pd/)) remains under the **MIT** license (see [`vendor/i2plib/__version__.py`](vendor/i2plib/__version__.py)).
+
+### ☕ Buy me a coffee
+
+If you like this project and want to support development, you can send a small donation in Bitcoin:
+
+- **BTC address**: `bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd`
+
+<p align="center">
+  <img src="btc_donation_qr.png" alt="Bitcoin donation QR" width="220" />
+</p>
 
 ---
 
