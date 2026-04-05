@@ -1,9 +1,17 @@
 # Build amd64 .deb from the published Linux AppImage zip and attach it to the same release.
+# Triggers: (1) release published — needs linux zip on the asset list already.
+#           (2) workflow_dispatch — if a release missed .deb, run manually with tag vX.Y.Z.
 name: Release .deb
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.2.2) — must match an existing GitHub release with linux zip"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -21,14 +29,18 @@ jobs:
 
       - name: Derive version from release tag
         id: meta
-        env:
-          TAG: ${{ github.event.release.tag_name }}
         run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
           VER="${TAG#v}"
           if [ -z "$VER" ]; then
-            echo "ERROR: empty version from tag $TAG" >&2
+            echo "ERROR: empty version from tag: $TAG" >&2
             exit 1
           fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
 
       - name: Build .deb from release zip
@@ -38,6 +50,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
+          gh release upload "${{ steps.meta.outputs.tag }}" \
             "dist/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb" \
             --clobber

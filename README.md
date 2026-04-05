@@ -37,6 +37,7 @@
 - [📬 BlindBox in short](#-blindbox-in-short)
 - [📸 Screenshots](#-screenshots)
 - [📦 Prebuilt binaries](#-prebuilt-binaries)
+- [📥 Install overview (all platforms)](docs/INSTALL.md)
 - [🛠 Running from source](#-running-from-source)
 - [🔧 Cross‑platform builds](#-crossplatform-builds)
 - [📄 License](#-license)
@@ -137,7 +138,7 @@ The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.pn
 
 ### 📦 Prebuilt binaries
 
-**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt binaries for Windows, macOS, and Linux (version **v1.2.2** matches [`VERSION`](VERSION) in this repo).
+**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — prebuilt binaries for Windows, macOS, and Linux (version **v1.2.2** matches [`VERSION`](VERSION) in this repo). **Consolidated install steps (all platforms):** [**docs/INSTALL.md**](docs/INSTALL.md).
 
 Currently shipped assets use **versioned** zip names, for example:
 
