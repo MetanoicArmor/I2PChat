@@ -19,9 +19,11 @@ function Invoke-NativeChecked {
 }
 
 function Stop-I2PChatProcessesLockingDist {
-    # Запущенный dist\I2PChat\I2PChat.exe держит _sodium.pyd — Remove-Item падает с PermissionDenied.
-    Get-Process -Name "I2PChat" -ErrorAction SilentlyContinue | ForEach-Object {
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    # Запущенный dist\I2PChat\*.exe держит _sodium.pyd — Remove-Item падает с PermissionDenied.
+    foreach ($procName in @("I2PChat", "I2PChat-tui")) {
+        Get-Process -Name $procName -ErrorAction SilentlyContinue | ForEach-Object {
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
     }
     Start-Sleep -Milliseconds 500
 }
@@ -108,6 +110,7 @@ if (Test-Path "vendor\i2pd\windows-x64\i2pd.exe") {
 Write-Host ""
 Write-Host "Done."
 Write-Host "GUI binary: dist\\I2PChat\\I2PChat.exe"
+Write-Host "TUI binary (console): dist\\I2PChat\\I2PChat-tui.exe"
 Write-Host "Security profile: signed handshake + TOFU (release $ReleaseVersion)"
 
 $ZipFile = "dist\\I2PChat-windows-x64-v$ReleaseVersion.zip"

@@ -239,9 +239,9 @@ The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.pn
 Currently shipped assets use **versioned** zip names, for example:
 
 - **Windows (x64) GUI** — `I2PChat-windows-x64-v1.2.2.zip`
-  - Inside: `I2PChat\I2PChat.exe`
+  - Inside: `I2PChat\I2PChat.exe` (Qt GUI) and **`I2PChat\I2PChat-tui.exe`** (Textual TUI, **console** — run from **cmd** / **PowerShell**).
   - Built with **Python 3.14** and PyInstaller, includes the Python runtime and all dependencies.
-  - **Python is *not* required on the target system** – unpack the zip and run `I2PChat.exe`.
+  - **Python is *not* required on the target system** – unpack the zip and run `I2PChat.exe` or `I2PChat-tui.exe [profile]`.
   - Release bundles can now include a **bundled `i2pd` sidecar**, so the app can work either with a system router or an embedded router backend.
 
 **Linux** (`I2PChat-linux-x86_64-v1.2.2.zip` → AppImage) and **macOS arm64** (`I2PChat-macOS-arm64-v1.2.2.zip` → `.app`) — same release page; **direct download links** are in the **Prebuilt Downloads** table later in this README.

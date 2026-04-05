@@ -54,7 +54,8 @@ User interfaces and UI entrypoints.
 - `i2pchat/gui/main_qt.py` — Qt desktop client
 - `i2pchat/gui/chat_python.py` — Textual TUI (реализация; запуск: `python -m i2pchat.tui`)
 - `i2pchat/gui/__main__.py` — package-first GUI entrypoint (`python -m i2pchat.gui`)
-- `i2pchat/run_gui.py` — same launcher, used as PyInstaller analyzed script
+- `i2pchat/run_gui.py` — Qt launcher, PyInstaller entry on Linux/macOS / primary exe on Windows
+- `i2pchat/run_tui.py` — TUI launcher for PyInstaller (**Windows:** second exe `I2PChat-tui.exe`, `console=True`)
 - `i2pchat/tui.py` — short TUI launcher (`python -m i2pchat.tui`; delegates to `chat_python`)
 
 ### `i2pchat/presentation`

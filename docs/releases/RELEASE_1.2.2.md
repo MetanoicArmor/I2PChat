@@ -38,11 +38,16 @@ On **Windows** (PowerShell), replace `./.venv314/bin/python` with `.\.venv314\Sc
 - Clipboard copy of local address includes the **`.b32.i2p`** suffix.
 - Safer logging when the Rich log is not ready.
 
+#### 4. Windows prebuilt zip: second console executable
+
+- The **Windows x64** archive includes **`I2PChat-tui.exe`** next to **`I2PChat.exe`** (same `I2PChat\` folder). The TUI build uses **`console=True`** so Textual works in **cmd** / **PowerShell**. Optional profile: `I2PChat-tui.exe myprofile`.
+
 ### Technical
 
 - **Qt:** `ChatWindow._refresh_offline_history_display`, `_chat_contains_injected_history_block`, `_try_load_history` peer key normalization; call sites (contacts, address field, connect, `start_core`, profile switch, router restart paths, history import/toggle).
 - **TUI:** `i2pchat/gui/chat_python.py` — `post` / `post_panel` guards, `/copyaddr` suffix.
 - **Launcher:** `i2pchat/tui.py` — thin delegate to `I2PChat().run()`.
+- **PyInstaller (Windows):** `i2pchat/run_tui.py` + shared `COLLECT` with deduplicated `binaries`/`datas` (`normalize_toc`); no `MERGE` (avoids onedir → onefile extraction overhead).
 
 ### Compatibility
 
@@ -51,7 +56,7 @@ On **Windows** (PowerShell), replace `./.venv314/bin/python` with `.\.venv314\Sc
 
 ### Validation
 
-- `python3 -m py_compile i2pchat/gui/main_qt.py i2pchat/tui.py i2pchat/gui/chat_python.py`
+- `python3 -m py_compile i2pchat/gui/main_qt.py i2pchat/tui.py i2pchat/run_tui.py i2pchat/gui/chat_python.py`
 - `pytest tests/test_tui_router_defaults.py` (with dev deps / Textual installed)
 
 ---
@@ -67,6 +72,7 @@ On **Windows** (PowerShell), replace `./.venv314/bin/python` with `.\.venv314\Sc
 - **Qt:** сохранённая история чата подгружается **до** соединения с пиром (выбор контакта / адрес / Connect); при **первой** вставке истории **не** стираются системные строки старта (профиль, keyring, контакт, «Starting I2P session…»).
 - **TUI:** **`/copyaddr`** копирует полный адрес с **`.b32.i2p`**; устойчивость **`post`** при отсутствии виджета лога; тесты в **`tests/test_tui_router_defaults.py`**.
 - **Документация** обновлена под новые точки входа.
+- **Windows zip:** в папке **`I2PChat\`** — **`I2PChat-tui.exe`** (консольный Textual TUI) рядом с **`I2PChat.exe`**; запуск из cmd/PowerShell, профиль: `I2PChat-tui.exe имя`.
 
 ### Примеры из корня репозитория
 
@@ -93,6 +99,6 @@ On **Windows** (PowerShell), replace `./.venv314/bin/python` with `.\.venv314\Sc
 
 | Platform | Download | Launch |
 |----------|----------|--------|
-| Windows | `I2PChat-windows-x64-v1.2.2.zip` | Unzip → run I2PChat.exe |
+| Windows | `I2PChat-windows-x64-v1.2.2.zip` | Unzip → `I2PChat.exe` (GUI) or `I2PChat-tui.exe` (console TUI) |
 | Linux | `I2PChat-linux-x86_64-v1.2.2.zip` | Unzip → chmod +x I2PChat.AppImage → run |
 | macOS | `I2PChat-macOS-arm64-v1.2.2.zip` | Unzip → open I2PChat.app |
