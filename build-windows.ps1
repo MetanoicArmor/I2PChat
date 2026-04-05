@@ -107,6 +107,12 @@ if (Test-Path "vendor\i2pd\windows-x64\i2pd.exe") {
     }
 }
 
+Write-Host "==> Build slim TUI-only bundle (I2PChat-tui.spec, no PyQt6)"
+Stop-I2PChatProcessesLockingDist
+Remove-PathWithRetry -Path "dist\I2PChat-tui"
+Remove-PathWithRetry -Path "build\I2PChat-tui"
+Invoke-NativeChecked $PythonExe @("-m", "PyInstaller", "--clean", "-y", "I2PChat-tui.spec")
+
 Write-Host ""
 Write-Host "Done."
 Write-Host "GUI binary: dist\\I2PChat\\I2PChat.exe"
@@ -140,10 +146,10 @@ if (Test-Path $TuiStage) {
     Remove-Item -Recurse -Force $TuiStage
 }
 New-Item -ItemType Directory -Path "$TuiStage\\I2PChat" | Out-Null
-Copy-Item "dist\\I2PChat\\I2PChat-tui.exe" "$TuiStage\\I2PChat\\"
-Copy-Item -Recurse "dist\\I2PChat\\_internal" "$TuiStage\\I2PChat\\_internal"
-if (Test-Path "dist\\I2PChat\\vendor") {
-    Copy-Item -Recurse "dist\\I2PChat\\vendor" "$TuiStage\\I2PChat\\vendor"
+Copy-Item "dist\\I2PChat-tui\\I2PChat-tui.exe" "$TuiStage\\I2PChat\\"
+Copy-Item -Recurse "dist\\I2PChat-tui\\_internal" "$TuiStage\\I2PChat\\_internal"
+if (Test-Path "dist\\I2PChat-tui\\vendor") {
+    Copy-Item -Recurse "dist\\I2PChat-tui\\vendor" "$TuiStage\\I2PChat\\vendor"
 }
 if (Test-Path $BlindboxInstallSrc) {
     Copy-Item $BlindboxInstallSrc "$TuiStage\\install.sh"

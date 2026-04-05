@@ -219,16 +219,25 @@ with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
 PY
 echo "✔ Packed ${ZIP_FILE}"
 
+echo "==> PyInstaller slim TUI-only onedir (I2PChat-tui.spec, без PyQt6)"
+pyinstaller --clean -y I2PChat-tui.spec
+
 # 4b) TUI-only zip (no AppImage): usr/bin layout + root launcher for AUR / manual install
 TUI_ZIP="${APP_NAME}-linux-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}.zip"
 TUI_STAGE="${APP_NAME}-linux-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}-stage"
 rm -rf "${TUI_STAGE}"
 mkdir -p "${TUI_STAGE}/usr/bin"
-cp "${APPDIR}/usr/bin/${APP_NAME}-tui" "${TUI_STAGE}/usr/bin/"
-cp -a "${APPDIR}/usr/bin/_internal" "${TUI_STAGE}/usr/bin/_internal"
-if [ -d "${APPDIR}/usr/bin/vendor" ]; then
-  cp -a "${APPDIR}/usr/bin/vendor" "${TUI_STAGE}/usr/bin/vendor"
+cp "dist/${APP_NAME}-tui/${APP_NAME}-tui" "${TUI_STAGE}/usr/bin/"
+cp -a "dist/${APP_NAME}-tui/_internal" "${TUI_STAGE}/usr/bin/_internal"
+if [ -d "dist/${APP_NAME}-tui/vendor" ]; then
+  cp -a "dist/${APP_NAME}-tui/vendor" "${TUI_STAGE}/usr/bin/vendor"
 fi
+for CAND in /usr/lib/libcrypt.so.2 /lib64/libcrypt.so.2 /lib/libcrypt.so.2; do
+  if [ -f "$CAND" ]; then
+    cp "$CAND" "${TUI_STAGE}/usr/bin/_internal/"
+    break
+  fi
+done
 cat > "${TUI_STAGE}/i2pchat-tui" <<EOF
 #!/bin/sh
 SCRIPT="\$0"

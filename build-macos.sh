@@ -135,12 +135,19 @@ ditto -c -k --sequesterRsrc --keepParent "${ZIP_STAGE}" "${ZIP_FILE}"
 rm -rf "${ZIP_STAGE}"
 echo "✔ Packed ${ZIP_FILE}"
 
-# TUI-only zip: PyInstaller onedir + root launcher (no .app) for Homebrew -tui / manual install
+echo "==> Собираю slim TUI-only onedir (I2PChat-tui.spec, без PyQt6)"
+"${PYTHON_CMD}" -m PyInstaller --clean -y I2PChat-tui.spec
+
+# TUI-only zip: отдельный slim onedir из dist/I2PChat-tui (не копия GUI-бандла из .app)
 TUI_ZIP="I2PChat-macOS-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}.zip"
 TUI_STAGE="dist/${APP_NAME}-macOS-${ARCH_SUFFIX}-tui-stage"
 rm -rf "${TUI_STAGE}"
-mkdir -p "${TUI_STAGE}"
-cp -R "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}" "${TUI_STAGE}/I2PChat"
+mkdir -p "${TUI_STAGE}/I2PChat"
+cp "dist/${APP_NAME}-tui/${APP_NAME}-tui" "${TUI_STAGE}/I2PChat/"
+cp -R "dist/${APP_NAME}-tui/_internal" "${TUI_STAGE}/I2PChat/_internal"
+if [ -d "dist/${APP_NAME}-tui/vendor" ]; then
+  cp -R "dist/${APP_NAME}-tui/vendor" "${TUI_STAGE}/I2PChat/vendor"
+fi
 cat > "${TUI_STAGE}/i2pchat-tui" <<'EOF'
 #!/bin/sh
 # Resolve symlinks (e.g. Homebrew copies this to bin while I2PChat/ lives under opt).
