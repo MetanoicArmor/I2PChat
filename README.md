@@ -100,7 +100,8 @@ Full feature list, shortcuts, BlindBox setup, and data paths → **MANUAL_EN** /
 
 <p align="center">
   <img src="screenshots/1.png" alt="I2PChat – main window" width="900" /><br>
-  <img src="screenshots/4.png" alt="I2PChat – chat and file transfer" width="900" />
+  <img src="screenshots/4.png" alt="I2PChat – chat and file transfer" width="900" /><br>
+  <img src="screenshots/10.png" alt="I2PChat – TUI (terminal UI) with messaging" width="900" />
 </p>
 
 More UI shots and captions → [**MANUAL_EN.md**](docs/MANUAL_EN.md) / [**MANUAL_RU.md**](docs/MANUAL_RU.md).
