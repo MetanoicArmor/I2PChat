@@ -10,7 +10,7 @@
 | **Homebrew tap** | Репозиторий [MetanoicArmor/homebrew-i2pchat](https://github.com/MetanoicArmor/homebrew-i2pchat): `brew tap MetanoicArmor/i2pchat`. |
 | **AUR** | **Опубликовано:** [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Установка (например **yay**): `yay -S i2pchat-bin`, `yay -S i2pchat-tui-bin`. Шаблоны в репо: [`aur/i2pchat-bin/`](aur/i2pchat-bin/), [`aur/i2pchat-tui-bin/`](aur/i2pchat-tui-bin/); обновление пакетов на AUR — см. [aur/README.md](aur/README.md). |
 | **Flatpak / COPR** | Flatpak — шаблоны в репо ([flatpak/README.md](flatpak/README.md)). COPR — по желанию мейнтейнера ([fedora/i2pchat.spec](fedora/i2pchat.spec)). |
-| **`.deb` / `.rpm` на GitHub Release** | Workflow [release-linux-pkgs.yml](../.github/workflows/release-linux-pkgs.yml): при публикации релиза (или вручную по тегу) прикрепляет **`i2pchat_<версия>_amd64.deb`** и **`i2pchat_<версия>_x86_64.rpm`** к тому же релизу. См. [debian/README.md](debian/README.md), [fedora/README.md](fedora/README.md). |
+| **`.deb` / `.rpm` на GitHub Release** | Workflow [release-linux-pkgs.yml](../.github/workflows/release-linux-pkgs.yml): прикрепляет **`i2pchat_…_amd64.deb`**, **`i2pchat-tui_…_amd64.deb`** и **`i2pchat_…_x86_64.rpm`**. См. [debian/README.md](debian/README.md), [fedora/README.md](fedora/README.md). |
 | **apt + GitHub Pages (это же репо)** | [`apt/README.md`](apt/README.md): Pages → **GitHub Actions**, секрет **`APT_REPO_GPG_PRIVATE_KEY`**; **Release Linux packages** (job **deploy-apt-site**) / **Publish apt mirror**. |
 
 | Платформа | Каталог | Действие мейнтейнера |

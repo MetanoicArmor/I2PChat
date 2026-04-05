@@ -47,7 +47,8 @@ sudo mkdir -p /etc/apt/keyrings
 curl -fsSL "https://OWNER.github.io/REPO/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
 echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://OWNER.github.io/REPO/ stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list
 sudo apt update
-sudo apt install i2pchat
+sudo apt install i2pchat        # GUI (AppImage)
+sudo apt install i2pchat-tui    # только TUI (тот же источник apt)
 ```
 
 Suite: **`stable`**, компонент: **`main`**, архитектура: **`amd64`**.
@@ -59,6 +60,7 @@ Suite: **`stable`**, компонент: **`main`**, архитектура: **`
 ```bash
 export VERSION=1.2.3
 export DEB_PATH="$PWD/dist/i2pchat_${VERSION}_amd64.deb"
+export DEB_PATH_2="$PWD/dist/i2pchat-tui_${VERSION}_amd64.deb"
 ./packaging/apt/scripts/build-apt-site.sh
 gpg --import apt-signing-private.asc
 export APT_REPO_GPG_PASSPHRASE='...'   # если ключ с паролем

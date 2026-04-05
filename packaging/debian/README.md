@@ -9,7 +9,7 @@
 | **PPA (Launchpad)** | Знакомый путь для Ubuntu | Рецепты сборки, очередь сборки |
 | **Flatpak / Flathub** | Один формат для многих дистрибутивов | Не `apt`; отдельный манифест и ревью Flathub |
 
-**Рекомендуемый путь для пользователей:** скачать **`i2pchat_<версия>_amd64.deb`** с [релизов GitHub](https://github.com/MetanoicArmor/I2PChat/releases) (если приложён) **или** официальный **Linux zip с AppImage** и при необходимости собрать `.deb` локально скриптом ниже.
+**Рекомендуемый путь для пользователей:** скачать **`i2pchat_<версия>_amd64.deb`** (GUI) и при необходимости **`i2pchat-tui_<версия>_amd64.deb`** (только TUI) с [релизов GitHub](https://github.com/MetanoicArmor/I2PChat/releases), **или** собрать локально скриптами ниже.
 
 ## Сборка локального .deb из официального AppImage
 
@@ -29,13 +29,25 @@
 
 **Зависимости в рантайме:** AppImage может требовать FUSE или встроенный runtime в зависимости от типа образа и версии ОС; при проблемах запуска см. [документацию AppImage](https://docs.appimage.org/).
 
+## Сборка .deb для TUI (официальный Linux TUI zip)
+
+Скрипт [`build-tui-deb-from-release-zip.sh`](build-tui-deb-from-release-zip.sh) собирает пакет **`i2pchat-tui`**: содержимое **`I2PChat-linux-x86_64-tui-v<версия>.zip`** в `/opt/i2pchat-tui/`, команда **`i2pchat-tui`**, `.desktop` для терминала (как в AUR **`i2pchat-tui-bin`**).
+
+```bash
+./packaging/debian/build-tui-deb-from-release-zip.sh 1.2.3
+# или версия из файла VERSION:
+./packaging/debian/build-tui-deb-from-release-zip.sh
+```
+
+Готовый файл: `dist/i2pchat-tui_<version>_amd64.deb`.
+
 ## Автоматическая сборка в CI
 
-При **публикации** GitHub Release (событие `published`) job **deb** в workflow [`.github/workflows/release-linux-pkgs.yml`](../../.github/workflows/release-linux-pkgs.yml) скачивает `I2PChat-linux-x86_64-v<версия>.zip` с того же релиза, собирает `.deb` и загружает его обратно как ассет (с `--clobber`, если файл уже есть). В том же workflow параллельно собирается **RPM** для Fedora (см. [`../fedora/README.md`](../fedora/README.md)).
+При **публикации** GitHub Release (событие `published`) job **deb** в workflow [`.github/workflows/release-linux-pkgs.yml`](../../.github/workflows/release-linux-pkgs.yml) ждёт **`I2PChat-linux-x86_64-v<версия>.zip`** и **`I2PChat-linux-x86_64-tui-v<версия>.zip`**, собирает **`i2pchat_…_amd64.deb`** и **`i2pchat-tui_…_amd64.deb`**, загружает их на релиз. В том же workflow параллельно собирается **RPM** для Fedora (см. [`../fedora/README.md`](../fedora/README.md)).
 
-Условие: в момент срабатывания workflow **linux zip уже должен появиться на релизе**. Событие `release: published` иногда приходит **раньше**, чем GitHub успевает отдать большие ассеты по прямой ссылке; в CI добавлено **ожидание** по API и **повторные попытки** `curl`. Для форка используется `GITHUB_REPOSITORY` (или вручную `I2PCHAT_RELEASE_REPO=owner/name` при локальном запуске).
+Условие: в момент срабатывания workflow **оба** linux zip уже должны быть в списке ассетов релиза. Событие `release: published` иногда приходит **раньше**, чем GitHub успевает отдать большие ассеты; в CI добавлено **ожидание** по API. Для форка используется `GITHUB_REPOSITORY` (или `I2PCHAT_RELEASE_REPO=owner/name` при локальном запуске).
 
-Если релиз уже опубликован **без** `.deb`/`.rpm`, в GitHub Actions запустите workflow **Release Linux packages** вручную (**workflow_dispatch**) и укажите тег вида `vX.Y.Z` — он должен совпадать с существующим релизом, на котором есть `I2PChat-linux-x86_64-vX.Y.Z.zip`.
+Если релиз уже опубликован **без** `.deb`/`.rpm`, в GitHub Actions запустите workflow **Release Linux packages** вручную (**workflow_dispatch**) и укажите тег `vX.Y.Z` — на релизе должны быть оба zip: **`I2PChat-linux-x86_64-vX.Y.Z.zip`** и **`I2PChat-linux-x86_64-tui-vX.Y.Z.zip`**.
 
 ## Публикация apt-репозитория (кратко)
 

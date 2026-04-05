@@ -37,7 +37,7 @@ yay -S i2pchat-tui-bin  # TUI-only: slim Linux zip → /opt/i2pchat-tui, command
 
 Package pages: [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Maintainer sources: [`packaging/aur/`](../packaging/aur/).
 
-**Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`**. Install with `sudo apt install ./i2pchat_*_amd64.deb` (or your package manager). If it is missing, use the AppImage zip or build a `.deb` locally as described in [`packaging/debian/README.md`](../packaging/debian/README.md).
+**Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`** (GUI) and **`i2pchat-tui_<version>_amd64.deb`** (TUI only). Install with `sudo apt install ./i2pchat_*_amd64.deb` / `./i2pchat-tui_*_amd64.deb`. If missing, use the Linux zips or build locally — [`packaging/debian/README.md`](../packaging/debian/README.md).
 
 **Optional apt source (same repo, GitHub Pages):** if maintainers enabled signing and **Pages → GitHub Actions** deploy, you can add the published apt mirror and run `sudo apt install i2pchat` — see [`packaging/apt/README.md`](../packaging/apt/README.md).
 

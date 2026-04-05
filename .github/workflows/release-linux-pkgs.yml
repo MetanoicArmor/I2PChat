@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v1.2.3) — existing release with I2PChat-linux-x86_64-v*.zip; uploads .deb + .rpm"
+        description: "Release tag (e.g. v1.2.3) — release with Linux GUI zip + TUI zip; uploads i2pchat + i2pchat-tui .deb + .rpm"
         required: true
         type: string
 
@@ -78,15 +78,39 @@ jobs:
           gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' >&2 || true
           exit 1
 
-      - name: Build .deb from release zip
+      - name: Wait for Linux TUI zip on release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          VER="${{ steps.meta.outputs.ver }}"
+          WANT="I2PChat-linux-x86_64-tui-v${VER}.zip"
+          for i in $(seq 1 36); do
+            if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "$WANT"; then
+              echo "Asset present: $WANT"
+              exit 0
+            fi
+            echo "Waiting for $WANT on $REPO@$TAG (try $i/36)..."
+            sleep 10
+          done
+          echo "Timed out waiting for $WANT. Assets on this release:" >&2
+          gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' >&2 || true
+          exit 1
+
+      - name: Build .deb from release zip (GUI)
         run: ./packaging/debian/build-deb-from-appimage.sh "${{ steps.meta.outputs.ver }}"
 
-      - name: Upload .deb to release
+      - name: Build .deb from TUI release zip
+        run: ./packaging/debian/build-tui-deb-from-release-zip.sh "${{ steps.meta.outputs.ver }}"
+
+      - name: Upload .deb packages to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ steps.meta.outputs.tag }}" \
             "dist/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb" \
+            "dist/i2pchat-tui_${{ steps.meta.outputs.ver }}_amd64.deb" \
             --clobber
 
       - name: Publish apt mirror to GitHub Pages (optional)
@@ -105,6 +129,7 @@ jobs:
           chmod +x packaging/apt/scripts/build-apt-site.sh packaging/apt/scripts/sign-release.sh
           export VERSION="${{ steps.meta.outputs.ver }}"
           export DEB_PATH="${{ github.workspace }}/dist/i2pchat_${VERSION}_amd64.deb"
+          export DEB_PATH_2="${{ github.workspace }}/dist/i2pchat-tui_${VERSION}_amd64.deb"
           ./packaging/apt/scripts/build-apt-site.sh
           echo "$APT_REPO_GPG_PRIVATE_KEY" | gpg --import --batch
           export APT_REPO_GPG_PASSPHRASE
