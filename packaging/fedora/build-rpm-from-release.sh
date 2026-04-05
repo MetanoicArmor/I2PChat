@@ -19,16 +19,40 @@ if ! command -v rpmbuild >/dev/null 2>&1; then
   fi
 fi
 
+REPO="${I2PCHAT_RELEASE_REPO:-${GITHUB_REPOSITORY:-MetanoicArmor/I2PChat}}"
+TAG_REF="v${VER}"
+ZIP_NAME="I2PChat-linux-x86_64-v${VER}.zip"
+ZIP_URL="https://github.com/${REPO}/releases/download/${TAG_REF}/${ZIP_NAME}"
+ICON_URL="https://github.com/${REPO}/raw/${TAG_REF}/icon.png"
+
+_default_zip_attempts() {
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then echo 36; else echo 8; fi
+}
+ZIP_ATTEMPTS="${I2PCHAT_ZIP_DOWNLOAD_ATTEMPTS:-$(_default_zip_attempts)}"
+
+curl_retry() {
+  local url="$1" dest="$2" attempts="${3:-36}"
+  local i
+  for ((i = 1; i <= attempts; i++)); do
+    if curl -fsSL --connect-timeout 30 --max-time 900 -o "$dest" "$url"; then
+      return 0
+    fi
+    echo "WARN: download failed (${i}/${attempts}): ${url}" >&2
+    if ((i < attempts)); then
+      sleep 10
+    fi
+  done
+  echo "ERROR: could not download after ${attempts} tries. Repo=${REPO} tag=${TAG_REF}" >&2
+  return 1
+}
+
 mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 SPEC_DST=~/rpmbuild/SPECS/i2pchat.spec
 cp "$ROOT/packaging/fedora/i2pchat.spec" "$SPEC_DST"
 sed -i "s/^Version:.*/Version:        ${VER}/" "$SPEC_DST"
 
-ZIP_NAME="I2PChat-linux-x86_64-v${VER}.zip"
-curl -fsSL -o ~/rpmbuild/SOURCES/"${ZIP_NAME}" \
-  "https://github.com/MetanoicArmor/I2PChat/releases/download/v${VER}/${ZIP_NAME}"
-curl -fsSL -o ~/rpmbuild/SOURCES/icon.png \
-  "https://github.com/MetanoicArmor/I2PChat/raw/v${VER}/icon.png"
+curl_retry "$ZIP_URL" ~/rpmbuild/SOURCES/"${ZIP_NAME}" "$ZIP_ATTEMPTS"
+curl_retry "$ICON_URL" ~/rpmbuild/SOURCES/icon.png 12
 
 rpmbuild -ba "$SPEC_DST"
 

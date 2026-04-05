@@ -28,7 +28,10 @@ jobs:
 
       - name: Derive version from release tag
         id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          REPO="${{ github.repository }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
@@ -39,8 +42,37 @@ jobs:
             echo "ERROR: empty version from tag: $TAG" >&2
             exit 1
           fi
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            :
+          elif gh release view "v${VER}" --repo "$REPO" >/dev/null 2>&1; then
+            TAG="v${VER}"
+          else
+            echo "ERROR: no release for tag '$TAG' or 'v${VER}' in ${REPO}" >&2
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      # release:published can fire before large assets finish uploading; wait via API then curl retries in script.
+      - name: Wait for Linux GUI zip on release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          VER="${{ steps.meta.outputs.ver }}"
+          WANT="I2PChat-linux-x86_64-v${VER}.zip"
+          for i in $(seq 1 36); do
+            if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "$WANT"; then
+              echo "Asset present: $WANT"
+              exit 0
+            fi
+            echo "Waiting for $WANT on $REPO@$TAG (try $i/36)..."
+            sleep 10
+          done
+          echo "Timed out waiting for $WANT. Assets on this release:" >&2
+          gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' >&2 || true
+          exit 1
 
       - name: Build .deb from release zip
         run: ./packaging/debian/build-deb-from-appimage.sh "${{ steps.meta.outputs.ver }}"
@@ -60,7 +92,10 @@ jobs:
 
       - name: Derive version from release tag
         id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          REPO="${{ github.repository }}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
@@ -71,12 +106,42 @@ jobs:
             echo "ERROR: empty version from tag: $TAG" >&2
             exit 1
           fi
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            :
+          elif gh release view "v${VER}" --repo "$REPO" >/dev/null 2>&1; then
+            TAG="v${VER}"
+          else
+            echo "ERROR: no release for tag '$TAG' or 'v${VER}' in ${REPO}" >&2
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Linux GUI zip on release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          VER="${{ steps.meta.outputs.ver }}"
+          WANT="I2PChat-linux-x86_64-v${VER}.zip"
+          for i in $(seq 1 36); do
+            if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "$WANT"; then
+              echo "Asset present: $WANT"
+              exit 0
+            fi
+            echo "Waiting for $WANT on $REPO@$TAG (try $i/36)..."
+            sleep 10
+          done
+          echo "Timed out waiting for $WANT. Assets on this release:" >&2
+          gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' >&2 || true
+          exit 1
 
       - name: Build RPM in Fedora container
         run: |
           docker run --rm \
+            -e "GITHUB_REPOSITORY=${{ github.repository }}" \
+            -e "GITHUB_ACTIONS=true" \
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             fedora:42 \

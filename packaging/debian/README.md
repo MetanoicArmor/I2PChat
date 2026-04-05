@@ -33,7 +33,7 @@
 
 При **публикации** GitHub Release (событие `published`) job **deb** в workflow [`.github/workflows/release-linux-pkgs.yml`](../../.github/workflows/release-linux-pkgs.yml) скачивает `I2PChat-linux-x86_64-v<версия>.zip` с того же релиза, собирает `.deb` и загружает его обратно как ассет (с `--clobber`, если файл уже есть). В том же workflow параллельно собирается **RPM** для Fedora (см. [`../fedora/README.md`](../fedora/README.md)).
 
-Условие: в момент срабатывания workflow **linux zip уже должен быть на релизе** (опубликуйте релиз после загрузки артефактов).
+Условие: в момент срабатывания workflow **linux zip уже должен появиться на релизе**. Событие `release: published` иногда приходит **раньше**, чем GitHub успевает отдать большие ассеты по прямой ссылке; в CI добавлено **ожидание** по API и **повторные попытки** `curl`. Для форка используется `GITHUB_REPOSITORY` (или вручную `I2PCHAT_RELEASE_REPO=owner/name` при локальном запуске).
 
 Если релиз уже опубликован **без** `.deb`/`.rpm`, в GitHub Actions запустите workflow **Release Linux packages** вручную (**workflow_dispatch**) и укажите тег вида `vX.Y.Z` — он должен совпадать с существующим релизом, на котором есть `I2PChat-linux-x86_64-vX.Y.Z.zip`.
 

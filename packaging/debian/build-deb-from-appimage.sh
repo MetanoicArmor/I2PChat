@@ -17,17 +17,42 @@ if [[ -z "$VER" ]]; then
   exit 1
 fi
 
+# CI sets GITHUB_REPOSITORY; local default matches upstream (override with I2PCHAT_RELEASE_REPO=owner/name).
+REPO="${I2PCHAT_RELEASE_REPO:-${GITHUB_REPOSITORY:-MetanoicArmor/I2PChat}}"
+TAG_REF="v${VER}"
 ZIP_NAME="I2PChat-linux-x86_64-v${VER}.zip"
-ZIP_URL="https://github.com/MetanoicArmor/I2PChat/releases/download/v${VER}/${ZIP_NAME}"
-ICON_URL="https://github.com/MetanoicArmor/I2PChat/raw/v${VER}/icon.png"
+ZIP_URL="https://github.com/${REPO}/releases/download/${TAG_REF}/${ZIP_NAME}"
+ICON_URL="https://github.com/${REPO}/raw/${TAG_REF}/icon.png"
+
+# In CI we retry longer (GitHub can list an asset before cdn download returns 200). Locally default is shorter.
+_default_zip_attempts() {
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then echo 36; else echo 8; fi
+}
+ZIP_ATTEMPTS="${I2PCHAT_ZIP_DOWNLOAD_ATTEMPTS:-$(_default_zip_attempts)}"
+
+curl_retry() {
+  local url="$1" dest="$2" attempts="${3:-36}"
+  local i
+  for ((i = 1; i <= attempts; i++)); do
+    if curl -fsSL --connect-timeout 30 --max-time 900 -o "$dest" "$url"; then
+      return 0
+    fi
+    echo "WARN: download failed (${i}/${attempts}): ${url}" >&2
+    if ((i < attempts)); then
+      sleep 10
+    fi
+  done
+  echo "ERROR: could not download after ${attempts} tries (HTTP 404 often means the Linux zip is not on the release yet, or wrong repo/tag). Repo=${REPO} tag=${TAG_REF} file=${ZIP_NAME}" >&2
+  return 1
+}
 
 WORKDIR="$(mktemp -d)"
 cleanup() { rm -rf "$WORKDIR"; }
 trap cleanup EXIT
 
 echo "==> Downloading ${ZIP_URL}"
-curl -fsSL -o "$WORKDIR/${ZIP_NAME}" "$ZIP_URL"
-curl -fsSL -o "$WORKDIR/icon.png" "$ICON_URL"
+curl_retry "$ZIP_URL" "$WORKDIR/${ZIP_NAME}" "$ZIP_ATTEMPTS"
+curl_retry "$ICON_URL" "$WORKDIR/icon.png" 12
 
 echo "==> Extracting AppImage"
 unzip -q "$WORKDIR/${ZIP_NAME}" -d "$WORKDIR/stage"
