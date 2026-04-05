@@ -67,7 +67,7 @@ After you choose a profile, the main chat window opens:
 - **Theme switch** — to the right of the status row (sun/moon icon). Toggles `ligth` and `night`.
 - **Saved peers** — optional **left** sidebar with the per-profile contact book; details in **§3.1**.
 - **Chat area** — shows your and peer messages, system notices, and file transfer progress. You can select and copy message text (right‑click or context menu).
-- **Message input** — below the chat: type your text. **By default**, **Enter** starts a new line and you send with **Shift+Enter** (also **Ctrl+Enter**, and on macOS **⌘+Enter**), or with the send button. In the **`⋯`** menu you can turn **Enter sends message: ON** — then **Enter** sends and **Shift+Enter** inserts a new line (**Ctrl/⌘+Enter** still sends in both modes). The placeholder hint under the field matches the active mode. Setting is saved in **`ui_prefs.json`**. You can **paste a raster image** from the clipboard (**Ctrl+V** / **⌘V** or **Paste** in the field’s menu); it is sent like **Send picture** (PNG/JPEG/WebP).
+- **Message input** — below the chat: type your text. **By default**, **macOS** uses **Enter** to send and **Shift+Enter** for a new line; **Windows/Linux** use **Enter** for a new line and **Ctrl+Enter** to send. On **macOS**, **Command+Enter** and **Ctrl+Enter** both send in either mode. In the **`⋯`** menu you can turn **Enter sends message: ON/OFF** for your preference — when ON, **Enter** sends and **Shift+Enter** inserts a new line; when OFF, **Enter** inserts a new line. The placeholder hint under the field matches the active mode. Setting is saved in **`ui_prefs.json`**. You can **paste a raster image** from the clipboard (**Ctrl+V** / **⌘V** or **Paste** in the field’s menu); it is sent like **Send picture** (PNG/JPEG/WebP).
 - **Actions bar** — at the bottom: peer address, connection buttons, and the **`⋯`** menu (see section 4).
 
 Use **Connect** for live chat and the first BlindBox bootstrap session. If BlindBox is already ready, sending text can go straight to the offline queue even without an active live connection.
@@ -131,7 +131,7 @@ Click the **`⋯`** button or press **Ctrl+.** (Windows/Linux) / **⌘+.** (macO
 - **Clear history** — delete the local history file for the current peer.
 - **History retention…** — configure maximum messages per peer and maximum age in days before encrypted history is persisted.
 - **Privacy mode: ON/OFF** — when ON: tray toasts omit message body text (title may still name the peer); while this window is focused, tray toasts and notification sounds are suppressed (including for other chats). When OFF, those behaviours are disabled. Label shows current state.
-- **Enter sends message: ON/OFF** — when **ON**: **Enter** sends the message, **Shift+Enter** inserts a new line (**Ctrl/⌘+Enter** still sends). When **OFF** (default): **Enter** is a new line; **Shift+Enter** or **Ctrl/⌘+Enter** sends. The compose placeholder text updates accordingly; the choice is persisted for the profile (see **`ui_prefs.json`**).
+- **Enter sends message: ON/OFF** — when **ON**: **Enter** sends the message, **Shift+Enter** inserts a new line (**Ctrl/⌘+Enter** still sends). When **OFF**: **Enter** inserts a new line, **Shift+Enter** also inserts a new line, and **Ctrl+Enter** sends (**on macOS: Command+Enter or Ctrl+Enter**). The compose placeholder text updates accordingly; the choice is persisted for the profile (see **`ui_prefs.json`**).
 - **Notification sound: ON/OFF** — enable or mute the incoming-message sound path when it would otherwise play (custom sound path is kept when off; Privacy mode can still mute sound while the window is focused).
 
 Example **I2P router** dialog (**⋯ → I2P router…** / **Ctrl/Cmd+R**):
@@ -469,7 +469,7 @@ sound notifications (`QSoundEffect`) for incoming messages.
    - press `Connect`.
 6. After the connection is established:
    - type your message in the bottom input field;
-   - send with `Shift+Enter` (or `Ctrl+Enter` / `⌘+Enter` on macOS), or click `Send`.
+   - send with `Enter` on macOS, or `Ctrl+Enter` on Windows/Linux; click `Send` if you prefer the button.
 7. The new message will appear on the right side of the chat area as your outgoing message.
 
 #### 6.2. Sending a file to a peer

@@ -2,6 +2,7 @@ import asyncio
 import base64
 import errno
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -366,8 +367,8 @@ MessageCallback = Callable[[ChatMessage], Any]
 PeerChangedCallback = Callable[[Optional[str]], Any]
 FileEventCallback = Callable[[FileTransferInfo], Any]
 SimpleCallback = Callable[[str], Any]
-TrustDecisionCallback = Callable[[str, str, str], bool]
-TrustMismatchDecisionCallback = Callable[[str, str, str, str, str], bool]
+TrustDecisionCallback = Callable[[str, str, str], bool | Awaitable[bool]]
+TrustMismatchDecisionCallback = Callable[[str, str, str, str, str], bool | Awaitable[bool]]
 FileOfferCallback = Callable[[str, int], Any]
 
 
@@ -2344,13 +2345,17 @@ class I2PChatCore:
         decision_future: asyncio.Future[bool] = loop.create_future()
 
         def _ask_user() -> None:
-            try:
-                approved = bool(self.on_trust_decision(peer_addr, fingerprint, signing_key_hex))
-            except Exception as e:
-                logger.warning("TOFU trust callback failed: %s", e)
-                approved = False
-            if not decision_future.done():
-                decision_future.set_result(approved)
+            async def _resolve() -> None:
+                try:
+                    result = self.on_trust_decision(peer_addr, fingerprint, signing_key_hex)
+                    approved = bool(await result) if inspect.isawaitable(result) else bool(result)
+                except Exception as e:
+                    logger.warning("TOFU trust callback failed: %s", e)
+                    approved = False
+                if not decision_future.done():
+                    decision_future.set_result(approved)
+
+            loop.create_task(_resolve())
 
         loop.call_soon(_ask_user)
         return await decision_future
@@ -2369,21 +2374,23 @@ class I2PChatCore:
         decision_future: asyncio.Future[bool] = loop.create_future()
 
         def _ask_user() -> None:
-            try:
-                approved = bool(
-                    self.on_trust_mismatch_decision(
+            async def _resolve() -> None:
+                try:
+                    result = self.on_trust_mismatch_decision(
                         peer_addr,
                         old_fingerprint,
                         new_fingerprint,
                         old_signing_key_hex,
                         new_signing_key_hex,
                     )
-                )
-            except Exception as e:
-                logger.warning("Trust mismatch callback failed: %s", e)
-                approved = False
-            if not decision_future.done():
-                decision_future.set_result(approved)
+                    approved = bool(await result) if inspect.isawaitable(result) else bool(result)
+                except Exception as e:
+                    logger.warning("Trust mismatch callback failed: %s", e)
+                    approved = False
+                if not decision_future.done():
+                    decision_future.set_result(approved)
+
+            loop.create_task(_resolve())
 
         loop.call_soon(_ask_user)
         return await decision_future

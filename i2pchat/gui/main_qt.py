@@ -1789,15 +1789,15 @@ def save_notify_quiet_mode(quiet: bool) -> None:
 
 def load_compose_enter_sends() -> bool:
     data = _load_ui_prefs()
-    return data.get("compose_enter_sends") is True
+    value = data.get("compose_enter_sends")
+    if isinstance(value, bool):
+        return value
+    return sys.platform == "darwin"
 
 
 def save_compose_enter_sends(enter_sends: bool) -> None:
     data = _load_ui_prefs()
-    if enter_sends:
-        data["compose_enter_sends"] = True
-    else:
-        data.pop("compose_enter_sends", None)
+    data["compose_enter_sends"] = bool(enter_sends)
     _save_ui_prefs(data)
 
 
@@ -3365,8 +3365,8 @@ class MessageInputEdit(QtWidgets.QTextEdit):
 
     В протокол и черновики уходит Unicode через plainTextForSend().
 
-    Режим по умолчанию: Enter — новая строка; Shift+Enter и Ctrl/⌘+Enter — отправка.
-    Режим «Enter отправляет»: Enter — отправка; Shift+Enter — новая строка (Ctrl/⌘+Enter тоже отправка).
+    По умолчанию: macOS — Enter отправляет; Windows/Linux — Enter даёт новую строку.
+    Во всех режимах Shift+Enter вставляет новую строку, а Ctrl/⌘+Enter отправляет.
     """
     sendRequested = QtCore.pyqtSignal()
     imagePasteReady = QtCore.pyqtSignal(str)
@@ -3634,12 +3634,12 @@ class MessageInputEdit(QtWidgets.QTextEdit):
                             | QtCore.Qt.KeyboardModifier.ControlModifier
                         )
                     )
-                    wants_send = shift_down or command_like
+                    wants_send = command_like
                 else:
                     ctrl_down = bool(
                         modifiers & QtCore.Qt.KeyboardModifier.ControlModifier
                     )
-                    wants_send = shift_down or ctrl_down
+                    wants_send = ctrl_down
 
             if wants_send:
                 self.sendRequested.emit()
@@ -5291,16 +5291,37 @@ def _physical_key_matches(
 
 
 def _compose_input_placeholder_text(*, enter_sends: bool) -> str:
-    """Подсказка в поле ввода: только релевантный модификатор (⌘ на macOS, Ctrl иначе)."""
-    send_mod = "⌘" if sys.platform == "darwin" else "Ctrl"
+    """Подсказка в поле ввода с платформенным поведением отправки."""
+    send_mod = (
+        "Command+Enter or Ctrl+Enter"
+        if sys.platform == "darwin"
+        else "Ctrl+Enter"
+    )
     if enter_sends:
         return (
-            "Type message. Enter = send; Shift+Enter = new line. "
+            f"Type message. Enter = send; Shift+Enter = new line; {send_mod} also sends. "
             "Drag and drop images or files to send."
         )
     return (
-        f"Type message. Enter = new line; Shift+Enter or {send_mod}+Enter = send. "
+        f"Type message. Enter = new line; Shift+Enter = new line; {send_mod} = send. "
         "Drag and drop images or files to send."
+    )
+
+
+def _compose_send_shortcut_tooltip_text(*, enter_sends: bool) -> str:
+    send_mod = (
+        "Command+Enter or Ctrl+Enter"
+        if sys.platform == "darwin"
+        else "Ctrl+Enter"
+    )
+    if enter_sends:
+        return (
+            "Keyboard: Enter sends. Shift+Enter inserts a new line. "
+            f"{send_mod} also sends."
+        )
+    return (
+        "Keyboard: Enter inserts a new line. Shift+Enter also inserts a new line. "
+        f"{send_mod} sends."
     )
 
 
@@ -6798,14 +6819,20 @@ class ChatWindow(QtWidgets.QMainWindow):
         delivery = self.core.get_delivery_telemetry()
         state = str(delivery.get("state", "unknown"))
         short_route, route_tip = _delivery_status_bar_and_tooltip(state)
+        shortcut_tip = _compose_send_shortcut_tooltip_text(
+            enter_sends=self._compose_enter_sends
+        )
         if state == "offline-ready" and not bool(delivery.get("secure_live")):
             self.send_button.setText("Send\noffline")
         else:
             self.send_button.setText("Send")
-        _set_tooltip_if_changed(self.send_button, route_tip)
+        _set_tooltip_if_changed(
+            self.send_button,
+            f"{route_tip}\n\n{shortcut_tip}",
+        )
         _set_tooltip_if_changed(
             self.input_edit,
-            "Current mode: " + short_route + ". " + route_tip,
+            "Current mode: " + short_route + ". " + route_tip + "\n\n" + shortcut_tip,
         )
 
     def _append_item(self, item: ChatItem) -> None:
@@ -9144,6 +9171,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         save_compose_enter_sends(self._compose_enter_sends)
         self.input_edit.set_enter_sends(self._compose_enter_sends)
         self._refresh_compose_placeholder_shortcuts()
+        self._refresh_send_controls()
         self._compose_enter_sends_toggle_btn.setText(
             self._compose_enter_sends_toggle_label()
         )

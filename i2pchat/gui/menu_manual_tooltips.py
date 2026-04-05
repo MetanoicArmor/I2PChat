@@ -132,7 +132,8 @@ TT_NOTIFICATION_SOUND_TOGGLE = (
 
 TT_COMPOSE_ENTER_SENDS_TOGGLE = (
     "When ON: plain Enter sends the message; Shift+Enter inserts a new line. "
-    "When OFF: Enter starts a new line; Shift+Enter or Ctrl/⌘+Enter sends (default). "
+    "When OFF: Enter starts a new line; Shift+Enter still inserts a new line; "
+    "Ctrl+Enter sends (on macOS: Command+Enter or Ctrl+Enter). "
     "The compose field hint updates to match."
 )
 
