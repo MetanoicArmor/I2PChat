@@ -34,6 +34,8 @@ makepkg --printsrcinfo > .SRCINFO
 
 ## Bump версии
 
+0. Актуальные хеши с GitHub Releases: **`./packaging/refresh-checksums.sh vX.Y.Z`** — подставьте две строки для Linux zip в соответствующие `PKGBUILD` (и `pkgrel+1`, если `pkgver` не менялся, а zip перезалили).
+
 1. Обновите `pkgver` (и при необходимости `pkgrel`) в `PKGBUILD`.
 2. Обновите `sha256sums` для zip и `icon.png` (иконка должна существовать в теге `v$pkgver`).
 3. Выполните `makepkg --printsrcinfo > .SRCINFO`, проверьте `makepkg -f` / `namcap`.

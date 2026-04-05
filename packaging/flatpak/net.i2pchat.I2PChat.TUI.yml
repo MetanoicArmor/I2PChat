@@ -24,4 +24,4 @@ modules:
     sources:
       - type: archive
         url: https://github.com/MetanoicArmor/I2PChat/releases/download/v1.2.3/I2PChat-linux-x86_64-tui-v1.2.3.zip
-        sha256: '0ca8558b9f3b6db9c45178b2863c86fa0101fa64a2b8695215b075b37fb37970'
+        sha256: 'afea5ce6ff31db968a847747de5801dbff039146eca78006ca306b2a12910ad6'
