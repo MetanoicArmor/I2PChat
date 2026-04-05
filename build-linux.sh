@@ -247,26 +247,36 @@ chmod +x "${TUI_STAGE}/i2pchat-tui" "${TUI_STAGE}/usr/bin/${APP_NAME}-tui"
 rm -f "${TUI_ZIP}"
 TUI_ZIP_ABS="$(pwd)/${TUI_ZIP}"
 # Same as macOS: preserve symlinks in PyInstaller onedir (avoid duplicated _internal).
-# Pure Python (no zip(1)); ZipFile.write(resolve_symlinks=False) matches zip -y.
+# Pure Python (no zip(1)); Unix symlink entries (no ZipFile.write(resolve_symlinks=…)
+# — not available on all runtimes, e.g. current CPython 3.14 in this venv).
 python - "${TUI_STAGE}" "${TUI_ZIP_ABS}" <<'PY'
 import os
 import sys
 import zipfile
 
 stage, out = sys.argv[1], sys.argv[2]
+
+
+def add_path(zf, path, arcname):
+    if os.path.islink(path):
+        zi = zipfile.ZipInfo(arcname)
+        zi.create_system = 3  # Unix
+        st = os.lstat(path)
+        zi.external_attr = (st.st_mode & 0xFFFF) << 16
+        zf.writestr(zi, os.fsencode(os.readlink(path)))
+    else:
+        zf.write(path, arcname)
+
+
 with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     for root, dirnames, files in os.walk(stage, followlinks=False):
         for d in dirnames:
             p = os.path.join(root, d)
             if os.path.islink(p):
-                zf.write(p, os.path.relpath(p, stage), resolve_symlinks=False)
+                add_path(zf, p, os.path.relpath(p, stage))
         for name in files:
             path = os.path.join(root, name)
-            arcname = os.path.relpath(path, stage)
-            if os.path.islink(path):
-                zf.write(path, arcname, resolve_symlinks=False)
-            else:
-                zf.write(path, arcname)
+            add_path(zf, path, os.path.relpath(path, stage))
 PY
 rm -rf "${TUI_STAGE}"
 echo "✔ Packed ${TUI_ZIP}"
