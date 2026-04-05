@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Git tag (e.g. v1.2.3) — checkout that ref, run build-linux.sh, upload zips + SHA256SUMS to the release"
+        description: "Release tag (e.g. v1.2.3) — upload zips + SHA256SUMS here"
         required: true
         type: string
+      source_ref:
+        description: "Ref to build from (leave empty = tag). Old tags may lack TUI zip in build-linux.sh — use main if VERSION on main still matches (e.g. 1.2.3)."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -22,7 +27,7 @@ jobs:
       I2PCHAT_SKIP_GPG_SIGN: "1"
       APPIMAGE_EXTRACT_AND_RUN: "1"
     steps:
-      - name: Resolve tag
+      - name: Resolve tag and checkout ref
         id: meta
         run: |
           R="${{ github.event.inputs.tag }}"
@@ -33,10 +38,17 @@ jobs:
           fi
           echo "tag=v${R}" >> "$GITHUB_OUTPUT"
           echo "ver=${R}" >> "$GITHUB_OUTPUT"
+          SRC="${{ github.event.inputs.source_ref }}"
+          SRC="$(echo "$SRC" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -z "$SRC" ]; then
+            SRC="v${R}"
+          fi
+          echo "checkout_ref=${SRC}" >> "$GITHUB_OUTPUT"
+          echo "Will build from ref: ${SRC}, upload to release: v${R}"
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ steps.meta.outputs.tag }}
+          ref: ${{ steps.meta.outputs.checkout_ref }}
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
@@ -78,6 +90,10 @@ jobs:
           for f in "$ZIP_GUI" "$ZIP_TUI" SHA256SUMS; do
             if [ ! -f "$f" ]; then
               echo "ERROR: missing $f" >&2
+              echo "Contents of workspace root:" >&2
+              ls -la >&2 || true
+              echo >&2
+              echo "Hint: tag ${TAG} may predate TUI zip support in build-linux.sh. Re-run with source_ref: main (VERSION on that ref must be ${VER})." >&2
               exit 1
             fi
           done
