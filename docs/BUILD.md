@@ -8,13 +8,13 @@ Python **3.14+** is recommended everywhere. The repo vendors a local **i2plib** 
 |--------|---------|------------------|
 | Linux (AppImage + zip) | `./build-linux.sh` | `I2PChat.AppImage`, `I2PChat-linux-<arch>-v<version>.zip` (AppImage inside), **`I2PChat-linux-<arch>-tui-v<version>.zip`** (TUI-only tree + `i2pchat-tui` launcher) |
 | macOS (.app + zip) | `./build-macos.sh` | `dist/I2PChat.app`, `I2PChat-macOS-<arch>-v<version>.zip`, **`I2PChat-macos-<arch>-tui-v<version>.zip`** |
-| Windows | `.\build-windows.ps1` | `dist\I2PChat\I2PChat.exe`, `I2PChat-tui.exe`, **`I2PChat-windows-tui-x64-v<version>.zip`** |
+| Windows | `.\build-windows.ps1` | `dist\I2PChat\I2PChat.exe`, **`I2PChat-windows-x64-v<version>.zip`**, **`I2PChat-windows-tui-x64-v<version>.zip`**, plus **`I2PChat-windows-x64-winget-v<version>.zip`** / **`I2PChat-windows-tui-x64-winget-v<version>.zip`** (same trees **without** embedded i2pd — for winget / Microsoft validation) |
 
 **Linux script** uses `.venv314`, PyInstaller **`I2PChat.spec`** (GUI + TUI exe sharing one Qt onedir), `appimagetool`; the AppImage includes `usr/bin/I2PChat` and **`usr/bin/I2PChat-tui`**, plus a TUI `.desktop` with `Terminal=true`. After that it runs **`I2PChat-tui.spec`** → `dist/I2PChat-tui/` (no Qt) and packs **`I2PChat-linux-*-tui-*.zip`** from that tree.
 
 **macOS** builds `dist/I2PChat.app` from **`I2PChat.spec`** (GUI + in-bundle TUI entrypoint sharing Qt), then **`I2PChat-tui.spec`** for the standalone **`I2PChat-macos-*-tui-*.zip`**.
 
-**Windows** runs both specs; the **`-tui`** zip is built from **`dist\I2PChat-tui\`**. Safer one-off PowerShell:
+**Windows** runs both specs twice: first **with** bundled i2pd (default zips), then with **`I2PCHAT_OMIT_BUNDLED_I2PD=1`** for the **`*-winget-*`** zips (PyInstaller omits i2pd binaries — AV “riskware” scans on `winget-pkgs`). The **`-tui`** zip is built from **`dist\I2PChat-tui\`**. Safer one-off PowerShell:
 
 ```powershell
 powershell -NoProfile -Command "Set-ExecutionPolicy -Scope Process RemoteSigned; .\build-windows.ps1"
@@ -24,7 +24,7 @@ powershell -NoProfile -Command "Set-ExecutionPolicy -Scope Process RemoteSigned;
 
 Release build scripts generate:
 
-- `SHA256SUMS` for **both** the main release zip(s) and the **TUI-only** zip produced on that platform (two lines per OS build);
+- `SHA256SUMS` for the main GUI zip, TUI zip, and on Windows the two **`*-winget-*`** zips (four lines on Windows);
 - detached armored GPG signature `SHA256SUMS.asc` (best-effort by default).
 
 These files are **not** tracked in git; upload them **with the release assets** on GitHub.

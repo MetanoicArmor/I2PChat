@@ -98,12 +98,14 @@ Remove-PathWithRetry -Path "dist\I2PChat"
 Remove-PathWithRetry -Path "build\I2PChat"
 Invoke-NativeChecked $PythonExe @("-m", "PyInstaller", "--clean", "-y", "I2PChat.spec")
 
-if (Test-Path "vendor\i2pd\windows-x64\i2pd.exe") {
-    $BundledRouterDir = "dist\I2PChat\vendor\i2pd\windows-x64"
-    New-Item -ItemType Directory -Force -Path $BundledRouterDir | Out-Null
-    Copy-Item "vendor\i2pd\windows-x64\i2pd.exe" "$BundledRouterDir\i2pd.exe"
-    Get-ChildItem "vendor\i2pd\windows-x64\*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item $_.FullName $BundledRouterDir
+if ($env:I2PCHAT_OMIT_BUNDLED_I2PD -ne "1") {
+    if (Test-Path "vendor\i2pd\windows-x64\i2pd.exe") {
+        $BundledRouterDir = "dist\I2PChat\vendor\i2pd\windows-x64"
+        New-Item -ItemType Directory -Force -Path $BundledRouterDir | Out-Null
+        Copy-Item "vendor\i2pd\windows-x64\i2pd.exe" "$BundledRouterDir\i2pd.exe"
+        Get-ChildItem "vendor\i2pd\windows-x64\*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName $BundledRouterDir
+        }
     }
 }
 
@@ -158,15 +160,80 @@ Compress-Archive -Path "$TuiStage\\*" -DestinationPath $TuiZipFile -CompressionL
 Remove-Item -Recurse -Force $TuiStage
 Write-Host "Packed (TUI only): $TuiZipFile"
 
+# Second pass: PyInstaller without embedded i2pd — zips for winget / Microsoft validation (no Riskware.I2PD.A).
+Write-Host ""
+Write-Host "==> Rebuild for winget (I2PCHAT_OMIT_BUNDLED_I2PD=1, no embedded i2pd)"
+Stop-I2PChatProcessesLockingDist
+Remove-PathWithRetry -Path "dist\I2PChat"
+Remove-PathWithRetry -Path "dist\I2PChat-tui"
+Remove-PathWithRetry -Path "build\I2PChat"
+Remove-PathWithRetry -Path "build\I2PChat-tui"
+$env:I2PCHAT_OMIT_BUNDLED_I2PD = "1"
+try {
+    Invoke-NativeChecked $PythonExe @("-m", "PyInstaller", "--clean", "-y", "I2PChat.spec")
+    Invoke-NativeChecked $PythonExe @("-m", "PyInstaller", "--clean", "-y", "I2PChat-tui.spec")
+}
+finally {
+    Remove-Item Env:\I2PCHAT_OMIT_BUNDLED_I2PD -ErrorAction SilentlyContinue
+}
+
+$WingetZipFile = "dist\\I2PChat-windows-x64-winget-v$ReleaseVersion.zip"
+if (Test-Path $WingetZipFile) {
+    Remove-Item -Force $WingetZipFile
+}
+$WingetStage = "dist\\I2PChat-windows-x64-winget-v$ReleaseVersion"
+if (Test-Path $WingetStage) {
+    Remove-Item -Recurse -Force $WingetStage
+}
+New-Item -ItemType Directory -Path $WingetStage | Out-Null
+Copy-Item -Recurse "dist\\I2PChat" "$WingetStage\\I2PChat"
+if (Test-Path $BlindboxInstallSrc) {
+    Copy-Item $BlindboxInstallSrc "$WingetStage\\install.sh"
+}
+Compress-Archive -Path "$WingetStage\\*" -DestinationPath $WingetZipFile -CompressionLevel Optimal
+Remove-Item -Recurse -Force $WingetStage
+Write-Host "Packed (winget GUI, no bundled i2pd): $WingetZipFile"
+
+$WingetTuiZipFile = "dist\\I2PChat-windows-tui-x64-winget-v$ReleaseVersion.zip"
+if (Test-Path $WingetTuiZipFile) {
+    Remove-Item -Force $WingetTuiZipFile
+}
+$WingetTuiStage = "dist\\I2PChat-windows-tui-x64-winget-v$ReleaseVersion"
+if (Test-Path $WingetTuiStage) {
+    Remove-Item -Recurse -Force $WingetTuiStage
+}
+New-Item -ItemType Directory -Path "$WingetTuiStage\\I2PChat" | Out-Null
+Copy-Item "dist\\I2PChat-tui\\I2PChat-tui.exe" "$WingetTuiStage\\I2PChat\\"
+Copy-Item -Recurse "dist\\I2PChat-tui\\_internal" "$WingetTuiStage\\I2PChat\\_internal"
+if (Test-Path "dist\\I2PChat-tui\\vendor") {
+    Copy-Item -Recurse "dist\\I2PChat-tui\\vendor" "$WingetTuiStage\\I2PChat\\vendor"
+}
+if (Test-Path $BlindboxInstallSrc) {
+    Copy-Item $BlindboxInstallSrc "$WingetTuiStage\\install.sh"
+}
+Compress-Archive -Path "$WingetTuiStage\\*" -DestinationPath $WingetTuiZipFile -CompressionLevel Optimal
+Remove-Item -Recurse -Force $WingetTuiStage
+Write-Host "Packed (winget TUI, no bundled i2pd): $WingetTuiZipFile"
+
 $sumGui = (Get-FileHash -Path $ZipFile -Algorithm SHA256).Hash.ToLowerInvariant()
 $sumTui = (Get-FileHash -Path $TuiZipFile -Algorithm SHA256).Hash.ToLowerInvariant()
+$sumWinget = (Get-FileHash -Path $WingetZipFile -Algorithm SHA256).Hash.ToLowerInvariant()
+$sumWingetTui = (Get-FileHash -Path $WingetTuiZipFile -Algorithm SHA256).Hash.ToLowerInvariant()
 $nameGui = Split-Path -Path $ZipFile -Leaf
 $nameTui = Split-Path -Path $TuiZipFile -Leaf
+$nameWinget = Split-Path -Path $WingetZipFile -Leaf
+$nameWingetTui = Split-Path -Path $WingetTuiZipFile -Leaf
 Set-Content -Path "SHA256SUMS" -Encoding utf8 -Value @(
     "$sumGui  $nameGui",
-    "$sumTui  $nameTui"
+    "$sumTui  $nameTui",
+    "$sumWinget  $nameWinget",
+    "$sumWingetTui  $nameWingetTui"
 )
-Write-Host "Generated: SHA256SUMS (GUI + TUI zips)"
+Write-Host "Generated: SHA256SUMS (full + winget zips)"
+Write-Host ""
+Write-Host "==> winget manifest InstallerSha256 (paste into packaging/winget/*/MetanoicArmor.I2PChat*.installer.yaml)"
+Write-Host "  MetanoicArmor.I2PChat:     $sumWinget"
+Write-Host "  MetanoicArmor.I2PChat.TUI: $sumWingetTui"
 
 if ($env:I2PCHAT_SKIP_GPG_SIGN -eq "1") {
     Write-Warning "Skipping GPG detached signature (I2PCHAT_SKIP_GPG_SIGN=1)"

@@ -1,9 +1,9 @@
 # winget — TUI-only package (`MetanoicArmor.I2PChat.TUI`)
 
-Portable zip: **`I2PChat-windows-tui-x64-vVERSION.zip`** (see root [`README.md`](../../README.md)). Separate package id from GUI [`MetanoicArmor.I2PChat`](../winget/).
+**winget** uses **`I2PChat-windows-tui-x64-winget-vVERSION.zip`** (no embedded i2pd — см. [`../winget/README.md`](../winget/README.md)). Полный zip с роутером: **`I2PChat-windows-tui-x64-vVERSION.zip`**. Отдельный package id от GUI [`MetanoicArmor.I2PChat`](../winget/).
 
 1. Fork [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs).
-2. After **`I2PChat-windows-tui-x64-vX.Y.Z.zip`** is on the GitHub release, run from repo root:
+2. После публикации **`I2PChat-windows-tui-x64-winget-vX.Y.Z.zip`** (и остальных артефактов) на GitHub Release, из корня репозитория:
 
    ```bash
    ./packaging/refresh-checksums.sh vX.Y.Z

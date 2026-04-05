@@ -36,6 +36,9 @@ else:
     if os.path.isfile(_i2pd_path):
         _i2pd_binaries.append((_i2pd_path, os.path.join('vendor', 'i2pd', 'linux-x86_64')))
 
+if os.environ.get("I2PCHAT_OMIT_BUNDLED_I2PD", "").strip().lower() in ("1", "true", "yes"):
+    _i2pd_binaries = []
+
 _tui_datas = [
     ('VERSION', '.'),
     ('i2pchat/blindbox/blindbox_server_example.py', 'i2pchat/blindbox'),

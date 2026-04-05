@@ -21,12 +21,23 @@ winget validate --manifest .\packaging\winget\1.2.3
 
 Скопируйте каталог под новую версию, обновите `PackageVersion` во всех трёх файлах, `InstallerUrl` / `InstallerSha256` и при необходимости `ReleaseDate`. Либо используйте [`../refresh-checksums.sh`](../refresh-checksums.sh) и вручную подставьте значения в YAML.
 
-## ESRP / wingetbot: Riskware.I2PD.A (ESET)
+## Microsoft: Installers Scan / `binaryValidation` / ESRP (i2pd)
 
-В zip лежит **вендорный [`i2pd`](https://github.com/PurpleI2P/i2pd)** (маршрутизатор I2P для встроенного режима). Сканеры вроде ESET помечают такие exe как **Win64/Riskware.I2PD.A** — это **ожидаемый** класс детекций для I2P/Tor-подобного ПО, а не признак вредоноса.
+Пайплайн **winget-pkgs** распаковывает zip и прогоняет бинарники; **встроенный i2pd** даёт детекции вроде **Win64/Riskware.I2PD.A** и падает **Installers Scan**.
 
-**Что сделать в PR в winget-pkgs:** оставьте комментарий для модераторов (на английском), например:
+**Решение в этом репозитории:** `build-windows.ps1` после обычных архивов делает **второй** проход PyInstaller с `I2PCHAT_OMIT_BUNDLED_I2PD=1` (см. `I2PChat.spec` / `I2PChat-tui.spec`) и упаковывает:
 
-> The ESRP-flagged file is the **bundled upstream i2pd** router (`vendor/.../i2pd.exe`) shipped for the optional embedded I2P router / SAM connectivity. It matches our published GitHub Release; same category of binary as official [PurpleI2P/i2pd](https://github.com/PurpleI2P/i2pd) releases. We request manual review — this is a known AV “riskware” label for legitimate I2P infrastructure, not malware.
+- `I2PChat-windows-x64-winget-v<версия>.zip`
+- `I2PChat-windows-tui-x64-winget-v<версия>.zip`
 
-При необходимости обновите манифест из этого репозитория (поля `Description` / `ReleaseNotes` в `*.locale.en-US.yaml` уже поясняют наличие i2pd) и запушьте коммит в ветку PR.
+Манифесты winget указывают на **эти** URL. В архивах **нет** вендорного i2pd — для работы нужен **системный** i2pd (SAM) либо полный zip с релиза GitHub.
+
+**Перед merge в winget-pkgs:**
+
+1. Залить оба `*-winget-*.zip` на **тот же** GitHub Release, что и обычные Windows zip.
+2. Подставить SHA256: вывод в конце `build-windows.ps1` или `./packaging/refresh-checksums.sh vX.Y.Z` (секции *winget*).
+3. В `MetanoicArmor.I2PChat*.installer.yaml` заменить placeholder `0000…0000` на реальные хеши и запушить в ветку PR.
+
+**Ответ msftbot (англ.), если попросят пояснить смену URL:**
+
+> We switched the manifest to the **`*-winget-*`** release assets built **without** the embedded i2pd binary so the installer passes Microsoft’s **Installers Scan**. The standard `I2PChat-windows-x64-v*.zip` on GitHub Releases still includes the bundled i2pd router for users who want it. i2pd upstream: https://github.com/PurpleI2P/i2pd

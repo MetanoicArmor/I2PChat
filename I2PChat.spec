@@ -35,6 +35,10 @@ else:
     if os.path.isfile(_i2pd_path):
         _i2pd_binaries.append((_i2pd_path, os.path.join('vendor', 'i2pd', 'linux-x86_64')))
 
+# Set I2PCHAT_OMIT_BUNDLED_I2PD=1 for a winget/store-friendly Windows build without embedded i2pd (Microsoft pipeline AV).
+if os.environ.get("I2PCHAT_OMIT_BUNDLED_I2PD", "").strip().lower() in ("1", "true", "yes"):
+    _i2pd_binaries = []
+
 _analysis_datas = [
     ('VERSION', '.'),
     ('assets/sounds/notify.wav', 'assets/sounds'),

@@ -20,12 +20,16 @@ BASE="https://github.com/MetanoicArmor/I2PChat/releases/download/v${TAG}"
 MAC_ZIP="I2PChat-macOS-arm64-v${TAG}.zip"
 MAC_TUI_ZIP="I2PChat-macos-arm64-tui-v${TAG}.zip"
 WIN_TUI_ZIP="I2PChat-windows-tui-x64-v${TAG}.zip"
+WIN_GUI_WINGET_ZIP="I2PChat-windows-x64-winget-v${TAG}.zip"
+WIN_TUI_WINGET_ZIP="I2PChat-windows-tui-x64-winget-v${TAG}.zip"
 LINUX_TUI_ZIP="I2PChat-linux-x86_64-tui-v${TAG}.zip"
 declare -a FILES=(
   "${MAC_ZIP}"
   "${MAC_TUI_ZIP}"
   "I2PChat-windows-x64-v${TAG}.zip"
   "${WIN_TUI_ZIP}"
+  "${WIN_GUI_WINGET_ZIP}"
+  "${WIN_TUI_WINGET_ZIP}"
   "I2PChat-linux-x86_64-v${TAG}.zip"
   "${LINUX_TUI_ZIP}"
 )
@@ -35,6 +39,8 @@ echo "# --- SHA256 (paste into packaging files) ---"
 MAC_SUM=""
 MAC_TUI_SUM=""
 WIN_TUI_SUM=""
+WIN_GUI_WINGET_SUM=""
+WIN_TUI_WINGET_SUM=""
 for f in "${FILES[@]}"; do
   url="${BASE}/${f}"
   sum="$(curl -fsSL "$url" | sha256sum | awk '{print $1}')" || {
@@ -51,6 +57,12 @@ for f in "${FILES[@]}"; do
   if [[ "$f" == "$WIN_TUI_ZIP" ]]; then
     WIN_TUI_SUM="$sum"
   fi
+  if [[ "$f" == "$WIN_GUI_WINGET_ZIP" ]]; then
+    WIN_GUI_WINGET_SUM="$sum"
+  fi
+  if [[ "$f" == "$WIN_TUI_WINGET_ZIP" ]]; then
+    WIN_TUI_WINGET_SUM="$sum"
+  fi
 done
 
 icon_url="https://github.com/MetanoicArmor/I2PChat/raw/v${TAG}/icon.png"
@@ -65,3 +77,9 @@ echo "  version \"${TAG}\""
 echo "  sha256 \"${MAC_TUI_SUM}\""
 echo "# --- winget MetanoicArmor.I2PChat.TUI (windows TUI zip) ---"
 echo "  InstallerSha256: ${WIN_TUI_SUM}"
+echo "# --- winget MetanoicArmor.I2PChat (windows GUI *-winget-* zip, no embedded i2pd) ---"
+echo "  InstallerUrl: .../${WIN_GUI_WINGET_ZIP}"
+echo "  InstallerSha256: ${WIN_GUI_WINGET_SUM}"
+echo "# --- winget MetanoicArmor.I2PChat.TUI (*-winget-* zip) ---"
+echo "  InstallerUrl: .../${WIN_TUI_WINGET_ZIP}"
+echo "  InstallerSha256: ${WIN_TUI_WINGET_SUM}"
