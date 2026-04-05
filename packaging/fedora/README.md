@@ -10,7 +10,7 @@
 
 ## Артефакт на GitHub Release
 
-При публикации релиза (или вручную через **workflow_dispatch**) job **rpm** в [`.github/workflows/release-linux-pkgs.yml`](../../.github/workflows/release-linux-pkgs.yml) собирает **`i2pchat_<версия>_x86_64.rpm`** и прикрепляет его к тому же релизу. Локально то же самое: скрипт [`build-rpm-from-release.sh`](build-rpm-from-release.sh) (удобнее всего в контейнере Fedora, см. ниже).
+Сборка **`i2pchat_<версия>_x86_64.rpm`** в CI не запускается; используйте скрипт [`build-rpm-from-release.sh`](build-rpm-from-release.sh) локально или в контейнере Fedora (см. ниже), либо COPR.
 
 ## Перед сборкой (вручную / COPR)
 

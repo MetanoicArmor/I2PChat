@@ -92,7 +92,7 @@ Public replicas behind an I2P tunnel may keep replica auth empty; raw TCP / loop
 
 ## Debian `.deb` from release zip
 
-See [`../packaging/debian/README.md`](../packaging/debian/README.md) and [`../packaging/fedora/README.md`](../packaging/fedora/README.md). GitHub Actions workflow `.github/workflows/release-linux-pkgs.yml` can attach a `.deb` and `.rpm` when a release is published (or run manually with a tag).
+See [`../packaging/debian/README.md`](../packaging/debian/README.md) and [`../packaging/fedora/README.md`](../packaging/fedora/README.md). GitHub Actions workflow `.github/workflows/release-linux-pkgs.yml` attaches **`.deb`** (GUI + TUI) when a release is published (or run manually with a tag).
 
 ## Maintainer packaging (brew, winget, AUR, Fedora)
 

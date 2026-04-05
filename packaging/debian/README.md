@@ -43,11 +43,11 @@
 
 ## Автоматическая сборка в CI
 
-При **публикации** GitHub Release (событие `published`) job **deb** в workflow [`.github/workflows/release-linux-pkgs.yml`](../../.github/workflows/release-linux-pkgs.yml) ждёт **`I2PChat-linux-x86_64-v<версия>.zip`** и **`I2PChat-linux-x86_64-tui-v<версия>.zip`**, собирает **`i2pchat_…_amd64.deb`** и **`i2pchat-tui_…_amd64.deb`**, загружает их на релиз. В том же workflow параллельно собирается **RPM** для Fedora (см. [`../fedora/README.md`](../fedora/README.md)).
+При **публикации** GitHub Release (событие `published`) job **deb** в workflow [`.github/workflows/release-linux-pkgs.yml`](../../.github/workflows/release-linux-pkgs.yml) ждёт **`I2PChat-linux-x86_64-v<версия>.zip`** и **`I2PChat-linux-x86_64-tui-v<версия>.zip`**, собирает **`i2pchat_…_amd64.deb`** и **`i2pchat-tui_…_amd64.deb`**, загружает их на релиз.
 
 Условие: в момент срабатывания workflow **оба** linux zip уже должны быть в списке ассетов релиза. Событие `release: published` иногда приходит **раньше**, чем GitHub успевает отдать большие ассеты; в CI добавлено **ожидание** по API. Для форка используется `GITHUB_REPOSITORY` (или `I2PCHAT_RELEASE_REPO=owner/name` при локальном запуске).
 
-Если релиз уже опубликован **без** `.deb`/`.rpm`, в GitHub Actions запустите workflow **Release Linux packages** вручную (**workflow_dispatch**) и укажите тег `vX.Y.Z` — на релизе должны быть оба zip: **`I2PChat-linux-x86_64-vX.Y.Z.zip`** и **`I2PChat-linux-x86_64-tui-vX.Y.Z.zip`**.
+Если релиз уже опубликован **без** `.deb`, в GitHub Actions запустите workflow **Release Linux packages** вручную (**workflow_dispatch**) и укажите тег `vX.Y.Z` — на релизе должны быть оба zip: **`I2PChat-linux-x86_64-vX.Y.Z.zip`** и **`I2PChat-linux-x86_64-tui-vX.Y.Z.zip`**.
 
 ## Публикация apt-репозитория (кратко)
 

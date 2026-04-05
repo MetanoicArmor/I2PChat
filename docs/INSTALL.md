@@ -41,7 +41,7 @@ Package pages: [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i
 
 **Optional apt source (same repo, GitHub Pages):** if maintainers enabled signing and **Pages → GitHub Actions** deploy, you can add the published apt mirror and run `sudo apt install i2pchat` — see [`packaging/apt/README.md`](../packaging/apt/README.md).
 
-**Optional `.rpm` (Fedora / RHEL-compatible):** look on the same release page for **`i2pchat_<version>_x86_64.rpm`** (it is added by CI, not by the main release build scripts). Install with `sudo dnf install ./i2pchat_*_x86_64.rpm` (or `rpm -i`). If the file is missing, use the **Linux AppImage zip** above, or ask a maintainer to run **Actions → Release Linux packages** for that tag. COPR and [`packaging/fedora/`](../packaging/fedora/README.md) cover other install paths.
+**Optional `.rpm` (Fedora / RHEL-compatible):** соберите локально или через COPR — см. [`packaging/fedora/README.md`](../packaging/fedora/README.md). На странице релиза готовый `.rpm` не обязателен; можно поставить из **Linux AppImage zip** выше.
 
 ## Router (I2P)
 

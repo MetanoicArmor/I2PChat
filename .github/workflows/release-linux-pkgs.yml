@@ -1,5 +1,5 @@
-# Build amd64 .deb and x86_64 .rpm from the published Linux zip and attach to the same release.
-# Triggers: release published (linux zip must already be on the asset list), or workflow_dispatch with tag vX.Y.Z.
+# Build amd64 .deb packages (GUI + TUI) from published Linux zips and attach to the same release.
+# Triggers: release published (linux zips must already be on the asset list), or workflow_dispatch with tag vX.Y.Z.
 name: Release Linux packages
 
 on:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v1.2.3) — release with Linux GUI zip + TUI zip; uploads i2pchat + i2pchat-tui .deb + .rpm"
+        description: "Release tag (e.g. v1.2.3) — release with Linux GUI zip + TUI zip; uploads i2pchat + i2pchat-tui .deb"
         required: true
         type: string
 
@@ -159,73 +159,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
-  rpm:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Derive version from release tag
-        id: meta
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          REPO="${{ github.repository }}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${{ github.event.release.tag_name }}"
-          fi
-          VER="${TAG#v}"
-          if [ -z "$VER" ]; then
-            echo "ERROR: empty version from tag: $TAG" >&2
-            exit 1
-          fi
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            :
-          elif gh release view "v${VER}" --repo "$REPO" >/dev/null 2>&1; then
-            TAG="v${VER}"
-          else
-            echo "ERROR: no release for tag '$TAG' or 'v${VER}' in ${REPO}" >&2
-            exit 1
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "ver=$VER" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for Linux GUI zip on release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          REPO="${{ github.repository }}"
-          TAG="${{ steps.meta.outputs.tag }}"
-          VER="${{ steps.meta.outputs.ver }}"
-          WANT="I2PChat-linux-x86_64-v${VER}.zip"
-          for i in $(seq 1 36); do
-            if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "$WANT"; then
-              echo "Asset present: $WANT"
-              exit 0
-            fi
-            echo "Waiting for $WANT on $REPO@$TAG (try $i/36)..."
-            sleep 10
-          done
-          echo "Timed out waiting for $WANT. Assets on this release:" >&2
-          gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' >&2 || true
-          exit 1
-
-      - name: Build RPM in Fedora container
-        run: |
-          docker run --rm \
-            -e "GITHUB_REPOSITORY=${{ github.repository }}" \
-            -e "GITHUB_ACTIONS=true" \
-            -v "${{ github.workspace }}:/workspace:rw" \
-            -w /workspace \
-            fedora:42 \
-            bash /workspace/packaging/fedora/build-rpm-from-release.sh "${{ steps.meta.outputs.ver }}"
-
-      - name: Upload RPM to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${{ steps.meta.outputs.tag }}" \
-            "dist/i2pchat_${{ steps.meta.outputs.ver }}_x86_64.rpm" \
-            --clobber
