@@ -1,5 +1,5 @@
 PackageIdentifier: MetanoicArmor.I2PChat
-PackageVersion: 1.2.2
+PackageVersion: 1.2.3
 InstallerLocale: en-US
 Platform:
   - Windows.Desktop
@@ -10,8 +10,8 @@ InstallModes:
 Installers:
   - Architecture: x64
     InstallerType: zip
-    InstallerUrl: https://github.com/MetanoicArmor/I2PChat/releases/download/v1.2.2/I2PChat-windows-x64-v1.2.2.zip
-    InstallerSha256: 4e77e048165097828b609a03d0bbd6fb0c97c6e5c475eeeec0225a42bb283dee
+    InstallerUrl: https://github.com/MetanoicArmor/I2PChat/releases/download/v1.2.3/I2PChat-windows-x64-v1.2.3.zip
+    InstallerSha256: 80b5f591fd07bf3cf9891d74cabab8d7cdafab6cf34f06e47ba4d11fe5e31ca4
     NestedInstallerType: portable
     NestedInstallerFiles:
       - RelativeFilePath: I2PChat/I2PChat.exe
