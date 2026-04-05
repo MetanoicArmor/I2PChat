@@ -67,16 +67,21 @@ if ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
   fi
 fi
 
-source "${VENV_DIR}/bin/activate"
+# Не полагаемся на source activate (в Docker + set -u иногда не появляется python в PATH)
+VENV_ABS="$(cd "${VENV_DIR}" && pwd)"
+VENV_PY="${VENV_ABS}/bin/python"
+export VIRTUAL_ENV="${VENV_ABS}"
+export PATH="${VENV_ABS}/bin:${PATH}"
+unset PYTHONHOME
 
 # гарантируем, что в окружении есть нужные зависимости (python -m pip — надёжнее голого pip)
-python -m pip install --upgrade pip
+"${VENV_PY}" -m pip install --upgrade pip
 
-python -m pip install --require-hashes -r requirements.txt
-python -m pip install --require-hashes -r requirements-build.txt
+"${VENV_PY}" -m pip install --require-hashes -r requirements.txt
+"${VENV_PY}" -m pip install --require-hashes -r requirements-build.txt
 
 # Security gate: secure protocol requires PyNaCl
-python - <<'PY'
+"${VENV_PY}" - <<'PY'
 import sys
 try:
     import nacl
@@ -88,7 +93,7 @@ print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
 PY
 
 # Быстрая проверка синтаксиса пакетов и вспомогательных скриптов (без glob *.py в корне)
-python -m compileall i2pchat vendor/i2plib scripts make_icon.py
+"${VENV_PY}" -m compileall i2pchat vendor/i2plib scripts make_icon.py
 
 # 1) сборка PyInstaller с использованием spec файла (анализирует i2pchat/run_gui.py и зависимости)
 rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"
@@ -174,7 +179,7 @@ if [ ! -f "$APPIMAGETOOL" ]; then
   echo "==> Downloading appimagetool for ${ARCH}..."
   wget "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/${APPIMAGETOOL}"
 fi
-ACTUAL_SHA256="$(python - "$APPIMAGETOOL" <<'PY'
+ACTUAL_SHA256="$("${VENV_PY}" - "$APPIMAGETOOL" <<'PY'
 import hashlib
 import sys
 path = sys.argv[1]
@@ -191,7 +196,7 @@ if [ "${ACTUAL_SHA256}" != "${APPIMAGETOOL_SHA256}" ]; then
   echo "Actual:   ${ACTUAL_SHA256}" >&2
   rm -f "${APPIMAGETOOL}"
   wget "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/${APPIMAGETOOL}"
-  ACTUAL_SHA256="$(python - "$APPIMAGETOOL" <<'PY'
+  ACTUAL_SHA256="$("${VENV_PY}" - "$APPIMAGETOOL" <<'PY'
 import hashlib
 import sys
 path = sys.argv[1]
@@ -235,7 +240,7 @@ fi
 # 4) архив для релиза: версия + архитектура в имени zip
 ZIP_FILE="${APP_NAME}-linux-${ARCH_SUFFIX}-v${RELEASE_VERSION}.zip"
 rm -f "${ZIP_FILE}"
-python - "${OUTPUT_FILE}" "${ZIP_FILE}" <<'PY'
+"${VENV_PY}" - "${OUTPUT_FILE}" "${ZIP_FILE}" <<'PY'
 import os
 import sys
 import zipfile
@@ -285,7 +290,7 @@ TUI_ZIP_ABS="$(pwd)/${TUI_ZIP}"
 # Same as macOS: preserve symlinks in PyInstaller onedir (avoid duplicated _internal).
 # Pure Python (no zip(1)); Unix symlink entries (no ZipFile.write(resolve_symlinks=…)
 # — not available on all runtimes, e.g. current CPython 3.14 in this venv).
-python - "${TUI_STAGE}" "${TUI_ZIP_ABS}" <<'PY'
+"${VENV_PY}" - "${TUI_STAGE}" "${TUI_ZIP_ABS}" <<'PY'
 import os
 import sys
 import zipfile
@@ -319,7 +324,7 @@ echo "✔ Packed ${TUI_ZIP}"
 
 # 5) release integrity artifacts: SHA256SUMS + detached GPG signature (SHA256SUMS.asc)
 SHA256_FILE="SHA256SUMS"
-python - "${ZIP_FILE}" "${TUI_ZIP}" "${SHA256_FILE}" <<'PY'
+"${VENV_PY}" - "${ZIP_FILE}" "${TUI_ZIP}" "${SHA256_FILE}" <<'PY'
 import hashlib
 import os
 import sys
