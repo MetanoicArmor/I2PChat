@@ -227,7 +227,8 @@ Practical notes:
 
 <p align="center">
   <img src="screenshots/1.png" alt="I2PChat – main window" width="900" /><br>
-  <img src="screenshots/4.png" alt="I2PChat – chat and file transfer (sending)" width="900" />
+  <img src="screenshots/4.png" alt="I2PChat – chat and file transfer (sending)" width="900" /><br>
+  <img src="screenshots/10.png" alt="I2PChat – chat and file transfer (sending)" width="900" />
 </p>
 
 The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.png`** (profile picker), **`5.png`** (emoji picker), **`6.png`** (BlindBox diagnostics), **`8.png`** (I2P router dialog), and **`9.png`** (Blind Box setup examples — `install.sh` / **Copy curl** for a custom replica) are documented inline in [**MANUAL_EN.md**](docs/MANUAL_EN.md) / [**MANUAL_RU.md**](docs/MANUAL_RU.md).
@@ -294,7 +295,6 @@ python3.14 -m venv .venv314
 # Terminal UI (Textual, same venv):
 ./.venv314/bin/python -m i2pchat.tui
 # Example with a saved profile (name at the end of the line):
-# ./.venv314/bin/python -m i2pchat.gui win
 # ./.venv314/bin/python -m i2pchat.tui alice
 ```
 
@@ -310,7 +310,6 @@ py -3.14 -m venv .venv314
 # Terminal UI (Textual, same venv):
 .\.venv314\Scripts\python -m i2pchat.tui
 # Example with a saved profile (name at the end of the line):
-# .\.venv314\Scripts\python -m i2pchat.gui win
 # .\.venv314\Scripts\python -m i2pchat.tui alice
 ```
 
