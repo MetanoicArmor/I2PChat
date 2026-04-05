@@ -162,12 +162,6 @@ class I2PChat(App):
         height: auto;
         background: $surface;
     }
-    #quick_keys_bar {
-        height: 1;
-        content-align: center middle;
-        color: $text-muted;
-        background: $surface;
-    }
     TextArea {
         height: 8;
         border: solid white;
@@ -249,7 +243,6 @@ class I2PChat(App):
         yield Static(id="status_bar")
         yield RichLog(id="chat_window", highlight=False, markup=True)
         with Vertical(id="compose_wrap"):
-            yield Static(self._quick_keys_bar_text(), id="quick_keys_bar")
             yield TextArea(
                 "",
                 id="compose_box",
@@ -260,10 +253,6 @@ class I2PChat(App):
                 ),
             )
         yield Footer()
-
-    @staticmethod
-    def _quick_keys_bar_text() -> str:
-        return "F1 Actions · F2 Contacts · F3 Media · F4 Settings · F5 Router · F6 History · F7 Diagnostics"
 
     @property
     def chat_log(self) -> RichLog:
