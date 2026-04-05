@@ -2626,9 +2626,9 @@ class I2PChatCore:
 
             if is_persistent:
                 if _try_keyring_set(self.profile, dest.private_key.base64):
-                    self._emit_message("success", "Identity saved to secure keyring")
+                    self._emit_system("Identity saved to secure keyring")
                 else:
-                    self._emit_message("success", f"Identity saved to {key_file}")
+                    self._emit_system(f"Identity saved to {key_file}")
 
         self.my_dest = dest
         if is_persistent:

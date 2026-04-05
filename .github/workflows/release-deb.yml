@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v1.2.2) — must match an existing GitHub release with linux zip"
+        description: "Release tag (e.g. v1.2.3) — must match an existing GitHub release with linux zip"
         required: true
         type: string
 

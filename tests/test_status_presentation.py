@@ -44,6 +44,7 @@ def test_build_status_sending_prefix() -> None:
         send_in_flight=True,
         profile_name="alice",
         is_transient_profile=False,
+        my_short="aa..zz.b32.i2p",
         peer_short="ab..cd.b32.i2p",
         stored_short="none",
         link_state="online",
@@ -56,6 +57,7 @@ def test_build_status_sending_prefix() -> None:
     assert p.primary_short.startswith("Sending… · ")
     assert "Online" in p.primary_short
     assert "Live" in p.primary_short
+    assert "My:aa..zz.b32.i2p" in p.primary_short
     assert "delivery (internal): online-live" in p.technical_detail.lower()
 
 
@@ -69,6 +71,7 @@ def test_build_status_compact_no_raw_tx() -> None:
         send_in_flight=False,
         profile_name="random_address",
         is_transient_profile=True,
+        my_short="none",
         peer_short="none",
         stored_short="none",
         link_state="offline",
@@ -80,4 +83,5 @@ def test_build_status_compact_no_raw_tx() -> None:
     )
     assert "offline-ready" not in p.primary_short
     assert "Will deliver later" in p.primary_short
+    assert "My:none" in p.primary_short
     assert "offline-ready" in p.technical_detail

@@ -4,6 +4,7 @@ Versioned release write-ups for I2PChat live in this directory (`docs/releases/`
 
 | Version | Notes |
 |--------|--------|
+| **1.2.3** | [RELEASE_1.2.3.md](RELEASE_1.2.3.md) — status `My:` local address (Qt+TUI); Qt keeps startup/Online lines with no peer; identity saved as system line |
 | **1.2.2** | [RELEASE_1.2.2.md](RELEASE_1.2.2.md) — `python -m i2pchat.gui` / `i2pchat.tui`, prebuilt **`I2PChat-tui`** (Win/Linux/macOS), TUI fixes, Qt offline history without wiping startup lines |
 | **1.2.1** | [RELEASE_1.2.1.md](RELEASE_1.2.1.md) — Fluent UI Emoji (replacing Noto), system/info chat styling, lifecycle lines as info, Windows Segoe UI status font |
 | **1.2.0** | [RELEASE_1.2.0.md](RELEASE_1.2.0.md) — bundled/system i2pd backend, router dialog + shortcuts, bundled packaging, update-check proxy alignment |

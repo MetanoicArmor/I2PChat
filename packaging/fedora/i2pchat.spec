@@ -2,7 +2,7 @@
 # Bump Version (and Release if rebuilding the same version) on each upstream tag.
 
 Name:           i2pchat
-Version:        1.2.2
+Version:        1.2.3
 Release:        1%{?dist}
 Summary:        Experimental peer-to-peer chat client for I2P (upstream AppImage)
 
@@ -63,5 +63,8 @@ EOF
 %{_datadir}/pixmaps/i2pchat.png
 
 %changelog
+* Sun Apr 05 2026 MetanoicArmor <https://github.com/MetanoicArmor/I2PChat> - 1.2.3-1
+- Package upstream AppImage (x86_64 zip from GitHub Releases)
+
 * Sun Apr 05 2026 MetanoicArmor <https://github.com/MetanoicArmor/I2PChat> - 1.2.2-1
 - Package upstream AppImage (x86_64 zip from GitHub Releases)

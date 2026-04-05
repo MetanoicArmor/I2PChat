@@ -76,6 +76,7 @@ def build_status_presentation(
     send_in_flight: bool,
     profile_name: str,
     is_transient_profile: bool,
+    my_short: str,
     peer_short: str,
     stored_short: str,
     link_state: str,
@@ -104,17 +105,17 @@ def build_status_presentation(
     send_prefix = "Sending… · " if send_in_flight else ""
 
     primary_short = (
-        f"{send_prefix}{chat} · {delivery_f} · I2P {i2p_w}"
+        f"{send_prefix}{chat} · {delivery_f} · I2P {i2p_w} · My:{my_short}"
     )
     primary_full = (
         f"{send_prefix}Prof:{profile_name} ({mode_tag}) | Chat:{chat} | "
-        f"Delivery:{delivery_f} | Peer:{peer_short} | I2P:{net_d} | "
+        f"Delivery:{delivery_f} | My:{my_short} | Peer:{peer_short} | I2P:{net_d} | "
         f"{blindbox_bar}"
     )
 
     tech_lines = [
         "Technical detail",
-        f"Net:{net_d} | Link:{link_state} | Peer:{peer_short} | St:{stored_short} | Sec:{secure_state}",
+        f"Net:{net_d} | My:{my_short} | Link:{link_state} | Peer:{peer_short} | St:{stored_short} | Sec:{secure_state}",
         f"Delivery (internal): {delivery_state}",
         f"Send UI: {delivery_bar}",
         f"BlindBox bar: {blindbox_bar}",

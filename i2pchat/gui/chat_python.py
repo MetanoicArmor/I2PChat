@@ -597,6 +597,11 @@ class I2PChat(App):
         secure_state = "verified" if self.core.proven else (
             "secure" if self.core.handshake_complete else "none"
         )
+        my_short = self._short_peer(
+            (self.core.my_dest.base32 + ".b32.i2p")
+            if self.core.my_dest is not None
+            else None
+        )
         presentation = build_status_presentation(
             network_status_raw=self.network_status,
             connected=self.core.conn is not None,
@@ -606,6 +611,7 @@ class I2PChat(App):
             send_in_flight=send_in_flight,
             profile_name=self.profile,
             is_transient_profile=is_transient_profile_name(self.profile),
+            my_short=my_short,
             peer_short=peer_short,
             stored_short=stored_short,
             link_state=link_state,

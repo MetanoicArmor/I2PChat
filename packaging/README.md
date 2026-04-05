@@ -18,7 +18,7 @@
 
 ```bash
 ./packaging/refresh-checksums.sh          # latest release
-./packaging/refresh-checksums.sh v1.2.2   # конкретный тег
+./packaging/refresh-checksums.sh v1.2.3   # конкретный тег
 ```
 
 выводит SHA256 для трёх zip и для `icon.png`, плюс строки для cask.

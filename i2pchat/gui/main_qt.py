@@ -8724,6 +8724,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         peer_for_status = self.core.current_peer_addr or stored
         current_peer_disp = _short_addr(peer_for_status)
         stored_disp = _short_addr(stored)
+        my_disp = _short_addr(
+            (self.core.my_dest.base32 + ".b32.i2p")
+            if self.core.my_dest is not None
+            else None
+        )
         ack_part = f"ACKdrop:{ack_drop_total}" if ack_drop_total > 0 else "ACKdrop:0"
 
         pres = build_status_presentation(
@@ -8735,6 +8740,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             send_in_flight=bool(self._status_send_in_flight),
             profile_name=self.profile,
             is_transient_profile=self.profile == TRANSIENT_PROFILE_NAME,
+            my_short=my_disp,
             peer_short=current_peer_disp,
             stored_short=stored_disp,
             link_state=link_state,
@@ -9101,7 +9107,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._history_loaded_for_peer = None
             self._history_entries = []
             self._history_dirty = False
-            self.chat_model.clear_items()
+            # Не сносим всю ленту: при пустом пире после старта (random_address / новый профиль)
+            # иначе пропадают системные строки и бабл «Online! My Address».
+            # Чистим только если реально показывали вставку офлайн-истории с маркерами.
+            if self._chat_contains_injected_history_block():
+                self.chat_model.clear_items()
             return
         if not self.core.get_identity_key_bytes():
             if _identity_retry < 25:

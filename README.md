@@ -22,13 +22,13 @@
 1. Open **[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** (version matches [`VERSION`](VERSION) in this repo).
 2. Step-by-step for every OS → [**docs/INSTALL.md**](docs/INSTALL.md).
 
-**Prebuilt downloads** (file names include the version, e.g. **v1.2.2**):
+**Prebuilt downloads** (file names include the version, e.g. **v1.2.3**):
 
 | Platform | Download | Launch |
 |----------|----------|--------|
-| **Windows** | [I2PChat-windows-x64-v1.2.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.2.zip) | Unzip → `I2PChat.exe` (GUI) or `I2PChat-tui.exe` (cmd/PowerShell) |
-| **macOS (arm64)** | [I2PChat-macOS-arm64-v1.2.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.2.zip) | Unzip → `I2PChat.app`; TUI: `I2PChat.app/Contents/MacOS/I2PChat-tui` |
-| **Linux (x86_64)** | [I2PChat-linux-x86_64-v1.2.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.2.zip) | `chmod +x` the AppImage → run it; TUI: see INSTALL.md |
+| **Windows** | [I2PChat-windows-x64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.3.zip) | Unzip → `I2PChat.exe` (GUI) or `I2PChat-tui.exe` (cmd/PowerShell) |
+| **macOS (arm64)** | [I2PChat-macOS-arm64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.3.zip) | Unzip → `I2PChat.app`; TUI: `I2PChat.app/Contents/MacOS/I2PChat-tui` |
+| **Linux (x86_64)** | [I2PChat-linux-x86_64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.3.zip) | `chmod +x` the AppImage → run it; TUI: see INSTALL.md |
 
 No Python needed for these bundles.
 

@@ -19,7 +19,7 @@
 
 ```bash
 # версия должна совпадать с опубликованным тегом vX.Y.Z и именем zip на GitHub
-./packaging/debian/build-deb-from-appimage.sh 1.2.2
+./packaging/debian/build-deb-from-appimage.sh 1.2.3
 
 # или взять версию из первой строки файла VERSION в корне репо:
 ./packaging/debian/build-deb-from-appimage.sh
