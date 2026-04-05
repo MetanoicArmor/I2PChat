@@ -727,7 +727,10 @@ class I2PChat(App):
         address_pattern = r"([a-z0-9]+\.b32\.i2p|[a-z0-9]+\.i2p)"
         formatted_msg = re.sub(address_pattern, r"[bold cyan]\1[/]", safe_message)
         content = styles.get(type_name, "{}").format(formatted_msg)
-        self.chat_log.write(content)
+        try:
+            self.chat_log.write(content)
+        except Exception:
+            return
 
     def post_panel(
         self,
@@ -738,7 +741,10 @@ class I2PChat(App):
         align: str = "left",
     ) -> None:
         panel = Panel(body, title=title, border_style=border_style, box=box.ROUNDED)
-        self.chat_log.write(Align(panel, align=align), expand=True)
+        try:
+            self.chat_log.write(Align(panel, align=align), expand=True)
+        except Exception:
+            return
 
     def _peer_display_name(self, peer: Optional[str]) -> str:
         if not peer:
@@ -2162,7 +2168,7 @@ class I2PChat(App):
             if not self.core.my_dest:
                 self.post("error", "Local address is not ready yet.")
                 return
-            addr = self.core.my_dest.base32
+            addr = self.core.my_dest.base32 + ".b32.i2p"
             if pyperclip is not None:
                 try:
                     pyperclip.copy(addr)

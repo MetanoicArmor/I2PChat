@@ -291,6 +291,43 @@ def test_tui_post_can_preserve_markup_when_requested() -> None:
     assert "[bold yellow]demo[/]" in written[0]
 
 
+def test_tui_post_ignores_missing_chat_widget() -> None:
+    from i2pchat.gui.chat_python import I2PChat
+
+    app = object.__new__(I2PChat)
+    app.query_one = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("gone"))  # type: ignore[method-assign]
+
+    I2PChat.post(app, "system", "bye")
+    I2PChat.post_panel(app, "Title", "Body")
+
+
+def test_tui_copyaddr_adds_b32_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
+    from i2pchat.gui.chat_python import I2PChat
+
+    class _Dest:
+        base32 = "exampleaddress"
+
+    class _Core:
+        my_dest = _Dest()
+
+    copied: list[str] = []
+    messages: list[tuple[str, str]] = []
+    app = object.__new__(I2PChat)
+    app.core = _Core()
+    app._compose_draft_active_key = None
+    app._set_compose_text = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    app._flush_compose_drafts_to_disk = lambda: None  # type: ignore[method-assign]
+    app._refresh_status_bar = lambda: None  # type: ignore[method-assign]
+    app.post = lambda level, msg, **_kwargs: messages.append((level, msg))  # type: ignore[method-assign]
+    monkeypatch.setattr("i2pchat.gui.chat_python.pyperclip", type("Clip", (), {"copy": staticmethod(lambda value: copied.append(value))}))
+
+    import asyncio
+    asyncio.run(I2PChat._execute_command(app, "/copyaddr"))
+
+    assert copied == ["exampleaddress.b32.i2p"]
+    assert messages[-1] == ("success", "Copied local address to clipboard: exampleaddress.b32.i2p")
+
+
 def test_tui_on_mount_schedules_background_init(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
