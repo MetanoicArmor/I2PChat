@@ -8,8 +8,8 @@
 |-------|-----------|
 | **winget** | PR в [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs): [MetanoicArmor.I2PChat 1.2.3](https://github.com/microsoft/winget-pkgs/pull/355476), [MetanoicArmor.I2PChat.TUI 1.2.3](https://github.com/microsoft/winget-pkgs/pull/355477) — ждут ревью/merge. |
 | **Homebrew tap** | Репозиторий [MetanoicArmor/homebrew-i2pchat](https://github.com/MetanoicArmor/homebrew-i2pchat): `brew tap MetanoicArmor/i2pchat`. |
-| **AUR** | Файлы в [`aur/`](aur/) готовы; выгрузка — `ssh://aur@aur.archlinux.org/` (нужен ключ AUR), см. [aur/README.md](aur/README.md). |
-| **Flatpak / COPR / .deb** | Шаблоны и скрипты: [flatpak/README.md](flatpak/README.md), [fedora/i2pchat.spec](fedora/i2pchat.spec), [debian/README.md](debian/README.md), CI [release-deb.yml](../.github/workflows/release-deb.yml). |
+| **AUR** | В репозитории актуальны [`aur/i2pchat-bin/`](aur/i2pchat-bin/) и [`aur/i2pchat-tui-bin/`](aur/i2pchat-tui-bin/). Публикация на aur.archlinux.org требует SSH-ключ, привязанный к аккаунту AUR (`ssh://aur@aur.archlinux.org/`); с машины без такого ключа будет `Permission denied (publickey)`. Выгрузка вручную — см. [aur/README.md](aur/README.md). |
+| **Flatpak / COPR / .deb** | Сборки и публикация в эти каналы **не запускались** (только шаблоны в репо). Ссылки: [flatpak/README.md](flatpak/README.md), [fedora/i2pchat.spec](fedora/i2pchat.spec) (COPR), [debian/README.md](debian/README.md), workflow [release-deb.yml](../.github/workflows/release-deb.yml) (прикрепление `.deb` к GitHub Release при публикации тега). |
 
 | Платформа | Каталог | Действие мейнтейнера |
 |-----------|---------|----------------------|

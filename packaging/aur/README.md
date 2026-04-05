@@ -6,8 +6,11 @@
 ## Публикация на AUR
 
 1. Зарегистрируйтесь на [aur.archlinux.org](https://aur.archlinux.org/).
-2. Создайте репозиторий `i2pchat-bin` через веб-интерфейс (Submit).
-3. Загрузите содержимое каталога (`PKGBUILD`, `.SRCINFO`) — например `git clone ssh://aur@aur.archlinux.org/i2pchat-bin.git` или отдельный репозиторий **`i2pchat-tui-bin`** для TUI.
+2. Добавьте в профиль AUR **SSH public key** (Account → SSH Keys). Без ключа `git push` на `ssh://aur@aur.archlinux.org/...` завершится ошибкой **`Permission denied (publickey)`**.
+3. Создайте пакет `i2pchat-bin` через веб-интерфейс (Submit), либо клонируйте пустой репозиторий: `git clone ssh://aur@aur.archlinux.org/i2pchat-bin.git` (отдельно **`i2pchat-tui-bin`** для TUI).
+4. Загрузите содержимое каталога из этого репозитория (`PKGBUILD`, `.SRCINFO`) — `git add`, `commit`, `push` на AUR.
+
+Если по SSH с текущей машины зайти нельзя, используйте другой хост с настроенным ключом или веб-форму AUR для первичной отправки, затем правки через `git` с машины, где SSH к AUR работает.
 
 После изменения `PKGBUILD` пересоберите метаданные:
 
