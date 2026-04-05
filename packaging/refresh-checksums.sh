@@ -23,6 +23,8 @@ WIN_TUI_ZIP="I2PChat-windows-tui-x64-v${TAG}.zip"
 WIN_GUI_WINGET_ZIP="I2PChat-windows-x64-winget-v${TAG}.zip"
 WIN_TUI_WINGET_ZIP="I2PChat-windows-tui-x64-winget-v${TAG}.zip"
 LINUX_TUI_ZIP="I2PChat-linux-x86_64-tui-v${TAG}.zip"
+LINUX_AARCH64_ZIP="I2PChat-linux-aarch64-v${TAG}.zip"
+LINUX_AARCH64_TUI_ZIP="I2PChat-linux-aarch64-tui-v${TAG}.zip"
 declare -a FILES=(
   "${MAC_ZIP}"
   "${MAC_TUI_ZIP}"
@@ -32,6 +34,8 @@ declare -a FILES=(
   "${WIN_TUI_WINGET_ZIP}"
   "I2PChat-linux-x86_64-v${TAG}.zip"
   "${LINUX_TUI_ZIP}"
+  "${LINUX_AARCH64_ZIP}"
+  "${LINUX_AARCH64_TUI_ZIP}"
 )
 
 echo "# Release v${TAG}"

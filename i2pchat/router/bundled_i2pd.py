@@ -157,11 +157,21 @@ def _unix_find_i2pd_pids_for_runtime(
     return ordered
 
 
+def _bundled_i2pd_rel_parts() -> tuple[str, ...]:
+    if sys.platform == "darwin":
+        return ("vendor", "i2pd", "darwin-arm64", "i2pd")
+    if sys.platform == "win32":
+        return ("vendor", "i2pd", "windows-x64", "i2pd.exe")
+    import platform
+
+    mach = platform.machine()
+    if mach in ("aarch64", "arm64"):
+        return ("vendor", "i2pd", "linux-aarch64", "i2pd")
+    return ("vendor", "i2pd", "linux-x86_64", "i2pd")
+
+
 def resolve_bundled_i2pd_binary() -> Optional[str]:
-    rel = {
-        "darwin": ("vendor", "i2pd", "darwin-arm64", "i2pd"),
-        "win32": ("vendor", "i2pd", "windows-x64", "i2pd.exe"),
-    }.get(sys.platform, ("vendor", "i2pd", "linux-x86_64", "i2pd"))
+    rel = _bundled_i2pd_rel_parts()
 
     candidates = []
 

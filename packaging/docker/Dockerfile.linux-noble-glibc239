@@ -33,7 +33,7 @@ RUN apt-get update -qq \
         libfuse2t64 \
         fuse3 \
         libgl1 \
-        libegl1-mesa \
+        libegl-mesa0 \
         libxkbcommon-x11-0 \
         libdbus-1-3 \
         libglib2.0-0t64 \

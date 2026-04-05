@@ -15,6 +15,7 @@ class BundledI2pdBinaryResolutionTests(unittest.TestCase):
             binary = rel / "i2pd"
             binary.write_text("x", encoding="utf-8")
             with mock.patch.object(bundled_i2pd.sys, "platform", "linux"), \
+                    mock.patch("platform.machine", return_value="x86_64"), \
                     mock.patch.object(
                         bundled_i2pd.Path,
                         "resolve",
@@ -34,6 +35,7 @@ class BundledI2pdBinaryResolutionTests(unittest.TestCase):
             fake_file.parent.mkdir(parents=True, exist_ok=True)
             fake_file.write_text("", encoding="utf-8")
             with mock.patch.object(bundled_i2pd.sys, "platform", "linux"), \
+                    mock.patch("platform.machine", return_value="x86_64"), \
                     mock.patch.object(bundled_i2pd.sys, "_MEIPASS", str(meipass), create=True), \
                     mock.patch.object(
                         bundled_i2pd.Path,

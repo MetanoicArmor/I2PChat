@@ -4,6 +4,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+DOCKER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=host-artifacts-msg.sh
+source "${DOCKER_DIR}/host-artifacts-msg.sh"
 IMAGE_TAG="${I2PCHAT_LINUX_DOCKER_TAG:-i2pchat-linux:noble-glibc239}"
 DOCKERFILE="${ROOT}/packaging/docker/Dockerfile.linux-noble-glibc239"
 
@@ -45,7 +48,7 @@ echo "==> Building image ${IMAGE_TAG}"
 "${RT}" build -f "${DOCKERFILE}" -t "${IMAGE_TAG}" "${ROOT}/packaging/docker"
 
 echo "==> Running build-linux.sh in container (mount ${ROOT} -> /src)"
-exec "${RT}" run --rm -it \
+"${RT}" run --rm -it \
   -e "I2PCHAT_SKIP_GPG_SIGN=${I2PCHAT_SKIP_GPG_SIGN:-1}" \
   -e "QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-offscreen}" \
   -e "APPIMAGE_EXTRACT_AND_RUN=${APPIMAGE_EXTRACT_AND_RUN:-1}" \
@@ -53,3 +56,5 @@ exec "${RT}" run --rm -it \
   -w /src \
   "${IMAGE_TAG}" \
   ./build-linux.sh
+
+i2pchat_print_linux_host_artifacts "${ROOT}" x86_64

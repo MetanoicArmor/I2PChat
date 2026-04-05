@@ -31,9 +31,16 @@ elif sys.platform == 'win32':
         for dll in glob.glob(os.path.join('vendor', 'i2pd', 'windows-x64', '*.dll'))
     )
 else:
-    _i2pd_path = os.path.join('vendor', 'i2pd', 'linux-x86_64', 'i2pd')
+    import platform
+
+    _mach = platform.machine()
+    if _mach in ('aarch64', 'arm64'):
+        _i2pd_sub = 'linux-aarch64'
+    else:
+        _i2pd_sub = 'linux-x86_64'
+    _i2pd_path = os.path.join('vendor', 'i2pd', _i2pd_sub, 'i2pd')
     if os.path.isfile(_i2pd_path):
-        _i2pd_binaries.append((_i2pd_path, os.path.join('vendor', 'i2pd', 'linux-x86_64')))
+        _i2pd_binaries.append((_i2pd_path, os.path.join('vendor', 'i2pd', _i2pd_sub)))
 
 # Set I2PCHAT_OMIT_BUNDLED_I2PD=1 for a winget/store-friendly Windows build without embedded i2pd (Microsoft pipeline AV).
 if os.environ.get("I2PCHAT_OMIT_BUNDLED_I2PD", "").strip().lower() in ("1", "true", "yes"):

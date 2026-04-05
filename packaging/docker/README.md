@@ -1,70 +1,59 @@
-# Docker: Linux build on Ubuntu 24.04 (glibc 2.39)
+# Docker: Linux release builds
 
-Use this image when you want **`build-linux.sh`** to run on **glibc 2.39** (Ubuntu 24.04 “noble”) instead of your host (e.g. Arch with a newer glibc) or instead of CI’s **ubuntu-22.04** (glibc 2.35).
+## x86_64 — Ubuntu 24.04 (glibc 2.39)
 
-**Trade-off:** artifacts from this image may require **a newer glibc** than 22.04 LTS users have. The default **GitHub Actions** workflow [`.github/workflows/build-linux-release-artifacts.yml`](../../.github/workflows/build-linux-release-artifacts.yml) stays on **ubuntu-22.04** for broad compatibility.
+Use **`./packaging/docker/run-linux-build.sh`** from the repo root (Docker or Podman). It builds **`Dockerfile.linux-noble-glibc239`** and runs **`./build-linux.sh`** → **`I2PChat-linux-x86_64-v*.zip`** and related outputs.
 
-## Requirements
+## aarch64 (arm64) — Ubuntu 24.04
 
-- **Docker** *with a running daemon* (`docker info` OK) **or** **Podman** (`podman info` OK)
-- Network for `pip`, `wget` (appimagetool), and GitHub downloads used by `build-linux.sh`
+**`linux-build-ubuntu2404-arm64.Dockerfile`** — Ubuntu **24.04** on **linux/arm64** with Python **3.14** (deadsnakes), Qt/AppImage dependencies.
 
-### Troubleshooting: `failed to connect to the docker API` / `docker.sock`
-
-The Docker **client** is installed but the **daemon** is not running (or your user cannot access `/var/run/docker.sock`).
-
-**Arch / CachyOS (systemd):**
-
-```bash
-sudo systemctl enable --now docker
-sudo usermod -aG docker "$USER"   # log out and back in, then retry
-```
-
-Check: `docker info` should print server info, not a socket error.
-
-**Use Podman instead** (no Docker daemon):
-
-```bash
-sudo pacman -S podman
-I2PCHAT_CONTAINER_RUNTIME=podman ./packaging/docker/run-linux-build.sh
-```
-
-Override explicitly: `I2PCHAT_CONTAINER_RUNTIME=docker` or `=podman`.
-
-**BuildKit deprecation** (legacy builder): the script sets `DOCKER_BUILDKIT=1` for Docker. Install Docker Buildx if your distro splits it out.
-
-## Quick start
+## Quick run
 
 From the **repository root**:
 
 ```bash
-./packaging/docker/run-linux-build.sh
+./packaging/docker/build-linux-aarch64.sh
 ```
 
-This builds the image `i2pchat-linux:noble-glibc239` and runs `./build-linux.sh` with the tree bind-mounted at `/src`.
+The script builds the image and runs **`./build-linux.sh`** end-to-end (GUI AppImage + zip, затем TUI zip). Репозиторий смонтирован в `/src`. Оба релизных zip — **в корне репо** (`I2PChat-linux-aarch64-v*.zip`, `*-tui-*`); в **`dist/`** — AppImage и каталоги PyInstaller.
 
-Outputs (`dist/`, `*.zip`, `I2PChat.AppDir`, etc.) appear in your working tree. If files are owned by `root`, fix with:
+## Prerequisites
+
+1. **Docker Buildx** and an arm64-capable builder. On Apple Silicon, native arm64 is fine. On x86_64 Linux/macOS you typically need QEMU/binfmt (e.g. `docker run --privileged --rm tonistiigi/binfmt --install all` once, then a `docker buildx` builder using the `docker-container` driver).
+
+2. **`vendor/i2pd/linux-aarch64/i2pd`** — executable i2pd for aarch64 (see [`../../vendor/i2pd/linux-aarch64/README.md`](../../vendor/i2pd/linux-aarch64/README.md)). Without it, the script exits with an error before build.
+
+3. Same Python **hashed** requirements as a normal local build (`requirements.txt`, `requirements-build.txt`).
+
+## Manual image build
 
 ```bash
-sudo chown -R "$(id -u):$(id -g)" dist build I2PChat.AppDir *.zip SHA256SUMS SHA256SUMS.asc 2>/dev/null || true
+docker buildx build --platform linux/arm64 --load \
+  -f packaging/docker/linux-build-ubuntu2404-arm64.Dockerfile \
+  -t i2pchat-linux-build:ubuntu-24.04-arm64 \
+  packaging/docker
 ```
 
-## Manual commands
+## Environment overrides
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `I2PCHAT_LINUX_ARM64_IMAGE` | `i2pchat-linux-build:ubuntu-24.04-arm64` | Image tag for `build-linux-aarch64.sh` |
+
+Inside the container, `build-linux.sh` respects **`I2PCHAT_SKIP_GPG_SIGN`**, **`APPIMAGE_EXTRACT_AND_RUN`**, **`QT_QPA_PLATFORM`** (set by the script).
+
+## Where outputs go (host)
+
+Скрипты монтируют **весь репозиторий** в контейнер как **`/src` с записью** (`-v "$ROOT:/src:rw"`). Сборки **сразу оказываются на вашей машине** в том же клоне: `dist/`, `I2PChat.AppImage`, `I2PChat-linux-<arch>-v*.zip`, `*-tui-*.zip`, `SHA256SUMS`. После успешной сборки скрипт печатает абсолютные пути.
+
+**Если запускали контейнер вручную без монтирования** и нужно вытащить файлы:
 
 ```bash
-docker build -f packaging/docker/Dockerfile.linux-noble-glibc239 \
-  -t i2pchat-linux:noble-glibc239 packaging/docker
-
-docker run --rm -it \
-  -e I2PCHAT_SKIP_GPG_SIGN=1 \
-  -e QT_QPA_PLATFORM=offscreen \
-  -e APPIMAGE_EXTRACT_AND_RUN=1 \
-  -v "$PWD:/src:rw" \
-  -w /src \
-  i2pchat-linux:noble-glibc239 \
-  ./build-linux.sh
+CID=$(docker create i2pchat-linux-build:ubuntu-24.04-arm64)   # или ваш тег
+docker cp "${CID}:/src/I2PChat-linux-aarch64-v1.2.3.zip" .
+docker cp "${CID}:/src/dist" ./dist-from-docker
+docker rm "${CID}"
 ```
 
-## Python
-
-The image uses **deadsnakes** `python3.14` on Ubuntu 24.04. If the PPA layout changes, adjust the Dockerfile while keeping **noble** as the base to retain glibc 2.39.
+Подставьте фактическую версию из `VERSION` и имена файлов из вывода `build-linux.sh`.

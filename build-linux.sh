@@ -29,6 +29,11 @@ esac
 
 echo "==> Building for architecture: ${ARCH_SUFFIX}"
 
+case "${ARCH_SUFFIX}" in
+  aarch64) I2PD_LINUX_SUBDIR="linux-aarch64" ;;
+  *)       I2PD_LINUX_SUBDIR="linux-x86_64" ;;
+esac
+
 if command -v python3.14 >/dev/null 2>&1; then
   PYTHON_BIN="python3.14"
 else
@@ -40,13 +45,28 @@ if [ ! -d "${VENV_DIR}" ]; then
   "${PYTHON_BIN}" -m venv "${VENV_DIR}"
 fi
 
+# Debian/Ubuntu + deadsnakes: venv иногда без pip в bin/ (ensurepip отключён в пакете).
+if ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
+  echo "Устанавливаю pip в ${VENV_DIR}…"
+  if "${VENV_DIR}/bin/python" -m ensurepip --upgrade --default-pip 2>/dev/null; then
+    :
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL https://bootstrap.pypa.io/get-pip.py | "${VENV_DIR}/bin/python"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- https://bootstrap.pypa.io/get-pip.py | "${VENV_DIR}/bin/python"
+  else
+    echo "ERROR: в venv нет pip, а curl/wget не найдены (нужен get-pip.py)" >&2
+    exit 1
+  fi
+fi
+
 source "${VENV_DIR}/bin/activate"
 
 # гарантируем, что в окружении есть нужные зависимости
-pip install --upgrade pip
+python -m pip install --upgrade pip
 
-pip install --require-hashes -r requirements.txt
-pip install --require-hashes -r requirements-build.txt
+python -m pip install --require-hashes -r requirements.txt
+python -m pip install --require-hashes -r requirements-build.txt
 
 # Security gate: secure protocol requires PyNaCl
 python - <<'PY'
@@ -80,8 +100,8 @@ cp -r "dist/${APP_NAME}/_internal" "${APPDIR}/usr/bin/_internal"
 if [ -d "dist/${APP_NAME}/vendor" ]; then
   cp -r "dist/${APP_NAME}/vendor" "${APPDIR}/usr/bin/vendor"
 fi
-if [ -f "${APPDIR}/usr/bin/vendor/i2pd/linux-x86_64/i2pd" ]; then
-  chmod +x "${APPDIR}/usr/bin/vendor/i2pd/linux-x86_64/i2pd"
+if [ -f "${APPDIR}/usr/bin/vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd" ]; then
+  chmod +x "${APPDIR}/usr/bin/vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd"
 fi
 
 # Добрасываем libcrypt, если он есть в системе, чтобы не требовать его снаружи
