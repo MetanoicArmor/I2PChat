@@ -45,6 +45,13 @@ if [ ! -d "${VENV_DIR}" ]; then
   "${PYTHON_BIN}" -m venv "${VENV_DIR}"
 fi
 
+# venv из bind-mount (Docker) или с другой ОС: битый интерпретатор / без pip
+if ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
+  echo "Пересоздаю ${VENV_DIR}: нет рабочего pip для текущего интерпретатора (${PYTHON_BIN})..."
+  rm -rf "${VENV_DIR}"
+  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+fi
+
 # Debian/Ubuntu + deadsnakes: venv иногда без pip в bin/ (ensurepip отключён в пакете).
 if ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
   echo "Устанавливаю pip в ${VENV_DIR}…"
@@ -62,7 +69,7 @@ fi
 
 source "${VENV_DIR}/bin/activate"
 
-# гарантируем, что в окружении есть нужные зависимости
+# гарантируем, что в окружении есть нужные зависимости (python -m pip — надёжнее голого pip)
 python -m pip install --upgrade pip
 
 python -m pip install --require-hashes -r requirements.txt
