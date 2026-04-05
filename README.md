@@ -255,9 +255,10 @@ Upstream-maintained recipes and docs live under [**packaging/**](packaging/READM
 | **Homebrew** (macOS arm64 cask) | Files in [`packaging/homebrew/`](packaging/homebrew/README.md) | Publish a tap repo `homebrew-i2pchat` or open a PR to Homebrew cask; then `brew install --cask i2pchat`. |
 | **winget** (Windows portable zip) | Manifests in [`packaging/winget/`](packaging/winget/README.md) | Copy versioned YAML into a PR to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs); then `winget install MetanoicArmor.I2PChat`. |
 | **Arch (AUR)** | [`packaging/aur/i2pchat-bin/`](packaging/aur/README.md) | Submit `PKGBUILD` / `.SRCINFO` as package `i2pchat-bin`; users: `yay -S i2pchat-bin` (or any AUR helper). |
-| **Debian/Ubuntu** | [`packaging/debian/`](packaging/debian/README.md) | No official apt repo here: build a local `.deb` with [`build-deb-from-appimage.sh`](packaging/debian/build-deb-from-appimage.sh), or use your own apt repository / PPA / **Flatpak** (Flathub) — see that README. |
+| **Debian/Ubuntu** | [`packaging/debian/`](packaging/debian/README.md) | Prefer **`i2pchat_*_amd64.deb`** attached to [GitHub Releases](https://github.com/MetanoicArmor/I2PChat/releases) (built by [`release-deb.yml`](.github/workflows/release-deb.yml) when the Linux zip is on the release), or build locally with [`build-deb-from-appimage.sh`](packaging/debian/build-deb-from-appimage.sh). Optional: your own apt repo / PPA / **Flatpak** (Flathub). |
+| **Fedora** | [`packaging/fedora/`](packaging/fedora/README.md) | RPM from the same upstream zip via [`i2pchat.spec`](packaging/fedora/i2pchat.spec); publish on **COPR**, then `dnf copr enable …` and `dnf install i2pchat`. |
 
-After each new **GitHub release** tag, refresh checksums with `./packaging/refresh-checksums.sh` and update version fields in the manifests you maintain.
+After each new **GitHub release** tag, refresh checksums with `./packaging/refresh-checksums.sh` and update version fields in the manifests you maintain (including **`Version:`** in the Fedora spec).
 
 ### 🛠 Running from source
 

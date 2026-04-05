@@ -1,0 +1,43 @@
+# Build amd64 .deb from the published Linux AppImage zip and attach it to the same release.
+name: Release .deb
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y dpkg-dev unzip curl
+
+      - name: Derive version from release tag
+        id: meta
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VER="${TAG#v}"
+          if [ -z "$VER" ]; then
+            echo "ERROR: empty version from tag $TAG" >&2
+            exit 1
+          fi
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Build .deb from release zip
+        run: ./packaging/debian/build-deb-from-appimage.sh "${{ steps.meta.outputs.ver }}"
+
+      - name: Upload .deb to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "dist/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb" \
+            --clobber
