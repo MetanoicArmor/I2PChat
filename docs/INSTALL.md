@@ -28,6 +28,8 @@ Python is **not** required on the target machine (PyInstaller bundle).
 
 **TUI-only zip:** **`I2PChat-linux-x86_64-tui-v<version>.zip`** — unpack and run **`./i2pchat-tui`** (wrapper sets `LD_LIBRARY_PATH` for `usr/bin/I2PChat-tui` and `_internal`).
 
+**glibc / `GLIBC_X.XX not found`:** PyInstaller bundles use the **C standard library from the machine where they were built**. If you see `version 'GLIBC_2.xx' not found` in `libc.so.6`, your distro’s glibc is **older** than the build host’s (for example a zip built on Fedora 42 may require very new symbols). **Workarounds:** install **`I2PChat` from source** on your machine (see [Build from source](#build-from-source)), use **Flatpak** if available, or ask maintainers to replace release zips with a build from **Ubuntu 22.04 LTS** (GitHub Actions workflow **[Build Linux release artifacts](../.github/workflows/build-linux-release-artifacts.yml)**).
+
 **Arch Linux (AUR):** with an AUR helper such as **yay** or **paru**:
 
 ```bash

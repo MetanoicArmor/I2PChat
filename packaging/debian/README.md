@@ -31,7 +31,7 @@
 
 ## Сборка .deb для TUI (официальный Linux TUI zip)
 
-Скрипт [`build-tui-deb-from-release-zip.sh`](build-tui-deb-from-release-zip.sh) собирает пакет **`i2pchat-tui`**: содержимое **`I2PChat-linux-x86_64-tui-v<версия>.zip`** в `/opt/i2pchat-tui/`, команда **`i2pchat-tui`**, `.desktop` для терминала (как в AUR **`i2pchat-tui-bin`**).
+Скрипт [`build-tui-deb-from-release-zip.sh`](build-tui-deb-from-release-zip.sh) собирает пакет **`i2pchat-tui`**: содержимое **`I2PChat-linux-x86_64-tui-v<версия>.zip`** в `/opt/i2pchat-tui/`, команда **`i2pchat-tui`**, `.desktop` для терминала (как в AUR **`i2pchat-tui-bin`**). Требования к **glibc** такие же, как у бинарника в zip (если zip собран на очень новой системе, на старой LTS возможна ошибка `GLIBC_* not found` — пересоберите zip на Ubuntu 22.04, см. workflow **Build Linux release artifacts** в [`.github/workflows/build-linux-release-artifacts.yml`](../../.github/workflows/build-linux-release-artifacts.yml)).
 
 ```bash
 ./packaging/debian/build-tui-deb-from-release-zip.sh 1.2.3

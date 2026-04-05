@@ -7,6 +7,8 @@ Python **3.14+** is recommended everywhere. The repo vendors a local **i2plib** 
 | Target | Command | Output (typical) |
 |--------|---------|------------------|
 | Linux (AppImage + zip) | `./build-linux.sh` | `I2PChat.AppImage`, `I2PChat-linux-<arch>-v<version>.zip` (AppImage inside), **`I2PChat-linux-<arch>-tui-v<version>.zip`** (TUI-only tree + `i2pchat-tui` launcher) |
+
+**Linux glibc baseline:** for release zips that run on common LTS distros, prefer building on **Ubuntu 22.04** (or use CI). Workflow **[`build-linux-release-artifacts.yml`](../.github/workflows/build-linux-release-artifacts.yml)** (`workflow_dispatch` + tag) runs `build-linux.sh` on **ubuntu-22.04** and uploads the two zips + `SHA256SUMS` to the GitHub release (`--clobber`). Local builds on bleeding-edge distros can embed a **newer minimum glibc** than users on Debian/Ubuntu LTS have.
 | macOS (.app + zip) | `./build-macos.sh` | `dist/I2PChat.app`, `I2PChat-macOS-<arch>-v<version>.zip`, **`I2PChat-macos-<arch>-tui-v<version>.zip`** |
 | Windows | `.\build-windows.ps1` | `dist\I2PChat\I2PChat.exe`, **`I2PChat-windows-x64-v<version>.zip`**, **`I2PChat-windows-tui-x64-v<version>.zip`**, plus **`I2PChat-windows-x64-winget-v<version>.zip`** / **`I2PChat-windows-tui-x64-winget-v<version>.zip`** (same trees **without** embedded i2pd — for winget / Microsoft validation) |
 

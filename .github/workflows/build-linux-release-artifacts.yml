@@ -1,0 +1,89 @@
+# Build official Linux GUI + TUI zips on Ubuntu 22.04 (glibc 2.35) so binaries run on
+# common LTS distros. Local builds on Fedora 42+ / very new glibc can produce
+# "GLIBC_2.42 not found" on older systems — re-upload zips from this workflow.
+name: Build Linux release artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag (e.g. v1.2.3) — checkout that ref, run build-linux.sh, upload zips + SHA256SUMS to the release"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      QT_QPA_PLATFORM: offscreen
+      I2PCHAT_SKIP_GPG_SIGN: "1"
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - name: Resolve tag
+        id: meta
+        run: |
+          R="${{ github.event.inputs.tag }}"
+          R="${R#v}"
+          if [ -z "$R" ]; then
+            echo "ERROR: empty tag" >&2
+            exit 1
+          fi
+          echo "tag=v${R}" >> "$GITHUB_OUTPUT"
+          echo "ver=${R}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.meta.outputs.tag }}
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            wget desktop-file-utils file patchelf \
+            libfuse2 \
+            libgl1-mesa-glx libegl1-mesa \
+            libxkbcommon-x11-0 libdbus-1-3 \
+            libglib2.0-0 libfontconfig1 libfreetype6 libdrm2 \
+            libxcb1 libxcb-xinerama0 libxcb-xfixes0 libxcb-shape0 libxcb-render0 \
+            libxcb-shm0 libxcb-randr0 libxcb-keysyms1 libxcb-image0 libxcb-icccm4 \
+            libxcb-util1 libxcb-sync1 libxcb-xinput0 libxcb-cursor0
+
+      - name: Build Linux zips (PyInstaller + AppImage)
+        run: ./build-linux.sh
+
+      - name: Verify VERSION matches tag
+        run: |
+          VER="${{ steps.meta.outputs.ver }}"
+          FILE_VER="$(tr -d '\r\n' < VERSION)"
+          if [ "$FILE_VER" != "$VER" ]; then
+            echo "ERROR: VERSION file is '$FILE_VER' but tag implies '$VER'" >&2
+            exit 1
+          fi
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          VER="${{ steps.meta.outputs.ver }}"
+          ZIP_GUI="I2PChat-linux-x86_64-v${VER}.zip"
+          ZIP_TUI="I2PChat-linux-x86_64-tui-v${VER}.zip"
+          for f in "$ZIP_GUI" "$ZIP_TUI" SHA256SUMS; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: missing $f" >&2
+              exit 1
+            fi
+          done
+          gh release upload "$TAG" \
+            "$ZIP_GUI" \
+            "$ZIP_TUI" \
+            SHA256SUMS \
+            --repo "${{ github.repository }}" \
+            --clobber
