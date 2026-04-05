@@ -14,14 +14,32 @@ echo "==> Monorepo: ${MONOREPO}"
 echo "==> Workdir:  ${WORKDIR}"
 echo "==> SSH:      ${GIT_SSH_COMMAND}"
 echo ""
-echo "Если увидите «Permission denied (publickey)», сначала:"
-echo "  ssh-add ~/.ssh/aur_ed25519"
+if [ -z "${SSH_AUTH_SOCK:-}" ]; then
+  echo "Подсказка: нет ssh-agent → ssh-add не сработает; passphrase спросят при каждом git/ssh."
+  echo "  eval \"\$(ssh-agent -s)\""
+  echo "  ssh-add ~/.ssh/aur_ed25519"
+  echo ""
+fi
+echo "Если «Permission denied (publickey)», добавьте ключ: ssh-add ~/.ssh/aur_ed25519"
 echo ""
 
 cleanup() { rm -rf "${WORKDIR}"; }
 trap cleanup EXIT
 
 mkdir -p "${WORKDIR}"
+
+# Автор коммита: AUR_GIT_* или настройки git в монорепо (глобальный ~/.gitconfig часто не задан)
+GIT_COMMIT_EMAIL="${AUR_GIT_EMAIL:-$(git -C "${MONOREPO}" config user.email 2>/dev/null || true)}"
+GIT_COMMIT_NAME="${AUR_GIT_NAME:-$(git -C "${MONOREPO}" config user.name 2>/dev/null || true)}"
+if [ -z "${GIT_COMMIT_EMAIL}" ] || [ -z "${GIT_COMMIT_NAME}" ]; then
+  echo "ERROR: для git commit нужны user.name и user.email." >&2
+  echo "  Вариант 1 (глобально): git config --global user.email \"you@example.com\"" >&2
+  echo "                        git config --global user.name \"Your Name\"" >&2
+  echo "  Вариант 2 (только скрипт): export AUR_GIT_EMAIL=… AUR_GIT_NAME=…" >&2
+  echo "  Вариант 3 (только монорепо): git -C \"${MONOREPO}\" config user.email \"…\"" >&2
+  echo "                              git -C \"${MONOREPO}\" config user.name \"…\"" >&2
+  exit 1
+fi
 
 for pkg in "${PACKAGES[@]}"; do
   src="${MONOREPO}/packaging/aur/${pkg}"
@@ -38,6 +56,8 @@ for pkg in "${PACKAGES[@]}"; do
   rm -rf "${clone}"
   git clone "ssh://aur@aur.archlinux.org/${pkg}.git" "${clone}"
   cd "${clone}"
+  git config user.email "${GIT_COMMIT_EMAIL}"
+  git config user.name "${GIT_COMMIT_NAME}"
 
   if git rev-parse --verify HEAD >/dev/null 2>&1; then
     git pull --rebase origin master 2>/dev/null || true

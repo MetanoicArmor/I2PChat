@@ -8,8 +8,16 @@
 1. Зарегистрируйтесь на [aur.archlinux.org](https://aur.archlinux.org/).
 2. Добавьте в профиль AUR **SSH public key** (Account → SSH Keys). Проверка: `ssh -T aur@aur.archlinux.org` → приветствие **Welcome to AUR, …**
 3. **Первый раз — зарегистрировать имена пакетов на сайте.** Пока пакета с таким именем нет в AUR, `git clone ssh://aur@aur.archlinux.org/i2pchat-bin.git` **не сработает**. Откройте [Submit (добавить пакет)](https://aur.archlinux.org/submit/) и создайте **`i2pchat-bin`**, затем снова **`i2pchat-tui-bin`**, подставив `PKGBUILD` и `.SRCINFO` из каталогов [`i2pchat-bin/`](i2pchat-bin/) и [`i2pchat-tui-bin/`](i2pchat-tui-bin/) этого репозитория (или минимальный черновик — см. [AUR submission guidelines](https://wiki.archlinux.org/title/AUR_submission_guidelines)). После этого появятся пустые Git-репозитории на сервере AUR.
-4. **Дальнейшие обновления** — из корня клона I2PChat, с разблокированным ключом в агенте:
+4. **Один раз задайте автора git-коммитов** (в корне I2PChat или глобально), иначе `publish-to-aur.sh` остановится на `git commit`:
    ```bash
+   git config user.email "you@example.com"
+   git config user.name "Your Name"
+   ```
+   Либо только для скрипта: `export AUR_GIT_EMAIL=… AUR_GIT_NAME=…`.
+
+5. **Дальнейшие обновления** — из корня клона I2PChat. Удобно поднять агент, чтобы не вводить passphrase дважды:
+   ```bash
+   eval "$(ssh-agent -s)"
    ssh-add ~/.ssh/aur_ed25519
    ./packaging/aur/publish-to-aur.sh
    ```
