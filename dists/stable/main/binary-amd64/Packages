@@ -1,0 +1,17 @@
+Package: i2pchat
+Version: 1.2.3-1
+Architecture: amd64
+Maintainer: MetanoicArmor <https://github.com/MetanoicArmor/I2PChat>
+Installed-Size: 136172
+Depends: zlib1g
+Filename: https://github.com/MetanoicArmor/I2PChat/releases/download/v1.2.3/i2pchat_1.2.3_amd64.deb
+Size: 138024758
+MD5sum: cad08ab8e397c6bc328ab3adfe13f235
+SHA1: 52f43579bc530f48e4fa74b0ab0eaa1d3b4770c3
+SHA256: e1fb05e8d8786d91795de227c9847f9fd3d8955da7506d607d8282f4d4518a3e
+Section: net
+Priority: optional
+Homepage: https://github.com/MetanoicArmor/I2PChat
+Description: Experimental peer-to-peer chat client for I2P
+ Bundled AppImage from upstream GitHub releases; GUI chat over I2P (PyQt6).
+

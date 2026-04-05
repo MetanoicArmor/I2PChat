@@ -1,0 +1,24 @@
+Architectures: amd64
+Codename: stable
+Components: main
+Date: Sun, 05 Apr 2026 11:07:22 +0000
+Description: Unofficial apt mirror for I2PChat (.deb from GitHub Releases)
+Label: I2PChat
+Origin: I2PChat
+Suite: stable
+MD5Sum:
+ c611deabcf12702d22f1c3ba15edce97              213 Release
+ 116a66a9867ba18685fc9dcfcbef0878              658 main/binary-amd64/Packages
+ bf3da0832ae75259de556b331a16cd48              447 main/binary-amd64/Packages.gz
+SHA1:
+ af941210bfe4722244c7a1cfecc2727e9deff632              213 Release
+ d70265d7eab882dbd029785dd0c43b2051cf4628              658 main/binary-amd64/Packages
+ c90a572fde21590c0eb3960ff70cc42c8532e509              447 main/binary-amd64/Packages.gz
+SHA256:
+ 030c0f64fc5be9f2111dec17ff69cac392e38311dddf1164a67296f94490ec18              213 Release
+ 5741be8bc25a328994500acdf785e90b2f3e9facbc043b1bb36ec9469fbcfdee              658 main/binary-amd64/Packages
+ a0d0fe77beb83a7c86f9347c86f51719096fb7564fced07d66bba4cc7a5683b0              447 main/binary-amd64/Packages.gz
+SHA512:
+ 2bc7d69f8d9bfdb7ff1e83eeb8a56a16ea323f19dd15f94c5cfdcc2c0d9c4a41e04c22595842cadac497a8edb0e97c50b7bada64da074e5d0aeab19c5c6e009e              213 Release
+ 34344140eb21430de2ac8248f916b62f210e55903b4e81917f5aa576a442c6e40494a1e9c79f1c59e8575b42ccfba1fee0db5df2abe5b56244607fe57da08e8b              658 main/binary-amd64/Packages
+ 078a786fce244450c9a84a8b86e0170c89c7513356f0e49a39ee12d0011b47622fa84bfc69feb8e778bce4ecc2780f8352ea6854ea03978fa1800f90ce1f50e3              447 main/binary-amd64/Packages.gz
