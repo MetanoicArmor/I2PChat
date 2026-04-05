@@ -1,6 +1,6 @@
 # apt-зеркало в этом же репозитории (GitHub Pages)
 
-Пользователи подключают apt к **`https://<owner>.github.io/<repo>/`** (для **`MetanoicArmor/I2PChat`**: `https://metanoicarmor.github.io/I2PChat/`).
+Пользователи подключают apt к **`https://<owner>.github.io/<repo>/`** (для **`MetanoicArmor/I2PChat`**: `https://metanoicarmor.github.io/I2PChat/`). В корне зеркала лежит **`index.html`** — витрина с командами установки и ссылками на `KEY.gpg` / индексы (после деплоя корень больше не обязан отдавать 404).
 
 Сайт публикуется через **GitHub Actions → Pages** (артефакт): в выдачу попадает полное дерево **`dists/`**, **`pool/main/*.deb`**, **`KEY.gpg`**, подписи. Так обходятся два ограничения:
 
@@ -75,7 +75,8 @@ export APT_REPO_GPG_PASSPHRASE='...'   # если ключ с паролем
 | Путь | Назначение |
 |------|------------|
 | `scripts/build-apt-site.sh` | `site/pool` + `site/dists` + неподписанный `Release` |
-| `scripts/sign-release.sh` | `InRelease`, `Release.gpg`, `KEY.gpg`, `.nojekyll` |
+| `scripts/sign-release.sh` | `InRelease`, `Release.gpg`, `KEY.gpg`, `.nojekyll`, копия **`index.html`** в корень `site/` |
+| `index.html` | Главная GitHub Pages: витрина apt, ссылки на индексы; **без внешних шрифтов**; кнопка «Copy» подставляет URL текущего хоста |
 | `config/apt-ftparchive-release.conf` | поля для `apt-ftparchive release` |
 
 Формат репозитория: [DebianRepository/Format](https://wiki.debian.org/DebianRepository/Format).

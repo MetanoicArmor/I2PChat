@@ -39,4 +39,13 @@ fi
 
 gpg --armor --export "$FPR" > "$SITE/KEY.gpg"
 touch "$SITE/.nojekyll"
+
+INDEX_SRC="$ROOT/index.html"
+if [[ -f "$INDEX_SRC" ]]; then
+  cp -f "$INDEX_SRC" "$SITE/index.html"
+  echo "Copied landing page: $SITE/index.html"
+else
+  echo "WARN: missing $INDEX_SRC — site root will have no index.html" >&2
+fi
+
 echo "Signed Release; wrote InRelease, Release.gpg, KEY.gpg"

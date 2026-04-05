@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="I2PChat — signed apt repository for Debian and Ubuntu (amd64)." />
+  <meta name="color-scheme" content="dark" />
+  <title>I2PChat · apt mirror</title>
+  <style>
+    :root {
+      --bg-deep: #06080f;
+      --bg-card: rgba(18, 22, 36, 0.72);
+      --stroke: rgba(148, 163, 184, 0.12);
+      --text: #e8eaef;
+      --muted: #94a3b8;
+      --accent: #818cf8;
+      --accent-dim: rgba(129, 140, 248, 0.15);
+      --glow: rgba(99, 102, 241, 0.45);
+      --success: #34d399;
+      --radius: 18px;
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+      --mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      min-height: 100vh;
+      font-family: var(--font);
+      color: var(--text);
+      background: var(--bg-deep);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    /* Aurora mesh background */
+    .bg {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background:
+        radial-gradient(ellipse 100% 80% at 20% -20%, rgba(99, 102, 241, 0.35), transparent 55%),
+        radial-gradient(ellipse 80% 60% at 100% 10%, rgba(52, 211, 153, 0.12), transparent 50%),
+        radial-gradient(ellipse 70% 50% at 50% 100%, rgba(129, 140, 248, 0.2), transparent 45%),
+        var(--bg-deep);
+    }
+
+    .bg::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: clamp(2rem, 6vw, 4rem) clamp(1.25rem, 4vw, 2rem) 4rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: clamp(2.5rem, 6vw, 3.5rem);
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: var(--accent-dim);
+      border: 1px solid rgba(129, 140, 248, 0.25);
+      padding: 0.35rem 0.85rem;
+      border-radius: 999px;
+      margin-bottom: 1.25rem;
+    }
+
+    .badge svg {
+      width: 14px;
+      height: 14px;
+      opacity: 0.9;
+    }
+
+    h1 {
+      font-size: clamp(2.25rem, 6vw, 3.25rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+      margin-bottom: 0.75rem;
+      background: linear-gradient(135deg, #fff 0%, #c7d2fe 45%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .tagline {
+      font-size: 1.1rem;
+      font-weight: 400;
+      color: var(--muted);
+      max-width: 32ch;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: var(--bg-card);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--stroke);
+      border-radius: var(--radius);
+      padding: clamp(1.25rem, 3vw, 1.75rem);
+      margin-bottom: 1.25rem;
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+        0 24px 48px -24px rgba(0, 0, 0, 0.5);
+    }
+
+    .card h2 {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 1rem;
+    }
+
+    pre, .code {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      line-height: 1.55;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--stroke);
+      border-radius: 12px;
+      padding: 1rem 1.1rem;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .code-row {
+      display: flex;
+      gap: 0.5rem;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      font-family: var(--font);
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--bg-deep);
+      background: linear-gradient(135deg, #a5b4fc, #818cf8);
+      border: none;
+      padding: 0.55rem 1rem;
+      border-radius: 10px;
+      cursor: pointer;
+      margin-top: 0.75rem;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      box-shadow: 0 4px 20px var(--glow);
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 28px var(--glow);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+    }
+
+    .btn.copied {
+      background: linear-gradient(135deg, #6ee7b7, var(--success));
+      box-shadow: 0 4px 20px rgba(52, 211, 153, 0.35);
+    }
+
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+    }
+
+    .links a {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--text);
+      text-decoration: none;
+      padding: 0.5rem 0.9rem;
+      border-radius: 10px;
+      border: 1px solid var(--stroke);
+      background: rgba(255, 255, 255, 0.03);
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .links a:hover {
+      border-color: rgba(129, 140, 248, 0.4);
+      background: var(--accent-dim);
+    }
+
+    .note {
+      font-size: 0.88rem;
+      color: var(--muted);
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--stroke);
+    }
+
+    .note strong {
+      color: #cbd5e1;
+      font-weight: 600;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 2.5rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+
+    .btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    .links a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+      .btn {
+        transition: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg" aria-hidden="true"></div>
+  <div class="wrap">
+    <header>
+      <div class="badge">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+        </svg>
+        Signed repository
+      </div>
+      <h1>I2PChat</h1>
+      <p class="tagline">Debian / Ubuntu apt mirror — GUI and terminal builds over I2P.</p>
+    </header>
+
+    <section class="card" aria-labelledby="install-h">
+      <h2 id="install-h">Install</h2>
+      <p class="note" style="margin-top:0;padding-top:0;border:0;margin-bottom:1rem;">Add the key, the source, then install <strong>i2pchat</strong> (GUI) or <strong>i2pchat-tui</strong>.</p>
+      <pre id="apt-block" class="code" aria-live="polite"></pre>
+      <button type="button" class="btn" id="copy-btn" aria-label="Copy install commands">Copy commands</button>
+    </section>
+
+    <section class="card" aria-labelledby="links-h">
+      <h2 id="links-h">Repository</h2>
+      <nav class="links" aria-label="Quick links">
+        <a href="KEY.gpg">KEY.gpg</a>
+        <a href="dists/stable/InRelease">InRelease</a>
+        <a href="dists/stable/main/binary-amd64/Packages.gz">Packages.gz</a>
+        <a href="https://github.com/MetanoicArmor/I2PChat">GitHub</a>
+        <a href="https://github.com/MetanoicArmor/I2PChat/releases">Releases</a>
+      </nav>
+      <p class="note">
+        <strong>amd64 only</strong> on this mirror. On ARM64, install <code style="font-family:var(--mono);font-size:0.85em;">*_arm64.deb</code> from GitHub Releases.
+      </p>
+    </section>
+
+    <footer>
+      <a href="https://github.com/MetanoicArmor/I2PChat/blob/main/docs/INSTALL.md">Full install guide</a>
+      ·
+      <a href="https://github.com/MetanoicArmor/I2PChat/blob/main/packaging/apt/README.md">Maintainer docs</a>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      var path = window.location.pathname.replace(/\/index\.html?$/i, "");
+      if (!path.endsWith("/")) {
+        path += "/";
+      }
+      var baseWithSlash = window.location.origin + path;
+      var debUrl = baseWithSlash.replace(/\/$/, "");
+
+      var block = document.getElementById("apt-block");
+      var btn = document.getElementById("copy-btn");
+
+      function rawText() {
+        return [
+          "sudo mkdir -p /etc/apt/keyrings",
+          'curl -fsSL "' + baseWithSlash + 'KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg',
+          'echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] ' + debUrl + ' stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list',
+          "sudo apt update",
+          "sudo apt install i2pchat",
+          "# or: sudo apt install i2pchat-tui",
+        ].join("\n");
+      }
+
+      block.textContent = rawText();
+
+      btn.addEventListener("click", function () {
+        navigator.clipboard.writeText(rawText()).then(function () {
+          var t = btn.textContent;
+          btn.textContent = "Copied";
+          btn.classList.add("copied");
+          setTimeout(function () {
+            btn.textContent = t;
+            btn.classList.remove("copied");
+          }, 2000);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
