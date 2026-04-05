@@ -68,6 +68,25 @@ jobs:
         with:
           ref: ${{ steps.meta.outputs.checkout_ref }}
 
+      # Tags like v1.2.3 predate I2PChat-tui.spec / TUI zip in build-linux.sh — users often leave source_ref empty.
+      - name: Use main for packaging when tag tree has no TUI spec
+        run: |
+          VER="${{ steps.meta.outputs.ver }}"
+          if [ -f I2PChat-tui.spec ]; then
+            echo "I2PChat-tui.spec present — continuing with checked-out ref"
+            exit 0
+          fi
+          echo "No I2PChat-tui.spec here — shallow-fetching origin/main for current packaging scripts"
+          git fetch --depth=1 origin main
+          git checkout -f FETCH_HEAD
+          FILE_VER="$(tr -d '\r\n' < VERSION)"
+          if [ "$FILE_VER" != "$VER" ]; then
+            echo "ERROR: origin/main VERSION is '$FILE_VER' but release is '$VER'." >&2
+            echo "Cannot auto-fallback: set source_ref to a branch/tag whose VERSION matches, or align main." >&2
+            exit 1
+          fi
+          echo "Switched to main (VERSION=$FILE_VER) for build"
+
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.14"
@@ -111,7 +130,7 @@ jobs:
               echo "Contents of workspace root:" >&2
               ls -la >&2 || true
               echo >&2
-              echo "Hint: tag ${TAG} may predate TUI zip support in build-linux.sh. Re-run with source_ref: main (VERSION on that ref must be ${VER})." >&2
+              echo "Hint: build-linux.sh should emit TUI zip + two-line SHA256SUMS; check PyInstaller TUI step logs above." >&2
               exit 1
             fi
           done
