@@ -96,8 +96,9 @@ PY
 "${VENV_PY}" -m compileall i2pchat vendor/i2plib scripts make_icon.py
 
 # 1) сборка PyInstaller с использованием spec файла (анализирует i2pchat/run_gui.py и зависимости)
+# python -m PyInstaller: bin/pyinstaller shebang часто с путём хоста, в Docker путь другой (/src)
 rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"
-pyinstaller --clean -y I2PChat.spec
+"${VENV_PY}" -m PyInstaller --clean -y I2PChat.spec
 
 # 2) упаковка в AppDir
 rm -rf "${APPDIR}"
@@ -252,7 +253,7 @@ PY
 echo "✔ Packed ${ZIP_FILE}"
 
 echo "==> PyInstaller slim TUI-only onedir (I2PChat-tui.spec, без PyQt6)"
-pyinstaller --clean -y I2PChat-tui.spec
+"${VENV_PY}" -m PyInstaller --clean -y I2PChat-tui.spec
 
 # 4b) TUI-only zip (no AppImage): usr/bin layout + root launcher for AUR / manual install
 TUI_ZIP="${APP_NAME}-linux-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}.zip"
