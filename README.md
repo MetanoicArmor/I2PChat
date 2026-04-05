@@ -46,22 +46,22 @@ No Python needed for these bundles.
 
 **Package managers** (same artifacts as GitHub Releases; third-party install paths):
 
-**macOS (Apple Silicon / arm64)** — [Homebrew](https://brew.sh) [tap](https://github.com/MetanoicArmor/homebrew-i2pchat):
+**macOS (arm64) — [Homebrew](https://brew.sh) [tap](https://github.com/MetanoicArmor/homebrew-i2pchat):**
 
 ```bash
 brew tap MetanoicArmor/i2pchat
-brew install --cask i2pchat      # GUI — I2PChat.app from release zip
-brew install --cask i2pchat-tui  # TUI only — slim zip
+brew install --cask i2pchat      # GUI — I2PChat.app
+brew install --cask i2pchat-tui  # TUI only
 ```
 
-**Arch Linux (x86_64)** — [AUR](https://aur.archlinux.org/) (example: [yay](https://github.com/Jguer/yay)):
+**Arch Linux (x86_64 / arm64) — [AUR](https://aur.archlinux.org/)** (example: [yay](https://github.com/Jguer/yay)):
 
 ```bash
 yay -S i2pchat-bin      # GUI — official AppImage from release
 yay -S i2pchat-tui-bin  # TUI only
 ```
 
-**Debian / Ubuntu (amd64, optional signed apt mirror on GitHub Pages)** — same **amd64** packages as Releases; **arm64** `.deb` → download from Releases only. Full setup → [`packaging/apt/README.md`](packaging/apt/README.md).
+**Debian / Ubuntu 24.04 (amd64 / arm64)** — signed apt mirror on GitHub Pages ([`packaging/apt/README.md`](packaging/apt/README.md)). The mirror currently publishes **amd64** packages; on **arm64** install the `*_arm64.deb` files from **Releases** (see table above) with `sudo apt install ./…`.
 
 ```bash
 sudo mkdir -p /etc/apt/keyrings
