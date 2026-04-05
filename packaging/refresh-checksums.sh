@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Print SHA256 for GitHub release zips + icon.png for a given tag (default: latest on GitHub).
+# Use when bumping Homebrew, winget, AUR, or deb packaging after a release.
+set -euo pipefail
+
+TAG="${1:-}"
+
+if [[ -z "$TAG" ]]; then
+  TAG="$(curl -fsSL "https://api.github.com/repos/MetanoicArmor/I2PChat/releases/latest" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('tag_name',''))")"
+fi
+
+TAG="${TAG#v}"
+if [[ -z "$TAG" ]]; then
+  echo "ERROR: could not resolve release tag" >&2
+  exit 1
+fi
+
+BASE="https://github.com/MetanoicArmor/I2PChat/releases/download/v${TAG}"
+MAC_ZIP="I2PChat-macOS-arm64-v${TAG}.zip"
+declare -a FILES=(
+  "${MAC_ZIP}"
+  "I2PChat-windows-x64-v${TAG}.zip"
+  "I2PChat-linux-x86_64-v${TAG}.zip"
+)
+
+echo "# Release v${TAG}"
+echo "# --- SHA256 (paste into packaging files) ---"
+MAC_SUM=""
+for f in "${FILES[@]}"; do
+  url="${BASE}/${f}"
+  sum="$(curl -fsSL "$url" | sha256sum | awk '{print $1}')"
+  printf '%s  %s\n' "$sum" "$f"
+  if [[ "$f" == "$MAC_ZIP" ]]; then
+    MAC_SUM="$sum"
+  fi
+done
+
+icon_url="https://github.com/MetanoicArmor/I2PChat/raw/v${TAG}/icon.png"
+icon_sum="$(curl -fsSL "$icon_url" | sha256sum | awk '{print $1}')"
+printf '%s  icon.png (raw v%s)\n' "$icon_sum" "$TAG"
+
+echo "# --- Homebrew cask (mac zip) ---"
+echo "  version \"${TAG}\""
+echo "  sha256 \"${MAC_SUM}\""

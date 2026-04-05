@@ -246,6 +246,19 @@ Currently shipped assets use **versioned** zip names, for example:
 
 **Linux** (`I2PChat-linux-x86_64-v1.2.2.zip` → AppImage) and **macOS arm64** (`I2PChat-macOS-arm64-v1.2.2.zip` → `.app`) — same release page; **direct download links** are in the **Prebuilt Downloads** table later in this README. Prebuilt AppImage and `.app` also ship a **console TUI** binary (`I2PChat-tui`); see the table below.
 
+#### Package managers (optional)
+
+Upstream-maintained recipes and docs live under [**packaging/**](packaging/README.md):
+
+| Ecosystem | Status | Notes |
+|-----------|--------|--------|
+| **Homebrew** (macOS arm64 cask) | Files in [`packaging/homebrew/`](packaging/homebrew/README.md) | Publish a tap repo `homebrew-i2pchat` or open a PR to Homebrew cask; then `brew install --cask i2pchat`. |
+| **winget** (Windows portable zip) | Manifests in [`packaging/winget/`](packaging/winget/README.md) | Copy versioned YAML into a PR to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs); then `winget install MetanoicArmor.I2PChat`. |
+| **Arch (AUR)** | [`packaging/aur/i2pchat-bin/`](packaging/aur/README.md) | Submit `PKGBUILD` / `.SRCINFO` as package `i2pchat-bin`; users: `yay -S i2pchat-bin` (or any AUR helper). |
+| **Debian/Ubuntu** | [`packaging/debian/`](packaging/debian/README.md) | No official apt repo here: build a local `.deb` with [`build-deb-from-appimage.sh`](packaging/debian/build-deb-from-appimage.sh), or use your own apt repository / PPA / **Flatpak** (Flathub) — see that README. |
+
+After each new **GitHub release** tag, refresh checksums with `./packaging/refresh-checksums.sh` and update version fields in the manifests you maintain.
+
 ### 🛠 Running from source
 
 Requirements:
