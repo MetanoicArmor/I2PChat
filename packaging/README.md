@@ -35,6 +35,15 @@
 
 выводит SHA256 для **шести** релизных zip (GUI + TUI на каждой ОС) и для `icon.png`, плюс строки для cask.
 
+Если на релизе **вручную заменили только Linux zip**, обновите **`SHA256SUMS`** (два ряда, как после `build-linux.sh`):
+
+```bash
+./packaging/refresh-linux-sha256sums.sh v1.2.3   # качает с GitHub, пишет dist/SHA256SUMS
+gh release upload v1.2.3 dist/SHA256SUMS --clobber
+```
+
+При публикации **`SHA256SUMS.asc`** пересоздайте подпись от нового файла.
+
 ## См. также
 
 - [**docs/INSTALL.md**](../docs/INSTALL.md) — краткая установка с релизов по платформам (для пользователей).

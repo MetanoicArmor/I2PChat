@@ -39,6 +39,8 @@ Environment:
 
 **Official release builds** should use `I2PCHAT_REQUIRE_GPG=1` so unsigned archives are not produced silently.
 
+**Linux-only checksum refresh** (after replacing `I2PChat-linux-*-v*.zip` on a release): [`../packaging/refresh-linux-sha256sums.sh`](../packaging/refresh-linux-sha256sums.sh) writes `dist/SHA256SUMS` in the same format as `build-linux.sh`, then upload with `gh release upload`.
+
 Verification:
 
 ```bash
