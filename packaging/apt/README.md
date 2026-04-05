@@ -3,6 +3,7 @@
 Пользователи могут подключать **один** источник apt, который публикуется на **GitHub Pages** этого репозитория (ветка **`gh-pages`**), без отдельного репо.
 
 - Берётся официальный **`i2pchat_<версия>_amd64.deb`** с [GitHub Releases](https://github.com/MetanoicArmor/I2PChat/releases).
+- На ветку **`gh-pages` попадают только** `dists/`, подписи и **`KEY.gpg`** (и при необходимости заглушка). Сам **`.deb` в git не кладётся**: в `Packages` поле **`Filename`** указывает **прямую ссылку на ассет релиза** — иначе GitHub отклонит push (лимит **100 MB** на файл, пакет больше).
 - URL сайта: **`https://<owner>.github.io/<repo>/`**  
   Для **`MetanoicArmor/I2PChat`**: `https://metanoicarmor.github.io/I2PChat/`
 
@@ -48,7 +49,18 @@ Suite: **`stable`**, компонент: **`main`**, архитектура: **`
 
 ## Локальная проверка (Linux)
 
-Из корня репозитория I2PChat:
+Из корня репозитория I2PChat.
+
+**Как в CI** (без копии `.deb` в `site/`, только метаданные + URL на Releases):
+
+```bash
+export VERSION=1.2.3
+export DEB_PATH="$PWD/dist/i2pchat_${VERSION}_amd64.deb"
+export APT_DEB_FILENAME_URL="https://github.com/MetanoicArmor/I2PChat/releases/download/v${VERSION}/i2pchat_${VERSION}_amd64.deb"
+./packaging/apt/scripts/build-apt-site.sh
+```
+
+**Полное зеркало с `pool/`** (для теста на локальном веб-сервере) — не задавайте `APT_DEB_FILENAME_URL`:
 
 ```bash
 export VERSION=1.2.3
@@ -57,7 +69,7 @@ export DEB_PATH="$PWD/dist/i2pchat_${VERSION}_amd64.deb"
 gpg --import apt-signing-private.asc
 export APT_REPO_GPG_PASSPHRASE='...'
 ./packaging/apt/scripts/sign-release.sh
-# готовое дерево: packaging/apt/site/
+# дерево: packaging/apt/site/
 ```
 
 ## Файлы

@@ -72,6 +72,7 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.ver }}
           DEB_PATH: ${{ github.workspace }}/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb
+          APT_DEB_FILENAME_URL: https://github.com/${{ github.repository }}/releases/download/v${{ steps.meta.outputs.ver }}/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb
           APT_REPO_GPG_PRIVATE_KEY: ${{ secrets.APT_REPO_GPG_PRIVATE_KEY }}
           APT_REPO_GPG_PASSPHRASE: ${{ secrets.APT_REPO_GPG_PASSPHRASE }}
         run: |

@@ -101,6 +101,8 @@ jobs:
           chmod +x packaging/apt/scripts/build-apt-site.sh packaging/apt/scripts/sign-release.sh
           export VERSION="${{ steps.meta.outputs.ver }}"
           export DEB_PATH="${{ github.workspace }}/dist/i2pchat_${VERSION}_amd64.deb"
+          # .deb >100 MB cannot live on gh-pages git; Packages points at the release asset
+          export APT_DEB_FILENAME_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/i2pchat_${VERSION}_amd64.deb"
           ./packaging/apt/scripts/build-apt-site.sh
           echo "$APT_REPO_GPG_PRIVATE_KEY" | gpg --import --batch
           export APT_REPO_GPG_PASSPHRASE
