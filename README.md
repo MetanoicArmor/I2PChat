@@ -69,8 +69,6 @@ sudo apt install i2pchat       # GUI
 # or: sudo apt install i2pchat-tui   # TUI only
 ```
 
-**glibc:** if the published `.deb` was built against **GLIBC_2.42** (very new toolchain), **Ubuntu 24.04 (~2.39)** and older releases can still fail with `GLIBC_2.42 not found` — use a `.deb`/zip built on an older baseline (see [**Build Linux release artifacts**](.github/workflows/build-linux-release-artifacts.yml)) or [build from source](docs/INSTALL.md#build-from-source).
-
 More platforms and detail → [**docs/INSTALL.md**](docs/INSTALL.md).
 
 > **Router:** On a fresh profile, the app often defaults to the **bundled** `i2pd`. Switch to a system **i2pd** (SAM, usually `127.0.0.1:7656`) via **More actions → I2P router…** (**Cmd/Ctrl+R**). The choice is saved.
