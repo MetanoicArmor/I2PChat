@@ -39,7 +39,7 @@ Package pages: [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i
 
 **Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`**. Install with `sudo apt install ./i2pchat_*_amd64.deb` (or your package manager). If it is missing, use the AppImage zip or build a `.deb` locally as described in [`packaging/debian/README.md`](../packaging/debian/README.md).
 
-**Optional `.rpm` (Fedora / RHEL-compatible):** some releases include **`i2pchat_<version>_x86_64.rpm`**. Install with `sudo dnf install ./i2pchat_*_x86_64.rpm` (or `rpm -i`). Same AppImage payload as the `.deb`; COPR and [`packaging/fedora/`](../packaging/fedora/README.md) cover other install paths.
+**Optional `.rpm` (Fedora / RHEL-compatible):** look on the same release page for **`i2pchat_<version>_x86_64.rpm`** (it is added by CI, not by the main release build scripts). Install with `sudo dnf install ./i2pchat_*_x86_64.rpm` (or `rpm -i`). If the file is missing, use the **Linux AppImage zip** above, or ask a maintainer to run **Actions → Release Linux packages** for that tag. COPR and [`packaging/fedora/`](../packaging/fedora/README.md) cover other install paths.
 
 ## Router (I2P)
 

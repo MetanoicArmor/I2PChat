@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v1.2.3) — must match an existing GitHub release with linux zip"
+        description: "Release tag (e.g. v1.2.3) — existing release with I2PChat-linux-x86_64-v*.zip; uploads .deb + .rpm"
         required: true
         type: string
 
