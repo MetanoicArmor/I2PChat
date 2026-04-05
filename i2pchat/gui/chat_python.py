@@ -713,7 +713,7 @@ class I2PChat(App):
 
     # ----- rendering helpers -----
 
-    def post(self, type_name: str, message: str) -> None:
+    def post(self, type_name: str, message: str, *, allow_markup: bool = False) -> None:
         styles = {
             "info": "[bold blue]STATUS:[/] [white]{}[/]",
             "error": "[bold red]ERROR:[/] [red]{}[/]",
@@ -723,7 +723,7 @@ class I2PChat(App):
             "help": "[dim]HELP:[/] [gray62]{}[/]",
         }
 
-        safe_message = escape(str(message))
+        safe_message = str(message) if allow_markup else escape(str(message))
         address_pattern = r"([a-z0-9]+\.b32\.i2p|[a-z0-9]+\.i2p)"
         formatted_msg = re.sub(address_pattern, r"[bold cyan]\1[/]", safe_message)
         content = styles.get(type_name, "{}").format(formatted_msg)
@@ -1204,7 +1204,11 @@ class I2PChat(App):
 
         self.network_status = "initializing"
         self.peer_b32 = self.selected_peer or "Initializing SAM Session..."
-        self.post("system", f"Initializing Profile: [bold yellow]{self.profile}[/]")
+        self.post(
+            "system",
+            f"Initializing Profile: [bold yellow]{escape(self.profile)}[/]",
+            allow_markup=True,
+        )
         self.post(
             "system",
             f"Mode: {'PERSISTENT' if self.profile != TRANSIENT_PROFILE_NAME else 'TRANSIENT'}",
@@ -1404,7 +1408,11 @@ class I2PChat(App):
         self._sync_compose_draft_to_peer_key(self.selected_peer)
         self.network_status = "initializing"
         self.peer_b32 = self.selected_peer or "Initializing SAM Session..."
-        self.post("system", f"Initializing Profile: [bold yellow]{self.profile}[/]")
+        self.post(
+            "system",
+            f"Initializing Profile: [bold yellow]{escape(self.profile)}[/]",
+            allow_markup=True,
+        )
         self._start_core_session_init_background()
 
     def _start_core_session_init_background(self) -> None:

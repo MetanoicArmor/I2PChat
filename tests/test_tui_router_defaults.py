@@ -277,6 +277,20 @@ def test_tui_trust_decision_screen_exists() -> None:
     assert screen is not None
 
 
+def test_tui_post_can_preserve_markup_when_requested() -> None:
+    from i2pchat.gui.chat_python import I2PChat
+
+    app = object.__new__(I2PChat)
+    written: list[str] = []
+    log = type("Log", (), {"write": lambda self, content: written.append(content)})()
+    app.query_one = lambda *_args, **_kwargs: log  # type: ignore[method-assign]
+
+    I2PChat.post(app, "system", "Initializing [bold yellow]demo[/]", allow_markup=True)
+
+    assert written
+    assert "[bold yellow]demo[/]" in written[0]
+
+
 def test_tui_on_mount_schedules_background_init(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
