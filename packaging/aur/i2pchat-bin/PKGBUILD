@@ -1,6 +1,6 @@
 # Maintainer: submit as i2pchat-bin on AUR (see packaging/README.md)
 pkgname=i2pchat-bin
-pkgver=1.2.1
+pkgver=1.2.2
 pkgrel=1
 pkgdesc="Experimental peer-to-peer chat client for the I2P network (official AppImage, binary)"
 arch=('x86_64')
@@ -11,7 +11,7 @@ options=('!strip')
 _zip="I2PChat-linux-x86_64-v${pkgver}.zip"
 source=("${_zip}::${url}/releases/download/v${pkgver}/${_zip}"
         "icon.png::${url}/raw/v${pkgver}/icon.png")
-sha256sums=('1751b5cde245a7169fb45e865ac8148edbf63d2c6f3565451a435077841ab30e'
+sha256sums=('b54598492d8c259c68610b025c35b363b2de2400787be4de5f25b78835625ef6'
             'c49c198bef05e1cf3bf159858acefad100981fb21437e47e2588fcc1e4ad7217')
 
 package() {
