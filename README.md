@@ -29,7 +29,9 @@
 | **Windows** | [I2PChat-windows-x64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.3.zip) | Unzip → `I2PChat.exe` (GUI) or `I2PChat-tui.exe` (cmd/PowerShell) |
 | **macOS (arm64)** | [I2PChat-macOS-arm64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.3.zip) | Unzip → `I2PChat.app`; TUI: `I2PChat.app/Contents/MacOS/I2PChat-tui` |
 | **Linux (x86_64)** | [I2PChat-linux-x86_64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.3.zip) | `chmod +x` the AppImage → run it; TUI: see INSTALL.md |
-| **Debian / Ubuntu (.deb)** | [i2pchat_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat_1.2.3_amd64.deb) (GUI), [i2pchat-tui_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat-tui_1.2.3_amd64.deb) (TUI) | `sudo apt install ./i2pchat_*_amd64.deb` / `sudo apt install ./i2pchat-tui_*_amd64.deb` — or signed apt mirror: [**INSTALL.md**](docs/INSTALL.md#linux-x86_64), [`packaging/apt/README.md`](packaging/apt/README.md) |
+| **Linux (arm64 / AArch64)** | [I2PChat-linux-aarch64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-v1.2.3.zip) | Same as x86_64: AppImage inside the zip — `chmod +x` → run; [**INSTALL.md**](docs/INSTALL.md) |
+| **Debian / Ubuntu (amd64)** | [i2pchat_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat_1.2.3_amd64.deb) (GUI), [i2pchat-tui_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat-tui_1.2.3_amd64.deb) (TUI) | `sudo apt install ./i2pchat_*_amd64.deb` / `sudo apt install ./i2pchat-tui_*_amd64.deb` — optional signed **amd64-only** apt mirror: [**INSTALL.md**](docs/INSTALL.md#linux-x86_64), [`packaging/apt/README.md`](packaging/apt/README.md) |
+| **Debian / Ubuntu (arm64)** | [i2pchat_1.2.3_arm64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat_1.2.3_arm64.deb) (GUI), [i2pchat-tui_1.2.3_arm64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat-tui_1.2.3_arm64.deb) (TUI) | `sudo apt install ./i2pchat_*_arm64.deb` / `sudo apt install ./i2pchat-tui_*_arm64.deb` (only on **Releases**; not in the GitHub Pages apt repo yet) |
 
 **TUI-only archives** (separate slim PyInstaller bundle via **`I2PChat-tui.spec`**: Textual + core, **no PyQt6**; for winget / Homebrew **`i2pchat-tui`** / AUR **`i2pchat-tui-bin`**):
 
@@ -38,6 +40,7 @@
 | **Windows** | [I2PChat-windows-tui-x64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-tui-x64-v1.2.3.zip) | Unzip → `I2PChat\I2PChat-tui.exe` |
 | **macOS (arm64)** | [I2PChat-macos-arm64-tui-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macos-arm64-tui-v1.2.3.zip) | Unzip → run `./i2pchat-tui` (uses `I2PChat/` onedir next to it) |
 | **Linux (x86_64)** | [I2PChat-linux-x86_64-tui-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-tui-v1.2.3.zip) | Unzip → run `./i2pchat-tui` |
+| **Linux (arm64)** | [I2PChat-linux-aarch64-tui-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-tui-v1.2.3.zip) | Unzip → run `./i2pchat-tui` |
 
 No Python needed for these bundles.
 
@@ -58,7 +61,7 @@ yay -S i2pchat-bin      # GUI — official AppImage from release
 yay -S i2pchat-tui-bin  # TUI only
 ```
 
-**Debian / Ubuntu (x86_64, optional signed apt mirror on GitHub Pages)** — same packages as Releases; full setup → [`packaging/apt/README.md`](packaging/apt/README.md).
+**Debian / Ubuntu (amd64, optional signed apt mirror on GitHub Pages)** — same **amd64** packages as Releases; **arm64** `.deb` → download from Releases only. Full setup → [`packaging/apt/README.md`](packaging/apt/README.md).
 
 ```bash
 sudo mkdir -p /etc/apt/keyrings
