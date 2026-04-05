@@ -1,0 +1,27 @@
+# Template — update sha256 after release (see packaging/refresh-checksums.sh).
+app-id: net.i2pchat.I2PChat.TUI
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: i2pchat-tui
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --socket=pulseaudio
+
+modules:
+  - name: i2pchat-tui-bundle
+    buildsystem: simple
+    build-commands:
+      - install -d /app/i2pchat-tui
+      - cp -a i2pchat-tui usr /app/i2pchat-tui/
+      - chmod +x /app/i2pchat-tui/i2pchat-tui /app/i2pchat-tui/usr/bin/I2PChat-tui
+      - install -d /app/bin
+      - ln -s /app/i2pchat-tui/i2pchat-tui /app/bin/i2pchat-tui
+    sources:
+      - type: archive
+        url: https://github.com/MetanoicArmor/I2PChat/releases/download/v1.2.3/I2PChat-linux-x86_64-tui-v1.2.3.zip
+        sha256: '0000000000000000000000000000000000000000000000000000000000000000'

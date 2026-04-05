@@ -4,9 +4,10 @@
 
 | Платформа | Каталог | Действие мейнтейнера |
 |-----------|---------|----------------------|
-| macOS (arm64) | [`homebrew/`](homebrew/) | Отдельный tap `homebrew-i2pchat` или PR в `homebrew-cask` |
-| Windows | [`winget/`](winget/) | PR в [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs) |
-| Arch | [`aur/`](aur/) | Создать пакет `i2pchat-bin` на AUR |
+| macOS (arm64) | [`homebrew/`](homebrew/) | Отдельный tap `homebrew-i2pchat` или PR в `homebrew-cask`: cask **`i2pchat`** (GUI `.app`), cask **`i2pchat-tui`** (TUI-only zip) |
+| Windows | [`winget/`](winget/) | PR в [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs): **`MetanoicArmor.I2PChat`** (GUI zip), **`MetanoicArmor.I2PChat.TUI`** — шаблоны в [`winget-tui/`](winget-tui/) |
+| Arch | [`aur/`](aur/) | **`i2pchat-bin`** (AppImage), **`i2pchat-tui-bin`** (Linux TUI zip → `/opt/i2pchat-tui`) |
+| Flatpak | [`flatpak/`](flatpak/) | Шаблоны `net.i2pchat.I2PChat` / `net.i2pchat.I2PChat.TUI` и README для PR в [Flathub](https://github.com/flathub/flathub) |
 | Debian/Ubuntu | [`debian/`](debian/) | Скрипт [`build-deb-from-appimage.sh`](debian/build-deb-from-appimage.sh); при публикации Release CI прикрепляет `.deb` ([`release-deb.yml`](../.github/workflows/release-deb.yml)); опционально свой apt-repo / PPA / Flatpak |
 | Fedora | [`fedora/`](fedora/) | RPM из релизного zip — [`i2pchat.spec`](fedora/i2pchat.spec), публикация в [COPR](https://copr.fedorainfracloud.org/) |
 
@@ -21,7 +22,7 @@
 ./packaging/refresh-checksums.sh v1.2.3   # конкретный тег
 ```
 
-выводит SHA256 для трёх zip и для `icon.png`, плюс строки для cask.
+выводит SHA256 для **шести** релизных zip (GUI + TUI на каждой ОС) и для `icon.png`, плюс строки для cask.
 
 ## См. также
 

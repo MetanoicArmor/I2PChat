@@ -6,9 +6,9 @@ Python **3.14+** is recommended everywhere. The repo vendors a local **i2plib** 
 
 | Target | Command | Output (typical) |
 |--------|---------|------------------|
-| Linux (AppImage + zip) | `./build-linux.sh` | `I2PChat.AppImage`, `I2PChat-linux-<arch>-v<version>.zip` (AppImage inside) |
-| macOS (.app + zip) | `./build-macos.sh` | `dist/I2PChat.app`, `I2PChat-macOS-<arch>-v<version>.zip` |
-| Windows | `.\build-windows.ps1` | `dist\I2PChat\I2PChat.exe`, `I2PChat-tui.exe` |
+| Linux (AppImage + zip) | `./build-linux.sh` | `I2PChat.AppImage`, `I2PChat-linux-<arch>-v<version>.zip` (AppImage inside), **`I2PChat-linux-<arch>-tui-v<version>.zip`** (TUI-only tree + `i2pchat-tui` launcher) |
+| macOS (.app + zip) | `./build-macos.sh` | `dist/I2PChat.app`, `I2PChat-macOS-<arch>-v<version>.zip`, **`I2PChat-macos-<arch>-tui-v<version>.zip`** |
+| Windows | `.\build-windows.ps1` | `dist\I2PChat\I2PChat.exe`, `I2PChat-tui.exe`, **`I2PChat-windows-tui-x64-v<version>.zip`** |
 
 **Linux script** uses `.venv314`, PyInstaller, `appimagetool`; image includes `usr/bin/I2PChat` and **`usr/bin/I2PChat-tui`**, plus a TUI `.desktop` with `Terminal=true`.
 
@@ -24,7 +24,7 @@ powershell -NoProfile -Command "Set-ExecutionPolicy -Scope Process RemoteSigned;
 
 Release build scripts generate:
 
-- `SHA256SUMS` for produced archive(s);
+- `SHA256SUMS` for **both** the main release zip(s) and the **TUI-only** zip produced on that platform (two lines per OS build);
 - detached armored GPG signature `SHA256SUMS.asc` (best-effort by default).
 
 These files are **not** tracked in git; upload them **with the release assets** on GitHub.
@@ -82,4 +82,4 @@ See [`../packaging/debian/README.md`](../packaging/debian/README.md). GitHub Act
 
 ## Maintainer packaging (brew, winget, AUR, Fedora)
 
-Templates and checksum workflow: [`../packaging/README.md`](../packaging/README.md).
+Templates and checksum workflow: [`../packaging/README.md`](../packaging/README.md). TUI-only packages use [`../packaging/winget-tui/`](../packaging/winget-tui/), [`../packaging/homebrew/Casks/i2pchat-tui.rb`](../packaging/homebrew/Casks/i2pchat-tui.rb), [`../packaging/aur/i2pchat-tui-bin/`](../packaging/aur/i2pchat-tui-bin/), and [`../packaging/flatpak/`](../packaging/flatpak/).

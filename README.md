@@ -30,6 +30,14 @@
 | **macOS (arm64)** | [I2PChat-macOS-arm64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.3.zip) | Unzip → `I2PChat.app`; TUI: `I2PChat.app/Contents/MacOS/I2PChat-tui` |
 | **Linux (x86_64)** | [I2PChat-linux-x86_64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.3.zip) | `chmod +x` the AppImage → run it; TUI: see INSTALL.md |
 
+**TUI-only archives** (same PyInstaller bundle without the GUI binary where applicable; for package managers named `*-tui` — winget, Homebrew cask `i2pchat-tui`, AUR `i2pchat-tui-bin`):
+
+| Platform | Download | Launch |
+|----------|----------|--------|
+| **Windows** | [I2PChat-windows-tui-x64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-tui-x64-v1.2.3.zip) | Unzip → `I2PChat\I2PChat-tui.exe` |
+| **macOS (arm64)** | [I2PChat-macos-arm64-tui-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macos-arm64-tui-v1.2.3.zip) | Unzip → run `./i2pchat-tui` (uses `I2PChat/` onedir next to it) |
+| **Linux (x86_64)** | [I2PChat-linux-x86_64-tui-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-tui-v1.2.3.zip) | Unzip → run `./i2pchat-tui` |
+
 No Python needed for these bundles.
 
 > **Router:** On a fresh profile, the app often defaults to the **bundled** `i2pd`. Switch to a system **i2pd** (SAM, usually `127.0.0.1:7656`) via **More actions → I2P router…** (**Cmd/Ctrl+R**). The choice is saved.
@@ -104,7 +112,7 @@ python3.14 -m venv .venv314
 
 On **Debian/Ubuntu** you may need `libxcb-cursor0` for PyQt6 on X11. Prefer `python -m` from the repo root (see [**MANUAL_EN**](docs/MANUAL_EN.md) for detail).
 
-**Release builds, signing, padding, NixOS, BlindBox service layout** → [**docs/BUILD.md**](docs/BUILD.md).
+**Release builds, signing, padding, NixOS, BlindBox service layout** → [**docs/BUILD.md**](docs/BUILD.md). **Protocol metadata and padding profile:** override with `I2PCHAT_PADDING_PROFILE=off` (details in BUILD.md).
 
 ---
 

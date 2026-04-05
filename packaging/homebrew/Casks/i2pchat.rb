@@ -1,6 +1,6 @@
 cask "i2pchat" do
-  version "1.2.2"
-  sha256 "1cad7f66fe7e7cf5b743108d09d4358a30177977bc5c752bcb8a8e4922c2dc48"
+  version "1.2.3"
+  sha256 "0356ca685d95eb57d569510bcb9ab35a1f9a96b6b33b2eafb27c5311af611223"
 
   url "https://github.com/MetanoicArmor/I2PChat/releases/download/v#{version}/I2PChat-macOS-arm64-v#{version}.zip"
   name "I2PChat"
@@ -13,6 +13,6 @@ cask "i2pchat" do
   app "I2PChat.app"
 
   caveats <<~EOS
-    Console TUI (optional): I2PChat.app/Contents/MacOS/I2PChat-tui
+    Textual TUI only: install the separate cask `i2pchat-tui`, or use I2PChat.app/Contents/MacOS/I2PChat-tui inside this bundle.
   EOS
 end

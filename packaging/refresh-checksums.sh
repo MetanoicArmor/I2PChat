@@ -18,21 +18,38 @@ fi
 
 BASE="https://github.com/MetanoicArmor/I2PChat/releases/download/v${TAG}"
 MAC_ZIP="I2PChat-macOS-arm64-v${TAG}.zip"
+MAC_TUI_ZIP="I2PChat-macos-arm64-tui-v${TAG}.zip"
+WIN_TUI_ZIP="I2PChat-windows-tui-x64-v${TAG}.zip"
+LINUX_TUI_ZIP="I2PChat-linux-x86_64-tui-v${TAG}.zip"
 declare -a FILES=(
   "${MAC_ZIP}"
+  "${MAC_TUI_ZIP}"
   "I2PChat-windows-x64-v${TAG}.zip"
+  "${WIN_TUI_ZIP}"
   "I2PChat-linux-x86_64-v${TAG}.zip"
+  "${LINUX_TUI_ZIP}"
 )
 
 echo "# Release v${TAG}"
 echo "# --- SHA256 (paste into packaging files) ---"
 MAC_SUM=""
+MAC_TUI_SUM=""
+WIN_TUI_SUM=""
 for f in "${FILES[@]}"; do
   url="${BASE}/${f}"
-  sum="$(curl -fsSL "$url" | sha256sum | awk '{print $1}')"
+  sum="$(curl -fsSL "$url" | sha256sum | awk '{print $1}')" || {
+    echo "ERROR: failed to fetch or hash $url" >&2
+    exit 1
+  }
   printf '%s  %s\n' "$sum" "$f"
   if [[ "$f" == "$MAC_ZIP" ]]; then
     MAC_SUM="$sum"
+  fi
+  if [[ "$f" == "$MAC_TUI_ZIP" ]]; then
+    MAC_TUI_SUM="$sum"
+  fi
+  if [[ "$f" == "$WIN_TUI_ZIP" ]]; then
+    WIN_TUI_SUM="$sum"
   fi
 done
 
@@ -40,6 +57,11 @@ icon_url="https://github.com/MetanoicArmor/I2PChat/raw/v${TAG}/icon.png"
 icon_sum="$(curl -fsSL "$icon_url" | sha256sum | awk '{print $1}')"
 printf '%s  icon.png (raw v%s)\n' "$icon_sum" "$TAG"
 
-echo "# --- Homebrew cask (mac zip) ---"
+echo "# --- Homebrew cask i2pchat (mac GUI zip) ---"
 echo "  version \"${TAG}\""
 echo "  sha256 \"${MAC_SUM}\""
+echo "# --- Homebrew cask i2pchat-tui (mac TUI zip) ---"
+echo "  version \"${TAG}\""
+echo "  sha256 \"${MAC_TUI_SUM}\""
+echo "# --- winget MetanoicArmor.I2PChat.TUI (windows TUI zip) ---"
+echo "  InstallerSha256: ${WIN_TUI_SUM}"

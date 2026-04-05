@@ -10,17 +10,23 @@
 
 Python is **not** required on the target machine (PyInstaller bundle).
 
+**TUI-only zip:** **`I2PChat-windows-tui-x64-v<version>.zip`** contains the `I2PChat` folder with **`I2PChat-tui.exe`**, `_internal`, and `vendor` only (no GUI exe). Use this with **`MetanoicArmor.I2PChat.TUI`** on winget and similar `-tui` packages.
+
 ## macOS (Apple Silicon / arm64)
 
 1. Download **`I2PChat-macOS-arm64-v<version>.zip`**.
 2. Unzip and open **`I2PChat.app`**.
 3. **TUI (optional):** `I2PChat.app/Contents/MacOS/I2PChat-tui` with an optional profile argument.
 
+**TUI-only zip:** **`I2PChat-macos-arm64-tui-v<version>.zip`** unpacks to **`i2pchat-tui`** (launcher) plus **`I2PChat/`** (PyInstaller onedir). Run **`./i2pchat-tui`** from the extracted folder. Homebrew: **`brew install --cask i2pchat-tui`**.
+
 ## Linux (x86_64)
 
 1. Download **`I2PChat-linux-x86_64-v<version>.zip`** (contains one **AppImage**).
 2. `chmod +x` the `.AppImage` file if needed, then run it for the GUI.
-3. **TUI:** see the [main README](../README.md) Quick Start table (AppImage mount path) or the **I2P Chat (terminal)** desktop entry if your launcher lists it.
+3. **TUI (inside AppImage):** mount or extract the image and run **`usr/bin/I2PChat-tui`**, or use the **I2P Chat (terminal)** desktop entry if present.
+
+**TUI-only zip:** **`I2PChat-linux-x86_64-tui-v<version>.zip`** — unpack and run **`./i2pchat-tui`** (wrapper sets `LD_LIBRARY_PATH` for `usr/bin/I2PChat-tui` and `_internal`). Use with AUR **`i2pchat-tui-bin`** and similar.
 
 **Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`**. Install with `sudo apt install ./i2pchat_*_amd64.deb` (or your package manager). If it is missing, use the AppImage zip or build a `.deb` locally as described in [`packaging/debian/README.md`](../packaging/debian/README.md).
 

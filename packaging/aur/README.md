@@ -1,12 +1,13 @@
-# AUR: i2pchat-bin
+# AUR: i2pchat-bin / i2pchat-tui-bin
 
-Каталог [`i2pchat-bin/`](i2pchat-bin/) содержит `PKGBUILD` и `.SRCINFO` для пакета, который ставит официальный AppImage из релиза GitHub.
+- [`i2pchat-bin/`](i2pchat-bin/) — GUI: официальный **AppImage** из `I2PChat-linux-x86_64-v*.zip`.
+- [`i2pchat-tui-bin/`](i2pchat-tui-bin/) — только TUI: zip **`I2PChat-linux-x86_64-tui-v*.zip`** → `/opt/i2pchat-tui`, команда **`i2pchat-tui`** (без конфликта с `i2pchat` из GUI-пакета).
 
 ## Публикация на AUR
 
 1. Зарегистрируйтесь на [aur.archlinux.org](https://aur.archlinux.org/).
 2. Создайте репозиторий `i2pchat-bin` через веб-интерфейс (Submit).
-3. Загрузите содержимое каталога `i2pchat-bin` (`PKGBUILD`, `.SRCINFO`) — например через `git clone ssh://aur@aur.archlinux.org/i2pchat-bin.git`.
+3. Загрузите содержимое каталога (`PKGBUILD`, `.SRCINFO`) — например `git clone ssh://aur@aur.archlinux.org/i2pchat-bin.git` или отдельный репозиторий **`i2pchat-tui-bin`** для TUI.
 
 После изменения `PKGBUILD` пересоберите метаданные:
 

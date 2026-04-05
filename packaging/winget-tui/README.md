@@ -1,0 +1,21 @@
+# winget — TUI-only package (`MetanoicArmor.I2PChat.TUI`)
+
+Portable zip: **`I2PChat-windows-tui-x64-vVERSION.zip`** (see root [`README.md`](../../README.md)). Separate package id from GUI [`MetanoicArmor.I2PChat`](../winget/).
+
+1. Fork [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs).
+2. After **`I2PChat-windows-tui-x64-vX.Y.Z.zip`** is on the GitHub release, run from repo root:
+
+   ```bash
+   ./packaging/refresh-checksums.sh vX.Y.Z
+   ```
+
+   Copy the printed **`InstallerSha256`** for the TUI zip into `MetanoicArmor.I2PChat.installer.yaml` (or edit the versioned folder under this directory).
+3. Open a PR to `winget-pkgs` following [their README](https://github.com/microsoft/winget-pkgs/blob/master/README.md).
+
+Local validation (Windows, with winget):
+
+```powershell
+winget validate --manifest .\packaging\winget-tui\1.2.3
+```
+
+Update **PackageVersion** and paths under `packaging/winget-tui/<version>/` when cutting a release (mirror [`packaging/winget/`](../winget/) process).

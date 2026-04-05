@@ -1,0 +1,32 @@
+# Template — Linux GUI zip contains one AppImage at top level. Update url/sha256 per release.
+app-id: net.i2pchat.I2PChat
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: i2pchat
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --socket=pulseaudio
+  - --filesystem=xdg-download
+
+modules:
+  - name: i2pchat-gui
+    buildsystem: simple
+    build-commands:
+      - |
+        set -e
+        img="$(echo I2PChat-linux-*-v*.AppImage)"
+        test -f "$img"
+        install -Dm755 "$img" /app/bin/I2PChat.AppImage
+      - install -Dm755 i2pchat-gui-entry.sh /app/bin/i2pchat
+    sources:
+      - type: archive
+        url: https://github.com/MetanoicArmor/I2PChat/releases/download/v1.2.3/I2PChat-linux-x86_64-v1.2.3.zip
+        sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+      - type: file
+        path: i2pchat-gui-entry.sh

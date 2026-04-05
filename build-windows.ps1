@@ -130,9 +130,37 @@ Compress-Archive -Path "$ZipStage\\*" -DestinationPath $ZipFile -CompressionLeve
 Remove-Item -Recurse -Force $ZipStage
 Write-Host "Packed: $ZipFile"
 
-$HashLine = "{0}  {1}" -f (Get-FileHash -Path $ZipFile -Algorithm SHA256).Hash.ToLowerInvariant(), (Split-Path -Path $ZipFile -Leaf)
-Set-Content -Path "SHA256SUMS" -Value $HashLine -NoNewline -Encoding utf8
-Write-Host "Generated: SHA256SUMS"
+# TUI-only zip: same layout (I2PChat/…) but without GUI exe — for winget/Homebrew-style -tui packages.
+$TuiZipFile = "dist\\I2PChat-windows-tui-x64-v$ReleaseVersion.zip"
+if (Test-Path $TuiZipFile) {
+    Remove-Item -Force $TuiZipFile
+}
+$TuiStage = "dist\\I2PChat-windows-tui-x64-v$ReleaseVersion"
+if (Test-Path $TuiStage) {
+    Remove-Item -Recurse -Force $TuiStage
+}
+New-Item -ItemType Directory -Path "$TuiStage\\I2PChat" | Out-Null
+Copy-Item "dist\\I2PChat\\I2PChat-tui.exe" "$TuiStage\\I2PChat\\"
+Copy-Item -Recurse "dist\\I2PChat\\_internal" "$TuiStage\\I2PChat\\_internal"
+if (Test-Path "dist\\I2PChat\\vendor") {
+    Copy-Item -Recurse "dist\\I2PChat\\vendor" "$TuiStage\\I2PChat\\vendor"
+}
+if (Test-Path $BlindboxInstallSrc) {
+    Copy-Item $BlindboxInstallSrc "$TuiStage\\install.sh"
+}
+Compress-Archive -Path "$TuiStage\\*" -DestinationPath $TuiZipFile -CompressionLevel Optimal
+Remove-Item -Recurse -Force $TuiStage
+Write-Host "Packed (TUI only): $TuiZipFile"
+
+$sumGui = (Get-FileHash -Path $ZipFile -Algorithm SHA256).Hash.ToLowerInvariant()
+$sumTui = (Get-FileHash -Path $TuiZipFile -Algorithm SHA256).Hash.ToLowerInvariant()
+$nameGui = Split-Path -Path $ZipFile -Leaf
+$nameTui = Split-Path -Path $TuiZipFile -Leaf
+Set-Content -Path "SHA256SUMS" -Encoding utf8 -Value @(
+    "$sumGui  $nameGui",
+    "$sumTui  $nameTui"
+)
+Write-Host "Generated: SHA256SUMS (GUI + TUI zips)"
 
 if ($env:I2PCHAT_SKIP_GPG_SIGN -eq "1") {
     Write-Warning "Skipping GPG detached signature (I2PCHAT_SKIP_GPG_SIGN=1)"

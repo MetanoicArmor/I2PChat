@@ -219,22 +219,54 @@ with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
 PY
 echo "✔ Packed ${ZIP_FILE}"
 
+# 4b) TUI-only zip (no AppImage): usr/bin layout + root launcher for AUR / manual install
+TUI_ZIP="${APP_NAME}-linux-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}.zip"
+TUI_STAGE="${APP_NAME}-linux-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}-stage"
+rm -rf "${TUI_STAGE}"
+mkdir -p "${TUI_STAGE}/usr/bin"
+cp "${APPDIR}/usr/bin/${APP_NAME}-tui" "${TUI_STAGE}/usr/bin/"
+cp -a "${APPDIR}/usr/bin/_internal" "${TUI_STAGE}/usr/bin/_internal"
+if [ -d "${APPDIR}/usr/bin/vendor" ]; then
+  cp -a "${APPDIR}/usr/bin/vendor" "${TUI_STAGE}/usr/bin/vendor"
+fi
+cat > "${TUI_STAGE}/i2pchat-tui" <<EOF
+#!/bin/sh
+SCRIPT="\$0"
+while [ -h "\$SCRIPT" ]; do
+  LINK="\$(readlink "\$SCRIPT" 2>/dev/null || true)"
+  case "\$LINK" in
+    /*) SCRIPT="\$LINK" ;;
+    *) SCRIPT="\$(dirname "\$SCRIPT")/\$LINK" ;;
+  esac
+done
+HERE="\$(cd "\$(dirname "\$SCRIPT")" && pwd)"
+export LD_LIBRARY_PATH="\$HERE/usr/bin/_internal:\${LD_LIBRARY_PATH:-}"
+exec "\$HERE/usr/bin/${APP_NAME}-tui" "\$@"
+EOF
+chmod +x "${TUI_STAGE}/i2pchat-tui" "${TUI_STAGE}/usr/bin/${APP_NAME}-tui"
+rm -f "${TUI_ZIP}"
+TUI_ZIP_ABS="$(pwd)/${TUI_ZIP}"
+( cd "${TUI_STAGE}" && zip -qr "${TUI_ZIP_ABS}" . )
+rm -rf "${TUI_STAGE}"
+echo "✔ Packed ${TUI_ZIP}"
+
 # 5) release integrity artifacts: SHA256SUMS + detached GPG signature (SHA256SUMS.asc)
 SHA256_FILE="SHA256SUMS"
-python - "${ZIP_FILE}" "${SHA256_FILE}" <<'PY'
+python - "${ZIP_FILE}" "${TUI_ZIP}" "${SHA256_FILE}" <<'PY'
 import hashlib
 import os
 import sys
 
-artifact, checksums = sys.argv[1], sys.argv[2]
-h = hashlib.sha256()
-with open(artifact, "rb") as f:
-    for chunk in iter(lambda: f.read(1024 * 1024), b""):
-        h.update(chunk)
+zip_gui, zip_tui, checksums = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(checksums, "w", encoding="utf-8") as out:
-    out.write(f"{h.hexdigest()}  {os.path.basename(artifact)}\n")
+    for path in (zip_gui, zip_tui):
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        out.write(f"{h.hexdigest()}  {os.path.basename(path)}\n")
 PY
-echo "✔ Generated ${SHA256_FILE}"
+echo "✔ Generated ${SHA256_FILE} (GUI + TUI zips)"
 
 if [ "${I2PCHAT_SKIP_GPG_SIGN:-0}" = "1" ]; then
   echo "⚠ Skipping GPG detached signature (I2PCHAT_SKIP_GPG_SIGN=1)"
