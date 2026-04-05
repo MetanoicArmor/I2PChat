@@ -6,11 +6,16 @@
 ## Публикация на AUR
 
 1. Зарегистрируйтесь на [aur.archlinux.org](https://aur.archlinux.org/).
-2. Добавьте в профиль AUR **SSH public key** (Account → SSH Keys). Без ключа `git push` на `ssh://aur@aur.archlinux.org/...` завершится ошибкой **`Permission denied (publickey)`**.
-3. Создайте пакет `i2pchat-bin` через веб-интерфейс (Submit), либо клонируйте пустой репозиторий: `git clone ssh://aur@aur.archlinux.org/i2pchat-bin.git` (отдельно **`i2pchat-tui-bin`** для TUI).
-4. Загрузите содержимое каталога из этого репозитория (`PKGBUILD`, `.SRCINFO`) — `git add`, `commit`, `push` на AUR.
+2. Добавьте в профиль AUR **SSH public key** (Account → SSH Keys). Проверка: `ssh -T aur@aur.archlinux.org` → приветствие **Welcome to AUR, …**
+3. **Первый раз — зарегистрировать имена пакетов на сайте.** Пока пакета с таким именем нет в AUR, `git clone ssh://aur@aur.archlinux.org/i2pchat-bin.git` **не сработает**. Откройте [Submit (добавить пакет)](https://aur.archlinux.org/submit/) и создайте **`i2pchat-bin`**, затем снова **`i2pchat-tui-bin`**, подставив `PKGBUILD` и `.SRCINFO` из каталогов [`i2pchat-bin/`](i2pchat-bin/) и [`i2pchat-tui-bin/`](i2pchat-tui-bin/) этого репозитория (или минимальный черновик — см. [AUR submission guidelines](https://wiki.archlinux.org/title/AUR_submission_guidelines)). После этого появятся пустые Git-репозитории на сервере AUR.
+4. **Дальнейшие обновления** — из корня клона I2PChat, с разблокированным ключом в агенте:
+   ```bash
+   ssh-add ~/.ssh/aur_ed25519
+   ./packaging/aur/publish-to-aur.sh
+   ```
+   Скрипт клонирует оба репозитория во временный каталог, копирует актуальные `PKGBUILD` и `.SRCINFO`, делает `commit` при изменениях и `git push` в ветку **`master`**.
 
-Если по SSH с текущей машины зайти нельзя, используйте другой хост с настроенным ключом или веб-форму AUR для первичной отправки, затем правки через `git` с машины, где SSH к AUR работает.
+Если по SSH с текущей машины зайти нельзя, используйте другой хост с настроенным ключом или только веб-интерфейс Submit, затем правки через `git` там, где `ssh aur@aur.archlinux.org` работает.
 
 После изменения `PKGBUILD` пересоберите метаданные:
 
