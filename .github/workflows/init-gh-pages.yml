@@ -1,0 +1,33 @@
+# One-time (or repeat-safe): create branch gh-pages so Settings → Pages can select it.
+# After this runs, set Pages source to branch gh-pages / (root), then use "Publish apt mirror"
+# or wait for Release Linux packages (with APT_REPO_GPG_PRIVATE_KEY).
+name: Init gh-pages branch
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create minimal site placeholder
+        run: |
+          mkdir -p site
+          touch site/.nojekyll
+          printf '%s\n' \
+            '<!DOCTYPE html><html><head><meta charset="utf-8"><title>I2PChat apt</title></head>' \
+            '<body><p>I2PChat apt mirror — content is deployed by GitHub Actions ' \
+            '(<code>Publish apt mirror</code> or <code>Release Linux packages</code>).</p>' \
+            '<p>See <a href="https://github.com/${{ github.repository }}/blob/main/packaging/apt/README.md">packaging/apt/README.md</a>.</p></body></html>' \
+            > site/index.html
+
+      - name: Push to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+          force_orphan: true

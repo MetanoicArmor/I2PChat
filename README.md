@@ -29,7 +29,7 @@
 | **Windows** | [I2PChat-windows-x64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.3.zip) | Unzip → `I2PChat.exe` (GUI) or `I2PChat-tui.exe` (cmd/PowerShell) |
 | **macOS (arm64)** | [I2PChat-macOS-arm64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.3.zip) | Unzip → `I2PChat.app`; TUI: `I2PChat.app/Contents/MacOS/I2PChat-tui` |
 | **Linux (x86_64)** | [I2PChat-linux-x86_64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.3.zip) | `chmod +x` the AppImage → run it; TUI: see INSTALL.md |
-| **Debian / Ubuntu (.deb)** | [i2pchat_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat_1.2.3_amd64.deb) | `sudo apt install ./i2pchat_*_amd64.deb` |
+| **Debian / Ubuntu (.deb)** | [i2pchat_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat_1.2.3_amd64.deb) | `sudo apt install ./i2pchat_*_amd64.deb` — optional apt mirror via GitHub Pages: [`packaging/apt/README.md`](packaging/apt/README.md) |
 
 **TUI-only archives** (separate slim PyInstaller bundle via **`I2PChat-tui.spec`**: Textual + core, **no PyQt6**; for winget / Homebrew **`i2pchat-tui`** / AUR **`i2pchat-tui-bin`**):
 

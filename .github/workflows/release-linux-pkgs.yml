@@ -85,6 +85,37 @@ jobs:
             "dist/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb" \
             --clobber
 
+      - name: Publish apt mirror to GitHub Pages (optional)
+        id: apt_pages
+        env:
+          APT_REPO_GPG_PRIVATE_KEY: ${{ secrets.APT_REPO_GPG_PRIVATE_KEY }}
+          APT_REPO_GPG_PASSPHRASE: ${{ secrets.APT_REPO_GPG_PASSPHRASE }}
+        run: |
+          if [ -z "${APT_REPO_GPG_PRIVATE_KEY:-}" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping apt GitHub Pages: set secret APT_REPO_GPG_PRIVATE_KEY (see packaging/apt/README.md)"
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y apt-utils gnupg
+          chmod +x packaging/apt/scripts/build-apt-site.sh packaging/apt/scripts/sign-release.sh
+          export VERSION="${{ steps.meta.outputs.ver }}"
+          export DEB_PATH="${{ github.workspace }}/dist/i2pchat_${VERSION}_amd64.deb"
+          ./packaging/apt/scripts/build-apt-site.sh
+          echo "$APT_REPO_GPG_PRIVATE_KEY" | gpg --import --batch
+          export APT_REPO_GPG_PASSPHRASE
+          ./packaging/apt/scripts/sign-release.sh
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy apt site to gh-pages
+        if: steps.apt_pages.outputs.publish == 'true'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: packaging/apt/site
+          publish_branch: gh-pages
+          force_orphan: true
+
   rpm:
     runs-on: ubuntu-latest
     steps:

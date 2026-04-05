@@ -1,0 +1,89 @@
+# Rebuild the signed apt site from an existing i2pchat_<ver>_amd64.deb on a GitHub Release
+# and push to branch gh-pages. GitHub Pages source must be gh-pages / (root).
+name: Publish apt mirror (GitHub Pages)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version x.y.z — asset i2pchat_x.y.z_amd64.deb must exist on release vx.y.z"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apt-github-pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Resolve version
+        id: meta
+        run: |
+          VER="${{ github.event.inputs.version }}"
+          VER="$(echo "$VER" | tr -d ' \t\r\n')"
+          VER="${VER#v}"
+          if [ -z "$VER" ]; then
+            echo "ERROR: empty version" >&2
+            exit 1
+          fi
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Require signing secret
+        env:
+          APT_REPO_GPG_PRIVATE_KEY: ${{ secrets.APT_REPO_GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "${APT_REPO_GPG_PRIVATE_KEY:-}" ]; then
+            echo "ERROR: set repository secret APT_REPO_GPG_PRIVATE_KEY (see packaging/apt/README.md)" >&2
+            exit 1
+          fi
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y dpkg-dev apt-utils gnupg curl
+
+      - name: Download .deb from release
+        run: |
+          set -euo pipefail
+          VER="${{ steps.meta.outputs.ver }}"
+          REPO="${{ github.repository }}"
+          DEB="i2pchat_${VER}_amd64.deb"
+          URL="https://github.com/${REPO}/releases/download/v${VER}/${DEB}"
+          for i in $(seq 1 36); do
+            if curl -fsSL --connect-timeout 30 --max-time 600 -o "$DEB" "$URL"; then
+              echo "Downloaded $DEB"
+              ls -la "$DEB"
+              exit 0
+            fi
+            echo "WARN: download failed (${i}/36): ${URL}"
+            sleep 10
+          done
+          echo "ERROR: could not download ${URL}" >&2
+          exit 1
+
+      - name: Build and sign apt site
+        env:
+          VERSION: ${{ steps.meta.outputs.ver }}
+          DEB_PATH: ${{ github.workspace }}/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb
+          APT_REPO_GPG_PRIVATE_KEY: ${{ secrets.APT_REPO_GPG_PRIVATE_KEY }}
+          APT_REPO_GPG_PASSPHRASE: ${{ secrets.APT_REPO_GPG_PASSPHRASE }}
+        run: |
+          chmod +x packaging/apt/scripts/build-apt-site.sh packaging/apt/scripts/sign-release.sh
+          ./packaging/apt/scripts/build-apt-site.sh
+          echo "$APT_REPO_GPG_PRIVATE_KEY" | gpg --import --batch
+          ./packaging/apt/scripts/sign-release.sh
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: packaging/apt/site
+          publish_branch: gh-pages
+          force_orphan: true

@@ -11,6 +11,7 @@
 | **AUR** | **Опубликовано:** [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Установка (например **yay**): `yay -S i2pchat-bin`, `yay -S i2pchat-tui-bin`. Шаблоны в репо: [`aur/i2pchat-bin/`](aur/i2pchat-bin/), [`aur/i2pchat-tui-bin/`](aur/i2pchat-tui-bin/); обновление пакетов на AUR — см. [aur/README.md](aur/README.md). |
 | **Flatpak / COPR** | Flatpak — шаблоны в репо ([flatpak/README.md](flatpak/README.md)). COPR — по желанию мейнтейнера ([fedora/i2pchat.spec](fedora/i2pchat.spec)). |
 | **`.deb` / `.rpm` на GitHub Release** | Workflow [release-linux-pkgs.yml](../.github/workflows/release-linux-pkgs.yml): при публикации релиза (или вручную по тегу) прикрепляет **`i2pchat_<версия>_amd64.deb`** и **`i2pchat_<версия>_x86_64.rpm`** к тому же релизу. См. [debian/README.md](debian/README.md), [fedora/README.md](fedora/README.md). |
+| **apt + GitHub Pages (это же репо)** | [`apt/README.md`](apt/README.md): один раз **Init gh-pages branch**, затем Pages → **`gh-pages`**, секрет **`APT_REPO_GPG_PRIVATE_KEY`**; публикация из **Release Linux packages** / **Publish apt mirror**. |
 
 | Платформа | Каталог | Действие мейнтейнера |
 |-----------|---------|----------------------|
@@ -18,7 +19,7 @@
 | Windows | [`winget/`](winget/) | PR в [`microsoft/winget-pkgs`](https://github.com/microsoft/winget-pkgs): **`MetanoicArmor.I2PChat`** (GUI zip), **`MetanoicArmor.I2PChat.TUI`** — шаблоны в [`winget-tui/`](winget-tui/) |
 | Arch | [`aur/`](aur/) | **`i2pchat-bin`** (AppImage), **`i2pchat-tui-bin`** (Linux TUI zip → `/opt/i2pchat-tui`) |
 | Flatpak | [`flatpak/`](flatpak/) | Шаблоны `net.i2pchat.I2PChat` / `net.i2pchat.I2PChat.TUI` и README для PR в [Flathub](https://github.com/flathub/flathub) |
-| Debian/Ubuntu | [`debian/`](debian/) | Скрипт [`build-deb-from-appimage.sh`](debian/build-deb-from-appimage.sh); CI — [`release-linux-pkgs.yml`](../.github/workflows/release-linux-pkgs.yml); опционально свой apt-repo / PPA / Flatpak |
+| Debian/Ubuntu | [`debian/`](debian/) | Скрипт [`build-deb-from-appimage.sh`](debian/build-deb-from-appimage.sh); CI — [`release-linux-pkgs.yml`](../.github/workflows/release-linux-pkgs.yml); **apt + Pages в этом репо** — [`apt/`](apt/README.md); опционально PPA / Flatpak |
 | Fedora | [`fedora/`](fedora/) | [`i2pchat.spec`](fedora/i2pchat.spec), скрипт [`build-rpm-from-release.sh`](fedora/build-rpm-from-release.sh); CI прикрепляет `.rpm` к релизу; опционально [COPR](https://copr.fedorainfracloud.org/) |
 
 ## Версии и checksums

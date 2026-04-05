@@ -5,7 +5,7 @@
 | Подход | Плюсы | Минусы |
 |--------|--------|--------|
 | **`.deb` на GitHub Release** | Один файл, `sudo apt install ./i2pchat_*_amd64.deb` | Нужно собирать при каждом релизе (локально или CI) |
-| **Свой .deb + apt-репозиторий** (GitHub Pages, Packagecloud) | Полный контроль, `apt install` после добавления источника | Подпись `Release` (GPG), инфраструктура |
+| **Свой .deb + apt-репозиторий** (GitHub Pages, Packagecloud) | Полный контроль, `apt install` после добавления источника | Подпись `Release` (GPG) — в **этом** репо: [**`packaging/apt/`**](../apt/README.md) (ветка `gh-pages` + секреты) |
 | **PPA (Launchpad)** | Знакомый путь для Ubuntu | Рецепты сборки, очередь сборки |
 | **Flatpak / Flathub** | Один формат для многих дистрибутивов | Не `apt`; отдельный манифест и ревью Flathub |
 
@@ -44,4 +44,4 @@
 3. Подпишите `Release` (GPG) и выложите на HTTPS.
 4. Пользователи добавляют `deb [signed-by=…] https://… stable main` и ключ.
 
-Подробности выходят за рамки этого репозитория; ориентиры: [Debian Repository Format](https://wiki.debian.org/DebianRepository/Format), `reprepro`.
+Пошаговая автоматизация в **этом** репозитории — [**`packaging/apt/README.md`**](../apt/README.md). Ориентиры по формату: [Debian Repository Format](https://wiki.debian.org/DebianRepository/Format), `reprepro`.
