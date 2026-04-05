@@ -38,6 +38,8 @@ winget validate --manifest .\packaging\winget\1.2.3
 2. Подставить SHA256: вывод в конце `build-windows.ps1` или `./packaging/refresh-checksums.sh vX.Y.Z` (секции *winget*).
 3. В `MetanoicArmor.I2PChat*.installer.yaml` заменить placeholder `0000…0000` на реальные хеши и запушить в ветку PR.
 
-**Ответ msftbot (англ.), если попросят пояснить смену URL:**
+### Блок для PR в winget-pkgs (смена URL на `*-winget-*` и Installers Scan)
 
-> We switched the manifest to the **`*-winget-*`** release assets built **without** the embedded i2pd binary so the installer passes Microsoft’s **Installers Scan**. The standard `I2PChat-windows-x64-v*.zip` on GitHub Releases still includes the bundled i2pd router for users who want it. i2pd upstream: https://github.com/PurpleI2P/i2pd
+Если в PR или в обсуждении спрашивают, **зачем** в манифесте URL на `I2PChat-*-winget-*.zip` вместо обычного zip — вставьте цитату ниже (англ.). Источник для ссылки: этот файл в апстриме I2PChat — [`packaging/winget/README.md`](README.md).
+
+> We switched the manifest to the **`*-winget-*`** release assets built **without** the embedded i2pd binary so the installer passes Microsoft’s **Installers Scan** (`binaryValidation` / ESRP). The standard `I2PChat-windows-x64-v*.zip` (and the full TUI zip) on GitHub Releases still include the bundled i2pd router for users who want it. i2pd upstream: https://github.com/PurpleI2P/i2pd
