@@ -44,6 +44,20 @@ gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum -c SHA256SUMS
 ```
 
+**Release signing key** (detached signatures on `SHA256SUMS`):
+
+| | |
+|---|---|
+| **Fingerprint** | `2BA0C56D8240077F9773248A2C05CFB3F6DFDF99` |
+| **UID** | `Vade <metanoicarmor@gmail.com>` |
+| **Key directory** | [keys.openpgp.org](https://keys.openpgp.org/search?q=metanoicarmor%40gmail.com) |
+
+Fetch before first verify:
+
+```bash
+gpg --keyserver keys.openpgp.org --recv-keys 2BA0C56D8240077F9773248A2C05CFB3F6DFDF99
+```
+
 ## Protocol padding profile
 
 The transport is encrypted after handshake, but some metadata (frame type, length, pre-handshake identity preface) remains observable.

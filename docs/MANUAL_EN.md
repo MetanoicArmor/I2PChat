@@ -414,7 +414,7 @@ The **`⋯` → Check for updates…** action (**Ctrl/Cmd+U**) fetches the **HTM
 
 1. Download the ZIP from the official releases page (or another mirror you trust).
 2. Verify SHA256 against **`SHA256SUMS`** from the same release.
-3. Verify the detached GPG signature on `SHA256SUMS` (**`SHA256SUMS.asc`**) with the project key.
+3. Verify the detached GPG signature on `SHA256SUMS` (**`SHA256SUMS.asc`**) with the release key (**fingerprint** `2BA0C56D8240077F9773248A2C05CFB3F6DFDF99`, UID **metanoicarmor@gmail.com** — published on [keys.openpgp.org](https://keys.openpgp.org/search?q=metanoicarmor%40gmail.com)). If needed: `gpg --keyserver keys.openpgp.org --recv-keys 2BA0C56D8240077F9773248A2C05CFB3F6DFDF99`, then `gpg --verify SHA256SUMS.asc SHA256SUMS`.
 
 If **`I2PCHAT_RELEASES_PAGE_URL`** is set, the releases page source changes — treat it like any other HTTP origin. The GUI shows a one-time warning the first time you run an update check; only continue if you fully trust that URL.
 
