@@ -40,7 +40,6 @@
 - [🛠 Running from source](#-running-from-source)
 - [🔧 Cross‑platform builds](#-crossplatform-builds)
 - [📄 License](#-license)
-- [☕ Buy me a coffee](#-buy-me-a-coffee)
 
 ### ✨ Features
 
@@ -151,17 +150,8 @@ Currently shipped assets use **versioned** zip names, for example:
 
 #### Package managers (optional)
 
-Upstream-maintained recipes and docs live under [**packaging/**](packaging/README.md):
-
-| Ecosystem | Status | Notes |
-|-----------|--------|--------|
-| **Homebrew** (macOS arm64 cask) | Files in [`packaging/homebrew/`](packaging/homebrew/README.md) | Publish a tap repo `homebrew-i2pchat` or open a PR to Homebrew cask; then `brew install --cask i2pchat`. |
-| **winget** (Windows portable zip) | Manifests in [`packaging/winget/`](packaging/winget/README.md) | Copy versioned YAML into a PR to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs); then `winget install MetanoicArmor.I2PChat`. |
-| **Arch (AUR)** | [`packaging/aur/i2pchat-bin/`](packaging/aur/README.md) | Submit `PKGBUILD` / `.SRCINFO` as package `i2pchat-bin`; users: `yay -S i2pchat-bin` (or any AUR helper). |
-| **Debian/Ubuntu** | [`packaging/debian/`](packaging/debian/README.md) | Prefer **`i2pchat_*_amd64.deb`** attached to [GitHub Releases](https://github.com/MetanoicArmor/I2PChat/releases) (built by [`release-deb.yml`](.github/workflows/release-deb.yml) when the Linux zip is on the release), or build locally with [`build-deb-from-appimage.sh`](packaging/debian/build-deb-from-appimage.sh). Optional: your own apt repo / PPA / **Flatpak** (Flathub). |
-| **Fedora** | [`packaging/fedora/`](packaging/fedora/README.md) | RPM from the same upstream zip via [`i2pchat.spec`](packaging/fedora/i2pchat.spec); publish on **COPR**, then `dnf copr enable …` and `dnf install i2pchat`. |
-
-After each new **GitHub release** tag, refresh checksums with `./packaging/refresh-checksums.sh` and update version fields in the manifests you maintain (including **`Version:`** in the Fedora spec).
+You may find **unofficial** installs via Homebrew, winget, AUR helpers, `.deb`, or Fedora COPR, depending on what maintainers have published. **Supported source for binaries** is always the **[GitHub release](https://github.com/MetanoicArmor/I2PChat/releases)** (zips and any attached `.deb`).  
+**Maintainers:** recipes, PR targets, checksum refresh, and COPR/spec bumps are documented only in [**packaging/**](packaging/README.md).
 
 ### 🛠 Running from source
 
@@ -338,16 +328,6 @@ nix develop github:MetanoicArmor/I2PChat
 I2PChat is licensed under the **GNU Affero General Public License v3.0** (or any later version — see section 14 of the license). The full text is in [`LICENSE`](LICENSE).
 
 The vendored [`vendor/i2plib/`](vendor/i2plib/) package (alongside [`vendor/i2pd/`](vendor/i2pd/)) remains under the **MIT** license (see [`vendor/i2plib/__version__.py`](vendor/i2plib/__version__.py)).
-
-### ☕ Buy me a coffee
-
-If you like this project and want to support development, you can send a small donation in Bitcoin:
-
-- **BTC address**: `bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd`
-
-<p align="center">
-  <img src="btc_donation_qr.png" alt="Bitcoin donation QR" width="220" />
-</p>
 
 ---
 
