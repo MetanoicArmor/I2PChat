@@ -25,7 +25,7 @@
    - **`APT_REPO_GPG_PRIVATE_KEY`** — содержимое `apt-signing-private.asc`
    - **`APT_REPO_GPG_PASSPHRASE`** — по необходимости
 
-5. Запустите **[Publish apt mirror (GitHub Pages)](../../.github/workflows/apt-github-pages.yml)** с версией `x.y.z` или дождитесь релиза с job **deb** в **[Release Linux packages](../../.github/workflows/release-linux-pkgs.yml)** (если секрет задан).
+5. Запустите **[Publish apt mirror (GitHub Pages)](../../.github/workflows/apt-github-pages.yml)** с версией `x.y.z` или дождитесь релиза с job **`deb-amd64`** в **[Release Linux packages](../../.github/workflows/release-linux-pkgs.yml)** (если секрет задан; зеркало только amd64).
 
 ### Устаревшая схема «только ветка gh-pages»
 

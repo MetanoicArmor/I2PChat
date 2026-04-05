@@ -1,5 +1,6 @@
-# Build amd64 .deb packages (GUI + TUI) from published Linux zips and attach to the same release.
-# Triggers: release published (linux zips must already be on the asset list), or workflow_dispatch with tag vX.Y.Z.
+# Build .deb packages (GUI + TUI) from published Linux zips and attach to the same release.
+# amd64 from x86_64 zips; arm64 from aarch64 zips.
+# Triggers: release published, or workflow_dispatch with tag vX.Y.Z.
 name: Release Linux packages
 
 on:
@@ -8,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v1.2.3) — release with Linux GUI zip + TUI zip; uploads i2pchat + i2pchat-tui .deb"
+        description: "Release tag (e.g. v1.2.3) — Linux zips on release; uploads i2pchat + i2pchat-tui (.deb amd64 + arm64)"
         required: true
         type: string
 
@@ -18,18 +19,12 @@ permissions:
   id-token: write
 
 jobs:
-  deb:
+  meta:
     runs-on: ubuntu-latest
     outputs:
-      apt_publish: ${{ steps.apt_pages.outputs.publish }}
+      tag: ${{ steps.meta.outputs.tag }}
+      ver: ${{ steps.meta.outputs.ver }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Install build tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y dpkg-dev unzip curl
-
       - name: Derive version from release tag
         id: meta
         env:
@@ -57,14 +52,26 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
 
-      # release:published can fire before large assets finish uploading; wait via API then curl retries in script.
-      - name: Wait for Linux GUI zip on release
+  deb-amd64:
+    needs: meta
+    runs-on: ubuntu-latest
+    outputs:
+      apt_publish: ${{ steps.apt_pages.outputs.publish }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y dpkg-dev unzip curl
+
+      - name: Wait for Linux GUI zip on release (x86_64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          TAG="${{ steps.meta.outputs.tag }}"
-          VER="${{ steps.meta.outputs.ver }}"
+          TAG="${{ needs.meta.outputs.tag }}"
+          VER="${{ needs.meta.outputs.ver }}"
           WANT="I2PChat-linux-x86_64-v${VER}.zip"
           for i in $(seq 1 36); do
             if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "$WANT"; then
@@ -74,17 +81,17 @@ jobs:
             echo "Waiting for $WANT on $REPO@$TAG (try $i/36)..."
             sleep 10
           done
-          echo "Timed out waiting for $WANT. Assets on this release:" >&2
+          echo "Timed out waiting for $WANT." >&2
           gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' >&2 || true
           exit 1
 
-      - name: Wait for Linux TUI zip on release
+      - name: Wait for Linux TUI zip on release (x86_64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REPO="${{ github.repository }}"
-          TAG="${{ steps.meta.outputs.tag }}"
-          VER="${{ steps.meta.outputs.ver }}"
+          TAG="${{ needs.meta.outputs.tag }}"
+          VER="${{ needs.meta.outputs.ver }}"
           WANT="I2PChat-linux-x86_64-tui-v${VER}.zip"
           for i in $(seq 1 36); do
             if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "$WANT"; then
@@ -94,23 +101,23 @@ jobs:
             echo "Waiting for $WANT on $REPO@$TAG (try $i/36)..."
             sleep 10
           done
-          echo "Timed out waiting for $WANT. Assets on this release:" >&2
+          echo "Timed out waiting for $WANT." >&2
           gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' >&2 || true
           exit 1
 
-      - name: Build .deb from release zip (GUI)
-        run: ./packaging/debian/build-deb-from-appimage.sh "${{ steps.meta.outputs.ver }}"
+      - name: Build .deb from release zip (GUI, amd64)
+        run: ./packaging/debian/build-deb-from-appimage.sh "${{ needs.meta.outputs.ver }}"
 
-      - name: Build .deb from TUI release zip
-        run: ./packaging/debian/build-tui-deb-from-release-zip.sh "${{ steps.meta.outputs.ver }}"
+      - name: Build .deb from TUI release zip (amd64)
+        run: ./packaging/debian/build-tui-deb-from-release-zip.sh "${{ needs.meta.outputs.ver }}"
 
-      - name: Upload .deb packages to release
+      - name: Upload amd64 .deb packages to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ steps.meta.outputs.tag }}" \
-            "dist/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb" \
-            "dist/i2pchat-tui_${{ steps.meta.outputs.ver }}_amd64.deb" \
+          gh release upload "${{ needs.meta.outputs.tag }}" \
+            "dist/i2pchat_${{ needs.meta.outputs.ver }}_amd64.deb" \
+            "dist/i2pchat-tui_${{ needs.meta.outputs.ver }}_amd64.deb" \
             --clobber
 
       - name: Publish apt mirror to GitHub Pages (optional)
@@ -127,7 +134,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y apt-utils gnupg
           chmod +x packaging/apt/scripts/build-apt-site.sh packaging/apt/scripts/sign-release.sh
-          export VERSION="${{ steps.meta.outputs.ver }}"
+          export VERSION="${{ needs.meta.outputs.ver }}"
           export DEB_PATH="${{ github.workspace }}/dist/i2pchat_${VERSION}_amd64.deb"
           export DEB_PATH_2="${{ github.workspace }}/dist/i2pchat-tui_${VERSION}_amd64.deb"
           ./packaging/apt/scripts/build-apt-site.sh
@@ -136,7 +143,6 @@ jobs:
           ./packaging/apt/scripts/sign-release.sh
           echo "publish=true" >> "$GITHUB_OUTPUT"
 
-      # Large .deb cannot be pushed to git (100 MB limit); Pages via Actions artifact can serve it.
       - name: Configure GitHub Pages
         if: steps.apt_pages.outputs.publish == 'true'
         uses: actions/configure-pages@v5
@@ -147,10 +153,82 @@ jobs:
         with:
           path: packaging/apt/site
 
+  deb-arm64:
+    needs: meta
+    runs-on: ubuntu-latest
+    # Релизы без aarch64 zip (старые теги): job падает по таймауту — не блокируем amd64/apt.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y dpkg-dev unzip curl
+
+      - name: Wait for Linux GUI zip on release (aarch64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          TAG="${{ needs.meta.outputs.tag }}"
+          VER="${{ needs.meta.outputs.ver }}"
+          WANT="I2PChat-linux-aarch64-v${VER}.zip"
+          for i in $(seq 1 36); do
+            if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "$WANT"; then
+              echo "Asset present: $WANT"
+              exit 0
+            fi
+            echo "Waiting for $WANT on $REPO@$TAG (try $i/36)..."
+            sleep 10
+          done
+          echo "Timed out waiting for $WANT." >&2
+          gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' >&2 || true
+          exit 1
+
+      - name: Wait for Linux TUI zip on release (aarch64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          TAG="${{ needs.meta.outputs.tag }}"
+          VER="${{ needs.meta.outputs.ver }}"
+          WANT="I2PChat-linux-aarch64-tui-v${VER}.zip"
+          for i in $(seq 1 36); do
+            if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "$WANT"; then
+              echo "Asset present: $WANT"
+              exit 0
+            fi
+            echo "Waiting for $WANT on $REPO@$TAG (try $i/36)..."
+            sleep 10
+          done
+          echo "Timed out waiting for $WANT." >&2
+          gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' >&2 || true
+          exit 1
+
+      - name: Build .deb from release zip (GUI, arm64)
+        env:
+          I2PCHAT_DEB_ARCH: arm64
+        run: ./packaging/debian/build-deb-from-appimage.sh "${{ needs.meta.outputs.ver }}"
+
+      - name: Build .deb from TUI release zip (arm64)
+        env:
+          I2PCHAT_DEB_ARCH: arm64
+        run: ./packaging/debian/build-tui-deb-from-release-zip.sh "${{ needs.meta.outputs.ver }}"
+
+      - name: Upload arm64 .deb packages to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.meta.outputs.tag }}" \
+            "dist/i2pchat_${{ needs.meta.outputs.ver }}_arm64.deb" \
+            "dist/i2pchat-tui_${{ needs.meta.outputs.ver }}_arm64.deb" \
+            --clobber
+
   deploy-apt-site:
     name: Deploy apt to GitHub Pages
-    needs: deb
-    if: needs.deb.outputs.apt_publish == 'true'
+    needs: deb-amd64
+    if: needs.deb-amd64.outputs.apt_publish == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

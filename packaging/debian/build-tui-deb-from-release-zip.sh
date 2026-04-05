@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build a minimal amd64 .deb from the official Linux TUI release zip (PyInstaller onedir layout).
+# Build a minimal .deb from the official Linux TUI release zip (PyInstaller onedir layout).
+# I2PCHAT_DEB_ARCH=amd64 (default) or arm64 — см. build-deb-from-appimage.sh.
 # Usage: from repo root — ./packaging/debian/build-tui-deb-from-release-zip.sh [version]
 set -euo pipefail
 
@@ -16,9 +17,19 @@ if [[ -z "$VER" ]]; then
   exit 1
 fi
 
+DEB_ARCH="${I2PCHAT_DEB_ARCH:-amd64}"
+case "$DEB_ARCH" in
+  amd64) LINUX_ZIP_ARCH="x86_64" ;;
+  arm64) LINUX_ZIP_ARCH="aarch64" ;;
+  *)
+    echo "ERROR: I2PCHAT_DEB_ARCH must be amd64 or arm64, got: ${DEB_ARCH}" >&2
+    exit 1
+    ;;
+esac
+
 REPO="${I2PCHAT_RELEASE_REPO:-${GITHUB_REPOSITORY:-MetanoicArmor/I2PChat}}"
 TAG_REF="v${VER}"
-ZIP_NAME="I2PChat-linux-x86_64-tui-v${VER}.zip"
+ZIP_NAME="I2PChat-linux-${LINUX_ZIP_ARCH}-tui-v${VER}.zip"
 ZIP_URL="https://github.com/${REPO}/releases/download/${TAG_REF}/${ZIP_NAME}"
 ICON_URL="https://github.com/${REPO}/raw/${TAG_REF}/icon.png"
 
@@ -94,7 +105,7 @@ Package: i2pchat-tui
 Version: ${VER}-1
 Section: net
 Priority: optional
-Architecture: amd64
+Architecture: ${DEB_ARCH}
 Maintainer: MetanoicArmor <https://github.com/MetanoicArmor/I2PChat>
 Homepage: https://github.com/MetanoicArmor/I2PChat
 Depends: zlib1g
@@ -104,7 +115,7 @@ Installed-Size: ${INSTALLED_KB}
 EOF
 
 mkdir -p dist
-DEB_OUT="dist/i2pchat-tui_${VER}_amd64.deb"
+DEB_OUT="dist/i2pchat-tui_${VER}_${DEB_ARCH}.deb"
 rm -f "$DEB_OUT"
 dpkg-deb --root-owner-group --build "$PKG_ROOT" "$DEB_OUT"
 echo "✔ Built ${DEB_OUT}"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build a minimal amd64 .deb from the official Linux release zip (AppImage inside).
+# Build a minimal .deb from the official Linux release zip (AppImage inside).
+# Architecture: I2PCHAT_DEB_ARCH=amd64 (default, zip I2PChat-linux-x86_64-v*.zip) or arm64 (I2PChat-linux-aarch64-v*.zip).
 # Usage: from repo root — ./packaging/debian/build-deb-from-appimage.sh [version]
 # Default version: first line of VERSION file in repo root.
 set -euo pipefail
@@ -17,10 +18,20 @@ if [[ -z "$VER" ]]; then
   exit 1
 fi
 
+DEB_ARCH="${I2PCHAT_DEB_ARCH:-amd64}"
+case "$DEB_ARCH" in
+  amd64) LINUX_ZIP_ARCH="x86_64" ;;
+  arm64) LINUX_ZIP_ARCH="aarch64" ;;
+  *)
+    echo "ERROR: I2PCHAT_DEB_ARCH must be amd64 or arm64, got: ${DEB_ARCH}" >&2
+    exit 1
+    ;;
+esac
+
 # CI sets GITHUB_REPOSITORY; local default matches upstream (override with I2PCHAT_RELEASE_REPO=owner/name).
 REPO="${I2PCHAT_RELEASE_REPO:-${GITHUB_REPOSITORY:-MetanoicArmor/I2PChat}}"
 TAG_REF="v${VER}"
-ZIP_NAME="I2PChat-linux-x86_64-v${VER}.zip"
+ZIP_NAME="I2PChat-linux-${LINUX_ZIP_ARCH}-v${VER}.zip"
 ZIP_URL="https://github.com/${REPO}/releases/download/${TAG_REF}/${ZIP_NAME}"
 ICON_URL="https://github.com/${REPO}/raw/${TAG_REF}/icon.png"
 
@@ -57,7 +68,7 @@ curl_retry "$ICON_URL" "$WORKDIR/icon.png" 12
 echo "==> Extracting AppImage"
 unzip -q "$WORKDIR/${ZIP_NAME}" -d "$WORKDIR/stage"
 # Release zip contains one file: I2PChat-linux-<arch>-v<ver>.AppImage (see build-linux.sh)
-APPIMAGE="$WORKDIR/stage/I2PChat-linux-x86_64-v${VER}.AppImage"
+APPIMAGE="$WORKDIR/stage/I2PChat-linux-${LINUX_ZIP_ARCH}-v${VER}.AppImage"
 if [[ ! -f "$APPIMAGE" ]]; then
   APPIMAGE="$(find "$WORKDIR/stage" -maxdepth 1 -name '*.AppImage' -print -quit)"
 fi
@@ -98,7 +109,7 @@ Package: i2pchat
 Version: ${VER}-1
 Section: net
 Priority: optional
-Architecture: amd64
+Architecture: ${DEB_ARCH}
 Maintainer: MetanoicArmor <https://github.com/MetanoicArmor/I2PChat>
 Homepage: https://github.com/MetanoicArmor/I2PChat
 Depends: zlib1g
@@ -108,7 +119,7 @@ Installed-Size: ${INSTALLED_KB}
 EOF
 
 mkdir -p dist
-DEB_OUT="dist/i2pchat_${VER}_amd64.deb"
+DEB_OUT="dist/i2pchat_${VER}_${DEB_ARCH}.deb"
 rm -f "$DEB_OUT"
 dpkg-deb --root-owner-group --build "$PKG_ROOT" "$DEB_OUT"
 echo "✔ Built ${DEB_OUT}"

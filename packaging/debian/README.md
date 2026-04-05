@@ -4,16 +4,16 @@
 
 | Подход | Плюсы | Минусы |
 |--------|--------|--------|
-| **`.deb` на GitHub Release** | Один файл, `sudo apt install ./i2pchat_*_amd64.deb` | Нужно собирать при каждом релизе (локально или CI) |
+| **`.deb` на GitHub Release** | `sudo apt install ./i2pchat_*_amd64.deb` или `./i2pchat_*_arm64.deb` на ARM | Нужно собирать при каждом релизе (локально или CI) |
 | **Свой .deb + apt-репозиторий** (GitHub Pages, Packagecloud) | Полный контроль, `apt install` после добавления источника | Подпись `Release` (GPG) — в **этом** репо: [**`packaging/apt/`**](../apt/README.md) (ветка `gh-pages` + секреты) |
 | **PPA (Launchpad)** | Знакомый путь для Ubuntu | Рецепты сборки, очередь сборки |
 | **Flatpak / Flathub** | Один формат для многих дистрибутивов | Не `apt`; отдельный манифест и ревью Flathub |
 
-**Рекомендуемый путь для пользователей:** скачать **`i2pchat_<версия>_amd64.deb`** (GUI) и при необходимости **`i2pchat-tui_<версия>_amd64.deb`** (только TUI) с [релизов GitHub](https://github.com/MetanoicArmor/I2PChat/releases), **или** собрать локально скриптами ниже.
+**Рекомендуемый путь для пользователей:** скачать **`i2pchat_<версия>_amd64.deb`** / **`_arm64.deb`** (GUI) и при необходимости **`i2pchat-tui_*`** той же архитектуры с [релизов GitHub](https://github.com/MetanoicArmor/I2PChat/releases), **или** собрать локально скриптами ниже.
 
 ## Сборка локального .deb из официального AppImage
 
-Скрипт [`build-deb-from-appimage.sh`](build-deb-from-appimage.sh) собирает минимальный пакет `i2pchat` (amd64): AppImage в `/opt/i2pchat/`, симлинк `usr/bin/i2pchat`, `.desktop` и иконка.
+Скрипт [`build-deb-from-appimage.sh`](build-deb-from-appimage.sh) собирает минимальный пакет `i2pchat`: AppImage в `/opt/i2pchat/`, симлинк `usr/bin/i2pchat`, `.desktop` и иконка. По умолчанию **amd64** (zip **`I2PChat-linux-x86_64-v*.zip`**). Для **arm64** (zip **`I2PChat-linux-aarch64-v*.zip`**): `I2PCHAT_DEB_ARCH=arm64 ./packaging/debian/build-deb-from-appimage.sh 1.2.3` → `dist/i2pchat_<version>_arm64.deb`.
 
 Требования: `bash`, `curl`, `unzip`, **`dpkg-deb`** (пакет `dpkg` в Debian/Ubuntu; на macOS `.deb` не соберётся без Linux-окружения). Запуск из корня репозитория I2PChat:
 
@@ -25,13 +25,13 @@
 ./packaging/debian/build-deb-from-appimage.sh
 ```
 
-Готовый файл: `dist/i2pchat_<version>_amd64.deb`.
+Готовый файл: `dist/i2pchat_<version>_<amd64|arm64>.deb`.
 
 **Зависимости в рантайме:** AppImage может требовать FUSE или встроенный runtime в зависимости от типа образа и версии ОС; при проблемах запуска см. [документацию AppImage](https://docs.appimage.org/).
 
 ## Сборка .deb для TUI (официальный Linux TUI zip)
 
-Скрипт [`build-tui-deb-from-release-zip.sh`](build-tui-deb-from-release-zip.sh) собирает пакет **`i2pchat-tui`**: содержимое **`I2PChat-linux-x86_64-tui-v<версия>.zip`** в `/opt/i2pchat-tui/`, команда **`i2pchat-tui`**, `.desktop` для терминала (как в AUR **`i2pchat-tui-bin`**). Требования к **glibc** такие же, как у бинарника в zip (если zip собран на очень новой системе, на старой LTS возможна ошибка `GLIBC_* not found` — пересоберите zip на Ubuntu 22.04, см. workflow **Build Linux release artifacts** в [`.github/workflows/build-linux-release-artifacts.yml`](../../.github/workflows/build-linux-release-artifacts.yml)).
+Скрипт [`build-tui-deb-from-release-zip.sh`](build-tui-deb-from-release-zip.sh) собирает пакет **`i2pchat-tui`**: содержимое официального TUI zip в `/opt/i2pchat-tui/`, команда **`i2pchat-tui`**, `.desktop` для терминала. **amd64:** **`I2PChat-linux-x86_64-tui-v*.zip`**. **arm64:** `I2PCHAT_DEB_ARCH=arm64` и zip **`I2PChat-linux-aarch64-tui-v*.zip`**. Требования к **glibc** — как у бинарника в zip (см. workflow **Build Linux release artifacts** в [`.github/workflows/build-linux-release-artifacts.yml`](../../.github/workflows/build-linux-release-artifacts.yml)).
 
 ```bash
 ./packaging/debian/build-tui-deb-from-release-zip.sh 1.2.3
@@ -39,15 +39,15 @@
 ./packaging/debian/build-tui-deb-from-release-zip.sh
 ```
 
-Готовый файл: `dist/i2pchat-tui_<version>_amd64.deb`.
+Готовый файл: `dist/i2pchat-tui_<version>_<amd64|arm64>.deb`.
 
 ## Автоматическая сборка в CI
 
-При **публикации** GitHub Release (событие `published`) job **deb** в workflow [`.github/workflows/release-linux-pkgs.yml`](../../.github/workflows/release-linux-pkgs.yml) ждёт **`I2PChat-linux-x86_64-v<версия>.zip`** и **`I2PChat-linux-x86_64-tui-v<версия>.zip`**, собирает **`i2pchat_…_amd64.deb`** и **`i2pchat-tui_…_amd64.deb`**, загружает их на релиз.
+При **публикации** GitHub Release (событие `published`) workflow [`.github/workflows/release-linux-pkgs.yml`](../../.github/workflows/release-linux-pkgs.yml) запускает два job’а: **`deb-amd64`** (ждёт x86_64 zip, выкладывает **`_amd64.deb`**) и **`deb-arm64`** (ждёт **`I2PChat-linux-aarch64-v*.zip`** и **`*-tui-*`**, выкладывает **`_arm64.deb`**). Зеркало **apt** на GitHub Pages по-прежнему строится только из **amd64** `.deb` (см. [`packaging/apt/`](../apt/README.md)).
 
-Условие: в момент срабатывания workflow **оба** linux zip уже должны быть в списке ассетов релиза. Событие `release: published` иногда приходит **раньше**, чем GitHub успевает отдать большие ассеты; в CI добавлено **ожидание** по API. Для форка используется `GITHUB_REPOSITORY` (или `I2PCHAT_RELEASE_REPO=owner/name` при локальном запуске).
+Условие: нужные zip уже в ассетах релиза; для каждого job’а — **ожидание** по API. Для форка: `GITHUB_REPOSITORY` / `I2PCHAT_RELEASE_REPO`.
 
-Если релиз уже опубликован **без** `.deb`, в GitHub Actions запустите workflow **Release Linux packages** вручную (**workflow_dispatch**) и укажите тег `vX.Y.Z` — на релизе должны быть оба zip: **`I2PChat-linux-x86_64-vX.Y.Z.zip`** и **`I2PChat-linux-x86_64-tui-vX.Y.Z.zip`**.
+**workflow_dispatch** с тегом `vX.Y.Z`: для **arm64** `.deb` на релизе должны быть **`I2PChat-linux-aarch64-v*.zip`** и **`*-tui-*`**; иначе job **`deb-arm64`** завершится ошибкой (**`continue-on-error`**, amd64 и apt не пострадают).
 
 ## Публикация apt-репозитория (кратко)
 
