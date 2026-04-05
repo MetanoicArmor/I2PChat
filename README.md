@@ -54,10 +54,10 @@ brew install --cask i2pchat      # GUI — I2PChat.app
 brew install --cask i2pchat-tui  # TUI only
 ```
 
-**Arch Linux (x86_64 / arm64) — [AUR](https://aur.archlinux.org/)** (example: [yay](https://github.com/Jguer/yay)):
+**Arch Linux — [AUR](https://aur.archlinux.org/)** (**x86_64** and **aarch64** / ARM64; same packages on both; example: [yay](https://github.com/Jguer/yay)):
 
 ```bash
-yay -S i2pchat-bin      # GUI — official AppImage from release
+yay -S i2pchat-bin      # GUI — official AppImage from release (zip matches your CPU arch)
 yay -S i2pchat-tui-bin  # TUI only
 ```
 
