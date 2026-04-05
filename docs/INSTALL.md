@@ -26,7 +26,16 @@ Python is **not** required on the target machine (PyInstaller bundle).
 2. `chmod +x` the `.AppImage` file if needed, then run it for the GUI.
 3. **TUI (inside AppImage):** mount or extract the image and run **`usr/bin/I2PChat-tui`**, or use the **I2P Chat (terminal)** desktop entry if present.
 
-**TUI-only zip:** **`I2PChat-linux-x86_64-tui-v<version>.zip`** — unpack and run **`./i2pchat-tui`** (wrapper sets `LD_LIBRARY_PATH` for `usr/bin/I2PChat-tui` and `_internal`). Use with AUR **`i2pchat-tui-bin`** and similar.
+**TUI-only zip:** **`I2PChat-linux-x86_64-tui-v<version>.zip`** — unpack and run **`./i2pchat-tui`** (wrapper sets `LD_LIBRARY_PATH` for `usr/bin/I2PChat-tui` and `_internal`).
+
+**Arch Linux (AUR):** with an AUR helper such as **yay** or **paru**:
+
+```bash
+yay -S i2pchat-bin      # GUI: official AppImage → /opt/i2pchat, command i2pchat
+yay -S i2pchat-tui-bin  # TUI-only: slim Linux zip → /opt/i2pchat-tui, command i2pchat-tui
+```
+
+Package pages: [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Maintainer sources: [`packaging/aur/`](../packaging/aur/).
 
 **Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`**. Install with `sudo apt install ./i2pchat_*_amd64.deb` (or your package manager). If it is missing, use the AppImage zip or build a `.deb` locally as described in [`packaging/debian/README.md`](../packaging/debian/README.md).
 

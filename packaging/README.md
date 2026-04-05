@@ -8,7 +8,7 @@
 |-------|-----------|
 | **winget** | PR в [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs): [MetanoicArmor.I2PChat 1.2.3](https://github.com/microsoft/winget-pkgs/pull/355476), [MetanoicArmor.I2PChat.TUI 1.2.3](https://github.com/microsoft/winget-pkgs/pull/355477) — ждут ревью/merge. |
 | **Homebrew tap** | Репозиторий [MetanoicArmor/homebrew-i2pchat](https://github.com/MetanoicArmor/homebrew-i2pchat): `brew tap MetanoicArmor/i2pchat`. |
-| **AUR** | В репозитории актуальны [`aur/i2pchat-bin/`](aur/i2pchat-bin/) и [`aur/i2pchat-tui-bin/`](aur/i2pchat-tui-bin/). Публикация на aur.archlinux.org требует SSH-ключ, привязанный к аккаунту AUR (`ssh://aur@aur.archlinux.org/`); с машины без такого ключа будет `Permission denied (publickey)`. Выгрузка вручную — см. [aur/README.md](aur/README.md). |
+| **AUR** | **Опубликовано:** [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Установка (например **yay**): `yay -S i2pchat-bin`, `yay -S i2pchat-tui-bin`. Шаблоны в репо: [`aur/i2pchat-bin/`](aur/i2pchat-bin/), [`aur/i2pchat-tui-bin/`](aur/i2pchat-tui-bin/); обновление пакетов на AUR — см. [aur/README.md](aur/README.md). |
 | **Flatpak / COPR / .deb** | Сборки и публикация в эти каналы **не запускались** (только шаблоны в репо). Ссылки: [flatpak/README.md](flatpak/README.md), [fedora/i2pchat.spec](fedora/i2pchat.spec) (COPR), [debian/README.md](debian/README.md), workflow [release-deb.yml](../.github/workflows/release-deb.yml) (прикрепление `.deb` к GitHub Release при публикации тега). |
 
 | Платформа | Каталог | Действие мейнтейнера |

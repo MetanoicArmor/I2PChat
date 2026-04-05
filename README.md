@@ -40,6 +40,8 @@
 
 No Python needed for these bundles.
 
+**Arch Linux:** `yay -S i2pchat-bin` (GUI AppImage) and `yay -S i2pchat-tui-bin` (TUI) — [AUR](https://aur.archlinux.org/packages/i2pchat-bin) / [details in INSTALL.md](docs/INSTALL.md).
+
 > **Router:** On a fresh profile, the app often defaults to the **bundled** `i2pd`. Switch to a system **i2pd** (SAM, usually `127.0.0.1:7656`) via **More actions → I2P router…** (**Cmd/Ctrl+R**). The choice is saved.
 
 Unofficial packages (Homebrew, winget, AUR, `.deb`, COPR) may exist; **canonical binaries** are always on **GitHub Releases**. Maintainer recipes → [**packaging/**](packaging/README.md).
