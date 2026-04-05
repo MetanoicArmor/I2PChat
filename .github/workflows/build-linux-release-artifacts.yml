@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v1.2.3) — upload zips + SHA256SUMS here"
+        description: "Release version (v1.2.3, 1.2.3, or typo v.1.2.3) — upload targets Git tag vX.Y.Z"
         required: true
         type: string
       source_ref:
-        description: "Ref to build from: main, v1.2.3, or leave empty (= tag). Do not use bare 1.2.3 unless you mean semver (auto-normalized to v1.2.3)."
+        description: "Ref to build from: main, v1.2.3, 1.2.3, v.1.2.3, or empty (= same as tag)."
         required: false
         type: string
         default: ""
@@ -30,22 +30,36 @@ jobs:
       - name: Resolve tag and checkout ref
         id: meta
         run: |
-          R="${{ github.event.inputs.tag }}"
-          R="${R#v}"
+          trim() { echo "$1" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
+          # Strip leading v and a mistaken dot (v.1.2.3 typo -> 1.2.3)
+          to_ver() {
+            local x
+            x="$(trim "$1")"
+            x="${x#v}"
+            x="${x#.}"
+            echo "$x"
+          }
+          R="$(to_ver "${{ github.event.inputs.tag }}")"
           if [ -z "$R" ]; then
             echo "ERROR: empty tag" >&2
             exit 1
           fi
+          if ! echo "$R" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: tag must be semver X.Y.Z (e.g. v1.2.3), got: ${{ github.event.inputs.tag }}" >&2
+            exit 1
+          fi
           echo "tag=v${R}" >> "$GITHUB_OUTPUT"
           echo "ver=${R}" >> "$GITHUB_OUTPUT"
-          SRC="${{ github.event.inputs.source_ref }}"
-          SRC="$(echo "$SRC" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-          if [ -z "$SRC" ]; then
+          SRC_RAW="$(trim "${{ github.event.inputs.source_ref }}")"
+          if [ -z "$SRC_RAW" ]; then
             SRC="v${R}"
-          fi
-          # Bare semver (e.g. 1.2.3) is not a git ref in this repo — tags are v1.2.3
-          if echo "$SRC" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            SRC="v${SRC}"
+          else
+            TMP="$(to_ver "$SRC_RAW")"
+            if echo "$TMP" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              SRC="v${TMP}"
+            else
+              SRC="$SRC_RAW"
+            fi
           fi
           echo "checkout_ref=${SRC}" >> "$GITHUB_OUTPUT"
           echo "Will build from ref: ${SRC}, upload to release: v${R}"
