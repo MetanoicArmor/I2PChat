@@ -1,0 +1,61 @@
+# Ubuntu 24.04 (noble): glibc 2.39 baseline for Linux PyInstaller/AppImage builds.
+# Official release zips still use CI on ubuntu-22.04 (glibc 2.35) for wider LTS compatibility.
+# See packaging/docker/README.md
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LC_ALL=C.UTF-8 \
+    LANG=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    QT_QPA_PLATFORM=offscreen \
+    I2PCHAT_SKIP_GPG_SIGN=1 \
+    APPIMAGE_EXTRACT_AND_RUN=1
+
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+        software-properties-common \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update -qq \
+    && apt-get install -y --no-install-recommends \
+        python3.14 \
+        python3.14-dev \
+        python3.14-venv \
+        wget \
+        desktop-file-utils \
+        file \
+        patchelf \
+        git \
+        build-essential \
+        libfuse2t64 \
+        fuse3 \
+        libgl1 \
+        libegl1-mesa \
+        libxkbcommon-x11-0 \
+        libdbus-1-3 \
+        libglib2.0-0t64 \
+        libfontconfig1 \
+        libfreetype6 \
+        libdrm2 \
+        libxcb1 \
+        libxcb-xinerama0 \
+        libxcb-xfixes0 \
+        libxcb-shape0 \
+        libxcb-render0 \
+        libxcb-shm0 \
+        libxcb-randr0 \
+        libxcb-keysyms1 \
+        libxcb-image0 \
+        libxcb-icccm4 \
+        libxcb-util1 \
+        libxcb-sync1 \
+        libxcb-xinput0 \
+        libxcb-cursor0 \
+        libcrypt1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+CMD ["./build-linux.sh"]
