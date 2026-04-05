@@ -69,7 +69,7 @@ curl -fsSL "https://metanoicarmor.github.io/I2PChat/KEY.gpg" | sudo gpg --dearmo
 echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat/ stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list
 sudo apt update
 sudo apt install i2pchat       # GUI
-# or: sudo apt install i2pchat-tui   # TUI only
+sudo apt install i2pchat-tui   # TUI only
 ```
 
 More platforms and detail → [**docs/INSTALL.md**](docs/INSTALL.md).
