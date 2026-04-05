@@ -4,11 +4,73 @@
 
 Use **`./packaging/docker/run-linux-build.sh`** from the repo root (Docker or Podman). It builds **`Dockerfile.linux-noble-glibc239`** and runs **`./build-linux.sh`** → **`I2PChat-linux-x86_64-v*.zip`** and related outputs.
 
+### Troubleshooting: `failed to connect to the docker API` / `docker.sock`
+
+The Docker **client** is installed but the **daemon** is not running (or your user cannot access `/var/run/docker.sock`).
+
+**Arch / CachyOS (systemd):**
+
+```bash
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"   # log out and back in, then retry
+```
+
+Check: `docker info` should print server info, not a socket error.
+
+**Use Podman instead** (no Docker daemon):
+
+```bash
+sudo pacman -S podman
+I2PCHAT_CONTAINER_RUNTIME=podman ./packaging/docker/run-linux-build.sh
+```
+
+Override explicitly: `I2PCHAT_CONTAINER_RUNTIME=docker` or `=podman`.
+
+**BuildKit / buildx:** if you see *BuildKit is enabled but the buildx component is missing*, install **`docker-buildx`** (Arch / CachyOS: `sudo pacman -S docker-buildx`). With buildx present, **`run-linux-build.sh`** sets **`DOCKER_BUILDKIT=1`** automatically. To force BuildKit off: `I2PCHAT_DOCKER_BUILDKIT=0 ./packaging/docker/run-linux-build.sh`.
+
+**`failed to export layer` / `device or resource busy` (containerd):** the Dockerfile step can succeed, but committing the next layer fails on some hosts (e.g. rolling distros). Install **`docker-buildx`** (Arch / CachyOS: `sudo pacman -S docker-buildx`); **`run-linux-build.sh`** then enables **BuildKit** automatically when `docker buildx` is available. Manual: `I2PCHAT_DOCKER_BUILDKIT=1 docker build ...`. To force the legacy builder: `I2PCHAT_DOCKER_BUILDKIT=0 ./packaging/docker/run-linux-build.sh`. Also try `sudo systemctl restart docker`, less concurrent container I/O, or **Podman** (`I2PCHAT_CONTAINER_RUNTIME=podman`).
+
+### Quick start (x86_64)
+
+From the **repository root**:
+
+```bash
+./packaging/docker/run-linux-build.sh
+```
+
+This builds the image `i2pchat-linux:noble-glibc239` and runs `./build-linux.sh` with the tree bind-mounted at `/src`.
+
+Outputs (`dist/`, `*.zip`, `I2PChat.AppDir`, etc.) appear in your working tree. If files are owned by `root`, fix with:
+
+```bash
+sudo chown -R "$(id -u):$(id -g)" dist build I2PChat.AppDir *.zip SHA256SUMS SHA256SUMS.asc 2>/dev/null || true
+```
+
+### Manual commands (x86_64 image)
+
+```bash
+docker build -f packaging/docker/Dockerfile.linux-noble-glibc239 \
+  -t i2pchat-linux:noble-glibc239 packaging/docker
+
+docker run --rm -it \
+  -e I2PCHAT_SKIP_GPG_SIGN=1 \
+  -e QT_QPA_PLATFORM=offscreen \
+  -e APPIMAGE_EXTRACT_AND_RUN=1 \
+  -v "$PWD:/src:rw" \
+  -w /src \
+  i2pchat-linux:noble-glibc239 \
+  ./build-linux.sh
+```
+
+### Python (noble x86_64 image)
+
+The image uses **deadsnakes** stable + **nightly** PPAs: **Python 3.14** is not in the stable PPA for noble yet, so **`ppa:deadsnakes/nightly`** supplies `python3.14`. If packaging changes, adjust the Dockerfile while keeping **noble** as the base to retain glibc 2.39.
+
 ## aarch64 (arm64) — Ubuntu 24.04
 
 **`linux-build-ubuntu2404-arm64.Dockerfile`** — Ubuntu **24.04** on **linux/arm64** with Python **3.14** (deadsnakes), Qt/AppImage dependencies.
 
-## Quick run
+## Quick run (aarch64)
 
 From the **repository root**:
 

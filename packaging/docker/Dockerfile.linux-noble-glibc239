@@ -19,6 +19,7 @@ RUN apt-get update -qq \
         gnupg \
         software-properties-common \
     && add-apt-repository -y ppa:deadsnakes/ppa \
+    && add-apt-repository -y ppa:deadsnakes/nightly \
     && apt-get update -qq \
     && apt-get install -y --no-install-recommends \
         python3.14 \

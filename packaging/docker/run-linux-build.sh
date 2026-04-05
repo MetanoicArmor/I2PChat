@@ -42,7 +42,18 @@ if ! RT="$(pick_runtime)"; then
 fi
 
 echo "==> Runtime: ${RT}"
-export DOCKER_BUILDKIT=1
+# BuildKit нужен docker-buildx. На части систем классический builder падает на
+# «failed to export layer» после тяжёлого RUN — тогда BuildKit обычно помогает.
+if [ "${RT}" = docker ]; then
+  if [ "${I2PCHAT_DOCKER_BUILDKIT:-}" = 0 ]; then
+    :
+  elif [ "${I2PCHAT_DOCKER_BUILDKIT:-}" = 1 ]; then
+    export DOCKER_BUILDKIT=1
+  elif docker buildx version >/dev/null 2>&1; then
+    export DOCKER_BUILDKIT=1
+    echo "==> DOCKER_BUILDKIT=1 (найден docker-buildx)"
+  fi
+fi
 
 echo "==> Building image ${IMAGE_TAG}"
 "${RT}" build -f "${DOCKERFILE}" -t "${IMAGE_TAG}" "${ROOT}/packaging/docker"
