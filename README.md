@@ -40,7 +40,24 @@
 
 No Python needed for these bundles.
 
-**Arch Linux:** `yay -S i2pchat-bin` (GUI AppImage) and `yay -S i2pchat-tui-bin` (TUI) — [AUR](https://aur.archlinux.org/packages/i2pchat-bin) / [details in INSTALL.md](docs/INSTALL.md).
+**Package managers** (same artifacts as GitHub Releases; third-party install paths):
+
+**macOS (Apple Silicon / arm64)** — [Homebrew](https://brew.sh) [tap](https://github.com/MetanoicArmor/homebrew-i2pchat):
+
+```bash
+brew tap MetanoicArmor/i2pchat
+brew install --cask i2pchat      # GUI — I2PChat.app from release zip
+brew install --cask i2pchat-tui  # TUI only — slim zip
+```
+
+**Arch Linux (x86_64)** — [AUR](https://aur.archlinux.org/) (example: [yay](https://github.com/Jguer/yay)):
+
+```bash
+yay -S i2pchat-bin      # GUI — official AppImage from release
+yay -S i2pchat-tui-bin  # TUI only
+```
+
+More platforms and detail → [**docs/INSTALL.md**](docs/INSTALL.md).
 
 > **Router:** On a fresh profile, the app often defaults to the **bundled** `i2pd`. Switch to a system **i2pd** (SAM, usually `127.0.0.1:7656`) via **More actions → I2P router…** (**Cmd/Ctrl+R**). The choice is saved.
 
