@@ -2,6 +2,15 @@
 
 Здесь лежат **шаблоны и инструкции** для Homebrew (cask), winget, AUR, **`.deb` (Debian/Ubuntu)** и **RPM/COPR (Fedora)**. Исходники приложения не обязаны жить в этих форматах — достаточно стабильных **GitHub Releases** с zip/AppImage.
 
+## Статус публикации (v1.2.3, 2026-04)
+
+| Канал | Состояние |
+|-------|-----------|
+| **winget** | PR в [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs): [MetanoicArmor.I2PChat 1.2.3](https://github.com/microsoft/winget-pkgs/pull/355476), [MetanoicArmor.I2PChat.TUI 1.2.3](https://github.com/microsoft/winget-pkgs/pull/355477) — ждут ревью/merge. |
+| **Homebrew tap** | Репозиторий [MetanoicArmor/homebrew-i2pchat](https://github.com/MetanoicArmor/homebrew-i2pchat): `brew tap MetanoicArmor/i2pchat`. |
+| **AUR** | Файлы в [`aur/`](aur/) готовы; выгрузка — `ssh://aur@aur.archlinux.org/` (нужен ключ AUR), см. [aur/README.md](aur/README.md). |
+| **Flatpak / COPR / .deb** | Шаблоны и скрипты: [flatpak/README.md](flatpak/README.md), [fedora/i2pchat.spec](fedora/i2pchat.spec), [debian/README.md](debian/README.md), CI [release-deb.yml](../.github/workflows/release-deb.yml). |
+
 | Платформа | Каталог | Действие мейнтейнера |
 |-----------|---------|----------------------|
 | macOS (arm64) | [`homebrew/`](homebrew/) | Отдельный tap `homebrew-i2pchat` или PR в `homebrew-cask`: cask **`i2pchat`** (GUI `.app`), cask **`i2pchat-tui`** (TUI-only zip) |
