@@ -276,9 +276,9 @@ python3.14 -m venv .venv314
 # PyQt6 GUI:
 ./.venv314/bin/python -m i2pchat.gui.main_qt
 # Terminal UI (ncurses, same venv):
-./.venv314/bin/python -m i2pchat.gui.chat_python
+./.venv314/bin/python -m i2pchat.tui
 # Example with a saved profile (name at the end of the line):
-# ./.venv314/bin/python -m i2pchat.gui.chat_python alice
+# ./.venv314/bin/python -m i2pchat.tui alice
 ```
 
 **Windows (PowerShell)**
@@ -289,9 +289,9 @@ py -3.14 -m venv .venv314
 # PyQt6 GUI:
 .\.venv314\Scripts\python -m i2pchat.gui.main_qt
 # Terminal UI (ncurses, same venv):
-.\.venv314\Scripts\python -m i2pchat.gui.chat_python
+.\.venv314\Scripts\python -m i2pchat.tui
 # Example with a saved profile (name at the end of the line):
-# .\.venv314\Scripts\python -m i2pchat.gui.chat_python alice
+# .\.venv314\Scripts\python -m i2pchat.tui alice
 ```
 
 If the venv already exists and dependencies are installed, run only the `python -m …` line you need (GUI or terminal).

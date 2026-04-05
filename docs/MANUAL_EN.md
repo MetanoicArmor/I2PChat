@@ -595,10 +595,11 @@ Override via environment variable:
 I2PCHAT_PADDING_PROFILE=off python -m i2pchat.gui
 ```
 
-Canonical entrypoints when running from source (repository root): `python -m i2pchat.gui`
-or `python -m i2pchat.run_gui` (same as the PyInstaller launcher
-[`i2pchat/run_gui.py`](../i2pchat/run_gui.py)). Application code lives only under
-`i2pchat/`; there are no flat root-level Python shims.
+Canonical entrypoints when running from source (repository root): Qt GUI —
+`python -m i2pchat.gui` or `python -m i2pchat.run_gui` (same as the PyInstaller
+launcher [`i2pchat/run_gui.py`](../i2pchat/run_gui.py)); terminal TUI —
+`python -m i2pchat.tui` (equivalent to `python -m i2pchat.gui.chat_python`).
+Application code lives only under `i2pchat/`; there are no flat root-level Python shims.
 
 Trade-off: more padding lowers metadata correlation but increases bandwidth use.
 

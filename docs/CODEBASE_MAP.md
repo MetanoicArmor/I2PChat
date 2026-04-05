@@ -52,9 +52,10 @@ Offline / delayed delivery subsystem.
 User interfaces and UI entrypoints.
 
 - `i2pchat/gui/main_qt.py` — Qt desktop client
-- `i2pchat/gui/chat_python.py` — Textual TUI
+- `i2pchat/gui/chat_python.py` — Textual TUI (реализация; запуск: `python -m i2pchat.tui`)
 - `i2pchat/gui/__main__.py` — package-first GUI entrypoint (`python -m i2pchat.gui`)
 - `i2pchat/run_gui.py` — same launcher, used as PyInstaller analyzed script
+- `i2pchat/tui.py` — short TUI launcher (`python -m i2pchat.tui`; delegates to `chat_python`)
 
 ### `i2pchat/presentation`
 
@@ -85,8 +86,10 @@ flows.
 python -m i2pchat.gui
 python -m i2pchat.run_gui
 python -m i2pchat.gui.main_qt
-python -m i2pchat.gui.chat_python
+python -m i2pchat.tui
 ```
+
+Legacy TUI module path (same app): `python -m i2pchat.gui.chat_python`.
 
 PyInstaller uses [`run_gui.py`](../i2pchat/run_gui.py) as the analyzed script (same as
 `python -m i2pchat.gui`).

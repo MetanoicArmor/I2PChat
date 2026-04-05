@@ -597,7 +597,7 @@ padding:
 I2PCHAT_PADDING_PROFILE=off python3 -m i2pchat.gui
 ```
 
-Точки входа при запуске из исходников (из корня репозитория): `python3 -m i2pchat.gui` или `python3 -m i2pchat.run_gui` (тот же код, что и скрипт [`i2pchat/run_gui.py`](../i2pchat/run_gui.py)). Прикладной код располагается только под `i2pchat/`; отдельных «плоских» шимов в корне нет.
+Точки входа при запуске из исходников (из корня репозитория): графический клиент — `python3 -m i2pchat.gui` или `python3 -m i2pchat.run_gui` (тот же код, что и скрипт [`i2pchat/run_gui.py`](../i2pchat/run_gui.py)); терминальный TUI — `python3 -m i2pchat.tui` (эквивалент `python3 -m i2pchat.gui.chat_python`). Прикладной код располагается только под `i2pchat/`; отдельных «плоских» шимов в корне нет.
 
 Компромисс: больше padding -> меньше сигналов для traffic analysis, но выше
 сетевые накладные расходы.

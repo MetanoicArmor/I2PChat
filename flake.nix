@@ -62,7 +62,7 @@
               --prefix QT_PLUGIN_PATH : "${qtPluginPath}"
 
             makeWrapper ${pythonEnv}/bin/python "$out/bin/i2pchat-tui" \
-              --add-flags "-m i2pchat.gui.chat_python" \
+              --add-flags "-m i2pchat.tui" \
               --prefix PYTHONPATH : "$out/lib/i2pchat"
             runHook postInstall
           '';
