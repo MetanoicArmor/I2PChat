@@ -41,7 +41,18 @@ Package pages: [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i
 
 **Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`** (GUI) and **`i2pchat-tui_<version>_amd64.deb`** (TUI only). Install with `sudo apt install ./i2pchat_*_amd64.deb` / `./i2pchat-tui_*_amd64.deb`. If missing, use the Linux zips or build locally — [`packaging/debian/README.md`](../packaging/debian/README.md).
 
-**Optional apt source (same repo, GitHub Pages):** if maintainers enabled signing and **Pages → GitHub Actions** deploy, you can add the published apt mirror and run `sudo apt install i2pchat` — see [`packaging/apt/README.md`](../packaging/apt/README.md).
+**Optional apt source (Debian/Ubuntu, x86_64, GitHub Pages):** requires maintainers’ signing secret and **Pages → GitHub Actions** — details [`packaging/apt/README.md`](../packaging/apt/README.md).
+
+```bash
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL "https://metanoicarmor.github.io/I2PChat/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
+echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat/ stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list
+sudo apt update
+sudo apt install i2pchat        # GUI
+# or: sudo apt install i2pchat-tui   # TUI only
+```
+
+**glibc:** packages from the mirror are the same PyInstaller bundles as the `.deb` on Releases. If they were linked against **GLIBC_2.42**, distros with **older** glibc (e.g. **Ubuntu 24.04 ≈ 2.39**) can still report `GLIBC_2.42 not found` — install a build produced on an older baseline (see [Build Linux release artifacts](../.github/workflows/build-linux-release-artifacts.yml)) or use [Build from source](#build-from-source).
 
 **Optional `.rpm` (Fedora / RHEL-compatible):** соберите локально или через COPR — см. [`packaging/fedora/README.md`](../packaging/fedora/README.md). На странице релиза готовый `.rpm` не обязателен; можно поставить из **Linux AppImage zip** выше.
 

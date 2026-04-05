@@ -29,7 +29,7 @@
 | **Windows** | [I2PChat-windows-x64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.3.zip) | Unzip → `I2PChat.exe` (GUI) or `I2PChat-tui.exe` (cmd/PowerShell) |
 | **macOS (arm64)** | [I2PChat-macOS-arm64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.3.zip) | Unzip → `I2PChat.app`; TUI: `I2PChat.app/Contents/MacOS/I2PChat-tui` |
 | **Linux (x86_64)** | [I2PChat-linux-x86_64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.3.zip) | `chmod +x` the AppImage → run it; TUI: see INSTALL.md |
-| **Debian / Ubuntu (.deb)** | [i2pchat_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat_1.2.3_amd64.deb) (GUI), [i2pchat-tui_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat-tui_1.2.3_amd64.deb) (TUI) | `sudo apt install ./i2pchat_*_amd64.deb` / `sudo apt install ./i2pchat-tui_*_amd64.deb` — optional apt: [`packaging/apt/README.md`](packaging/apt/README.md) |
+| **Debian / Ubuntu (.deb)** | [i2pchat_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat_1.2.3_amd64.deb) (GUI), [i2pchat-tui_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat-tui_1.2.3_amd64.deb) (TUI) | `sudo apt install ./i2pchat_*_amd64.deb` / `sudo apt install ./i2pchat-tui_*_amd64.deb` — or signed apt mirror: [**INSTALL.md**](docs/INSTALL.md#linux-x86_64), [`packaging/apt/README.md`](packaging/apt/README.md) |
 
 **TUI-only archives** (separate slim PyInstaller bundle via **`I2PChat-tui.spec`**: Textual + core, **no PyQt6**; for winget / Homebrew **`i2pchat-tui`** / AUR **`i2pchat-tui-bin`**):
 
@@ -57,6 +57,19 @@ brew install --cask i2pchat-tui  # TUI only — slim zip
 yay -S i2pchat-bin      # GUI — official AppImage from release
 yay -S i2pchat-tui-bin  # TUI only
 ```
+
+**Debian / Ubuntu (x86_64, optional signed apt mirror on GitHub Pages)** — same packages as Releases; full setup → [`packaging/apt/README.md`](packaging/apt/README.md).
+
+```bash
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL "https://metanoicarmor.github.io/I2PChat/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
+echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat/ stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list
+sudo apt update
+sudo apt install i2pchat       # GUI
+# or: sudo apt install i2pchat-tui   # TUI only
+```
+
+**glibc:** if the published `.deb` was built against **GLIBC_2.42** (very new toolchain), **Ubuntu 24.04 (~2.39)** and older releases can still fail with `GLIBC_2.42 not found` — use a `.deb`/zip built on an older baseline (see [**Build Linux release artifacts**](.github/workflows/build-linux-release-artifacts.yml)) or [build from source](docs/INSTALL.md#build-from-source).
 
 More platforms and detail → [**docs/INSTALL.md**](docs/INSTALL.md).
 
