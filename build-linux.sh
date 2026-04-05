@@ -247,7 +247,27 @@ chmod +x "${TUI_STAGE}/i2pchat-tui" "${TUI_STAGE}/usr/bin/${APP_NAME}-tui"
 rm -f "${TUI_ZIP}"
 TUI_ZIP_ABS="$(pwd)/${TUI_ZIP}"
 # Same as macOS: preserve symlinks in PyInstaller onedir (avoid duplicated _internal).
-( cd "${TUI_STAGE}" && zip -qry "${TUI_ZIP_ABS}" . )
+# Pure Python (no zip(1)); ZipFile.write(resolve_symlinks=False) matches zip -y.
+python - "${TUI_STAGE}" "${TUI_ZIP_ABS}" <<'PY'
+import os
+import sys
+import zipfile
+
+stage, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    for root, dirnames, files in os.walk(stage, followlinks=False):
+        for d in dirnames:
+            p = os.path.join(root, d)
+            if os.path.islink(p):
+                zf.write(p, os.path.relpath(p, stage), resolve_symlinks=False)
+        for name in files:
+            path = os.path.join(root, name)
+            arcname = os.path.relpath(path, stage)
+            if os.path.islink(path):
+                zf.write(path, arcname, resolve_symlinks=False)
+            else:
+                zf.write(path, arcname)
+PY
 rm -rf "${TUI_STAGE}"
 echo "✔ Packed ${TUI_ZIP}"
 
