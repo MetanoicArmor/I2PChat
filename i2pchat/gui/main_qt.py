@@ -6468,6 +6468,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._save_contacts_book()
         self._refresh_contacts_list()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+        self._refresh_offline_history_display()
         self.refresh_status_label()
         self._refresh_connection_buttons()
 
@@ -6676,7 +6677,9 @@ class ChatWindow(QtWidgets.QMainWindow):
                 norm_cb,
                 app_data_root=self.core.get_profiles_dir(),
             )
-            if norm_cb == self._history_loaded_for_peer:
+            if normalize_peer_addr(norm_cb) == normalize_peer_addr(
+                self._history_loaded_for_peer or ""
+            ):
                 self._history_entries = []
                 self._history_dirty = False
                 self._history_loaded_for_peer = None
@@ -8086,6 +8089,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self._update_peer_lock_indicator()
                 self.refresh_status_label()
                 self._refresh_connection_buttons()
+                QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
                 self.handle_system("Bundled router restarted.")
             except Exception as e:
                 logger.exception("restart bundled router failed")
@@ -8149,6 +8153,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self._update_peer_lock_indicator()
                 self.refresh_status_label()
                 self._refresh_connection_buttons()
+                QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
                 self.handle_system(
                     f"I2P router backend applied: {self._router_settings.backend}"
                 )
@@ -8166,6 +8171,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     self._update_peer_lock_indicator()
                     self.refresh_status_label()
                     self._refresh_connection_buttons()
+                    QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
                 except Exception:
                     logger.exception("router settings rollback failed")
                 QtWidgets.QMessageBox.warning(
@@ -8820,6 +8826,8 @@ class ChatWindow(QtWidgets.QMainWindow):
                 )
                 return
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+        if self.core.conn is None:
+            self._refresh_offline_history_display()
         asyncio.create_task(self.core.connect_to_peer(addr))
         QtCore.QTimer.singleShot(0, self._refresh_connection_buttons)
 
@@ -9010,6 +9018,7 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def _on_addr_editing_finished_for_drafts(self) -> None:
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+        self._refresh_offline_history_display()
 
     def _sync_compose_draft_to_peer_key(self, new_key: Optional[str]) -> None:
         if new_key == self._compose_draft_active_key:
@@ -9027,11 +9036,68 @@ class ChatWindow(QtWidgets.QMainWindow):
         clear_unread_for_peer(self._unread_by_peer, active)
         self._update_unread_chrome()
 
+    def _chat_contains_injected_history_block(self) -> bool:
+        """Есть ли в ленте маркеры офлайн-вставки истории (между --- ... history ---)."""
+        for row in range(self.chat_model.rowCount()):
+            item = self.chat_model.item_at(row)
+            if item is None:
+                continue
+            if item.kind != "system":
+                continue
+            text = item.text or ""
+            if "message(s) from history" in text or "from history ---" in text:
+                return True
+        return False
+
+    def _refresh_offline_history_display(self, _identity_retry: int = 0) -> None:
+        """Показать сохранённую историю для выбранного пира до подключения (если SAM уже выдал ключ)."""
+        if not self._history_enabled:
+            return
+        if self.core.conn is not None:
+            return
+        raw = (self._current_history_peer() or "").strip()
+        if not raw:
+            self._save_history_if_needed()
+            self._history_flush_timer.stop()
+            self._history_loaded_for_peer = None
+            self._history_entries = []
+            self._history_dirty = False
+            self.chat_model.clear_items()
+            return
+        if not self.core.get_identity_key_bytes():
+            if _identity_retry < 25:
+                QtCore.QTimer.singleShot(
+                    200,
+                    lambda r=_identity_retry + 1: self._refresh_offline_history_display(r),
+                )
+            return
+        peer_key = normalize_peer_addr(raw)
+        if self._history_loaded_for_peer is not None and normalize_peer_addr(
+            self._history_loaded_for_peer
+        ) == peer_key:
+            return
+        self._save_history_if_needed()
+        self._history_flush_timer.stop()
+        prev_loaded = self._history_loaded_for_peer
+        self._history_loaded_for_peer = None
+        self._history_entries = []
+        self._history_dirty = False
+        # Не сносим системные строки старта (профиль, keyring, контакт…): только полная
+        # перезагрузка пира или замена уже вставленного блока истории.
+        if prev_loaded is not None or self._chat_contains_injected_history_block():
+            self.chat_model.clear_items()
+        self._try_load_history()
+
     def _try_load_history(self) -> None:
         if not self._history_enabled:
             return
         peer = self._current_history_peer()
-        if not peer or peer == self._history_loaded_for_peer:
+        if not peer:
+            return
+        peer_key = normalize_peer_addr(peer)
+        if self._history_loaded_for_peer is not None and normalize_peer_addr(
+            self._history_loaded_for_peer
+        ) == peer_key:
             return
         identity_key = self.core.get_identity_key_bytes()
         if not identity_key:
@@ -9095,9 +9161,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             finally:
                 self._chat_search_sync_suppressed = False
             self._sync_chat_search_after_model_change()
-        self._history_loaded_for_peer = peer
+        self._history_loaded_for_peer = peer_key
         self._history_flush_timer.start()
-        clear_unread_for_peer(self._unread_by_peer, normalize_peer_addr(peer))
+        clear_unread_for_peer(self._unread_by_peer, peer_key)
         self._update_unread_chrome()
 
     def _save_history_if_needed(self) -> None:
@@ -9383,6 +9449,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.handle_system(
             f"History backup imported: restored {summary.restored_files}, skipped {summary.skipped_files}."
         )
+        QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
 
     @QtCore.pyqtSlot()
     def _on_toggle_history_clicked(self) -> None:
@@ -9390,7 +9457,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         save_history_enabled(self._history_enabled)
         self._history_toggle_btn.setText(self._history_toggle_label())
         if self._history_enabled:
-            if self.core.conn is not None and self.core.handshake_complete:
+            if self.core.conn is None:
+                self._refresh_offline_history_display()
+            elif self.core.handshake_complete:
                 self._try_load_history()
             self.handle_system("Chat history saving enabled.")
         else:
@@ -9418,7 +9487,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             app_data_root=self.core.get_profiles_dir(),
         )
         if deleted:
-            if peer == self._history_loaded_for_peer:
+            if normalize_peer_addr(peer) == normalize_peer_addr(
+                self._history_loaded_for_peer or ""
+            ):
                 self._history_entries = []
                 self._history_dirty = False
             self.handle_system("History cleared for this peer.")
@@ -9985,6 +10056,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._refresh_connection_buttons()
         QtCore.QTimer.singleShot(0, self._deferred_saved_peers_refresh_after_switch)
         QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
+        QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
 
     @QtCore.pyqtSlot()
     def on_send_file_clicked(self) -> None:
@@ -10108,6 +10180,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.core = self._create_core(self.profile, sam_address)
         await self.core.init_session()
         QtCore.QTimer.singleShot(0, self._update_peer_lock_indicator)
+        QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
 
     def _on_app_state_changed_clear_unread(
         self, state: QtCore.Qt.ApplicationState
