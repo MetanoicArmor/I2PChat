@@ -6,8 +6,32 @@ Use this image when you want **`build-linux.sh`** to run on **glibc 2.39** (Ubun
 
 ## Requirements
 
-- Docker (or Podman with a compatible CLI)
+- **Docker** *with a running daemon* (`docker info` OK) **or** **Podman** (`podman info` OK)
 - Network for `pip`, `wget` (appimagetool), and GitHub downloads used by `build-linux.sh`
+
+### Troubleshooting: `failed to connect to the docker API` / `docker.sock`
+
+The Docker **client** is installed but the **daemon** is not running (or your user cannot access `/var/run/docker.sock`).
+
+**Arch / CachyOS (systemd):**
+
+```bash
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"   # log out and back in, then retry
+```
+
+Check: `docker info` should print server info, not a socket error.
+
+**Use Podman instead** (no Docker daemon):
+
+```bash
+sudo pacman -S podman
+I2PCHAT_CONTAINER_RUNTIME=podman ./packaging/docker/run-linux-build.sh
+```
+
+Override explicitly: `I2PCHAT_CONTAINER_RUNTIME=docker` or `=podman`.
+
+**BuildKit deprecation** (legacy builder): the script sets `DOCKER_BUILDKIT=1` for Docker. Install Docker Buildx if your distro splits it out.
 
 ## Quick start
 

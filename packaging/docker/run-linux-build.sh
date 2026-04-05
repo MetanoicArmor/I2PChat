@@ -1,21 +1,51 @@
 #!/usr/bin/env bash
 # Build Linux AppImage + zips inside Ubuntu 24.04 (glibc 2.39).
+# Uses Docker or Podman (auto-detect). Override: I2PCHAT_CONTAINER_RUNTIME=podman|docker
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 IMAGE_TAG="${I2PCHAT_LINUX_DOCKER_TAG:-i2pchat-linux:noble-glibc239}"
 DOCKERFILE="${ROOT}/packaging/docker/Dockerfile.linux-noble-glibc239"
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "ERROR: docker not found in PATH" >&2
+pick_runtime() {
+  if [ -n "${I2PCHAT_CONTAINER_RUNTIME:-}" ]; then
+    printf '%s\n' "${I2PCHAT_CONTAINER_RUNTIME}"
+    return 0
+  fi
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    printf '%s\n' docker
+    return 0
+  fi
+  if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+    printf '%s\n' podman
+    return 0
+  fi
+  return 1
+}
+
+if ! RT="$(pick_runtime)"; then
+  echo "ERROR: нет доступного контейнерного рантайма (docker / podman)." >&2
+  echo "" >&2
+  echo "Docker (Arch / CachyOS и т.п.):" >&2
+  echo "  sudo systemctl enable --now docker" >&2
+  echo "  sudo usermod -aG docker \"\$USER\"   # затем перелогиниться" >&2
+  echo "  # или разово: sudo docker build ..." >&2
+  echo "" >&2
+  echo "Podman:" >&2
+  echo "  sudo pacman -S podman && podman info   # обычно без systemd-сокета Docker" >&2
+  echo "" >&2
+  echo "Проверка: docker info   или   podman info" >&2
   exit 1
 fi
 
+echo "==> Runtime: ${RT}"
+export DOCKER_BUILDKIT=1
+
 echo "==> Building image ${IMAGE_TAG}"
-docker build -f "${DOCKERFILE}" -t "${IMAGE_TAG}" "${ROOT}/packaging/docker"
+"${RT}" build -f "${DOCKERFILE}" -t "${IMAGE_TAG}" "${ROOT}/packaging/docker"
 
 echo "==> Running build-linux.sh in container (mount ${ROOT} -> /src)"
-exec docker run --rm -it \
+exec "${RT}" run --rm -it \
   -e "I2PCHAT_SKIP_GPG_SIGN=${I2PCHAT_SKIP_GPG_SIGN:-1}" \
   -e "QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-offscreen}" \
   -e "APPIMAGE_EXTRACT_AND_RUN=${APPIMAGE_EXTRACT_AND_RUN:-1}" \
