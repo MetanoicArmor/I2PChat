@@ -27,6 +27,6 @@ modules:
     sources:
       - type: archive
         url: https://github.com/MetanoicArmor/I2PChat/releases/download/v1.2.3/I2PChat-linux-x86_64-v1.2.3.zip
-        sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+        sha256: 'be16b2a1ed96523b2ff7e892e7cdb09ba4b39f4c9522e8462653373d22bc3f48'
       - type: file
         path: i2pchat-gui-entry.sh

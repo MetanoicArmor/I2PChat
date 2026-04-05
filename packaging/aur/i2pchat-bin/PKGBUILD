@@ -11,7 +11,7 @@ options=('!strip')
 _zip="I2PChat-linux-x86_64-v${pkgver}.zip"
 source=("${_zip}::${url}/releases/download/v${pkgver}/${_zip}"
         "icon.png::${url}/raw/v${pkgver}/icon.png")
-sha256sums=('1e1f984b9a965cc53465b40b08486147454faa984d3a7a3a822bfdffcd397d44'
+sha256sums=('be16b2a1ed96523b2ff7e892e7cdb09ba4b39f4c9522e8462653373d22bc3f48'
             'c49c198bef05e1cf3bf159858acefad100981fb21437e47e2588fcc1e4ad7217')
 
 package() {

@@ -11,7 +11,7 @@ Installers:
   - Architecture: x64
     InstallerType: zip
     InstallerUrl: https://github.com/MetanoicArmor/I2PChat/releases/download/v1.2.3/I2PChat-windows-x64-v1.2.3.zip
-    InstallerSha256: 80b5f591fd07bf3cf9891d74cabab8d7cdafab6cf34f06e47ba4d11fe5e31ca4
+    InstallerSha256: 6e0481272587b0a07f93a93310fbca94c0aadb637d337c4aab6ad00bbf972436
     NestedInstallerType: portable
     NestedInstallerFiles:
       - RelativeFilePath: I2PChat/I2PChat.exe
