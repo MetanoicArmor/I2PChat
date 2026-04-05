@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       source_ref:
-        description: "Ref to build from (leave empty = tag). Old tags may lack TUI zip in build-linux.sh — use main if VERSION on main still matches (e.g. 1.2.3)."
+        description: "Ref to build from: main, v1.2.3, or leave empty (= tag). Do not use bare 1.2.3 unless you mean semver (auto-normalized to v1.2.3)."
         required: false
         type: string
         default: ""
@@ -42,6 +42,10 @@ jobs:
           SRC="$(echo "$SRC" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           if [ -z "$SRC" ]; then
             SRC="v${R}"
+          fi
+          # Bare semver (e.g. 1.2.3) is not a git ref in this repo — tags are v1.2.3
+          if echo "$SRC" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            SRC="v${SRC}"
           fi
           echo "checkout_ref=${SRC}" >> "$GITHUB_OUTPUT"
           echo "Will build from ref: ${SRC}, upload to release: v${R}"
