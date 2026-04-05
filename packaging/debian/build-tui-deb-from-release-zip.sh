@@ -53,8 +53,11 @@ curl_retry "$ICON_URL" "$WORKDIR/icon.png" 12
 
 echo "==> Extracting TUI zip"
 unzip -q "$WORKDIR/${ZIP_NAME}" -d "$WORKDIR/stage"
-if [[ ! -d "$WORKDIR/stage/i2pchat-tui" || ! -d "$WORKDIR/stage/usr" ]]; then
-  echo "ERROR: expected i2pchat-tui/ and usr/ at top level of ${ZIP_NAME}" >&2
+# Official zip (build-linux.sh): launcher script i2pchat-tui + usr/bin/... at archive root — not i2pchat-tui/
+if [[ ! -e "$WORKDIR/stage/i2pchat-tui" || ! -d "$WORKDIR/stage/usr" ]]; then
+  echo "ERROR: expected i2pchat-tui (file or dir) and usr/ at top level of ${ZIP_NAME}" >&2
+  echo "Top-level entries:" >&2
+  ls -la "$WORKDIR/stage" >&2 || true
   exit 1
 fi
 
