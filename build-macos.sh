@@ -91,6 +91,10 @@ fi
 printf '%s\n' '#!/bin/sh' "exec \"\$(dirname \"\$0\")/../Resources/${APP_NAME}/${APP_NAME}\" \"\$@\"" > "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
 chmod +x "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
 
+# Консольный TUI (Textual): тот же onedir, отдельный бинарник — удобно запускать из Terminal.
+printf '%s\n' '#!/bin/sh' "exec \"\$(dirname \"\$0\")/../Resources/${APP_NAME}/${APP_NAME}-tui\" \"\$@\"" > "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}-tui"
+chmod +x "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}-tui"
+
 # Info.plist
 cat > "dist/${APP_NAME}.app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -172,3 +176,4 @@ else
   fi
 fi
 echo "  Можно перенести dist/${APP_NAME}.app в /Applications и запускать двойным кликом."
+echo "  TUI: в Terminal: dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}-tui [профиль]"

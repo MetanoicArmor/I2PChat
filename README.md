@@ -244,7 +244,7 @@ Currently shipped assets use **versioned** zip names, for example:
   - **Python is *not* required on the target system** – unpack the zip and run `I2PChat.exe` or `I2PChat-tui.exe [profile]`.
   - Release bundles can now include a **bundled `i2pd` sidecar**, so the app can work either with a system router or an embedded router backend.
 
-**Linux** (`I2PChat-linux-x86_64-v1.2.2.zip` → AppImage) and **macOS arm64** (`I2PChat-macOS-arm64-v1.2.2.zip` → `.app`) — same release page; **direct download links** are in the **Prebuilt Downloads** table later in this README.
+**Linux** (`I2PChat-linux-x86_64-v1.2.2.zip` → AppImage) and **macOS arm64** (`I2PChat-macOS-arm64-v1.2.2.zip` → `.app`) — same release page; **direct download links** are in the **Prebuilt Downloads** table later in this README. Prebuilt AppImage and `.app` also ship a **console TUI** binary (`I2PChat-tui`); see the table below.
 
 ### 🛠 Running from source
 
@@ -324,7 +324,7 @@ This script:
 
 - Uses `python3.14` (or default `python3`) and `.venv314`.
 - Builds a self‑contained GUI binary via PyInstaller.
-- Packs it into `I2PChat.AppImage` using `appimagetool`.
+- Packs it into `I2PChat.AppImage` using `appimagetool` (в образе: `usr/bin/I2PChat` и **`usr/bin/I2PChat-tui`**, плюс `.desktop` для TUI с `Terminal=true`).
 - Creates release archive `I2PChat-linux-<arch>-v<version>.zip` (contains `I2PChat.AppImage`).
 
 #### 🍎 macOS (GUI .app bundle)
@@ -334,7 +334,7 @@ This script:
 ```
 
 - Uses Python 3.14+ (from PATH or Homebrew).
-- Builds `dist/I2PChat.app` via PyInstaller.
+- Builds `dist/I2PChat.app` via PyInstaller (в бандле: GUI и **`Contents/MacOS/I2PChat-tui`** → `Resources/I2PChat/I2PChat-tui`).
 
 ### 🪟 Windows build (GUI)
 
@@ -356,11 +356,11 @@ It will:
 
 1. Create a fresh virtual environment `.venv314` using **Python 3.14** via `py -3.14 -m venv`.
 2. Install all dependencies from `requirements.txt` and `requirements-build.txt` (both hash-locked).
-3. Build a GUI‑only PyQt6 binary:
+3. Build PyQt6 GUI + Textual TUI binaries:
    - Output folder: `dist\I2PChat\`
-   - Main executable: `dist\I2PChat\I2PChat.exe`
+   - `I2PChat.exe` (GUI) and **`I2PChat-tui.exe`** (console TUI)
 
-The resulting `I2PChat.exe` is self‑contained and can be distributed to machines without Python installed.
+The resulting executables are self‑contained and can be distributed to machines without Python installed.
 
 ### Verify release artifacts
 
@@ -444,9 +444,9 @@ If you like this project and want to support development, you can send a small d
 
 | Platform | Download | Launch |
 |----------|----------|--------|
-| **Windows** | [I2PChat-windows-x64-v1.2.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.2.zip) | Unzip → run `I2PChat.exe` |
-| **macOS** | [I2PChat-macOS-arm64-v1.2.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.2.zip) | Unzip → open `I2PChat.app` |
-| **Linux** | [I2PChat-linux-x86_64-v1.2.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.2.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
+| **Windows** | [I2PChat-windows-x64-v1.2.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.2.zip) | Unzip → `I2PChat.exe` (GUI) or **`I2PChat-tui.exe`** in the same folder (cmd/PowerShell) |
+| **macOS** | [I2PChat-macOS-arm64-v1.2.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.2.zip) | Unzip → open `I2PChat.app`; **TUI:** `I2PChat.app/Contents/MacOS/I2PChat-tui` [profile] |
+| **Linux** | [I2PChat-linux-x86_64-v1.2.2.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.2.zip) | GUI: `chmod +x I2PChat.AppImage` → `./I2PChat.AppImage`. **TUI:** `MNT=$(./I2PChat.AppImage --appimage-mount)` then `"$MNT/usr/bin/I2PChat-tui"` (or use the **I2P Chat (terminal)** desktop entry if your launcher shows it) |
 
 > **Router backend:** On a **fresh profile** (no saved preference), I2PChat defaults to the **bundled** `i2pd` sidecar. You can switch to a system `i2pd` (SAM, typically `127.0.0.1:7656`) via **More actions → I2P router…** (shortcut **Cmd/Ctrl+R**); that choice is persisted. The same dialog opens the router data/log paths and can restart the bundled router.
 

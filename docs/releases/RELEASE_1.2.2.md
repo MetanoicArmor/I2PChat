@@ -38,16 +38,18 @@ On **Windows** (PowerShell), replace `./.venv314/bin/python` with `.\.venv314\Sc
 - Clipboard copy of local address includes the **`.b32.i2p`** suffix.
 - Safer logging when the Rich log is not ready.
 
-#### 4. Windows prebuilt zip: second console executable
+#### 4. Prebuilt bundles: console TUI next to GUI
 
-- The **Windows x64** archive includes **`I2PChat-tui.exe`** next to **`I2PChat.exe`** (same `I2PChat\` folder). The TUI build uses **`console=True`** so Textual works in **cmd** / **PowerShell**. Optional profile: `I2PChat-tui.exe myprofile`.
+- **Windows x64 zip:** **`I2PChat-tui.exe`** beside **`I2PChat.exe`** (`console=True`; **cmd** / **PowerShell**). Optional profile: `I2PChat-tui.exe myprofile`.
+- **macOS `.app`:** **`Contents/MacOS/I2PChat-tui`** wrapper → `Resources/I2PChat/I2PChat-tui`; run from **Terminal**.
+- **Linux AppImage:** **`usr/bin/I2PChat-tui`** inside the image; optional **`i2pchat-tui.desktop`** (`Terminal=true`). Example: `MNT=$(./I2PChat.AppImage --appimage-mount)` then `"$MNT/usr/bin/I2PChat-tui"`.
 
 ### Technical
 
 - **Qt:** `ChatWindow._refresh_offline_history_display`, `_chat_contains_injected_history_block`, `_try_load_history` peer key normalization; call sites (contacts, address field, connect, `start_core`, profile switch, router restart paths, history import/toggle).
 - **TUI:** `i2pchat/gui/chat_python.py` — `post` / `post_panel` guards, `/copyaddr` suffix.
 - **Launcher:** `i2pchat/tui.py` — thin delegate to `I2PChat().run()`.
-- **PyInstaller (Windows):** `i2pchat/run_tui.py` + shared `COLLECT` with deduplicated `binaries`/`datas` (`normalize_toc`); no `MERGE` (avoids onedir → onefile extraction overhead).
+- **PyInstaller (all platforms):** `i2pchat/run_tui.py` + single `COLLECT` with two `EXE` and `normalize_toc(a.binaries + a_tui.binaries)` (no `MERGE`).
 
 ### Compatibility
 
@@ -72,7 +74,7 @@ On **Windows** (PowerShell), replace `./.venv314/bin/python` with `.\.venv314\Sc
 - **Qt:** сохранённая история чата подгружается **до** соединения с пиром (выбор контакта / адрес / Connect); при **первой** вставке истории **не** стираются системные строки старта (профиль, keyring, контакт, «Starting I2P session…»).
 - **TUI:** **`/copyaddr`** копирует полный адрес с **`.b32.i2p`**; устойчивость **`post`** при отсутствии виджета лога; тесты в **`tests/test_tui_router_defaults.py`**.
 - **Документация** обновлена под новые точки входа.
-- **Windows zip:** в папке **`I2PChat\`** — **`I2PChat-tui.exe`** (консольный Textual TUI) рядом с **`I2PChat.exe`**; запуск из cmd/PowerShell, профиль: `I2PChat-tui.exe имя`.
+- **Сборки PyInstaller:** рядом с GUI всегда **`I2PChat-tui`** (на Windows — **`I2PChat-tui.exe`**). **macOS:** `I2PChat.app/Contents/MacOS/I2PChat-tui`. **Linux AppImage:** `usr/bin/I2PChat-tui` и пункт меню **I2P Chat (terminal)**.
 
 ### Примеры из корня репозитория
 

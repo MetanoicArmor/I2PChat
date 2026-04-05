@@ -71,84 +71,50 @@ def _analysis(entry_script):
     )
 
 
-if sys.platform == 'win32':
-    a = _analysis('i2pchat/run_gui.py')
-    a_tui = _analysis('i2pchat/run_tui.py')
-    pyz = PYZ(a.pure)
-    pyz_tui = PYZ(a_tui.pure)
-    exe = EXE(
-        pyz,
-        a.scripts,
-        [],
-        exclude_binaries=True,
-        name='I2PChat',
-        debug=False,
-        bootloader_ignore_signals=False,
-        strip=False,
-        upx=True,
-        console=False,
-        disable_windowed_traceback=False,
-        argv_emulation=False,
-        target_arch=None,
-        codesign_identity=None,
-        entitlements_file=None,
-        icon=[_icon_file],
-    )
-    exe_tui = EXE(
-        pyz_tui,
-        a_tui.scripts,
-        [],
-        exclude_binaries=True,
-        name='I2PChat-tui',
-        debug=False,
-        bootloader_ignore_signals=False,
-        strip=False,
-        upx=True,
-        console=True,
-        disable_windowed_traceback=False,
-        argv_emulation=False,
-        target_arch=None,
-        codesign_identity=None,
-        entitlements_file=None,
-        icon=[_icon_file],
-    )
-    coll = COLLECT(
-        exe,
-        exe_tui,
-        normalize_toc(a.binaries + a_tui.binaries),
-        normalize_toc(a.datas + a_tui.datas),
-        strip=False,
-        upx=True,
-        upx_exclude=[],
-        name='I2PChat',
-    )
-else:
-    a = _analysis('i2pchat/run_gui.py')
-    pyz = PYZ(a.pure)
-    exe = EXE(
-        pyz,
-        a.scripts,
-        [],
-        exclude_binaries=True,
-        name='I2PChat',
-        debug=False,
-        bootloader_ignore_signals=False,
-        strip=False,
-        upx=True,
-        console=False,
-        disable_windowed_traceback=False,
-        argv_emulation=False,
-        target_arch=None,
-        codesign_identity=None,
-        entitlements_file=None,
-        icon=[_icon_file],
-    )
-    coll = COLLECT(
-        exe,
-        a.binaries,
-        a.datas,
-        strip=False,
-        upx=True,
-        upx_exclude=[],
-        name='I2PChat',
-    )
+# GUI (windowed) + TUI (console) в одном onedir; имя TUI: I2PChat-tui (.exe на Windows).
+a = _analysis('i2pchat/run_gui.py')
+a_tui = _analysis('i2pchat/run_tui.py')
+pyz = PYZ(a.pure)
+pyz_tui = PYZ(a_tui.pure)
+
+_exe_common = dict(
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=[_icon_file],
+)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='I2PChat',
+    console=False,
+    **_exe_common,
+)
+exe_tui = EXE(
+    pyz_tui,
+    a_tui.scripts,
+    [],
+    exclude_binaries=True,
+    name='I2PChat-tui',
+    console=True,
+    **_exe_common,
+)
+coll = COLLECT(
+    exe,
+    exe_tui,
+    normalize_toc(a.binaries + a_tui.binaries),
+    normalize_toc(a.datas + a_tui.datas),
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='I2PChat',
+)

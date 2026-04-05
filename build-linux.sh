@@ -73,8 +73,9 @@ mkdir -p "${APPDIR}/usr/bin" \
          "${APPDIR}/usr/share/applications" \
          "${APPDIR}/usr/share/icons/hicolor/512x512/apps"
 
-# Кладём внутрь AppDir бинарник и каталог _internal (с libpython и всеми зависимостями)
+# Кладём внутрь AppDir бинарники (GUI + TUI) и каталог _internal (с libpython и всеми зависимостями)
 cp "dist/${APP_NAME}/${APP_NAME}" "${APPDIR}/usr/bin/${APP_NAME}"
+cp "dist/${APP_NAME}/${APP_NAME}-tui" "${APPDIR}/usr/bin/${APP_NAME}-tui"
 cp -r "dist/${APP_NAME}/_internal" "${APPDIR}/usr/bin/_internal"
 if [ -d "dist/${APP_NAME}/vendor" ]; then
   cp -r "dist/${APP_NAME}/vendor" "${APPDIR}/usr/bin/vendor"
@@ -103,8 +104,20 @@ Terminal=false
 Categories=Network;Chat;
 EOF
 
+cat > "${APPDIR}/usr/share/applications/i2pchat-tui.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=I2P Chat (terminal)
+Comment=I2PChat Textual TUI — run in a terminal
+Exec=${APP_NAME}-tui
+Icon=i2pchat
+Terminal=true
+Categories=Network;Chat;
+EOF
+
 # копия .desktop и иконки в корень AppDir, чтобы appimagetool их увидел
 cp "${APPDIR}/usr/share/applications/i2pchat.desktop" "${APPDIR}/i2pchat.desktop"
+cp "${APPDIR}/usr/share/applications/i2pchat-tui.desktop" "${APPDIR}/i2pchat-tui.desktop"
 cp icon.png "${APPDIR}/i2pchat.png"
 
 cat > "${APPDIR}/AppRun" <<'EOF'
@@ -116,7 +129,7 @@ export LD_LIBRARY_PATH="$HERE/usr/bin/_internal:${LD_LIBRARY_PATH:-}"
 exec "$HERE/usr/bin/I2PChat" "$@"
 EOF
 
-chmod +x "${APPDIR}/AppRun" "${APPDIR}/usr/bin/${APP_NAME}"
+chmod +x "${APPDIR}/AppRun" "${APPDIR}/usr/bin/${APP_NAME}" "${APPDIR}/usr/bin/${APP_NAME}-tui"
 
 # 3) appimagetool (pinned release + SHA256 verification)
 APPIMAGETOOL="appimagetool-${ARCH}.AppImage"
@@ -177,6 +190,7 @@ mkdir -p "dist"
 OUTPUT_FILE="dist/${APP_NAME}-linux-${ARCH_SUFFIX}-v${RELEASE_VERSION}.AppImage"
 ./"$APPIMAGETOOL" "${APPDIR}" "$OUTPUT_FILE"
 echo "✔ Built ${OUTPUT_FILE}"
+echo "  TUI inside AppImage: usr/bin/${APP_NAME}-tui (after mount: ${APP_NAME}.AppImage --appimage-mount)"
 
 ROOT_APPIMAGE="${APP_NAME}.AppImage"
 if [ -e "$ROOT_APPIMAGE" ] || [ -L "$ROOT_APPIMAGE" ]; then
