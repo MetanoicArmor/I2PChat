@@ -1,7 +1,6 @@
-# Build amd64 .deb from the published Linux AppImage zip and attach it to the same release.
-# Triggers: (1) release published — needs linux zip on the asset list already.
-#           (2) workflow_dispatch — if a release missed .deb, run manually with tag vX.Y.Z.
-name: Release .deb
+# Build amd64 .deb and x86_64 .rpm from the published Linux zip and attach to the same release.
+# Triggers: release published (linux zip must already be on the asset list), or workflow_dispatch with tag vX.Y.Z.
+name: Release Linux packages
 
 on:
   release:
@@ -52,4 +51,41 @@ jobs:
         run: |
           gh release upload "${{ steps.meta.outputs.tag }}" \
             "dist/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb" \
+            --clobber
+
+  rpm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Derive version from release tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          VER="${TAG#v}"
+          if [ -z "$VER" ]; then
+            echo "ERROR: empty version from tag: $TAG" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Build RPM in Fedora container
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace:rw" \
+            -w /workspace \
+            fedora:42 \
+            bash /workspace/packaging/fedora/build-rpm-from-release.sh "${{ steps.meta.outputs.ver }}"
+
+      - name: Upload RPM to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ steps.meta.outputs.tag }}" \
+            "dist/i2pchat_${{ steps.meta.outputs.ver }}_x86_64.rpm" \
             --clobber

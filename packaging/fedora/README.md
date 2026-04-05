@@ -8,10 +8,22 @@
 
 Попадание в основной репозиторий Fedora без мейнтейнера и политики сборки из исходников здесь **не цель**.
 
-## Перед сборкой
+## Артефакт на GitHub Release
+
+При публикации релиза (или вручную через **workflow_dispatch**) job **rpm** в [`.github/workflows/release-linux-pkgs.yml`](../../.github/workflows/release-linux-pkgs.yml) собирает **`i2pchat_<версия>_x86_64.rpm`** и прикрепляет его к тому же релизу. Локально то же самое: скрипт [`build-rpm-from-release.sh`](build-rpm-from-release.sh) (удобнее всего в контейнере Fedora, см. ниже).
+
+## Перед сборкой (вручную / COPR)
 
 1. Опубликован тег **`v%{version}`** и на релизе есть **`I2PChat-linux-x86_64-v%{version}.zip`** и ветка/tag **`v%{version}`** с файлом **`icon.png`** (как в upstream).
-2. В `i2pchat.spec` обновите директивы **`Version:`** (и при пересборке того же tarball — увеличьте **`Release:`** и допишите запись в **`%changelog`**).
+2. В `i2pchat.spec` обновите директивы **`Version:`** (и при пересборке того же tarball — увеличьте **`Release:`** и допишите запись в **`%changelog`**). Скрипт `build-rpm-from-release.sh` при CI **копирует** spec и подставляет версию из тега, файл в репозитории можно держать синхронным с последним релизом для удобства COPR.
+
+## Локальная проверка (Docker с Fedora, с любой хост-ОС)
+
+```bash
+docker run --rm -v "$PWD:/workspace:rw" -w /workspace fedora:42 \
+  bash /workspace/packaging/fedora/build-rpm-from-release.sh 1.2.3
+# → dist/i2pchat_1.2.3_x86_64.rpm
+```
 
 ## Локальная проверка (Fedora)
 

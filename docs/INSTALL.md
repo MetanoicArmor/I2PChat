@@ -39,6 +39,8 @@ Package pages: [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i
 
 **Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`**. Install with `sudo apt install ./i2pchat_*_amd64.deb` (or your package manager). If it is missing, use the AppImage zip or build a `.deb` locally as described in [`packaging/debian/README.md`](../packaging/debian/README.md).
 
+**Optional `.rpm` (Fedora / RHEL-compatible):** some releases include **`i2pchat_<version>_x86_64.rpm`**. Install with `sudo dnf install ./i2pchat_*_x86_64.rpm` (or `rpm -i`). Same AppImage payload as the `.deb`; COPR and [`packaging/fedora/`](../packaging/fedora/README.md) cover other install paths.
+
 ## Router (I2P)
 
 You need a working I2P router with **SAM** enabled (typical embedded or system **i2pd**). Fresh installs often default to a **bundled** router; you can switch to a system router in the app. Details: [**MANUAL_EN.md**](MANUAL_EN.md) / [**MANUAL_RU.md**](MANUAL_RU.md) and the **Router backend** note in the [README](../README.md) Quick Start section.

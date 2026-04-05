@@ -61,7 +61,7 @@ More platforms and detail → [**docs/INSTALL.md**](docs/INSTALL.md).
 
 > **Router:** On a fresh profile, the app often defaults to the **bundled** `i2pd`. Switch to a system **i2pd** (SAM, usually `127.0.0.1:7656`) via **More actions → I2P router…** (**Cmd/Ctrl+R**). The choice is saved.
 
-Unofficial packages (Homebrew, winget, AUR, `.deb`, COPR) may exist; **canonical binaries** are always on **GitHub Releases**. Maintainer recipes → [**packaging/**](packaging/README.md).
+Unofficial packages (Homebrew, winget, AUR, `.deb`, `.rpm`, COPR) may exist; **canonical binaries** are always on **GitHub Releases**. Maintainer recipes → [**packaging/**](packaging/README.md).
 
 **Contents:** [Features](#features) · [Screenshots](#screenshots) · [Technical docs](#technical-docs) · [For developers](#for-developers) · [License](#license) · [Buy me a coffee](#buy-me-a-coffee)
 

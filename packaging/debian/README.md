@@ -31,11 +31,11 @@
 
 ## Автоматическая сборка в CI
 
-При **публикации** GitHub Release (событие `published`) workflow [`.github/workflows/release-deb.yml`](../../.github/workflows/release-deb.yml) скачивает `I2PChat-linux-x86_64-v<версия>.zip` с того же релиза, собирает `.deb` и загружает его обратно как ассет (с `--clobber`, если файл уже есть).
+При **публикации** GitHub Release (событие `published`) job **deb** в workflow [`.github/workflows/release-linux-pkgs.yml`](../../.github/workflows/release-linux-pkgs.yml) скачивает `I2PChat-linux-x86_64-v<версия>.zip` с того же релиза, собирает `.deb` и загружает его обратно как ассет (с `--clobber`, если файл уже есть). В том же workflow параллельно собирается **RPM** для Fedora (см. [`../fedora/README.md`](../fedora/README.md)).
 
 Условие: в момент срабатывания workflow **linux zip уже должен быть на релизе** (опубликуйте релиз после загрузки артефактов).
 
-Если релиз уже опубликован **без** `.deb`, в GitHub Actions запустите workflow **Release .deb** вручную (**workflow_dispatch**) и укажите тег вида `vX.Y.Z` — он должен совпадать с существующим релизом, на котором есть `I2PChat-linux-x86_64-vX.Y.Z.zip`.
+Если релиз уже опубликован **без** `.deb`/`.rpm`, в GitHub Actions запустите workflow **Release Linux packages** вручную (**workflow_dispatch**) и укажите тег вида `vX.Y.Z` — он должен совпадать с существующим релизом, на котором есть `I2PChat-linux-x86_64-vX.Y.Z.zip`.
 
 ## Публикация apt-репозитория (кратко)
 

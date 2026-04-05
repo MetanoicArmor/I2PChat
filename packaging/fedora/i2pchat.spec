@@ -1,5 +1,6 @@
-# RPM spec for COPR: repackage upstream Linux AppImage from GitHub Releases.
+# RPM spec for COPR / local builds: repackage upstream Linux AppImage from GitHub Releases.
 # Bump Version (and Release if rebuilding the same version) on each upstream tag.
+# CI copies this file and rewrites Version: when building via packaging/fedora/build-rpm-from-release.sh
 
 Name:           i2pchat
 Version:        1.2.3
