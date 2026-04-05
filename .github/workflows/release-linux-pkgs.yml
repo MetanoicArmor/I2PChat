@@ -14,10 +14,14 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   deb:
     runs-on: ubuntu-latest
+    outputs:
+      apt_publish: ${{ steps.apt_pages.outputs.publish }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -101,22 +105,35 @@ jobs:
           chmod +x packaging/apt/scripts/build-apt-site.sh packaging/apt/scripts/sign-release.sh
           export VERSION="${{ steps.meta.outputs.ver }}"
           export DEB_PATH="${{ github.workspace }}/dist/i2pchat_${VERSION}_amd64.deb"
-          # .deb >100 MB cannot live on gh-pages git; Packages points at the release asset
-          export APT_DEB_FILENAME_URL="https://github.com/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/i2pchat_${VERSION}_amd64.deb"
           ./packaging/apt/scripts/build-apt-site.sh
           echo "$APT_REPO_GPG_PRIVATE_KEY" | gpg --import --batch
           export APT_REPO_GPG_PASSPHRASE
           ./packaging/apt/scripts/sign-release.sh
           echo "publish=true" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy apt site to gh-pages
+      # Large .deb cannot be pushed to git (100 MB limit); Pages via Actions artifact can serve it.
+      - name: Configure GitHub Pages
         if: steps.apt_pages.outputs.publish == 'true'
-        uses: peaceiris/actions-gh-pages@v4
+        uses: actions/configure-pages@v5
+
+      - name: Upload apt site (Pages artifact)
+        if: steps.apt_pages.outputs.publish == 'true'
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: packaging/apt/site
-          publish_branch: gh-pages
-          force_orphan: true
+          path: packaging/apt/site
+
+  deploy-apt-site:
+    name: Deploy apt to GitHub Pages
+    needs: deb
+    if: needs.deb.outputs.apt_publish == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
 
   rpm:
     runs-on: ubuntu-latest

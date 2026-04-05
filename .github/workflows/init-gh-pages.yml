@@ -1,6 +1,6 @@
-# One-time (or repeat-safe): create branch gh-pages so Settings → Pages can select it.
-# After this runs, set Pages source to branch gh-pages / (root), then use "Publish apt mirror"
-# or wait for Release Linux packages (with APT_REPO_GPG_PRIVATE_KEY).
+# Legacy: creates branch gh-pages for "Deploy from a branch" Pages.
+# Current apt mirror uses GitHub Actions → Pages (artifact); see packaging/apt/README.md.
+# Run this only if you still want a branch-based Pages setup without Actions deploy.
 name: Init gh-pages branch
 
 on:

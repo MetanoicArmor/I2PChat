@@ -1,5 +1,5 @@
-# Rebuild the signed apt site from an existing i2pchat_<ver>_amd64.deb on a GitHub Release
-# and push to branch gh-pages. GitHub Pages source must be gh-pages / (root).
+# Rebuild the signed apt site from i2pchat_<ver>_amd64.deb on a release and deploy via
+# GitHub Actions → Pages (artifact). Set repository Pages source to "GitHub Actions".
 name: Publish apt mirror (GitHub Pages)
 
 on:
@@ -11,7 +11,9 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: apt-github-pages
@@ -20,6 +22,9 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -72,7 +77,6 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.ver }}
           DEB_PATH: ${{ github.workspace }}/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb
-          APT_DEB_FILENAME_URL: https://github.com/${{ github.repository }}/releases/download/v${{ steps.meta.outputs.ver }}/i2pchat_${{ steps.meta.outputs.ver }}_amd64.deb
           APT_REPO_GPG_PRIVATE_KEY: ${{ secrets.APT_REPO_GPG_PRIVATE_KEY }}
           APT_REPO_GPG_PASSPHRASE: ${{ secrets.APT_REPO_GPG_PASSPHRASE }}
         run: |
@@ -81,10 +85,14 @@ jobs:
           echo "$APT_REPO_GPG_PRIVATE_KEY" | gpg --import --batch
           ./packaging/apt/scripts/sign-release.sh
 
-      - name: Deploy to gh-pages
-        uses: peaceiris/actions-gh-pages@v4
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload apt site (Pages artifact)
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: packaging/apt/site
-          publish_branch: gh-pages
-          force_orphan: true
+          path: packaging/apt/site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

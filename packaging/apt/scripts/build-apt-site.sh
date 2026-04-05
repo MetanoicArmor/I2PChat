@@ -4,9 +4,10 @@
 # Usage:
 #   VERSION=1.2.3 DEB_PATH=/path/to.deb ./packaging/apt/scripts/build-apt-site.sh
 #
-# If APT_DEB_FILENAME_URL is set (e.g. GitHub Releases asset URL), Packages "Filename:"
-# points there and the .deb is NOT copied into site/ — avoids GitHub's 100 MB git limit on gh-pages.
-# If unset, the .deb is copied to site/pool/main/ (local full mirror).
+# Optional APT_DEB_FILENAME_URL: rewrite Packages "Filename:" to this URL and skip copying .deb
+# into site/. WARNING: stock apt resolves Filename relative to the repo base URL and will break
+# (e.g. base + https://github.com/...). Use only with a client/tool that supports absolute URLs,
+# or prefer publishing the full site (pool/ + .deb) via GitHub Actions → Pages artifact.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
