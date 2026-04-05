@@ -1,6 +1,6 @@
 # winget
 
-Готовые манифесты для [Windows Package Manager](https://learn.microsoft.com/windows/package-manager/) лежат в каталоге с версией, например [`1.2.3/`](1.2.3/) (**GUI**). Отдельный пакет **TUI**: [`../winget-tui/`](../winget-tui/) (`MetanoicArmor.I2PChat.TUI`). Старые версии при необходимости ищите в истории git этого репозитория — в дереве остаётся только актуальный набор файлов, чтобы не путать его с шаблоном для PR.
+Готовые манифесты для [Windows Package Manager](https://learn.microsoft.com/windows/package-manager/) лежат в каталоге с версией, например [`1.2.3/`](1.2.3/) (**GUI**). Отдельный пакет **TUI**: [`../winget-tui/`](../winget-tui/) (`MetanoicArmor.I2PChat.TUI`) — в репозитории winget-pkgs путь **`manifests/m/MetanoicArmor/I2PChat/TUI/<version>/`** (каждый сегмент идентификатора после издателя = вложенная папка). Старые версии ищите в истории git.
 
 ## Публикация в community-репозитории
 

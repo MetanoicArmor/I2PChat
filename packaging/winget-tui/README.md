@@ -9,13 +9,15 @@ Portable zip: **`I2PChat-windows-tui-x64-vVERSION.zip`** (see root [`README.md`]
    ./packaging/refresh-checksums.sh vX.Y.Z
    ```
 
-   Copy the printed **`InstallerSha256`** for the TUI zip into `MetanoicArmor.I2PChat.installer.yaml` (or edit the versioned folder under this directory).
+   Copy the printed **`InstallerSha256`** for the TUI zip into `MetanoicArmor.I2PChat.TUI.installer.yaml` (under the versioned folder below).
 3. Open a PR to `winget-pkgs` following [their README](https://github.com/microsoft/winget-pkgs/blob/master/README.md).
 
 Local validation (Windows, with winget):
 
 ```powershell
-winget validate --manifest .\packaging\winget-tui\1.2.3
+winget validate --manifest .\packaging\winget-tui\manifests\m\MetanoicArmor\I2PChat\TUI\1.2.3
 ```
 
-Update **PackageVersion** and paths under `packaging/winget-tui/<version>/` when cutting a release (mirror [`packaging/winget/`](../winget/) process).
+**Folder layout in [winget-pkgs](https://github.com/microsoft/winget-pkgs)** must mirror each `PackageIdentifier` segment after the publisher: for `MetanoicArmor.I2PChat.TUI` use `manifests/m/MetanoicArmor/I2PChat/TUI/<version>/` (not `I2PChat.TUI`). Canonical copies live under [`manifests/m/MetanoicArmor/I2PChat/TUI/`](manifests/m/MetanoicArmor/I2PChat/TUI/) in this tree.
+
+Update **PackageVersion** and duplicate that path for new releases (mirror [`packaging/winget/`](../winget/) process).
