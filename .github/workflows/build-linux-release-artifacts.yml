@@ -107,6 +107,27 @@ jobs:
       - name: Build Linux zips (PyInstaller + AppImage)
         run: ./build-linux.sh
 
+      # Fail before upload if the bundle needs glibc newer than Ubuntu 22.04 (e.g. stale local builds).
+      - name: Verify TUI zip on clean Ubuntu 22.04 (glibc smoke)
+        run: |
+          VER="${{ steps.meta.outputs.ver }}"
+          export ZIP="I2PChat-linux-x86_64-tui-v${VER}.zip"
+          docker run --rm -v "$PWD:/ws:ro" -e "ZIP=$ZIP" ubuntu:22.04 bash -ceu "
+            apt-get update -qq
+            apt-get install -y -qq unzip ca-certificates
+            mkdir -p /tmp/tui
+            unzip -q -d /tmp/tui /ws/\$ZIP
+            cd /tmp/tui
+            set +e
+            out=\$(timeout 15 ./i2pchat-tui 2>&1) || true
+            if echo \"\$out\" | grep -qi 'GLIBC_.*not found'; then
+              echo \"\$out\" | head -40
+              echo \"ERROR: TUI needs newer glibc than Ubuntu 22.04 — fix build host / Python\" >&2
+              exit 1
+            fi
+            echo \"TUI smoke OK (no GLIBC mismatch on Ubuntu 22.04)\"
+          "
+
       - name: Verify VERSION matches tag
         run: |
           VER="${{ steps.meta.outputs.ver }}"
