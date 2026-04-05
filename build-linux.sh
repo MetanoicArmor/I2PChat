@@ -246,7 +246,8 @@ EOF
 chmod +x "${TUI_STAGE}/i2pchat-tui" "${TUI_STAGE}/usr/bin/${APP_NAME}-tui"
 rm -f "${TUI_ZIP}"
 TUI_ZIP_ABS="$(pwd)/${TUI_ZIP}"
-( cd "${TUI_STAGE}" && zip -qr "${TUI_ZIP_ABS}" . )
+# Same as macOS: preserve symlinks in PyInstaller onedir (avoid duplicated _internal).
+( cd "${TUI_STAGE}" && zip -qry "${TUI_ZIP_ABS}" . )
 rm -rf "${TUI_STAGE}"
 echo "✔ Packed ${TUI_ZIP}"
 

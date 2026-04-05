@@ -166,7 +166,9 @@ EOF
 chmod +x "${TUI_STAGE}/i2pchat-tui"
 rm -f "${TUI_ZIP}"
 TUI_ZIP_ABS="$(pwd)/${TUI_ZIP}"
-( cd "${TUI_STAGE}" && zip -qr "${TUI_ZIP_ABS}" . )
+# -y: keep symlinks as links (PyInstaller _internal uses many); plain -r follows links
+# and duplicates Qt/Python payloads → ~2× zip size vs GUI .app (ditto preserves links).
+( cd "${TUI_STAGE}" && zip -qry "${TUI_ZIP_ABS}" . )
 rm -rf "${TUI_STAGE}"
 echo "✔ Packed ${TUI_ZIP}"
 

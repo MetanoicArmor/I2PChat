@@ -65,6 +65,3 @@ EOF
 %changelog
 * Sun Apr 05 2026 MetanoicArmor <https://github.com/MetanoicArmor/I2PChat> - 1.2.3-1
 - Package upstream AppImage (x86_64 zip from GitHub Releases)
-
-* Sun Apr 05 2026 MetanoicArmor <https://github.com/MetanoicArmor/I2PChat> - 1.2.2-1
-- Package upstream AppImage (x86_64 zip from GitHub Releases)
