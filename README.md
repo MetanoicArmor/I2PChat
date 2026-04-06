@@ -11,74 +11,65 @@
   <a href="https://i2pd.website"><img src="https://img.shields.io/badge/I2P-SAM%20API-purple.svg" alt="I2P"></a>
 </p>
 
-**I2PChat** is an **experimental** desktop chat client for the [I2P](https://i2pd.website) network: encrypted, peer-to-peer style sessions over **SAM**, with a **PyQt6** GUI (and an optional **Textual** terminal UI). Prebuilt releases usually ship a **bundled `i2pd`** so you can start without a separate router install; you can switch to a system router in the app.
+**I2PChat** is an **experimental** desktop chat client for the [I2P](https://i2pd.website) network: encrypted, peer-to-peer style sessions over **SAM**. You get a **PyQt6 GUI** (normal windows) **and** a separate **terminal / text-mode client** — the same chat **in a console**, without the Qt interface. In docs and packages that build is often labeled **TUI** (*terminal user interface*). Prebuilt releases usually include a **bundled `i2pd`**; you can switch to a system router in the app.
 
-**Goal:** download a release, run the GUI (or TUI), create or pick a **profile**, connect to a peer’s `.b32.i2p` destination. Full behavior, menus, and troubleshooting → [**docs/MANUAL_EN.md**](docs/MANUAL_EN.md) / [**docs/MANUAL_RU.md**](docs/MANUAL_RU.md).
+**Goal:** install a build, create or pick a **profile**, connect to a peer’s `.b32.i2p` destination. Behaviour, menus, troubleshooting → [**docs/MANUAL_EN.md**](docs/MANUAL_EN.md) / [**docs/MANUAL_RU.md**](docs/MANUAL_RU.md).
 
 ---
 
 ## Quick start
 
-1. Open **[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** (version matches [`VERSION`](VERSION) in this repo).
-2. Step-by-step for every OS → [**docs/INSTALL.md**](docs/INSTALL.md).
+1. Open **[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** and download from **Assets** (version matches [`VERSION`](VERSION) in this repo).
+2. Per-OS steps, paths inside zips, **winget**, and edge cases → [**docs/INSTALL.md**](docs/INSTALL.md).
 
-**Prebuilt downloads** (file names include the version, e.g. **v1.2.3**):
+**What to grab on Releases** (names always include the version, e.g. `v1.2.3`):
 
-| Platform | Download | Launch |
-|----------|----------|--------|
-| **Windows** | [I2PChat-windows-x64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.3.zip) | Unzip → `I2PChat.exe` (GUI) or `I2PChat-tui.exe` (cmd/PowerShell) |
-| **macOS (arm64)** | [I2PChat-macOS-arm64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.3.zip) | Unzip → `I2PChat.app`; TUI: `I2PChat.app/Contents/MacOS/I2PChat-tui` |
-| **Linux (x86_64)** | [I2PChat-linux-x86_64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.3.zip) | `chmod +x` the AppImage → run it; TUI: see INSTALL.md |
-| **Linux (arm64 / AArch64)** | [I2PChat-linux-aarch64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-v1.2.3.zip) | Same as x86_64: AppImage inside the zip — `chmod +x` → run; [**INSTALL.md**](docs/INSTALL.md) |
-| **Debian / Ubuntu (amd64)** | [i2pchat_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat_1.2.3_amd64.deb) (GUI), [i2pchat-tui_1.2.3_amd64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat-tui_1.2.3_amd64.deb) (TUI) | `sudo apt install ./i2pchat_*_amd64.deb` / `sudo apt install ./i2pchat-tui_*_amd64.deb` — optional signed **amd64-only** apt mirror: [**INSTALL.md**](docs/INSTALL.md#linux-x86_64), [`packaging/apt/README.md`](packaging/apt/README.md) |
-| **Debian / Ubuntu (arm64)** | [i2pchat_1.2.3_arm64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat_1.2.3_arm64.deb) (GUI), [i2pchat-tui_1.2.3_arm64.deb](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/i2pchat-tui_1.2.3_arm64.deb) (TUI) | `sudo apt install ./i2pchat_*_arm64.deb` / `sudo apt install ./i2pchat-tui_*_arm64.deb` (only on **Releases**; not in the GitHub Pages apt repo yet) |
+| What | Typical asset names |
+|------|---------------------|
+| **Windows** GUI | `I2PChat-windows-x64-vX.Y.Z.zip` |
+| **Windows** terminal only | `I2PChat-windows-tui-x64-vX.Y.Z.zip` |
+| **macOS** GUI (Apple Silicon) | `I2PChat-macOS-arm64-vX.Y.Z.zip` |
+| **macOS** terminal only | `I2PChat-macOS-arm64-tui-vX.Y.Z.zip` |
+| **Linux** GUI (AppImage in zip) | `I2PChat-linux-x86_64-vX.Y.Z.zip`, `I2PChat-linux-aarch64-vX.Y.Z.zip` |
+| **Linux** terminal only | `I2PChat-linux-*-tui-vX.Y.Z.zip` |
+| **Debian/Ubuntu** | `i2pchat_X.Y.Z_amd64.deb` / `_arm64.deb`, `i2pchat-tui_X.Y.Z_*.deb` |
 
-**TUI-only archives** (separate slim PyInstaller bundle via **`I2PChat-tui.spec`**: Textual + core, **no PyQt6**; for winget / Homebrew **`i2pchat-tui`** / AUR **`i2pchat-tui-bin`**):
+**Windows (winget):** installers point at **`I2PChat-windows-*-winget-v*.zip`** (no embedded i2pd, for store validation). The ordinary **`I2PChat-windows-*.zip`** assets still bundle the router — details in **INSTALL.md**.
 
-| Platform | Download | Launch |
-|----------|----------|--------|
-| **Windows** | [I2PChat-windows-tui-x64-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-tui-x64-v1.2.3.zip) | Unzip → `I2PChat\I2PChat-tui.exe` |
-| **macOS (arm64)** | [I2PChat-macos-arm64-tui-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macos-arm64-tui-v1.2.3.zip) | Unzip → run `./i2pchat-tui` (uses `I2PChat/` onedir next to it) |
-| **Linux (x86_64)** | [I2PChat-linux-x86_64-tui-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-tui-v1.2.3.zip) | Unzip → run `./i2pchat-tui` |
-| **Linux (arm64)** | [I2PChat-linux-aarch64-tui-v1.2.3.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-tui-v1.2.3.zip) | Unzip → run `./i2pchat-tui` |
+No Python on the target machine for these bundles.
 
-No Python needed for these bundles.
+### Package managers
 
-**Package managers** (same artifacts as GitHub Releases; third-party install paths):
-
-**macOS (arm64) — [Homebrew](https://brew.sh) ([tap](https://github.com/MetanoicArmor/homebrew-i2pchat)):**
+**macOS (arm64) — [Homebrew](https://brew.sh) ([tap](https://github.com/MetanoicArmor/homebrew-i2pchat))**
 
 ```bash
-# Full cask name: <github-user>/<tap>/<cask> — tap is added automatically (no `brew tap` needed)
 brew install --cask metanoicarmor/i2pchat/i2pchat      # GUI — I2PChat.app
-brew install --cask metanoicarmor/i2pchat/i2pchat-tui  # TUI only
+brew install --cask metanoicarmor/i2pchat/i2pchat-tui   # terminal (TUI) only
 ```
 
-Alternatively: `brew tap MetanoicArmor/i2pchat` then `brew install --cask i2pchat` / `i2pchat-tui`.
+(`brew tap MetanoicArmor/i2pchat` then `brew install --cask i2pchat` works too.)
 
-**Arch Linux — [AUR](https://aur.archlinux.org/)** (**x86_64** and **aarch64** / ARM64; same packages on both; example: [yay](https://github.com/Jguer/yay)):
+**Arch Linux — [AUR](https://aur.archlinux.org/)** (x86_64 and aarch64; example [yay](https://github.com/Jguer/yay))
 
 ```bash
-yay -S i2pchat-bin      # GUI — official AppImage from release (zip matches your CPU arch)
-yay -S i2pchat-tui-bin  # TUI only
+yay -S i2pchat-bin       # GUI — AppImage from release (arch matches your CPU)
+yay -S i2pchat-tui-bin   # TUI only
 ```
 
-**Debian / Ubuntu 24.04 (amd64 / arm64)** — signed apt mirror on GitHub Pages ([`packaging/apt/README.md`](packaging/apt/README.md)). The mirror currently publishes **amd64** packages; on **arm64** install the `*_arm64.deb` files from **Releases** (see table above) with `sudo apt install ./…`.
+**Debian / Ubuntu — signed apt mirror** ([`packaging/apt/README.md`](packaging/apt/README.md); **amd64** on the mirror, **arm64** `.deb` only from Releases)
 
 ```bash
 sudo mkdir -p /etc/apt/keyrings
 curl -fsSL "https://metanoicarmor.github.io/I2PChat/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
-echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat/ stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list
+echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list
 sudo apt update
 sudo apt install i2pchat       # GUI
-sudo apt install i2pchat-tui   # TUI only
+sudo apt install i2pchat-tui   # terminal (TUI)
 ```
 
-More platforms and detail → [**docs/INSTALL.md**](docs/INSTALL.md).
+**Canonical binaries** for every platform live on **GitHub Releases** above. Maintainer-facing recipes (winget, AUR templates, `.deb` build scripts, etc.) → [**packaging/**](packaging/README.md).
 
-> **Router:** On a fresh profile, the app often defaults to the **bundled** `i2pd`. Switch to a system **i2pd** (SAM, usually `127.0.0.1:7656`) via **More actions → I2P router…** (**Cmd/Ctrl+R**). The choice is saved.
-
-Unofficial packages (Homebrew, winget, AUR, `.deb`, COPR) may exist; **canonical binaries** are always on **GitHub Releases**. Maintainer recipes → [**packaging/**](packaging/README.md).
+> **Router:** New profiles often start with the **bundled** `i2pd`. Use **More actions → I2P router…** (**Cmd/Ctrl+R**) to point at a system **i2pd** (SAM, e.g. `127.0.0.1:7656`).
 
 **Contents:** [Features](#features) · [Screenshots](#screenshots) · [Technical docs](#technical-docs) · [For developers](#for-developers) · [License](#license) · [Buy me a coffee](#buy-me-a-coffee)
 
@@ -102,10 +93,10 @@ Unofficial packages (Homebrew, winget, AUR, `.deb`, COPR) may exist; **canonical
 - Chat over **I2P SAM** with **E2E encryption**, **TOFU** peer pinning, optional **lock to one peer**
 - **PyQt6** GUI (light/dark), **file and image** transfer, notifications (tray + sound)
 - **Profiles** (`.dat`) and **saved peers** / contact list; optional **encrypted local chat history**
-- **BlindBox** — offline text delivery when the peer is away (details in the manuals)
-- Optional **terminal UI**: `python -m i2pchat.tui` from source, or `I2PChat-tui` / `I2PChat-tui.exe` in releases
+- **BlindBox** — offline text delivery when the peer is away (see manuals)
+- **Terminal client (TUI):** full chat **in the shell** — no Qt windows, keyboard-driven UI (Textual). Shipped as slim **`*-tui-*`** zips / `i2pchat-tui` packages, embedded next to the GUI in some bundles, or run from source: `python -m i2pchat.tui`
 
-Full feature list, shortcuts, BlindBox setup, and data paths → **MANUAL_EN** / **MANUAL_RU** above.
+Full shortcuts, BlindBox setup, data paths → **MANUAL_EN** / **MANUAL_RU** above.
 
 ---
 
@@ -117,7 +108,7 @@ Full feature list, shortcuts, BlindBox setup, and data paths → **MANUAL_EN** /
   <img src="screenshots/10.png" alt="I2PChat – TUI (terminal UI) with messaging" width="900" />
 </p>
 
-More UI shots and captions → [**MANUAL_EN.md**](docs/MANUAL_EN.md) / [**MANUAL_RU.md**](docs/MANUAL_RU.md).
+More UI shots → [**MANUAL_EN.md**](docs/MANUAL_EN.md) / [**MANUAL_RU.md**](docs/MANUAL_RU.md).
 
 ---
 
@@ -142,14 +133,14 @@ From repo root (Linux/macOS example):
 python3.14 -m venv .venv314
 ./.venv314/bin/pip install -r requirements.txt
 ./.venv314/bin/python -m i2pchat.gui    # GUI; optional profile name as first arg
-./.venv314/bin/python -m i2pchat.tui   # terminal UI
+./.venv314/bin/python -m i2pchat.tui   # terminal (TUI)
 ```
 
 **Windows:** `py -3.14 -m venv .venv314`, then `.\.venv314\Scripts\pip` / `python -m i2pchat.gui` / `i2pchat.tui`.
 
-On **Debian/Ubuntu** you may need `libxcb-cursor0` for PyQt6 on X11. Prefer `python -m` from the repo root (see [**MANUAL_EN**](docs/MANUAL_EN.md) for detail).
+On **Debian/Ubuntu** you may need `libxcb-cursor0` for PyQt6 on X11. See [**MANUAL_EN**](docs/MANUAL_EN.md).
 
-**Release builds, signing, padding, NixOS, BlindBox service layout** → [**docs/BUILD.md**](docs/BUILD.md). **Protocol metadata and padding profile:** override with `I2PCHAT_PADDING_PROFILE=off` (details in BUILD.md).
+**Release builds, signing, padding, NixOS, BlindBox service layout** → [**docs/BUILD.md**](docs/BUILD.md). **Padding profile:** `I2PCHAT_PADDING_PROFILE=off` (details in BUILD.md).
 
 ---
 
