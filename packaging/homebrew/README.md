@@ -7,7 +7,14 @@
 
 Репозиторий: **[github.com/MetanoicArmor/homebrew-i2pchat](https://github.com/MetanoicArmor/homebrew-i2pchat)** — канонические cask-файлы по-прежнему ведутся в основном репозитории в [`Casks/`](Casks/); при релизе скопируйте обновлённые `.rb` в tap и закоммитьте.
 
-Пользователи:
+Пользователи — **одной командой** (tap подтянется сам; формат `github-пользователь/короткое-имя-tap/имя-cask`, не `…/tap/…`):
+
+```bash
+brew install --cask metanoicarmor/i2pchat/i2pchat
+brew install --cask metanoicarmor/i2pchat/i2pchat-tui
+```
+
+Классический вариант:
 
 ```bash
 brew tap MetanoicArmor/i2pchat

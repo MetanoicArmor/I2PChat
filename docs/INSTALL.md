@@ -18,7 +18,7 @@ Python is **not** required on the target machine (PyInstaller bundle).
 2. Unzip and open **`I2PChat.app`**.
 3. **TUI (optional):** `I2PChat.app/Contents/MacOS/I2PChat-tui` with an optional profile argument.
 
-**TUI-only zip:** **`I2PChat-macos-arm64-tui-v<version>.zip`** unpacks to **`i2pchat-tui`** (launcher) plus **`I2PChat/`** (PyInstaller onedir). Run **`./i2pchat-tui`** from the extracted folder. Homebrew: **`brew install --cask i2pchat-tui`**.
+**TUI-only zip:** **`I2PChat-macos-arm64-tui-v<version>.zip`** unpacks to **`i2pchat-tui`** (launcher) plus **`I2PChat/`** (PyInstaller onedir). Run **`./i2pchat-tui`** from the extracted folder. Homebrew (tap added automatically): **`brew install --cask metanoicarmor/i2pchat/i2pchat-tui`** (GUI: **`…/i2pchat`**).
 
 ## Linux (x86_64)
 

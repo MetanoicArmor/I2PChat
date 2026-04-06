@@ -46,13 +46,15 @@ No Python needed for these bundles.
 
 **Package managers** (same artifacts as GitHub Releases; third-party install paths):
 
-**macOS (arm64) — [Homebrew](https://brew.sh) [tap](https://github.com/MetanoicArmor/homebrew-i2pchat):**
+**macOS (arm64) — [Homebrew](https://brew.sh) ([tap](https://github.com/MetanoicArmor/homebrew-i2pchat)):**
 
 ```bash
-brew tap MetanoicArmor/i2pchat
-brew install --cask i2pchat      # GUI — I2PChat.app
-brew install --cask i2pchat-tui  # TUI only
+# Full cask name: <github-user>/<tap>/<cask> — tap is added automatically (no `brew tap` needed)
+brew install --cask metanoicarmor/i2pchat/i2pchat      # GUI — I2PChat.app
+brew install --cask metanoicarmor/i2pchat/i2pchat-tui  # TUI only
 ```
+
+Alternatively: `brew tap MetanoicArmor/i2pchat` then `brew install --cask i2pchat` / `i2pchat-tui`.
 
 **Arch Linux — [AUR](https://aur.archlinux.org/)** (**x86_64** and **aarch64** / ARM64; same packages on both; example: [yay](https://github.com/Jguer/yay)):
 
