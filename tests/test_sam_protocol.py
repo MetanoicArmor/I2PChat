@@ -44,6 +44,11 @@ class SamProtocolTests(unittest.TestCase):
         reply = parse_reply_line(line)
         self.assertIs(expect_ok(reply), reply)
 
+    def test_expect_ok_accepts_session_status_destination_without_result(self) -> None:
+        """i2pd may omit RESULT=OK on successful SESSION CREATE (STATUS + DESTINATION=…)."""
+        reply = parse_reply_line(b"SESSION STATUS DESTINATION=TRANSIENT\n")
+        self.assertIs(expect_ok(reply), reply)
+
     def test_expect_ok_maps_known_sam_errors(self) -> None:
         cant_reach = parse_reply_line(
             b"STREAM STATUS RESULT=CANT_REACH_PEER MESSAGE=offline\n"

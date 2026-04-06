@@ -21,9 +21,22 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from i2pchat import sam as i2plib
 from i2pchat.blindbox.blindbox_blob import BLINDBOX_MAX_FRAME_SIZE
 from i2pchat.sam import protocol as sam_protocol
-from i2pchat.sam.errors import LegacySAMException
+from i2pchat.sam.errors import LegacySAMException, ProtocolError
+from i2pchat.sam.protocol import expect_ok, parse_reply_line
 
 logger = logging.getLogger("i2pchat")
+
+
+def _expect_sam_line_ok(line: bytes) -> None:
+    """Parse a single SAM reply; same success rules as i2pchat.sam (incl. i2pd SESSION/DEST quirks)."""
+    try:
+        expect_ok(parse_reply_line(line))
+    except ProtocolError as exc:
+        text = line.decode("utf-8", errors="ignore").strip()
+        if not text:
+            raise RuntimeError("(no response / disconnected)") from exc
+        # Prefer the wire line for errors (router-specific RESULT / MESSAGE).
+        raise RuntimeError(text) from exc
 
 
 def _sam_exc_detail(exc: BaseException) -> str:
@@ -215,8 +228,9 @@ class BlindBoxClient:
                     "I2P may still be building tunnels — wait and retry, or increase "
                     "I2PCHAT_BLINDBOX_SAM_SESSION_TIMEOUT."
                 ) from exc
-            response_text = response.decode("utf-8", errors="ignore").strip()
-            if "RESULT=OK" not in response_text:
+            try:
+                _expect_sam_line_ok(response)
+            except RuntimeError as exc:
                 # Drop half-open ctrl connection so a retry can open a fresh socket.
                 writer = self._ctrl_writer
                 self._ctrl_writer = None
@@ -227,14 +241,15 @@ class BlindBoxClient:
                         await writer.wait_closed()
                     except Exception:
                         pass
-                if not response.strip():
-                    msg = (
+                inner = str(exc)
+                if inner == "(no response / disconnected)":
+                    detail = (
                         "SAM session create failed: (no response / disconnected — "
                         f"is I2P running and SAM enabled on {self.sam_host}:{self.sam_port}?)"
                     )
                 else:
-                    msg = f"SAM session create failed: {response_text}"
-                raise RuntimeError(msg)
+                    detail = f"SAM session create failed: {inner}"
+                raise RuntimeError(detail) from exc
             self._started = True
 
     def is_runtime_ready(self) -> bool:
@@ -540,15 +555,17 @@ class BlindBoxClient:
             response = await asyncio.wait_for(
                 reader.readline(), timeout=self.io_timeout
             )
-            response_text = response.decode("utf-8", errors="ignore").strip()
-            if "RESULT=OK" not in response_text:
+            try:
+                _expect_sam_line_ok(response)
+            except RuntimeError as exc:
                 await self._safe_close(writer)
-                if not response.strip():
+                inner = str(exc)
+                if inner == "(no response / disconnected)":
                     raise RuntimeError(
                         "SAM STREAM CONNECT failed: (no response — "
                         "Blind Box SAM session may not be started)"
-                    )
-                raise RuntimeError(f"SAM STREAM CONNECT failed: {response_text}")
+                    ) from exc
+                raise RuntimeError(f"SAM STREAM CONNECT failed: {inner}") from exc
             return reader, writer
         except Exception:
             await self._safe_close(writer)
@@ -621,14 +638,16 @@ class BlindBoxClient:
         await writer.drain()
         t = self.io_timeout if line_timeout is None else line_timeout
         response = await asyncio.wait_for(reader.readline(), timeout=t)
-        response_text = response.decode("utf-8", errors="ignore").strip()
-        if "RESULT=OK" not in response_text:
-            if not response.strip():
+        try:
+            expect_ok(parse_reply_line(response))
+        except ProtocolError as exc:
+            raw = response.decode("utf-8", errors="ignore").strip()
+            if not raw:
                 raise RuntimeError(
                     "SAM HELLO failed: (no response / disconnected — "
                     f"check I2P router and SAM on {self.sam_host}:{self.sam_port})"
-                )
-            raise RuntimeError(f"SAM HELLO failed: {response_text}")
+                ) from exc
+            raise RuntimeError(f"SAM HELLO failed: {raw}") from exc
 
     @staticmethod
     async def _safe_close(writer: asyncio.StreamWriter) -> None:

@@ -195,6 +195,13 @@ def expect_ok(reply: SAMReply, *, result_key: str = "RESULT") -> SAMReply:
             and reply.fields.get("PRIV")
         ):
             return reply
+        # i2pd: successful SESSION CREATE may reply SESSION STATUS DESTINATION=… without RESULT=OK.
+        if (
+            reply.command == "SESSION"
+            and reply.topic == "STATUS"
+            and reply.fields.get("DESTINATION")
+        ):
+            return reply
         raise ProtocolError(message="SAM reply missing RESULT", raw_line=reply.raw_line)
     message = reply.fields.get("MESSAGE") or f"{reply.command} {reply.topic} failed"
     raise map_result_to_error(result, message, raw_line=reply.raw_line)
