@@ -8584,7 +8584,52 @@ class ChatWindow(QtWidgets.QMainWindow):
             return
         self.more_actions_popup.show_below(self.more_toolbar_button)
 
-    def handle_trust_decision(self, peer_addr: str, fingerprint: str, signing_key_hex: str) -> bool:
+    async def _async_yes_no_message_box(
+        self,
+        icon: QtWidgets.QMessageBox.Icon,
+        title: str,
+        text: str,
+        *,
+        default_yes: bool = False,
+    ) -> bool:
+        """
+        Неблокирующий Yes/No (open + Future). Блокирующий exec()/question() внутри asyncio-задачи
+        ведёт к вложенной обработке событий и RuntimeError 3.12+ (другая Task не может войти, пока
+        выполняется текущая).
+        """
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[bool] = loop.create_future()
+        msg = QtWidgets.QMessageBox(self)
+        msg.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+        msg.setIcon(icon)
+        msg.setWindowTitle(title)
+        msg.setText(text)
+        std_yes = QtWidgets.QMessageBox.StandardButton.Yes
+        std_no = QtWidgets.QMessageBox.StandardButton.No
+        msg.setStandardButtons(std_yes | std_no)
+        msg.setDefaultButton(std_yes if default_yes else std_no)
+
+        def on_finished(result: int) -> None:
+            def _deliver() -> None:
+                if not fut.done():
+                    fut.set_result(result == int(std_yes))
+
+            loop.call_soon(_deliver)
+
+        msg.finished.connect(on_finished)
+        msg.open()
+        try:
+            return await fut
+        finally:
+            try:
+                msg.finished.disconnect(on_finished)
+            except TypeError:
+                pass
+            msg.deleteLater()
+
+    async def handle_trust_decision(
+        self, peer_addr: str, fingerprint: str, signing_key_hex: str
+    ) -> bool:
         """
         TOFU-подтверждение: показать пользователю fingerprint нового ключа пира.
 
@@ -8604,17 +8649,14 @@ class ChatWindow(QtWidgets.QMainWindow):
             "Verify fingerprint over an independent channel before trusting this peer.\n\n"
             "Trust and pin this key (TOFU)?"
         )
-        answer = QtWidgets.QMessageBox.question(
-            self,
+        return await self._async_yes_no_message_box(
+            QtWidgets.QMessageBox.Icon.Question,
             "Trust on First Use (TOFU)",
             msg,
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.No,
-            QtWidgets.QMessageBox.StandardButton.No,
+            default_yes=False,
         )
-        return answer == QtWidgets.QMessageBox.StandardButton.Yes
 
-    def handle_trust_mismatch_decision(
+    async def handle_trust_mismatch_decision(
         self,
         peer_addr: str,
         old_fingerprint: str,
@@ -8635,15 +8677,12 @@ class ChatWindow(QtWidgets.QMainWindow):
             "Only trust the new key if you have verified the change out-of-band.\n"
             "Trust and replace the pinned key?"
         )
-        answer = QtWidgets.QMessageBox.warning(
-            self,
+        return await self._async_yes_no_message_box(
+            QtWidgets.QMessageBox.Icon.Warning,
             "Trusted key changed",
             msg,
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.No,
-            QtWidgets.QMessageBox.StandardButton.No,
+            default_yes=False,
         )
-        return answer == QtWidgets.QMessageBox.StandardButton.Yes
 
     def _set_status_text(self, line_text_full: str, line_text_compact: str) -> None:
         """Полная и компактная строка; в лейбле — по ширине окна (без всплывающей подсказки)."""
