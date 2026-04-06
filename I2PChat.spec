@@ -51,6 +51,7 @@ _analysis_datas = [
     ('assets/sounds/notify.wav', 'assets/sounds'),
     ('i2pchat/gui/fluent_emoji', 'i2pchat/gui/fluent_emoji'),
     ('i2pchat/gui/icons', 'i2pchat/gui/icons'),
+    ('i2pchat/gui/assets', 'i2pchat/gui/assets'),
     ('i2pchat/blindbox/blindbox_server_example.py', 'i2pchat/blindbox'),
     ('i2pchat/blindbox/blindbox_service_standalone.py', 'i2pchat/blindbox'),
     ('i2pchat/blindbox/fail2ban', 'i2pchat/blindbox/fail2ban'),

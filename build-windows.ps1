@@ -1,5 +1,5 @@
 Param(
-    [string]$VenvDir = ".venv314"
+    [string]$VenvDir = ".venv"
 )
 
 Set-StrictMode -Version Latest
@@ -68,23 +68,22 @@ if ($LASTEXITCODE -ne 0) {
     $PyLauncherArgs = @("-3")
 }
 
-Write-Host "==> Create fresh virtual environment $VenvDir (Python 3.14+ preferred)"
-if (Test-Path $VenvDir) {
-    Remove-Item -Recurse -Force $VenvDir
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    throw "uv is required. Install: https://docs.astral.sh/uv/getting-started/installation/ (e.g. irm https://astral.sh/uv/install.ps1 | iex)"
 }
-& py @PyLauncherArgs -m venv $VenvDir
 
-Write-Host "==> Activate virtual environment"
-& "$VenvDir\Scripts\Activate.ps1"
-$PythonExe = Join-Path $VenvDir "Scripts\python.exe"
+$RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $RepoRoot
+$env:UV_PROJECT_ENVIRONMENT = Join-Path $RepoRoot $VenvDir
+
+Write-Host "==> uv sync (locked runtime + build group, no dev tools)"
+$uvPy = if ($PyLauncherArgs -contains "-3.14") { "3.14" } else { "3" }
+Invoke-NativeChecked "uv" @("sync", "--frozen", "--python", $uvPy, "--group", "build", "--no-dev")
+
+$PythonExe = Join-Path $RepoRoot (Join-Path $VenvDir "Scripts\python.exe")
 if (-not (Test-Path $PythonExe)) {
-    throw "Virtualenv python not found: $PythonExe"
+    throw "Virtualenv python not found after uv sync: $PythonExe"
 }
-
-Write-Host "==> Install dependencies from requirements.txt"
-Invoke-NativeChecked $PythonExe @("-m", "pip", "install", "--upgrade", "pip")
-Invoke-NativeChecked $PythonExe @("-m", "pip", "install", "--require-hashes", "-r", "requirements.txt")
-Invoke-NativeChecked $PythonExe @("-m", "pip", "install", "--require-hashes", "-r", "requirements-build.txt")
 
 Write-Host "==> Check PyNaCl (required for secure protocol)"
 Invoke-NativeChecked $PythonExe @("-c", "import nacl; from nacl.secret import SecretBox")

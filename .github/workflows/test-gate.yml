@@ -17,18 +17,20 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.14"
+
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
-      - name: Install runtime dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --require-hashes -r requirements.txt
+      - name: Install project + dev tools (locked)
+        run: uv sync --frozen
 
       - name: Run security regression test gate
         run: |
-          python -m unittest \
+          uv run python -m unittest \
             tests.test_blindbox_state_wrap \
             tests.test_asyncio_regression \
             tests.test_blindbox_client \
@@ -40,9 +42,5 @@ jobs:
             tests.test_sam_input_validation \
             tests.test_audit_remediation
 
-      # Pytest suite (compose_drafts, unread_counters, image validation, etc.) is not
-      # unittest-discoverable; keep it in CI so UX/helper modules stay covered.
-      - name: Install pytest and run pytest suite
-        run: |
-          python -m pip install pytest
-          python -m pytest tests/ -q --tb=short
+      - name: Pytest suite
+        run: uv run pytest tests/ -q --tb=short

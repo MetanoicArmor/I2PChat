@@ -1,6 +1,6 @@
 import unittest
 
-from i2plib import sam
+from i2pchat.sam import protocol as sam
 
 
 class SamInputValidationTests(unittest.TestCase):

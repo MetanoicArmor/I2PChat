@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from i2pchat.blindbox.blindbox_client import BlindBoxClient
-from i2plib.sam import session_create
+from i2pchat.sam.protocol import session_create
 
 
 def _free_port() -> int:
@@ -163,7 +163,7 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
                 "STREAM",
                 "sess_cafebabe",
                 "TRANSIENT",
-                "SIGNATURE_TYPE=7 OPTION inbound.length=2 outbound.length=2",
+                "SIGNATURE_TYPE=7 inbound.length=2 outbound.length=2",
             ).decode("utf-8").strip()
             self.assertEqual(lines[1], expected)
         finally:

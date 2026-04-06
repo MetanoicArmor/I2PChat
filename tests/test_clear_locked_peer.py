@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import tempfile
 import unittest
 from unittest.mock import patch
-
-if importlib.util.find_spec("i2plib") is None:
-    raise unittest.SkipTest("i2plib not installed")
 
 from i2pchat.core.transient_profile import TRANSIENT_PROFILE_NAME
 from i2pchat.core.i2p_chat_core import I2PChatCore

@@ -474,7 +474,7 @@ class ProfileComboPopup(QtWidgets.QFrame):
         self._as_embedded_child = as_embedded_child
         # На Windows и Linux: WA_TranslucentBackground + anti-aliased paintEvent.
         # На macOS достаточно QSS border-radius.
-        self._win_menu_chrome = False
+        self._win_menu_chrome = sys.platform.startswith("win")
         self._opaque_popup_chrome = (
             as_embedded_child and sys.platform == "darwin"
         )

@@ -14,7 +14,7 @@
 
 I2PChat is a desktop chat client using **I2P SAM** for streaming connections to peers. It implements a **binary vNext framed protocol**, a **NaCl-based handshake** with ephemeral keys, **authenticated encryption** for payloads, **TOFU-style** signing-key pinning for peers, optional **encrypted local chat history**, and **BlindBox** offline message storage via third-party replicas.
 
-Primary codebase: Python 3, **PyQt6** GUI, **PyNaCl**, **i2plib**, **Pillow** for images.
+Primary codebase: Python 3, **PyQt6** GUI, **PyNaCl**, internal **`i2pchat.sam`** (SAM), **Pillow** for images.
 
 ---
 
@@ -62,7 +62,7 @@ Primary codebase: Python 3, **PyQt6** GUI, **PyNaCl**, **i2plib**, **Pillow** fo
 
 ### 4.1 I2P SAM and addressing
 
-- **i2plib** SAM helpers reject dangerous characters in destinations and session IDs (`tests/test_sam_input_validation.py`), reducing command-injection style issues in SAM string building.
+- **`i2pchat.sam.protocol`** builders reject dangerous characters in destinations and session IDs (`tests/test_sam_input_validation.py`), reducing command-injection style issues in SAM string building.
 - User-supplied peer strings still rely on **correct router behavior**; the app does not escape I2P’s threat model.
 
 **Severity:** informational (defense in depth).
@@ -161,7 +161,7 @@ Operators should avoid debug flags in production unless logs are protected.
 ### 4.10 Dependencies and build
 
 - Core crypto in **PyNaCl** (well-audited library).  
-- **PyQt6**, **i2plib**, **Pillow**—follow upstream CVE advisories.  
+- **PyQt6**, **Pillow**—follow upstream CVE advisories.  
 - No `pickle` on untrusted network data identified in reviewed chat paths.  
 - PyInstaller / build scripts: follow **reproducible build** and **signature** practices (`I2PCHAT_REQUIRE_GPG` mentioned in README for releases).
 

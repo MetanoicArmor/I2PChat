@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, List, Literal, Optional, Tuple
 
-import i2plib
+from i2pchat import sam as i2plib
 from PIL import Image
 
 from i2pchat import crypto
@@ -1149,6 +1149,10 @@ class I2PChatCore:
         on_trust_mismatch_decision: Optional[TrustMismatchDecisionCallback] = None,
     ) -> None:
         self.sam_address = sam_address
+        self._sam_session_create_timeout = max(
+            15.0,
+            float(os.environ.get("I2PCHAT_SAM_SESSION_CREATE_TIMEOUT", "180")),
+        )
         cp = coalesce_profile_name(profile)
         self.profile = (
             TRANSIENT_PROFILE_NAME
@@ -2178,17 +2182,27 @@ class I2PChatCore:
         return hashlib.sha256(pubkey).hexdigest()[:16]
 
     def _normalize_peer_addr(self, addr: str) -> str:
-        raw = (addr or "").strip().lower()
+        """
+        Канонический peer id: host из base32 + '.b32.i2p'.
+        Допускает типичный ввод из UI/чата: пробелы, префиксты («My Addr: …»), вставку строки целиком.
+        """
+        raw = (addr or "").strip()
         if not raw:
             return ""
-        if any(ch in raw for ch in ("\r", "\n", "\x00", " ", "\t", "=")):
+        lower = raw.lower()
+        # Первая подходящая подстрока … .b32.i2p (игнорирует префикс/мусор вокруг).
+        m = re.search(r"([a-z2-7]{40,80})\.b32\.i2p", lower)
+        if m:
+            return m.group(1) + ".b32.i2p"
+        compact = re.sub(r"\s+", "", lower)
+        if any(ch in compact for ch in ("\r", "\n", "\x00", "\t", "=")):
             raise ValueError("Peer address contains forbidden characters")
-        if raw.endswith(".b32.i2p"):
-            host = raw[: -len(".b32.i2p")]
-        elif "." in raw:
+        if compact.endswith(".b32.i2p"):
+            host = compact[: -len(".b32.i2p")]
+        elif "." in compact:
             raise ValueError("Peer address must use .b32.i2p format")
         else:
-            host = raw
+            host = compact
         if not re.fullmatch(r"[a-z2-7]{40,80}", host):
             raise ValueError("Peer address format is invalid")
         return host + ".b32.i2p"
@@ -2344,6 +2358,15 @@ class I2PChatCore:
         loop = asyncio.get_running_loop()
         decision_future: asyncio.Future[bool] = loop.create_future()
 
+        def _schedule_result(approved: bool) -> None:
+            # Откладываем set_result на следующий тик цикла: иначе при Qt/async UI
+            # возможна реентерабельная активация ожидающих задач (RuntimeError в 3.12+).
+            def _set() -> None:
+                if not decision_future.done():
+                    decision_future.set_result(approved)
+
+            loop.call_soon(_set)
+
         def _ask_user() -> None:
             async def _resolve() -> None:
                 try:
@@ -2352,8 +2375,7 @@ class I2PChatCore:
                 except Exception as e:
                     logger.warning("TOFU trust callback failed: %s", e)
                     approved = False
-                if not decision_future.done():
-                    decision_future.set_result(approved)
+                _schedule_result(approved)
 
             loop.create_task(_resolve())
 
@@ -2373,6 +2395,13 @@ class I2PChatCore:
         loop = asyncio.get_running_loop()
         decision_future: asyncio.Future[bool] = loop.create_future()
 
+        def _schedule_result(approved: bool) -> None:
+            def _set() -> None:
+                if not decision_future.done():
+                    decision_future.set_result(approved)
+
+            loop.call_soon(_set)
+
         def _ask_user() -> None:
             async def _resolve() -> None:
                 try:
@@ -2387,8 +2416,7 @@ class I2PChatCore:
                 except Exception as e:
                     logger.warning("Trust mismatch callback failed: %s", e)
                     approved = False
-                if not decision_future.done():
-                    decision_future.set_result(approved)
+                _schedule_result(approved)
 
             loop.create_task(_resolve())
 
@@ -2660,6 +2688,7 @@ class I2PChatCore:
                 "inbound.quantity": "3",
                 "outbound.quantity": "3",
             },
+            session_create_timeout=self._sam_session_create_timeout,
         )
 
         # Blind Box uses a second SAM stream session; starting it here overlaps with
@@ -3347,8 +3376,15 @@ class I2PChatCore:
             detail = getattr(crypto, "NACL_IMPORT_ERROR", "") or "pynacl not installed"
             self._emit_error(f"Secure protocol requires PyNaCl. Install: pip install pynacl. ({detail})")
             return
-        normalized_target = self._normalize_peer_addr(target_address)
-        locked_peer = self._normalize_peer_addr(self.stored_peer or "")
+        try:
+            normalized_target = self._normalize_peer_addr(target_address)
+        except ValueError as e:
+            self._emit_error(str(e).strip() or "Invalid peer address")
+            return
+        try:
+            locked_peer = self._normalize_peer_addr(self.stored_peer or "")
+        except ValueError:
+            locked_peer = ""
         if locked_peer and normalized_target and normalized_target != locked_peer:
             self._emit_error(
                 "Profile is locked to another peer. "

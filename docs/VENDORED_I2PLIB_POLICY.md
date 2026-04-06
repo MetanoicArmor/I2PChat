@@ -1,10 +1,15 @@
 # Vendored i2plib Security Policy
 
+**Note:** Live application SAM transport is **`i2pchat.sam`**. The tree under
+`vendor/i2plib/` is **optional** (audits, provenance, or legacy tooling); it is
+**not** required for normal runtime. This document still governs that tree **if
+it is kept** in the repository.
+
 ## Purpose
 
-This project intentionally vendors `i2plib` instead of installing it from PyPI.
-The goal is deterministic behavior across supported Python versions, but it also
-moves patch responsibility to this repository.
+If present, the project may keep a vendored `i2plib` snapshot instead of
+installing it from PyPI, for deterministic review of third-party code and
+provenance tracking.
 
 ## Required Maintenance Workflow
 

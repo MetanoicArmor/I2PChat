@@ -86,7 +86,7 @@ The script builds the image and runs **`./build-linux.sh`** end-to-end (GUI AppI
 
 2. **`vendor/i2pd/linux-aarch64/i2pd`** — executable i2pd for aarch64 (see [`../../vendor/i2pd/linux-aarch64/README.md`](../../vendor/i2pd/linux-aarch64/README.md)). Without it, the script exits with an error before build.
 
-3. Same Python **hashed** requirements as a normal local build (`requirements.txt`, `requirements-build.txt`).
+3. Same **uv** lockfile as a normal local build (`pyproject.toml`, `uv.lock`); the image includes the `uv` binary for `build-linux.sh`.
 
 ## Manual image build
 

@@ -66,7 +66,7 @@ Unofficial packages may exist (Homebrew, winget, AUR, Fedora COPR, etc.). The **
 
 ## Build from source
 
-See **Running from source** and **Cross‑platform builds** in the repository root [`README.md`](../README.md) (Python 3.14+, venv, `pip install -r requirements.txt`, `python -m i2pchat.gui` or `python -m i2pchat.tui`, plus `build-linux.sh` / `build-macos.sh` / `build-windows.ps1`).
+See **Running from source** and **Cross‑platform builds** in the repository root [`README.md`](../README.md) (Python 3.12+, **uv**, `uv sync`, `uv run python -m i2pchat.gui` or `… tui`, plus `build-linux.sh` / `build-macos.sh` / `build-windows.ps1`).
 
 ## More documentation
 

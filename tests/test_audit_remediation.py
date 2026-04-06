@@ -57,32 +57,37 @@ class AuditRemediationPolicyTests(unittest.TestCase):
         nixpkgs_rev = data["nodes"]["nixpkgs"]["locked"]["rev"]
         self.assertTrue(isinstance(nixpkgs_rev, str) and len(nixpkgs_rev) >= 7)
 
-    def test_build_scripts_use_hashed_build_lockfile(self) -> None:
+    def test_build_scripts_use_frozen_uv_sync(self) -> None:
         for rel_path in ("build-linux.sh", "build-macos.sh", "build-windows.ps1"):
             content = _read(rel_path)
-            self.assertIn("requirements-build.txt", content, rel_path)
+            self.assertIn("uv sync", content, rel_path)
+            self.assertIn("--frozen", content, rel_path)
+            if rel_path.endswith(".ps1"):
+                self.assertIn('"--group", "build"', content, rel_path)
+            else:
+                self.assertIn("--group build", content, rel_path)
             self.assertNotIn("install pyinstaller", content.lower(), rel_path)
 
-    def test_build_lockfile_pins_pyinstaller_with_hashes(self) -> None:
-        content = _read("requirements-build.txt")
-        self.assertRegex(content, r"(?m)^pyinstaller==\d")
-        self.assertIn("--hash=sha256:", content)
+    def test_uv_lock_pins_pyinstaller(self) -> None:
+        content = _read("uv.lock")
+        self.assertRegex(content, r'name = "pyinstaller"')
+        self.assertIn("hash = ", content)
 
-    def test_security_workflow_uses_hashed_ci_lockfile(self) -> None:
+    def test_security_workflow_uses_uv_export_and_pip_audit(self) -> None:
         content = _read(".github/workflows/security-audit.yml")
-        self.assertIn("requirements-ci-audit.txt", content)
-        self.assertNotRegex(content, r"(?m)^\\s*python\\s+-m\\s+pip\\s+install\\s+pip-audit\\b")
+        self.assertIn("uv export", content)
+        self.assertIn("pip-audit", content)
+        self.assertNotRegex(content, r"(?m)^\s*python\s+-m\s+pip\s+install\s+pip-audit\b")
 
-    def test_ci_lockfile_pins_pip_audit_with_hashes(self) -> None:
-        content = _read("requirements-ci-audit.txt")
-        self.assertRegex(content, r"(?m)^pip-audit==\d")
-        self.assertIn("--hash=sha256:", content)
+    def test_test_gate_workflow_uses_uv(self) -> None:
+        content = _read(".github/workflows/test-gate.yml")
+        self.assertIn("uv sync", content)
+        self.assertIn("astral-sh/setup-uv", content)
 
-    def test_i2plib_is_not_installed_from_pypi(self) -> None:
-        req_in = _read("requirements.in")
-        req_txt = _read("requirements.txt")
-        self.assertNotRegex(req_in, r"(?mi)^\s*i2plib(?:\s|$)")
-        self.assertNotRegex(req_txt, r"(?mi)^\s*i2plib(?:==|[<>=])")
+    def test_i2plib_is_not_declared_dependency(self) -> None:
+        pp = _read("pyproject.toml")
+        self.assertNotRegex(pp, r"(?mi)\"i2plib\"")
+        self.assertNotRegex(pp, r"(?mi)^i2plib\s*=")
 
     def test_build_scripts_generate_signed_checksum_artifacts(self) -> None:
         for rel_path in ("build-linux.sh", "build-macos.sh", "build-windows.ps1"):

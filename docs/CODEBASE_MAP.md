@@ -2,8 +2,9 @@
 
 This document is a low-risk navigation guide for the current repository layout.
 All application code lives under `i2pchat/`; the repo root keeps tooling and
-docs; vendored third-party code lives under `vendor/` (including `vendor/i2plib`
-and `vendor/i2pd`).
+docs; vendored third-party code lives under `vendor/` (primarily **`vendor/i2pd`**;
+an optional legacy **`vendor/i2plib`** tree may remain for tooling or audits but is
+not required for normal app SAM transport — see **`i2pchat/sam/`**).
 
 ## Canonical source tree
 
@@ -24,6 +25,16 @@ Wire-format and delivery semantics.
 
 - `i2pchat/protocol/protocol_codec.py` — vNext framing codec, header parsing, legacy opt-in mode
 - `i2pchat/protocol/message_delivery.py` — delivery states and related helper logic
+
+### `i2pchat/sam`
+
+I2P **SAM** transport to the router (separate from vNext chat framing).
+
+- `i2pchat/sam/protocol.py` — SAM line builders and strict reply parsing
+- `i2pchat/sam/client.py` — `SAMClient`, stream open helpers, I/O timeouts
+- `i2pchat/sam/backend.py` — async façade used by core and BlindBox (`create_session`, `stream_connect`, …)
+- `i2pchat/sam/destination.py` — destination / private-key value object
+- `i2pchat/sam/errors.py` — typed SAM protocol errors
 
 ### `i2pchat/storage`
 

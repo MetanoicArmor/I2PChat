@@ -18,20 +18,20 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-import i2plib
+from i2pchat import sam as i2plib
 from i2pchat.blindbox.blindbox_blob import BLINDBOX_MAX_FRAME_SIZE
-from i2plib.exceptions import SAMException
-from i2plib.sam import session_create
+from i2pchat.sam import protocol as sam_protocol
+from i2pchat.sam.errors import LegacySAMException
 
 logger = logging.getLogger("i2pchat")
 
 
 def _sam_exc_detail(exc: BaseException) -> str:
-    """i2plib SAM errors often have empty str(); still show something useful."""
+    """SAM errors sometimes have empty str(); still show something useful."""
     text = str(exc).strip()
     if text:
         return text
-    if isinstance(exc, SAMException):
+    if isinstance(exc, LegacySAMException):
         doc = (type(exc).__doc__ or "").strip()
         first = doc.split("\n", 1)[0] if doc else ""
         if first:
@@ -186,15 +186,12 @@ class BlindBoxClient:
                 ) from exc
 
             self._active_sam_id = f"{self.session_id}_{secrets.token_hex(4)}"
-            options_str = " ".join(f"{k}={v}" for k, v in self.sam_options.items())
-            sam_cmd_options = "SIGNATURE_TYPE=7 OPTION"
-            if options_str:
-                sam_cmd_options += f" {options_str}"
-            cmd = session_create(
+            cmd = sam_protocol.session_create(
                 "STREAM",
                 self._active_sam_id,
                 "TRANSIENT",
-                sam_cmd_options,
+                options=self.sam_options,
+                sig_type=7,
             )
             self._ctrl_writer.write(cmd)
             await self._ctrl_writer.drain()
@@ -572,7 +569,7 @@ class BlindBoxClient:
         connect_order: List[str] = []
 
         if destination.endswith(".b32.i2p"):
-            # Prefer NAMING LOOKUP → Base64 (matches i2plib.stream_connect). Some routers
+            # Prefer NAMING LOOKUP → Base64 (same order as stream_connect in i2pchat.sam). Some routers
             # have no LeaseSet yet → KEY_NOT_FOUND; then raw .b32.i2p may still work.
             try:
                 dest_obj = await i2plib.dest_lookup(

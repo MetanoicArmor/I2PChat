@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="I2PChat"
-VENV_DIR=".venv314"
+VENV_DIR=".venv"
 BLINDBOX_INSTALL_SRC="i2pchat/blindbox/daemon/install/install.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -26,32 +26,29 @@ case "$ARCH" in
 esac
 
 echo "==> Building for architecture: ${ARCH_SUFFIX}"
-echo "==> Активирую окружение ${VENV_DIR}"
-if [ ! -d "${VENV_DIR}" ]; then
-  if command -v python3.14 >/dev/null 2>&1; then
-    PYTHON_BIN="python3.14"
-  else
-    PYTHON_BIN="python3"
-  fi
-  echo "==> Создаю виртуальное окружение ${VENV_DIR} на базе ${PYTHON_BIN}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "ERROR: установите uv: https://docs.astral.sh/uv/getting-started/installation/ (macOS: brew install uv)" >&2
+  exit 1
 fi
-source "${VENV_DIR}/bin/activate"
+
+if command -v python3.14 >/dev/null 2>&1; then
+  PYTHON_BIN="python3.14"
+else
+  PYTHON_BIN="python3"
+fi
+
+echo "==> Синхронизирую зависимости (uv → ${VENV_DIR}, группа build)"
+export UV_PROJECT_ENVIRONMENT="$(pwd)/${VENV_DIR}"
+uv sync --frozen --python "${PYTHON_BIN}" --group build --no-dev
 
 if [ -x "${VENV_DIR}/bin/python" ]; then
   PYTHON_CMD="${VENV_DIR}/bin/python"
 elif [ -x "${VENV_DIR}/bin/python3" ]; then
   PYTHON_CMD="${VENV_DIR}/bin/python3"
-elif command -v python3 >/dev/null 2>&1; then
-  PYTHON_CMD="$(command -v python3)"
 else
-  PYTHON_CMD="$(command -v python)"
+  echo "ERROR: после uv sync не найден интерпретатор в ${VENV_DIR}/bin" >&2
+  exit 1
 fi
-
-echo "==> Устанавливаю/обновляю зависимости"
-"${PYTHON_CMD}" -m pip install --upgrade pip
-"${PYTHON_CMD}" -m pip install --require-hashes -r requirements.txt
-"${PYTHON_CMD}" -m pip install --require-hashes -r requirements-build.txt
 
 echo "==> Проверяю PyNaCl (обязателен для secure protocol)"
 "${PYTHON_CMD}" - <<'PY'

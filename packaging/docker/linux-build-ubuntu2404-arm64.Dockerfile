@@ -51,4 +51,6 @@ RUN apt-get update -qq \
     zlib1g \
   && rm -rf /var/lib/apt/lists/*
 
+COPY --from=ghcr.io/astral-sh/uv:0.6.14 /uv /usr/local/bin/uv
+
 WORKDIR /src

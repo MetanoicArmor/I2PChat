@@ -1,6 +1,6 @@
 # Building and releasing I2PChat
 
-Python **3.14+** is recommended everywhere. The repo vendors a local **i2plib** compatible with modern asyncio; PyPI `i2plib` is not used.
+Python **3.12+** is supported (**3.14+** recommended for release-style builds). Dependencies are managed with **[uv](https://docs.astral.sh/uv/)** (`pyproject.toml` + **`uv.lock`**). **I2P SAM** lives in **`i2pchat.sam`**; PyPI **`i2plib`** is not a runtime dependency (optional **`vendor/i2plib`** may remain for audits or tooling).
 
 ## Release build scripts
 
@@ -15,7 +15,7 @@ Python **3.14+** is recommended everywhere. The repo vendors a local **i2plib** 
 
 **Optional Docker:** **`./packaging/docker/run-linux-build.sh`** — Ubuntu **24.04** on **amd64** (`Dockerfile.linux-noble-glibc239`, glibc **2.39**); newer baseline than 22.04. **`./packaging/docker/build-linux-aarch64.sh`** — Ubuntu **24.04** on **linux/arm64** for **`I2PChat-linux-aarch64-*`** artifacts. Details: [`packaging/docker/README.md`](../packaging/docker/README.md).
 
-**Linux script** uses `.venv314`, PyInstaller **`I2PChat.spec`** (GUI + TUI exe sharing one Qt onedir), `appimagetool`; the AppImage includes `usr/bin/I2PChat` and **`usr/bin/I2PChat-tui`**, plus a TUI `.desktop` with `Terminal=true`. After that it runs **`I2PChat-tui.spec`** → `dist/I2PChat-tui/` (no Qt) and packs **`I2PChat-linux-*-tui-*.zip`** from that tree.
+**Linux script** uses **uv** (`.venv`, `uv sync --frozen --group build`) and PyInstaller **`I2PChat.spec`** (GUI + TUI exe sharing one Qt onedir), `appimagetool`; the AppImage includes `usr/bin/I2PChat` and **`usr/bin/I2PChat-tui`**, plus a TUI `.desktop` with `Terminal=true`. After that it runs **`I2PChat-tui.spec`** → `dist/I2PChat-tui/` (no Qt) and packs **`I2PChat-linux-*-tui-*.zip`** from that tree.
 
 **macOS** builds `dist/I2PChat.app` from **`I2PChat.spec`** (GUI + in-bundle TUI entrypoint sharing Qt), then **`I2PChat-tui.spec`** for the standalone **`I2PChat-macos-*-tui-*.zip`**.
 

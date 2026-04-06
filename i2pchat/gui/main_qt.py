@@ -191,6 +191,25 @@ BUNDLED_NOTIFY_SOUND_REL = "assets/sounds/notify.wav"
 logger = logging.getLogger("i2pchat.gui")
 
 
+def _resolve_path_under_gui(*parts: str) -> Optional[str]:
+    """Файл под каталогом gui/ (dev, PyInstaller _MEIPASS, рядом с exe)."""
+    gui_dir = os.path.dirname(os.path.abspath(__file__))
+    p = os.path.join(gui_dir, *parts)
+    if os.path.isfile(p):
+        return p
+    meipass = getattr(sys, "_MEIPASS", None)
+    if isinstance(meipass, str) and meipass:
+        alt = os.path.join(meipass, "i2pchat", "gui", *parts)
+        if os.path.isfile(alt):
+            return alt
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        alt2 = os.path.join(exe_dir, "i2pchat", "gui", *parts)
+        if os.path.isfile(alt2):
+            return alt2
+    return None
+
+
 def _resolve_gui_icon(filename: str) -> Optional[str]:
     """
     Raster icons next to main_qt.py under gui/icons/ (dev + PyInstaller via datas).
@@ -684,8 +703,7 @@ THEMES: dict[str, dict[str, object]] = {
             QTabWidget#BlindBoxExampleTabWidget QTabBar::tab:selected:hover {
                 background: #f2f4f8;
             }
-            QCheckBox { color: #1d1d1f; spacing: 8px; }
-            QCheckBox::indicator { width: 18px; height: 18px; }
+            QCheckBox { color: #1d1d1f; spacing: 10px; }
         """,
         "window_stylesheet": """
             QMainWindow { background-color: #e6eaf2; }
@@ -1234,8 +1252,7 @@ THEMES: dict[str, dict[str, object]] = {
             QTabWidget#BlindBoxExampleTabWidget QTabBar::tab:selected:hover {
                 background: rgba(255, 255, 255, 0.22);
             }
-            QCheckBox { color: #f5f5f7; spacing: 8px; }
-            QCheckBox::indicator { width: 18px; height: 18px; }
+            QCheckBox { color: #f5f5f7; spacing: 10px; }
         """,
         "window_stylesheet": """
             QMainWindow { background-color: #101114; }
@@ -1613,6 +1630,51 @@ _TOOLTIP_THEME_COLORS: dict[str, tuple[str, str]] = {
 }
 
 
+def _dialog_checkbox_indicator_qss(theme_tid: str) -> str:
+    """
+    Полная отрисовка QCheckBox::indicator в диалогах: на macOS при одном лишь width/height
+    индикатор часто превращается в чёрный квадрат без видимой галочки на светлом фоне.
+    """
+    svg_path = _resolve_path_under_gui("assets", "dialog_checkbox_check.svg")
+    image_clause = ""
+    if svg_path:
+        url = QtCore.QUrl.fromLocalFile(os.path.normpath(svg_path)).toString()
+        image_clause = f"image: url({url});"
+    if theme_tid == "ligth":
+        unchecked_bg = "#ffffff"
+        unchecked_border = "#8c93a3"
+        hover_border = "#0a84ff"
+        disabled_bg = "#f0f2f6"
+        disabled_border = "#c8ceda"
+    else:
+        unchecked_bg = "#2a2d36"
+        unchecked_border = "#6d7380"
+        hover_border = "#0a84ff"
+        disabled_bg = "#1f1f23"
+        disabled_border = "#4a505c"
+    return f"""
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid {unchecked_border};
+                background-color: {unchecked_bg};
+            }}
+            QCheckBox::indicator:hover {{
+                border: 2px solid {hover_border};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: #0a84ff;
+                border: 2px solid #0a84ff;
+                {image_clause}
+            }}
+            QCheckBox::indicator:disabled {{
+                background-color: {disabled_bg};
+                border: 2px solid {disabled_border};
+            }}
+        """
+
+
 def _apply_application_tooltip_stylesheet(theme_id: Optional[str]) -> None:
     app = QtWidgets.QApplication.instance()
     if app is None:
@@ -1634,8 +1696,9 @@ def _apply_application_tooltip_stylesheet(theme_id: Optional[str]) -> None:
 
 def _apply_dialog_theme_sheet(widget: QtWidgets.QWidget, theme_id: Optional[str]) -> None:
     """Отдельный лист от QMainWindow: иначе на macOS QDialog с светлым фоном наследует QLabel { color: #f5f5f7 }."""
-    theme = THEMES[_resolve_theme(theme_id)]
-    widget.setStyleSheet(str(theme["dialog_stylesheet"]))
+    tid = _resolve_theme(theme_id)
+    theme = THEMES[tid]
+    widget.setStyleSheet(str(theme["dialog_stylesheet"]) + _dialog_checkbox_indicator_qss(tid))
 
 
 def _format_plaintext_hash_comment_lines(

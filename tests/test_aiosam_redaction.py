@@ -1,6 +1,6 @@
 import unittest
 
-from i2plib.aiosam import _redact_sam_reply
+from i2pchat.sam.protocol import _redact_sam_reply
 
 
 class SamReplyRedactionTests(unittest.TestCase):

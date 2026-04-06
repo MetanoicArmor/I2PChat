@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/MetanoicArmor/I2PChat/releases/latest"><img src="https://img.shields.io/github/v/release/MetanoicArmor/I2PChat?label=release" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/MetanoicArmor/I2PChat" alt="License"></a>
-  <a href="requirements.txt"><img src="https://img.shields.io/badge/Python-3.14+-blue.svg" alt="Python"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python"></a>
   <a href="https://i2pd.website"><img src="https://img.shields.io/badge/I2P-SAM%20API-purple.svg" alt="I2P"></a>
 </p>
 
@@ -46,7 +46,7 @@
 
 ### ✨ Features
 
-- **End‑to‑end communication over I2P SAM** (via `i2plib`)
+- **End‑to‑end communication over I2P SAM** (internal `i2pchat.sam` layer)
 - **E2E encryption** — handshake, key signing and verification
 - **TOFU** — peer key pinning on first contact
 - **Lock to peer** — bind a profile to a single peer
@@ -139,10 +139,10 @@ optional local BlindBox"]
     end
 
     subgraph Transport["Network / external boundary"]
-        i2plib["Vendored i2plib
+        samLayer["i2pchat.sam
 SESSION CREATE
 STREAM CONNECT / ACCEPT
-DEST LOOKUP"]
+NAMING / DEST LOOKUP"]
         sam["I2P router
 SAM API"]
         peer["Remote peer
@@ -173,8 +173,8 @@ root rotation, polling"| bbclient
 and root metadata"| bbstate
     core -.->|"optional local fallback"| bblocal
     bbclient -->|"stores / fetches blobs"| bbblob
-    bbclient <-->|"SAM streams or TCP"| i2plib
-    i2plib <--> sam
+    bbclient <-->|"SAM streams or TCP"| samLayer
+    samLayer <--> sam
     sam <--> peer
     bbclient <--> boxes
     core -->|"status / message / file /
@@ -266,10 +266,13 @@ Per-OS paths inside zips, **winget**, **`.deb`**, and edge cases → [**docs/INS
 
 Requirements:
 
-- Python **3.14+** (recommended; this is what the vendored local `i2plib` copy and current builds are tested with)
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — install once (e.g. `brew install uv`, or the `curl` / PowerShell one-liner from the uv docs).
+- Python **3.12+** (matches CI); **3.14+** is recommended for parity with release build images.
 - one of:
   - a **system** [i2pd](https://i2pd.website) router with **SAM** enabled (default port `7656`), or
   - a **bundled** `i2pd` binary shipped with your build/package
+
+Dependencies and versions are locked in **`uv.lock`**; declared in **`pyproject.toml`**. After changing dependencies, run **`uv lock`** and commit the updated lockfile.
 
 Quick run commands (from repo root):
 
@@ -287,22 +290,20 @@ sudo apt install libxcb-cursor0
 **macOS / Linux**
 
 ```bash
-python3.14 -m venv .venv314
-./.venv314/bin/pip install -r requirements.txt
-./.venv314/bin/python -m i2pchat.gui.main_qt   # GUI; optional profile name as first arg
-./.venv314/bin/python -m i2pchat.tui            # terminal (TUI)
+uv sync --python 3.14
+uv run python -m i2pchat.gui.main_qt   # GUI; optional profile name as first arg
+uv run python -m i2pchat.tui            # terminal (TUI)
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-py -3.14 -m venv .venv314
-.\.venv314\Scripts\pip install -r requirements.txt
-.\.venv314\Scripts\python -m i2pchat.gui.main_qt
-.\.venv314\Scripts\python -m i2pchat.tui
+uv sync --python 3.14
+uv run python -m i2pchat.gui.main_qt
+uv run python -m i2pchat.tui
 ```
 
-If the venv already exists and dependencies are installed, run only the **GUI** or **TUI** line you need.
+If the environment is already synced, you can run only the **`uv run python -m …`** lines you need.
 
 The same GUI path is available as `python -m i2pchat.run_gui` (matches [`i2pchat/run_gui.py`](i2pchat/run_gui.py), the PyInstaller analyzed script) or `python -m i2pchat.gui`. Prefer `-m` from the repo root; running the `.py` file directly can break package imports.
 
@@ -313,7 +314,7 @@ PyInstaller builds use [`i2pchat/run_gui.py`](i2pchat/run_gui.py) as the GUI ent
 ### 🔧 Cross‑platform builds
 
 The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  
-Everywhere, the recommended/runtime version is **Python 3.14+** (the repo includes a vendored local `i2plib` copy compatible with modern asyncio; PyPI `i2plib` is not used).
+Everywhere, the recommended/runtime version is **Python 3.14+**. SAM transport is implemented in **`i2pchat.sam`** (PyPI **`i2plib`** is not a runtime dependency).
 
 #### 🐧 Linux (GUI AppImage)
 
@@ -323,7 +324,7 @@ Everywhere, the recommended/runtime version is **Python 3.14+** (the repo includ
 
 This script:
 
-- Uses `python3.14` (or default `python3`) and `.venv314`.
+- Requires **uv**; uses `python3.14` (or `python3`) and a **`uv sync`** environment under **`.venv`** (runtime + build group).
 - Builds a self‑contained GUI binary via PyInstaller.
 - Packs it into `I2PChat.AppImage` using `appimagetool`.
 - Creates release archive `I2PChat-linux-<arch>-v<version>.zip` (contains `I2PChat.AppImage`); **`arch`** is **`x86_64`** or **`aarch64`** depending on the host. CI publishes matching **`I2PChat-linux-aarch64-v*.zip`** and may attach **`SHA256SUMS.linux-aarch64`** separately from the amd64 checksum file.
@@ -355,8 +356,8 @@ This limits policy relaxation to the current process and does not change machine
 
 It will:
 
-1. Create a fresh virtual environment `.venv314` using **Python 3.14** via `py -3.14 -m venv`.
-2. Install all dependencies from `requirements.txt` and `requirements-build.txt` (both hash-locked).
+1. Require **uv** on `PATH` (install from the uv docs if needed).
+2. Run **`uv sync --frozen --group build --no-dev`** so **`uv.lock`** pins runtime + PyInstaller tooling.
 3. Build a GUI‑only PyQt6 binary:
    - Output folder: `dist\I2PChat\`
    - Main executable: `dist\I2PChat\I2PChat.exe`
@@ -423,7 +424,7 @@ nix develop github:MetanoicArmor/I2PChat
 
 I2PChat is licensed under the **GNU Affero General Public License v3.0** (or any later version — see section 14 of the license). The full text is in [`LICENSE`](LICENSE).
 
-The vendored [`vendor/i2plib/`](vendor/i2plib/) package (alongside [`vendor/i2pd/`](vendor/i2pd/)) remains under the **MIT** license (see [`vendor/i2plib/__version__.py`](vendor/i2plib/__version__.py)).
+If present, the optional vendored [`vendor/i2plib/`](vendor/i2plib/) tree (alongside [`vendor/i2pd/`](vendor/i2pd/)) remains under the **MIT** license (see [`vendor/i2plib/__version__.py`](vendor/i2plib/__version__.py)); the application SAM stack is **`i2pchat.sam`**.
 
 ### ☕ Buy me a coffee
 

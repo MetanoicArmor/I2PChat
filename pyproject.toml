@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "i2pchat"
+dynamic = ["version"]
+description = "Experimental peer-to-peer chat client for the I2P network (GUI + TUI)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "AGPL-3.0-or-later" }
+dependencies = [
+    "textual",
+    "rich",
+    "pyperclip",
+    "PyQt6",
+    "qasync",
+    "Pillow",
+    "pynacl",
+    "keyring",
+    "cryptography==46.0.6; sys_platform == 'linux'",
+    "pywin32-ctypes; sys_platform == 'win32'",
+]
+
+[dependency-groups]
+build = [
+    "pyinstaller",
+    "pefile; sys_platform == 'win32'",
+]
+dev = ["pytest"]
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = "(?P<version>[0-9]+(?:\\.[0-9]+)*)"
+
+[tool.hatch.build.targets.wheel]
+packages = ["i2pchat"]
+
+[tool.uv]
+managed = true

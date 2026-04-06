@@ -10,7 +10,7 @@ This page is a plain-text map (GitHub’s Mermaid renderer can fail to load thir
 - **Shared async core** — [`../i2pchat/core/i2p_chat_core.py`](../i2pchat/core/i2p_chat_core.py): profile/session bootstrap, accept/connect, secure handshake + TOFU pinning, send/receive loops, ACKs and delivery telemetry, text/file/image, BlindBox root exchange; retry helpers [`../i2pchat/core/send_retry_policy.py`](../i2pchat/core/send_retry_policy.py), [`../i2pchat/core/transfer_retry.py`](../i2pchat/core/transfer_retry.py).
 - **Protocol + security** — framing in [`../i2pchat/protocol/protocol_codec.py`](../i2pchat/protocol/protocol_codec.py); delivery semantics in [`../i2pchat/protocol/message_delivery.py`](../i2pchat/protocol/message_delivery.py); [`../i2pchat/crypto.py`](../i2pchat/crypto.py) (X25519, Ed25519, HKDF, SecretBox, HMAC).
 - **BlindBox** — client ([`../i2pchat/blindbox/blindbox_client.py`](../i2pchat/blindbox/blindbox_client.py)), key schedule, blobs, [`../i2pchat/storage/blindbox_state.py`](../i2pchat/storage/blindbox_state.py), optional [`../i2pchat/blindbox/blindbox_local_replica.py`](../i2pchat/blindbox/blindbox_local_replica.py); replicas over I2P or loopback.
-- **Transport** — vendored **i2plib** (SAM session, streams, DEST LOOKUP) ↔ **I2P router (SAM)** ↔ **remote peer**; BlindBox traffic to **replica endpoints**.
+- **Transport** — internal **`i2pchat.sam`** (SAM session, streams, naming/dest lookup) ↔ **I2P router (SAM)** ↔ **remote peer**; BlindBox traffic to **replica endpoints**.
 - **Profile / local identity** — `profiles/<name>/` (`.dat`, keyring, peer lock, trust store, signing seed) loaded into **I2PChatCore**.
 
 ## Runtime in practice

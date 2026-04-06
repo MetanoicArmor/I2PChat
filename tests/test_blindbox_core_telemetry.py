@@ -467,6 +467,19 @@ class BlindBoxCoreTelemetryTests(unittest.TestCase):
             ("a" * 52) + ".b32.i2p",
         )
 
+    def test_normalize_peer_addr_extracts_from_pasted_line(self) -> None:
+        core = I2PChatCore(profile="default")
+        host52 = "a" * 52
+        full = f"{host52}.b32.i2p"
+        self.assertEqual(
+            core._normalize_peer_addr(f"  My Addr: {full}  "),  # noqa: SLF001
+            full,
+        )
+        self.assertEqual(
+            core._normalize_peer_addr(f"peer {full} trailing"),  # noqa: SLF001
+            full,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

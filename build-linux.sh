@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_NAME="I2PChat"
 APPDIR="${APP_NAME}.AppDir"
-VENV_DIR=".venv314"
+VENV_DIR=".venv"
 APPIMAGETOOL_VERSION="1.9.1"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -40,32 +40,15 @@ else
   PYTHON_BIN="python3"
 fi
 
-if [ ! -d "${VENV_DIR}" ]; then
-  echo "Создаю виртуальное окружение ${VENV_DIR} на базе ${PYTHON_BIN}..."
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "ERROR: нужен uv (https://docs.astral.sh/uv/getting-started/installation/). В официальном Docker-образе сборки uv уже установлен." >&2
+  exit 1
 fi
 
-# venv из bind-mount (Docker) или с другой ОС: битый интерпретатор / без pip
-if ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
-  echo "Пересоздаю ${VENV_DIR}: нет рабочего pip для текущего интерпретатора (${PYTHON_BIN})..."
-  rm -rf "${VENV_DIR}"
-  "${PYTHON_BIN}" -m venv "${VENV_DIR}"
-fi
+REPO_ROOT="$(pwd)"
+export UV_PROJECT_ENVIRONMENT="${REPO_ROOT}/${VENV_DIR}"
 
-# Debian/Ubuntu + deadsnakes: venv иногда без pip в bin/ (ensurepip отключён в пакете).
-if ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
-  echo "Устанавливаю pip в ${VENV_DIR}…"
-  if "${VENV_DIR}/bin/python" -m ensurepip --upgrade --default-pip 2>/dev/null; then
-    :
-  elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL https://bootstrap.pypa.io/get-pip.py | "${VENV_DIR}/bin/python"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -qO- https://bootstrap.pypa.io/get-pip.py | "${VENV_DIR}/bin/python"
-  else
-    echo "ERROR: в venv нет pip, а curl/wget не найдены (нужен get-pip.py)" >&2
-    exit 1
-  fi
-fi
+uv sync --frozen --python "${PYTHON_BIN}" --group build --no-dev
 
 # Не полагаемся на source activate (в Docker + set -u иногда не появляется python в PATH)
 VENV_ABS="$(cd "${VENV_DIR}" && pwd)"
@@ -73,12 +56,6 @@ VENV_PY="${VENV_ABS}/bin/python"
 export VIRTUAL_ENV="${VENV_ABS}"
 export PATH="${VENV_ABS}/bin:${PATH}"
 unset PYTHONHOME
-
-# гарантируем, что в окружении есть нужные зависимости (python -m pip — надёжнее голого pip)
-"${VENV_PY}" -m pip install --upgrade pip
-
-"${VENV_PY}" -m pip install --require-hashes -r requirements.txt
-"${VENV_PY}" -m pip install --require-hashes -r requirements-build.txt
 
 # Security gate: secure protocol requires PyNaCl
 "${VENV_PY}" - <<'PY'

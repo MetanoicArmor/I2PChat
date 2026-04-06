@@ -9,7 +9,7 @@ cd "${REPO_ROOT}"
 PYTHON="${REPO_ROOT}/.venv/bin/python"
 if [[ ! -x "${PYTHON}" ]]; then
   echo "run_tests.sh: no ${PYTHON}" >&2
-  echo "Create a venv and install deps, e.g.: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install pytest" >&2
+  echo "Install deps with uv, e.g.: uv sync && uv run pytest tests/ -q" >&2
   exit 1
 fi
 
