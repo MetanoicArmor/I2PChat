@@ -475,6 +475,8 @@ yay -S i2pchat-bin       # GUI — AppImage from release
 yay -S i2pchat-tui-bin   # TUI only
 ```
 
+> **Not this repo:** [**`i2pchat-git`**](https://aur.archlinux.org/packages/i2pchat-git) (`yay -S i2pchat-git`) builds [**vituperative/i2pchat**](https://github.com/vituperative/i2pchat) — another I2P chat client (**Qt5**). It may still install and run as *that* app, but it is **not** **MetanoicArmor/I2PChat** (Python / PyQt6 / Textual TUI). For this project use **`i2pchat-bin`** / **`i2pchat-tui-bin`**, or clone this repo and run **`python -m i2pchat.gui`** / **`python -m i2pchat.tui`**.
+
 **Debian / Ubuntu — signed apt** ([`packaging/apt/README.md`](packaging/apt/README.md): mirror ships **amd64**; **arm64** `.deb` is on **GitHub Releases** if you need it)
 
 ```bash

@@ -1,5 +1,7 @@
 # AUR: i2pchat-bin / i2pchat-tui-bin
 
+В AUR есть пакет **`i2pchat-git`** — это **другой** апстрим ([`vituperative/i2pchat`](https://github.com/vituperative/i2pchat), Qt5), не этот репозиторий. Для **MetanoicArmor/I2PChat** используйте **`i2pchat-bin`** и **`i2pchat-tui-bin`** ниже (или сборку из исходников).
+
 - [`i2pchat-bin/`](i2pchat-bin/) — GUI: официальный **AppImage** из `I2PChat-linux-x86_64-v*.zip`.
 - [`i2pchat-tui-bin/`](i2pchat-tui-bin/) — только TUI: zip **`I2PChat-linux-x86_64-tui-v*.zip`** → `/opt/i2pchat-tui`, команда **`i2pchat-tui`** (без конфликта с `i2pchat` из GUI-пакета).
 
