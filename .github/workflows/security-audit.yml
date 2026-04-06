@@ -80,23 +80,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Enforce vendored provenance and flake lock policy
+      - name: Enforce internal SAM backend and flake lock policy
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
 
-          provenance_path = Path("vendor/i2plib/VENDORED_UPSTREAM.json")
-          if not provenance_path.exists():
-              raise SystemExit("Missing vendored provenance file: vendor/i2plib/VENDORED_UPSTREAM.json")
-
-          data = json.loads(provenance_path.read_text(encoding="utf-8"))
-          required_top = ("component", "strategy", "upstream", "review_policy", "last_reviewed_utc")
-          missing_top = [k for k in required_top if k not in data]
-          if missing_top:
-              raise SystemExit(f"Invalid vendored provenance metadata: missing {missing_top}")
-          if data.get("strategy") != "vendored":
-              raise SystemExit("Invalid vendored provenance strategy marker")
+          sam_pkg = Path("i2pchat/sam/__init__.py")
+          if not sam_pkg.is_file():
+              raise SystemExit("Missing internal SAM package: i2pchat/sam/__init__.py")
+          sam_text = sam_pkg.read_text(encoding="utf-8")
+          if "create_session" not in sam_text:
+              raise SystemExit("i2pchat.sam package must export create_session")
 
           lock_path = Path("flake.lock")
           if not lock_path.exists():

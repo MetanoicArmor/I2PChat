@@ -9,10 +9,6 @@ _local_modules = [
     os.path.splitext(os.path.relpath(f, '.'))[0].replace(os.sep, '.')
     for f in glob.glob('i2pchat/**/*.py', recursive=True)
     if not f.endswith('__init__.py')
-] + [
-    os.path.splitext(os.path.relpath(f, 'vendor'))[0].replace(os.sep, '.')
-    for f in glob.glob('vendor/i2plib/**/*.py', recursive=True)
-    if not f.endswith('__init__.py')
 ]
 
 _icon_file = 'i2pchat.ico' if sys.platform == 'win32' else 'icon.png'
@@ -64,7 +60,7 @@ _hiddenimports = _local_modules + [
     'nacl', 'nacl.secret', 'nacl.public', 'nacl.signing', 'nacl.encoding', 'nacl.exceptions',
 ]
 
-_pathex = [os.path.join(_SPECDIR, 'vendor')]
+_pathex = [_SPECDIR]
 
 
 def _analysis(entry_script):

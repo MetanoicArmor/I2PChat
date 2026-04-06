@@ -89,7 +89,7 @@ Write-Host "==> Check PyNaCl (required for secure protocol)"
 Invoke-NativeChecked $PythonExe @("-c", "import nacl; from nacl.secret import SecretBox")
 
 Write-Host "==> Syntax check (packages + helper scripts, same scope as Linux/macOS build)"
-Invoke-NativeChecked $PythonExe @("-m", "compileall", "i2pchat", "vendor/i2plib", "scripts", "make_icon.py")
+Invoke-NativeChecked $PythonExe @("-m", "compileall", "i2pchat", "scripts", "make_icon.py")
 
 Write-Host "==> Build GUI I2PChat.exe using spec file"
 Stop-I2PChatProcessesLockingDist

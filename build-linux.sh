@@ -70,7 +70,7 @@ print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
 PY
 
 # Быстрая проверка синтаксиса пакетов и вспомогательных скриптов (без glob *.py в корне)
-"${VENV_PY}" -m compileall i2pchat vendor/i2plib scripts make_icon.py
+"${VENV_PY}" -m compileall i2pchat scripts make_icon.py
 
 # 1) сборка PyInstaller с использованием spec файла (анализирует i2pchat/run_gui.py и зависимости)
 # python -m PyInstaller: bin/pyinstaller shebang часто с путём хоста, в Docker путь другой (/src)

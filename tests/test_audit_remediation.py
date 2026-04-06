@@ -40,15 +40,11 @@ class AuditRemediationPolicyTests(unittest.TestCase):
         self.assertIn("Protocol metadata and padding", en_manual)
         self.assertIn("I2PCHAT_PADDING_PROFILE=off", en_manual)
 
-    def test_vendored_i2plib_provenance_policy_files_exist(self) -> None:
-        provenance = _read("vendor/i2plib/VENDORED_UPSTREAM.json")
-        policy_doc = _read("docs/VENDORED_I2PLIB_POLICY.md")
-        data = json.loads(provenance)
-        self.assertEqual(data.get("strategy"), "vendored")
-        self.assertIn("upstream", data)
-        self.assertIn("review_policy", data)
-        self.assertIn("last_reviewed_utc", data)
-        self.assertIn("Vendored i2plib Security Policy", policy_doc)
+    def test_internal_sam_backend_package_present(self) -> None:
+        sam_init = _read("i2pchat/sam/__init__.py")
+        self.assertIn("create_session", sam_init)
+        proto = _read("i2pchat/sam/protocol.py")
+        self.assertIn("build_session_create", proto)
 
     def test_flake_lock_exists_and_pins_nixpkgs_rev(self) -> None:
         lock_content = _read("flake.lock")

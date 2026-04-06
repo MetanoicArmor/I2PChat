@@ -424,7 +424,7 @@ nix develop github:MetanoicArmor/I2PChat
 
 I2PChat is licensed under the **GNU Affero General Public License v3.0** (or any later version — see section 14 of the license). The full text is in [`LICENSE`](LICENSE).
 
-If present, the optional vendored [`vendor/i2plib/`](vendor/i2plib/) tree (alongside [`vendor/i2pd/`](vendor/i2pd/)) remains under the **MIT** license (see [`vendor/i2plib/__version__.py`](vendor/i2plib/__version__.py)); the application SAM stack is **`i2pchat.sam`**.
+Bundled [`vendor/i2pd/`](vendor/i2pd/) binaries (when shipped) follow their upstream licenses. The application **SAM** stack is **`i2pchat.sam`** (no PyPI or vendored **i2plib**).
 
 ### ☕ Buy me a coffee
 

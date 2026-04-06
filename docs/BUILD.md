@@ -1,6 +1,6 @@
 # Building and releasing I2PChat
 
-Python **3.12+** is supported (**3.14+** recommended for release-style builds). Dependencies are managed with **[uv](https://docs.astral.sh/uv/)** (`pyproject.toml` + **`uv.lock`**). **I2P SAM** lives in **`i2pchat.sam`**; PyPI **`i2plib`** is not a runtime dependency (optional **`vendor/i2plib`** may remain for audits or tooling).
+Python **3.12+** is supported (**3.14+** recommended for release-style builds). Dependencies are managed with **[uv](https://docs.astral.sh/uv/)** (`pyproject.toml` + **`uv.lock`**). **I2P SAM** is implemented in **`i2pchat.sam`**; PyPI **`i2plib`** is not used.
 
 ## Release build scripts
 

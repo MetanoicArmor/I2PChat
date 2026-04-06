@@ -50,8 +50,6 @@
             mkdir -p "$out/lib/i2pchat" "$out/bin"
 
             cp -r i2pchat "$out/lib/i2pchat/"
-            mkdir -p "$out/lib/i2pchat/vendor"
-            cp -r vendor/i2plib "$out/lib/i2pchat/vendor/"
             if [ -e VERSION ]; then cp VERSION "$out/lib/i2pchat/"; fi
             if [ -d assets ]; then cp -r assets "$out/lib/i2pchat/"; fi
             if [ -e icon.png ]; then cp icon.png "$out/lib/i2pchat/"; fi

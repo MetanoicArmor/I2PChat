@@ -2,9 +2,8 @@
 
 This document is a low-risk navigation guide for the current repository layout.
 All application code lives under `i2pchat/`; the repo root keeps tooling and
-docs; vendored third-party code lives under `vendor/` (primarily **`vendor/i2pd`**;
-an optional legacy **`vendor/i2plib`** tree may remain for tooling or audits but is
-not required for normal app SAM transport — see **`i2pchat/sam/`**).
+docs; vendored third-party code under `vendor/` is primarily **`vendor/i2pd`**.
+**I2P SAM** is **`i2pchat/sam/`** (no vendored **i2plib**).
 
 ## Canonical source tree
 

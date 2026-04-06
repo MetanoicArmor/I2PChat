@@ -123,7 +123,7 @@ def build_session_create(
     if options:
         # SAM v3: I2CP/streaming options are plain name=value tokens after DESTINATION
         # (see geti2p SAM spec "[option=value]*"). Do not insert a standalone "OPTION"
-        # keyword — i2plib and routers expect space-separated pairs only.
+        # keyword — SAM routers expect space-separated name=value pairs only.
         option_bits.extend(f"{key}={value}" for key, value in options.items())
     option_string = " ".join(option_bits)
     style_s = _validate_sam_style(style)

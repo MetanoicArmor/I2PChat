@@ -10,12 +10,6 @@ import sys
 
 _SPECDIR = os.path.dirname(os.path.abspath(SPEC))
 
-_i2plib_modules = [
-    os.path.splitext(os.path.relpath(f, 'vendor'))[0].replace(os.sep, '.')
-    for f in glob.glob('vendor/i2plib/**/*.py', recursive=True)
-    if not f.endswith('__init__.py')
-]
-
 _icon_file = 'i2pchat.ico' if sys.platform == 'win32' else 'icon.png'
 
 _i2pd_binaries = []
@@ -56,7 +50,7 @@ _tui_datas = [
 
 # Dependency graph from run_tui → chat_python covers i2pchat; do not mirror I2PChat.spec's
 # full i2pchat/**/*.py hiddenimports (that forces main_qt and pulls Qt into TUI zips).
-_hiddenimports = _i2plib_modules + [
+_hiddenimports = [
     'rich',
     'textual',
     'pyperclip',
@@ -89,7 +83,7 @@ _qt_excludes = [
     'shiboken2',
 ]
 
-_pathex = [os.path.join(_SPECDIR, 'vendor')]
+_pathex = [_SPECDIR]
 
 a = Analysis(
     ['i2pchat/run_tui.py'],
