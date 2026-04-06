@@ -13,6 +13,11 @@ This page is a plain-text map (GitHub’s Mermaid renderer can fail to load thir
 - **Transport** — internal **`i2pchat.sam`** (SAM session, streams, naming/dest lookup) ↔ **I2P router (SAM)** ↔ **remote peer**; BlindBox traffic to **replica endpoints**.
 - **Profile / local identity** — `profiles/<name>/` (`.dat`, keyring, peer lock, trust store, signing seed) loaded into **I2PChatCore**.
 
+## Toolchain
+
+- **uv** — Python dependencies are declared in **`pyproject.toml`** and pinned in **`uv.lock`**. Contributors typically run **`uv sync`** then **`uv run python -m i2pchat.gui`** / **`i2pchat.tui`** (see root **README**).
+- **`i2pchat.sam`** — in-tree SAM client and protocol helpers (HELLO, SESSION, STREAM, NAMING, reply parsing). I2PChat does **not** depend on PyPI **`i2plib`**; a former vendored tree was removed in favor of this package.
+
 ## Runtime in practice
 
 1. **Startup**: `main_qt.py` runs **profile directory migration** when needed (flat `*.dat` in the data root → `profiles/<name>/`) before the profile picker, then creates `ChatWindow`; `start_core()` calls `I2PChatCore.init_session()`, which loads or creates the profile identity, opens the long-lived SAM session, warms up tunnels, and starts `accept_loop()` / `tunnel_watcher()`.

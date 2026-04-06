@@ -16,6 +16,7 @@ __pycache__/
 *.so
 .venv/
 .venv*/
+.audit-venv/
 venv/
 env/
 # BlindBox daemon ships an env template under a directory literally named env/

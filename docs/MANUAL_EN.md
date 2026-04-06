@@ -576,6 +576,13 @@ sudo apt install libxcb-cursor0
 
 Then launch the app again. (The project **README** also lists this next to other Linux setup commands.)
 
+#### 7.6. Running from source: **uv** and the **i2pchat.sam** layer (developers)
+
+If you run I2PChat from a **git checkout** (not a prebuilt zip):
+
+- Install **[uv](https://docs.astral.sh/uv/)** and sync dependencies from **`pyproject.toml`** / **`uv.lock`** — see the repository **README** (`uv sync`, then `uv run python -m …`).
+- **I2P SAM** (control connection to the router, sessions, streams, naming lookups) is implemented **inside this repo** as the **`i2pchat.sam`** package. The project does **not** use the PyPI **`i2plib`** package, and the old vendored copy was removed.
+
 ### 8. Protocol metadata and padding
 
 Even with post-handshake encryption, some transport metadata remains observable:
