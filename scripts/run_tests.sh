@@ -6,19 +6,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-PYTHON="${REPO_ROOT}/.gm/bin/python"
-if [[ ! -x "${PYTHON}" ]]; then
-  echo "run_tests.sh: no ${PYTHON}" >&2
-  echo "Install deps with uv, e.g.: uv sync && uv run pytest tests/ -q" >&2
+if ! command -v uv >/dev/null 2>&1; then
+  echo "run_tests.sh: uv not found" >&2
+  echo "Install: https://docs.astral.sh/uv/getting-started/installation/" >&2
   exit 1
 fi
 
+export UV_PROJECT_ENVIRONMENT="${REPO_ROOT}/.venv"
+uv sync --frozen
+
 echo "==> pytest tests/"
-"${PYTHON}" -m pytest tests/ -q --tb=short
+uv run pytest tests/ -q --tb=short
 
 echo ""
 echo "==> unittest (Test Gate modules)"
-"${PYTHON}" -m unittest \
+uv run python -m unittest \
   tests.test_blindbox_state_wrap \
   tests.test_asyncio_regression \
   tests.test_blindbox_client \

@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_NAME="I2PChat"
 APPDIR="${APP_NAME}.AppDir"
-VENV_DIR=".gm"
+VENV_DIR=".venv"
 APPIMAGETOOL_VERSION="1.9.1"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -47,7 +47,7 @@ fi
 
 REPO_ROOT="$(pwd)"
 export UV_PROJECT_ENVIRONMENT="${REPO_ROOT}/${VENV_DIR}"
-# Иначе uv ругается, если в шелле активировано другое venv (например .venv снаружи).
+# Явный путь к окружению проекта: не зависит от чужого VIRTUAL_ENV в шелле.
 unset VIRTUAL_ENV
 
 # Удаление onedir после сборки от root или с read-only битами: иначе rm → EACCES.

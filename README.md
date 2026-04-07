@@ -275,7 +275,7 @@ Requirements:
 
 Dependencies and versions are locked in **`uv.lock`**; declared in **`pyproject.toml`**. After changing dependencies, run **`uv lock`** and commit the updated lockfile.
 
-Quick run commands (from repo root). The project virtualenv lives in **`.gm`** (build scripts set this via `UV_PROJECT_ENVIRONMENT`; for a bare shell use the export below).
+Quick run commands (from repo root). **uv** keeps the project environment in **`.venv`** (default); the commands below are enough. Older checkouts may still have a **`.gm`** folder from previous build scripts — you can delete it; everything now uses **`.venv`**.
 
 **Linux (Debian/Ubuntu)** — system packages you may need:
 
@@ -291,7 +291,6 @@ sudo apt install libxcb-cursor0
 **macOS / Linux**
 
 ```bash
-export UV_PROJECT_ENVIRONMENT="${PWD}/.gm"
 uv sync --python 3.14
 uv run python -m i2pchat.gui.main_qt   # GUI; optional profile name as first arg
 uv run python -m i2pchat.tui            # terminal (TUI)
@@ -300,7 +299,6 @@ uv run python -m i2pchat.tui            # terminal (TUI)
 **Windows (PowerShell)**
 
 ```powershell
-$env:UV_PROJECT_ENVIRONMENT = Join-Path (Get-Location) ".gm"
 uv sync --python 3.14
 uv run python -m i2pchat.gui.main_qt
 uv run python -m i2pchat.tui
@@ -329,7 +327,7 @@ Everywhere, the recommended/runtime version is **Python 3.14+**. SAM transport i
 
 This script:
 
-- Requires **uv**; uses `python3.14` (or `python3`) and a **`uv sync`** environment under **`.gm`** (runtime + build group).
+- Requires **uv**; uses `python3.14` (or `python3`) and **`uv sync`** into **`.venv`** (runtime + `build` group).
 - Builds a self‑contained GUI binary via PyInstaller.
 - Packs it into `I2PChat.AppImage` using `appimagetool`.
 - Creates release archive `I2PChat-linux-<arch>-v<version>.zip` (contains `I2PChat.AppImage`); **`arch`** is **`x86_64`** or **`aarch64`** depending on the host. CI publishes matching **`I2PChat-linux-aarch64-v*.zip`** and may attach **`SHA256SUMS.linux-aarch64`** separately from the amd64 checksum file.

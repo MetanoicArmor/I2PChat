@@ -15,7 +15,7 @@ Python **3.12+** is supported (**3.14+** recommended for release-style builds). 
 
 **Optional Docker:** **`./packaging/docker/run-linux-build.sh`** — Ubuntu **24.04** on **amd64** (`Dockerfile.linux-noble-glibc239`, glibc **2.39**); newer baseline than 22.04. **`./packaging/docker/build-linux-aarch64.sh`** — Ubuntu **24.04** on **linux/arm64** for **`I2PChat-linux-aarch64-*`** artifacts. Details: [`packaging/docker/README.md`](../packaging/docker/README.md).
 
-**Linux script** uses **uv** (`.gm`, `uv sync --frozen --group build`) and PyInstaller **`I2PChat.spec`** (GUI + TUI exe sharing one Qt onedir), `appimagetool`; the AppImage includes `usr/bin/I2PChat` and **`usr/bin/I2PChat-tui`**, plus a TUI `.desktop` with `Terminal=true`. After that it runs **`I2PChat-tui.spec`** → `dist/I2PChat-tui/` (no Qt) and packs **`I2PChat-linux-*-tui-*.zip`** from that tree.
+**Linux script** uses **uv** (`.venv`, `uv sync --frozen --group build`) and PyInstaller **`I2PChat.spec`** (GUI + TUI exe sharing one Qt onedir), `appimagetool`; the AppImage includes `usr/bin/I2PChat` and **`usr/bin/I2PChat-tui`**, plus a TUI `.desktop` with `Terminal=true`. After that it runs **`I2PChat-tui.spec`** → `dist/I2PChat-tui/` (no Qt) and packs **`I2PChat-linux-*-tui-*.zip`** from that tree.
 
 **Optional bundled router staging:** portable builds can embed `i2pd` if local files are staged under `vendor/i2pd/`. Build scripts now auto-try [`scripts/ensure_bundled_i2pd.sh`](../scripts/ensure_bundled_i2pd.sh), which resolves in this order:
 
