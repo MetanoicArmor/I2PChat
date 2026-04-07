@@ -73,17 +73,52 @@ dpkg-deb -c ../python3-i2pchat_*_all.deb | grep -E 'usr/share/(i2pchat|doc/pytho
 dpkg-deb -c ../i2pchat_*_all.deb | head -20          # .desktop, pixmaps
 ```
 
-### Чеклист перед RFS (кратко)
+### Перед отправкой спонсору (checklist)
 
-1. **`dpkg-buildpackage -us -uc`** на **sid** (или `./packaging/debian/docker-dpkg-buildpackage.sh`).
-2. **Версия:** формат **3.0 (native)** → в changelog только **`Upstream-Version`** (например `1.2.4`), без Debian-revision.
-3. **`lintian ../*.changes`** (в CI — `lintian -E` на staged `.changes`): нет ошибок; предупреждения либо исправлены, либо осознанно в **`debian/*.lintian-overrides`** / **`debian/source/lintian-overrides`**.
-4. **`autopkgtest`** (`virt null`): хотя бы **import-runtime**; установка пакетов и маркер system-router-only не ломают сценарий.
-5. **Содержимое `.deb`:** `python3-i2pchat` — модули и entry points; `i2pchat` / `i2pchat-tui` — только desktop-интеграция.
-6. **Политика роутера в .deb:** только системный **i2pd** (**≥ 2.59**), встроенный роутер в Debian-пакете не поставляется; portable/AppImage — отдельная линия.
-7. **`debian/copyright`:** покрыты upstream-ассеты (emoji, иконки и т.д.).
-8. **Дерево:** нет сгенерированного мусора в **`debian/`** под VCS; нет случайных бинарников в коммите.
-9. **Размер tarball:** `debian/source/options` исключает **`.git`** и прочий локальный шум; без этого lintian видит **`.git/lfs`** и ругается на сторонние бинарники. Полный `*.tar.xz` всё равно большой из‑за набора **Fluent emoji PNG** — это ожидаемо для upstream.
+**Дерево**
+
+- `git status` чистый (кроме осознанных untracked: не коммитить `I2PChat.AppImage`, локальные отчёты).
+- В source tree нет случайных build artifacts; в **`debian/`** не должно быть generated-файлов (`files`, `*.substvars`, `*.debhelper.log`, `debhelper-build-stamp`, каталоги `python3-i2pchat/` и т.д.) — они в **`.gitignore`**, после сборки удаляйте вручную или не добавляйте в коммит.
+
+**Версия**
+
+- **`debian/source/format`:** `3.0 (native)`.
+- **`debian/changelog`:** версия вида **`1.2.4`**, без `-1`; совпадает с намерением релиза (сверить с **`VERSION`** в корне).
+
+**Сборка**
+
+- **`dpkg-buildpackage -us -uc`** проходит на **sid** — локально: [`docker-dpkg-buildpackage.sh`](docker-dpkg-buildpackage.sh); в CI: workflow **Debian dpkg-buildpackage**.
+- **`sbuild`** на чистом chroot — у спонсора или у себя вручную (`sbuild -d unstable ../i2pchat_*.dsc`); в репозитории не автоматизировано.
+
+**Качество**
+
+- **`lintian`** на **`*.changes`** (в скрипте — `lintian -E`); цель — без ошибок, предупреждения только осознанные; overrides в **`debian/*lintian-overrides`** и **`debian/source/lintian-overrides`** — минимальные и с комментариями.
+
+**Тесты**
+
+- **`autopkgtest`** (`virt null`): минимум **`import-runtime`**; в docker-скрипте дополнительно переустановка `.deb` и проверка **`/usr/share/i2pchat/system-router-only`** и отсутствия бинарника **`i2pd`** в `python3-i2pchat`.
+
+**Зависимости**
+
+- **`Depends` / `Build-Depends`** соответствуют реальности; **`i2pd (>= 2.59.0~)`** зафиксирован в **`debian/control`**; в Debian-пакет **bundled router не входит** (отдельно — portable/AppImage и **`vendor/`**, в tarball режется **`debian/source/options`**).
+
+**Policy / packaging**
+
+- Split: **`python3-i2pchat`** (Python + entry points), **`i2pchat`** / **`i2pchat-tui`** (desktop); **`.desktop`** и **`.install`** согласованы; override **`desktop-command-not-in-package`** у метапакетов обоснован.
+- **`debian/source/options`** отсекает **`.git`**, venv, AppImage, **`vendor/`** и пр. из source tarball.
+
+**Licensing**
+
+- **`debian/copyright`:** исходники (AGPL-3+), **Fluent emoji** (Expat), **GUI icons**, **`icon.png`**, packaging.
+
+**Процесс**
+
+- **ITP / WNPP** — оформить до/вместе с RFS при необходимости.
+- Спонсору удобно сразу: ссылка на **репозиторий и commit**; готовые **`.dsc`**, **`.changes`**, **`.buildinfo`**, **source tarball** (после сборки в `..` или **`debian-ci-out/`**); короткий текст **RFS** с перечислением: **native**, **sid**, **lintian**, **autopkgtest**, **system-router-only**, **отделение portable от Debian source**.
+
+**Что подчеркнуть спонсору одной фразой**
+
+- Пакет **native**, собирается на **sid**, прогнаны **lintian** и **autopkgtest**, в **.deb** только **system i2pd** и маркер **`system-router-only`**, portable/bundled сборки **не смешиваются** с Debian source package.
 
 ---
 
