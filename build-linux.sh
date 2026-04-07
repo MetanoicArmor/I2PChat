@@ -98,7 +98,7 @@ safe_rm_rf "dist/${APP_NAME}" "build/${APP_NAME}"
 "${VENV_PY}" -m PyInstaller --clean -y I2PChat.spec
 
 # 2) упаковка в AppDir
-rm -rf "${APPDIR}"
+safe_rm_rf "${APPDIR}"
 mkdir -p "${APPDIR}/usr/bin" \
          "${APPDIR}/usr/share/applications" \
          "${APPDIR}/usr/share/icons/hicolor/512x512/apps"
@@ -256,7 +256,7 @@ safe_rm_rf "dist/${APP_NAME}-tui" "build/${APP_NAME}-tui"
 # 4b) TUI-only zip (no AppImage): usr/bin layout + root launcher for AUR / manual install
 TUI_ZIP="${APP_NAME}-linux-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}.zip"
 TUI_STAGE="${APP_NAME}-linux-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}-stage"
-rm -rf "${TUI_STAGE}"
+safe_rm_rf "${TUI_STAGE}"
 mkdir -p "${TUI_STAGE}/usr/bin"
 cp "dist/${APP_NAME}-tui/${APP_NAME}-tui" "${TUI_STAGE}/usr/bin/"
 cp -a "dist/${APP_NAME}-tui/_internal" "${TUI_STAGE}/usr/bin/_internal"
@@ -318,7 +318,7 @@ with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             path = os.path.join(root, name)
             add_path(zf, path, os.path.relpath(path, stage))
 PY
-rm -rf "${TUI_STAGE}"
+safe_rm_rf "${TUI_STAGE}"
 echo "✔ Packed ${TUI_ZIP}"
 
 # 5) release integrity artifacts: SHA256SUMS + detached GPG signature (SHA256SUMS.asc)
