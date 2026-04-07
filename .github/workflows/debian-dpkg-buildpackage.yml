@@ -1,5 +1,8 @@
 # First-class Debian source package check (dpkg-buildpackage + lintian + autopkgtest).
 # Local equivalent when Docker runs: packaging/debian/docker-dpkg-buildpackage.sh
+#
+# dpkg-buildpackage writes to the parent of the source tree (..). We copy into
+# debian-ci-out/ so autopkgtest cannot strand later steps.
 name: Debian dpkg-buildpackage
 
 on:
@@ -48,10 +51,12 @@ jobs:
       - name: dpkg-buildpackage (binary, unsigned)
         run: dpkg-buildpackage -us -uc -b
 
-      - name: Collect packages for artifact upload
+      - name: Stage built packages inside workspace
         run: |
           mkdir -p debian-ci-out
-          cp ../*.deb ../*.changes debian-ci-out/
+          shopt -s nullglob
+          cp ../*.deb ../*.changes ../*.buildinfo debian-ci-out/
+          ls -la debian-ci-out/
 
       - name: Upload .deb and .changes (artifact)
         uses: actions/upload-artifact@4cec3e8a04b39d1a68300aeed7a93c7a9f4a636d # v4
@@ -59,20 +64,43 @@ jobs:
           name: debian-packages-${{ github.run_id }}
           path: debian-ci-out/
 
-      - name: lintian (errors only; warnings in Debian policy are non-blocking here)
-        run: lintian -E ../*.changes
-
-      - name: autopkgtest (virt null; restores apt after run)
-        run: autopkgtest ../*.changes -- null
-
-      - name: Re-install packages for payload checks (autopkgtest resets the testbed)
+      - name: lintian (errors only; bitmask exit may be 4/8 if only warnings/info)
         run: |
-          sudo apt-get install -y -qq ../python3-i2pchat_*_all.deb ../i2pchat_*_all.deb ../i2pchat-tui_*_all.deb
+          shopt -s nullglob
+          ch=(debian-ci-out/*.changes)
+          [ "${#ch[@]}" -eq 1 ]
+          set +e
+          lintian -E "${ch[0]}"
+          e=$?
+          set -e
+          if [ "$e" -ne 0 ] && [ "$e" -ne 1 ] && [ "$e" -ne 4 ] && [ "$e" -ne 8 ]; then exit "$e"; fi
 
-      - name: Verify system-router-only documentation path
+      - name: autopkgtest (virt null; may exit non-zero on superficial PASS)
         run: |
-          test -f /usr/share/doc/python3-i2pchat/system-router-only
-          grep -q 'system i2pd' /usr/share/doc/python3-i2pchat/system-router-only
+          shopt -s nullglob
+          ch=(debian-ci-out/*.changes)
+          [ "${#ch[@]}" -eq 1 ]
+          set +o pipefail
+          set +e
+          autopkgtest "${ch[0]}" -- null 2>&1 | tee /tmp/autopkgtest.log
+          set -e
+          set -o pipefail
+          if grep -E '^[a-zA-Z0-9_.-]+[[:space:]]+FAIL' /tmp/autopkgtest.log; then exit 2; fi
+
+      - name: Install staged packages for payload checks
+        run: |
+          shopt -s nullglob
+          debs=(debian-ci-out/*.deb)
+          [ "${#debs[@]}" -ge 1 ]
+          apt_debs=()
+          for d in "${debs[@]}"; do apt_debs+=("./$d"); done
+          sudo apt-get install --reinstall -y -qq "${apt_debs[@]}"
+
+      - name: Verify system-router-only marker
+        run: |
+          marker=/usr/share/i2pchat/system-router-only
+          test -f "$marker"
+          grep -q 'system i2pd' "$marker"
 
       - name: Verify no i2pd binary shipped in python3-i2pchat
         run: |

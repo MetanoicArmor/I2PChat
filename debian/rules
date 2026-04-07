@@ -9,3 +9,8 @@ export PYBUILD_NAME = i2pchat
 # dev deps; upstream runs pytest in CI (.github/workflows/test-gate.yml).
 override_dh_auto_test:
 	@echo "Skipping dh_auto_test (pytest suite in CI)"
+
+# Marker must live outside /usr/share/doc/* — dpkg path-exclude (nodoc) strips arbitrary doc files.
+override_dh_fixperms:
+	dh_fixperms
+	install -D -m644 debian/system-router-only debian/python3-i2pchat/usr/share/i2pchat/system-router-only

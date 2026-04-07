@@ -84,6 +84,9 @@ config.local.*
 .coverage.*
 htmlcov/
 
+# Debian CI: copies of ../*.deb from dpkg-buildpackage (see docker-dpkg-buildpackage.yml)
+debian-ci-out/
+
 # dpkg-buildpackage / dh / pybuild (local tree only)
 .pybuild/
 debian/files
