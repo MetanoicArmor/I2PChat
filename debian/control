@@ -1,0 +1,61 @@
+Source: i2pchat
+Section: net
+Priority: optional
+Maintainer: I2PChat Packaging Team <packaging@i2pchat.invalid>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-python,
+ pybuild-plugin-pyproject,
+ python3-all,
+ python3-hatchling
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/MetanoicArmor/I2PChat
+Vcs-Browser: https://github.com/MetanoicArmor/I2PChat
+Vcs-Git: https://github.com/MetanoicArmor/I2PChat.git
+Testsuite: autopkgtest
+
+Package: python3-i2pchat
+Section: python
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ python3 (>= 3.12~),
+ i2pd (>= 2.49.0),
+ python3-cryptography,
+ python3-keyring,
+ python3-nacl,
+ python3-pil,
+ python3-pyperclip,
+ python3-pyqt6,
+ python3-qasync,
+ python3-rich,
+ python3-textual
+Description: I2PChat shared Python runtime
+ Experimental peer-to-peer chat client for the I2P anonymity network.
+ .
+ This package contains the shared Python modules and entry points used by the
+ graphical and terminal frontends. It expects a system-provided i2pd router.
+ Newer i2pd (for example 2.59+) is recommended for full feature parity with
+ upstream releases.
+
+Package: i2pchat
+Architecture: all
+Depends:
+ ${misc:Depends},
+ python3-i2pchat
+Description: peer-to-peer chat client for the I2P network (GUI integration)
+ Experimental peer-to-peer chat client for the I2P anonymity network.
+ .
+ This package provides desktop integration for the graphical I2PChat frontend.
+
+Package: i2pchat-tui
+Architecture: all
+Depends:
+ ${misc:Depends},
+ python3-i2pchat
+Description: peer-to-peer chat client for the I2P network (terminal frontend)
+ Experimental peer-to-peer chat client for the I2P anonymity network.
+ .
+ This package provides terminal-launcher integration for the Textual frontend.

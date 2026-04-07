@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=I2P Chat
+Comment=Secure chat over I2P
+Exec=i2pchat %u
+Icon=i2pchat
+Terminal=false
+Categories=Network;Chat;

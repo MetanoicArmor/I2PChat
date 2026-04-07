@@ -1,0 +1,2 @@
+# /usr/bin/i2pchat-tui is in python3-i2pchat; this metapackage only ships desktop integration.
+i2pchat-tui: desktop-command-not-in-package

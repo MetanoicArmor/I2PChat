@@ -1,0 +1,82 @@
+# First-class Debian source package check (dpkg-buildpackage + lintian + autopkgtest).
+# Local equivalent when Docker runs: packaging/debian/docker-dpkg-buildpackage.sh
+name: Debian dpkg-buildpackage
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "debian/**"
+      - "packaging/debian/docker-dpkg-buildpackage.sh"
+      - "pyproject.toml"
+      - "VERSION"
+      - "i2pchat/**"
+      - ".github/workflows/debian-dpkg-buildpackage.yml"
+  pull_request:
+    paths:
+      - "debian/**"
+      - "packaging/debian/docker-dpkg-buildpackage.sh"
+      - "pyproject.toml"
+      - "VERSION"
+      - "i2pchat/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dpkg-buildpackage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Debian build toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            autopkgtest \
+            build-essential \
+            debhelper \
+            devscripts \
+            dh-python \
+            fakeroot \
+            lintian \
+            pybuild-plugin-pyproject \
+            python3-all \
+            python3-hatchling
+
+      - name: dpkg-buildpackage (binary, unsigned)
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Collect packages for artifact upload
+        run: |
+          mkdir -p debian-ci-out
+          cp ../*.deb ../*.changes debian-ci-out/
+
+      - name: Upload .deb and .changes (artifact)
+        uses: actions/upload-artifact@4cec3e8a04b39d1a68300aeed7a93c7a9f4a636d # v4
+        with:
+          name: debian-packages-${{ github.run_id }}
+          path: debian-ci-out/
+
+      - name: lintian (errors only; warnings in Debian policy are non-blocking here)
+        run: lintian -E ../*.changes
+
+      - name: autopkgtest (virt null; restores apt after run)
+        run: autopkgtest ../*.changes -- null
+
+      - name: Re-install packages for payload checks (autopkgtest resets the testbed)
+        run: |
+          sudo apt-get install -y -qq ../python3-i2pchat_*_all.deb ../i2pchat_*_all.deb ../i2pchat-tui_*_all.deb
+
+      - name: Verify system-router-only documentation path
+        run: |
+          test -f /usr/share/doc/python3-i2pchat/system-router-only
+          grep -q 'system i2pd' /usr/share/doc/python3-i2pchat/system-router-only
+
+      - name: Verify no i2pd binary shipped in python3-i2pchat
+        run: |
+          if dpkg -L python3-i2pchat | grep -E '(^|/)i2pd$'; then
+            echo "ERROR: i2pd binary must not be in python3-i2pchat (Debian uses system i2pd)" >&2
+            exit 1
+          fi

@@ -1,0 +1,4 @@
+Tests: import-runtime
+Depends: @,
+ python3
+Restrictions: superficial

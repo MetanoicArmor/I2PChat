@@ -1,0 +1,5 @@
+i2pchat (1.2.4-1) UNRELEASED; urgency=medium
+
+  * Initial Debian packaging skeleton.
+
+ -- I2PChat Packaging Team <packaging@i2pchat.invalid>  Tue, 07 Apr 2026 12:00:00 +0300

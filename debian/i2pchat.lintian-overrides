@@ -1,0 +1,2 @@
+# /usr/bin/i2pchat is in python3-i2pchat; this metapackage only ships desktop integration.
+i2pchat: desktop-command-not-in-package

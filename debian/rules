@@ -1,0 +1,11 @@
+#!/usr/bin/make -f
+
+export PYBUILD_NAME = i2pchat
+
+%:
+	dh $@ --buildsystem=pybuild --with python3
+
+# pybuild defaults to "unittest discover", which mis-discovers packages and lacks
+# dev deps; upstream runs pytest in CI (.github/workflows/test-gate.yml).
+override_dh_auto_test:
+	@echo "Skipping dh_auto_test (pytest suite in CI)"

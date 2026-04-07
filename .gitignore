@@ -41,10 +41,15 @@ I2PChat-macOS-arm64*.zip
 I2PChat-windows*.zip
 I2PChat-*.AppImage
 I2PChat.AppDir/
+appimagetool-*.AppImage
+I2PChat-linux-*.zip
 
 # Per-build integrity artifacts (attach to GitHub Releases; do not commit — differs per OS/artifact)
 SHA256SUMS
 SHA256SUMS.asc
+
+# Optional local bundled-router blobs for portable release builds only.
+vendor/i2pd/
 
 # Secrets / keys — never commit
 *.dat
@@ -78,3 +83,15 @@ config.local.*
 .coverage
 .coverage.*
 htmlcov/
+
+# dpkg-buildpackage / dh / pybuild (local tree only)
+.pybuild/
+debian/files
+debian/debhelper-build-stamp
+debian/*.substvars
+debian/*.debhelper
+debian/.debhelper/
+debian/tmp/
+debian/python3-i2pchat/
+debian/i2pchat/
+debian/i2pchat-tui/

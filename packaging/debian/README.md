@@ -51,9 +51,32 @@ sudo apt install i2pchat-tui    # терминал (TUI)
 
 ---
 
+## Source package в корне `debian/` (не путать с `.deb` из zip выше)
+
+Это отдельная линия: **официальный стиль Debian** (`dpkg-buildpackage`), пакеты **`python3-i2pchat`** + мета **`i2pchat`** / **`i2pchat-tui`**, зависимость от **системного `i2pd`**, без бинарника встроенного роутера в `.deb`.
+
+**Статус:** не эквивалентно готовности к **RFS в Debian**; цель ближайшего рубежа — стабильный **`dpkg-buildpackage`**, **lintian** (без ошибок), **autopkgtest** на `virt null`. Дальше — **sbuild** в чистом chroot, расширение **`debian/copyright`**, полировка **`debian/control`**.
+
+- **CI:** [`.github/workflows/debian-dpkg-buildpackage.yml`](../../.github/workflows/debian-dpkg-buildpackage.yml) (Ubuntu 24.04, Python **≥ 3.12** как в [`pyproject.toml`](../../pyproject.toml)).
+- **Локально (Docker на macOS / Linux):** [`docker-dpkg-buildpackage.sh`](docker-dpkg-buildpackage.sh) — по умолчанию образ **`ubuntu:24.04`**; переопределение: `DEBIAN_BUILD_IMAGE=debian:trixie ./packaging/debian/docker-dpkg-buildpackage.sh`.
+- **sbuild (следующий рубеж, вручную):** после `dpkg-buildpackage -S` — например `sbuild -d unstable ../i2pchat_*.dsc` в настроенном chroot; в CI пока не гоняется.
+
+Сборка **намеренно пропускает `dh_auto_test`**: pybuild по умолчанию вызывает `unittest discover`, что не совпадает с pytest-сьютом в репозитории; тесты — в [**`test-gate.yml`**](../../.github/workflows/test-gate.yml).
+
+**Проверка раскладки пакетов после сборки** (из родительского каталога клона, где лежат `*.deb`):
+
+```bash
+dpkg-deb -c ../python3-i2pchat_*_all.deb | head -40   # модули, console scripts, doc/system-router-only
+dpkg-deb -c ../i2pchat_*_all.deb | head -20          # .desktop, pixmaps
+```
+
+---
+
 ## CI
 
 После публикации релиза [**`release-linux-pkgs.yml`**](../../.github/workflows/release-linux-pkgs.yml) собирает `.deb` из zip на релизе (amd64; arm64 — если есть aarch64 zip). Повтор: **Actions → Release Linux packages → Run workflow** с тегом `vX.Y.Z`. Обновление apt-зеркала на Pages — при секрете `APT_REPO_GPG_PRIVATE_KEY`, см. **`packaging/apt/`**.
+
+Отдельно: workflow **Debian dpkg-buildpackage** (см. выше) проверяет **корневой `debian/`**, а не zip-репакеты.
 
 ---
 

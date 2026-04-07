@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+python3 -c "import i2pchat.sam, i2pchat.tui, i2pchat.core.i2p_chat_core"

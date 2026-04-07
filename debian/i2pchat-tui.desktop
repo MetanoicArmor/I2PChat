@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=I2P Chat (TUI)
+Comment=Terminal chat over I2P
+Exec=i2pchat-tui
+Icon=i2pchat-tui
+Terminal=true
+Categories=Network;Chat;
