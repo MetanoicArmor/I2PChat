@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 # Build Debian binary packages in a clean container (Docker on macOS ARM or Linux).
-# Usage: from repo root — ./packaging/debian/docker-dpkg-buildpackage.sh
+#
+# Usage (from repo root):
+#   ./packaging/debian/docker-dpkg-buildpackage.sh
+#
+# Sponsor / RFS confidence (clean sid, amd64 — expected for Debian review):
+#   DEBIAN_DOCKER_PLATFORM=linux/amd64 ./packaging/debian/docker-dpkg-buildpackage.sh
+# Use this on Apple Silicon (or any non-amd64 host) so the build matches amd64 sbuild.
+#
+# Inside the container: dpkg-buildpackage -us -uc → lintian -E → autopkgtest … → reinstall .deb checks.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # Default debian:sid: archive i2pd satisfies python3-i2pchat Depends (>= 2.59.0~).
 # Ubuntu 24.04 ships i2pd 2.49 — use DEBIAN_BUILD_IMAGE=ubuntu:24.04 only if you relax Depends.
 IMAGE="${DEBIAN_BUILD_IMAGE:-debian:sid}"
-docker run --rm -i -v "${ROOT}:/src:rw" -w /src "${IMAGE}" bash -s <<'EOS'
+PLATFORM_ARGS=()
+if [ -n "${DEBIAN_DOCKER_PLATFORM:-}" ]; then
+  PLATFORM_ARGS=(--platform "${DEBIAN_DOCKER_PLATFORM}")
+fi
+docker run --rm -i "${PLATFORM_ARGS[@]}" -v "${ROOT}:/src:rw" -w /src "${IMAGE}" bash -s <<'EOS'
 set -euo pipefail
 shopt -s nullglob
 export DEBIAN_FRONTEND=noninteractive

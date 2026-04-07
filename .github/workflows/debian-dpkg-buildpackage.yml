@@ -1,6 +1,7 @@
 # Debian source package check (dpkg-buildpackage + lintian + autopkgtest).
 # Runs in debian:sid so Depends i2pd (>= 2.59~) is satisfiable from the archive.
 # Local equivalent: packaging/debian/docker-dpkg-buildpackage.sh
+# (on non-amd64 hosts use DEBIAN_DOCKER_PLATFORM=linux/amd64 for sponsor-facing builds)
 #
 # dpkg-buildpackage writes to the parent of the source tree (..). We copy into
 # debian-ci-out/ so autopkgtest cannot strand later steps.

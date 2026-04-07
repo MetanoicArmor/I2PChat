@@ -59,6 +59,7 @@ sudo apt install i2pchat-tui    # терминал (TUI)
 
 - **CI:** [`.github/workflows/debian-dpkg-buildpackage.yml`](../../.github/workflows/debian-dpkg-buildpackage.yml) — контейнер **`debian:sid`**, чтобы из архива ставился **`i2pd` ≥ 2.59** (как в `Depends` у `python3-i2pchat`). В **Ubuntu 24.04** в main сейчас только i2pd **2.49**, поэтому noble без PPA/backports не подходит под текущие зависимости. Python **≥ 3.12** — как в [`pyproject.toml`](../../pyproject.toml).
 - **Локально (Docker):** [`docker-dpkg-buildpackage.sh`](docker-dpkg-buildpackage.sh) — по умолчанию **`debian:sid`**. Скрипт выполняет **`dpkg-buildpackage -us -uc`** (полный native upload), копирует в **`debian-ci-out/`** артефакты `*.deb` / `*.changes` / `*.buildinfo` / `*.dsc` / `*.tar.xz`, затем **`lintian -E`**, **`autopkgtest`**, переустановку `.deb` и проверку маркера **`/usr/share/i2pchat/system-router-only`**.
+  - **Перед RFS / для спонсора (amd64):** на **macOS ARM** или другом не-amd64 хосте задайте **`DEBIAN_DOCKER_PLATFORM=linux/amd64`**, чтобы сборка в Docker совпадала с типичным **amd64** chroot/sbuild у ревьюера. На **x86_64 Linux** платформу можно не задавать (уже amd64).
 - **Чистый source tree:** в git должны оставаться только «ручные» файлы под `debian/` (`rules`, `control`, `copyright`, `tests/*`, …). Всё, что создаёт `dh`/`dpkg-buildpackage` (`debian/files`, `*.substvars`, `debhelper-build-stamp`, `debian/python3-i2pchat/` и т.д.), перечислено в **`.gitignore`** — после локальной сборки можно смело удалять эти пути.
 - **sbuild (следующий рубеж, вручную):** после `dpkg-buildpackage -S` — например `sbuild -d unstable ../i2pchat_*.dsc` в настроенном chroot; в CI пока не гоняется.
 
@@ -87,7 +88,7 @@ dpkg-deb -c ../i2pchat_*_all.deb | head -20          # .desktop, pixmaps
 
 **Сборка**
 
-- **`dpkg-buildpackage -us -uc`** проходит на **sid** — локально: [`docker-dpkg-buildpackage.sh`](docker-dpkg-buildpackage.sh); в CI: workflow **Debian dpkg-buildpackage**.
+- **`dpkg-buildpackage -us -uc`** проходит на **sid** — локально: [`docker-dpkg-buildpackage.sh`](docker-dpkg-buildpackage.sh) (при необходимости **`DEBIAN_DOCKER_PLATFORM=linux/amd64`**); в CI: workflow **Debian dpkg-buildpackage** (раннер amd64).
 - **`sbuild`** на чистом chroot — у спонсора или у себя вручную (`sbuild -d unstable ../i2pchat_*.dsc`); в репозитории не автоматизировано.
 
 **Качество**
