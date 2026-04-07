@@ -275,7 +275,7 @@ Requirements:
 
 Dependencies and versions are locked in **`uv.lock`**; declared in **`pyproject.toml`**. After changing dependencies, run **`uv lock`** and commit the updated lockfile.
 
-Quick run commands (from repo root). **uv** keeps the project environment in **`.venv`** (default); the commands below are enough. Older checkouts may still have a **`.gm`** folder from previous build scripts — you can delete it; everything now uses **`.venv`**.
+Quick run commands (from repo root). **uv** keeps the project environment in **`.venv`** (default); the commands below are enough.
 
 **Linux (Debian/Ubuntu)** — system packages you may need:
 

@@ -8,7 +8,7 @@ Patch after **v1.2.1**: **documented package-style launch commands** for Qt and 
 
 **v1.2.2** improves discoverability and first-run clarity:
 
-- **Qt GUI** can be started as **`python -m i2pchat.gui`** (same code as **`python -m i2pchat.gui.main_qt`** / **`python -m i2pchat.run_gui`**). Optional CLI args: **profile name**, then optional **theme** (`ligth` / `night`), e.g. `./.venv314/bin/python -m i2pchat.gui win`.
+- **Qt GUI** can be started as **`python -m i2pchat.gui`** (same code as **`python -m i2pchat.gui.main_qt`** / **`python -m i2pchat.run_gui`**). Optional CLI args: **profile name**, then optional **theme** (`ligth` / `night`), e.g. `uv run python -m i2pchat.gui win`.
 - **Terminal UI (Textual)** has a short entrypoint: **`python -m i2pchat.tui`** [profile]. The legacy path **`python -m i2pchat.gui.chat_python`** remains equivalent.
 - **Qt:** saved per-peer history loads when you pick a peer or finish editing the address **while disconnected**, not only after “Secure channel with PFS established”. The first history injection **keeps** the early **system** bootstrap lines (profile / keyring / stored contact / session start) instead of clearing the whole feed.
 - **TUI:** **`/copyaddr`** copies the full **`… .b32.i2p`** address; **`post` / `post_panel`** tolerate a missing chat widget without crashing; regression tests added in **`tests/test_tui_router_defaults.py`**.
@@ -16,17 +16,17 @@ Patch after **v1.2.1**: **documented package-style launch commands** for Qt and 
 
 ### User-visible changes
 
-#### 1. Recommended `python -m` commands (from repo root, with venv Python)
+#### 1. Recommended commands (from repo root, via **uv**)
 
 | Client | Example |
 |--------|---------|
-| Qt GUI | `./.venv314/bin/python -m i2pchat.gui` or `… -m i2pchat.gui myprofile` |
-| Same Qt (explicit module) | `… -m i2pchat.gui.main_qt` |
-| PyInstaller-aligned launcher | `… -m i2pchat.run_gui` |
-| Textual TUI | `… -m i2pchat.tui` or `… -m i2pchat.tui myprofile` |
-| TUI (legacy path) | `… -m i2pchat.gui.chat_python` |
+| Qt GUI | `uv run python -m i2pchat.gui` or `uv run python -m i2pchat.gui myprofile` |
+| Same Qt (explicit module) | `uv run python -m i2pchat.gui.main_qt` |
+| PyInstaller-aligned launcher | `uv run python -m i2pchat.run_gui` |
+| Textual TUI | `uv run python -m i2pchat.tui` or `uv run python -m i2pchat.tui myprofile` |
+| TUI (legacy path) | `uv run python -m i2pchat.gui.chat_python` |
 
-On **Windows** (PowerShell), replace `./.venv314/bin/python` with `.\.venv314\Scripts\python`.
+On **Windows** (PowerShell), the same **`uv run python -m …`** lines apply after **`uv sync`**.
 
 #### 2. Qt: offline history + smoother startup feed
 
@@ -58,8 +58,8 @@ On **Windows** (PowerShell), replace `./.venv314/bin/python` with `.\.venv314\Sc
 
 ### Validation
 
-- `python3 -m py_compile i2pchat/gui/main_qt.py i2pchat/tui.py i2pchat/run_tui.py i2pchat/gui/chat_python.py`
-- `pytest tests/test_tui_router_defaults.py` (with dev deps / Textual installed)
+- `uv run python -m py_compile i2pchat/gui/main_qt.py i2pchat/tui.py i2pchat/run_tui.py i2pchat/gui/chat_python.py`
+- `uv run pytest tests/test_tui_router_defaults.py`
 
 ---
 
@@ -79,10 +79,10 @@ On **Windows** (PowerShell), replace `./.venv314/bin/python` with `.\.venv314\Sc
 ### Примеры из корня репозитория
 
 ```bash
-./.venv314/bin/python -m i2pchat.gui
-./.venv314/bin/python -m i2pchat.gui win
-./.venv314/bin/python -m i2pchat.tui
-./.venv314/bin/python -m i2pchat.tui win
+uv run python -m i2pchat.gui
+uv run python -m i2pchat.gui win
+uv run python -m i2pchat.tui
+uv run python -m i2pchat.tui win
 ```
 
 ### Совместимость

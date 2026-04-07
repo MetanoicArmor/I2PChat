@@ -245,9 +245,9 @@ if msg_type not in [...]:
 
 **Important:** Protocol v2 is incompatible with v1. Both peers must upgrade.
 
-1. Update dependencies:
+1. Update dependencies (today: **uv** + **`uv.lock`**; this release historically used **`pip install -r requirements.txt`**):
    ```bash
-   pip install -r requirements.txt
+   uv sync
    ```
 
 2. Existing profiles and keys are compatible — no migration needed.
