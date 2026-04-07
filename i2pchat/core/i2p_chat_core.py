@@ -1178,7 +1178,11 @@ class I2PChatCore:
             os.environ.get("I2PCHAT_TRUST_AUTO", "").strip().lower() in TRUTHY_ENV_VALUES
         )
 
-        self.session_id = f"chat_{self.profile}_{int(time.time())}"
+        # Include high-entropy suffix so rapid re-inits (router settings apply + rollback in
+        # the same wall second) never reuse the same SAM nickname — i2pd returns DUPLICATED_ID.
+        self.session_id = (
+            f"chat_{self.profile}_{int(time.time())}_{secrets.token_hex(4)}"
+        )
         self.network_status = "initializing"
         self.peer_b32: str = "Waiting for incoming connections..."
 

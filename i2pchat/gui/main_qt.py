@@ -8209,10 +8209,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self.handle_system("Bundled router restarted.")
             except Exception as e:
                 logger.exception("restart bundled router failed")
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "I2P router",
-                    str(e).strip() or type(e).__name__,
+                err_msg = str(e).strip() or type(e).__name__
+                QtCore.QTimer.singleShot(
+                    0,
+                    lambda m=err_msg: QtWidgets.QMessageBox.warning(
+                        self, "I2P router", m
+                    ),
                 )
 
         try:
@@ -8290,10 +8292,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                     QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
                 except Exception:
                     logger.exception("router settings rollback failed")
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "I2P router",
-                    str(e).strip() or type(e).__name__,
+                err_msg = str(e).strip() or type(e).__name__
+                QtCore.QTimer.singleShot(
+                    0,
+                    lambda m=err_msg: QtWidgets.QMessageBox.warning(
+                        self, "I2P router", m
+                    ),
                 )
 
         try:
@@ -10342,10 +10346,22 @@ class ChatWindow(QtWidgets.QMainWindow):
         asyncio.create_task(self.core.send_image_lines(lines))
 
     async def start_core(self) -> None:
-        sam_address = await self._ensure_router_backend_ready()
-        self._active_sam_address = sam_address
-        self.core = self._create_core(self.profile, sam_address)
-        await self.core.init_session()
+        try:
+            sam_address = await self._ensure_router_backend_ready()
+            self._active_sam_address = sam_address
+            self.core = self._create_core(self.profile, sam_address)
+            await self.core.init_session()
+        except Exception as e:
+            logger.exception("start_core failed")
+            self.core = None
+            err_msg = str(e).strip() or type(e).__name__
+            QtCore.QTimer.singleShot(
+                0,
+                lambda m=err_msg: self.handle_error(
+                    f"Could not start I2P session: {m}"
+                ),
+            )
+            return
         QtCore.QTimer.singleShot(0, self._update_peer_lock_indicator)
         QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
 

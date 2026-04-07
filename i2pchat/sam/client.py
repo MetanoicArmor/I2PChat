@@ -92,26 +92,41 @@ class SAMClient:
         sig_type: int | None = None,
         options: dict[str, str] | None = None,
     ) -> SessionHandle:
-        try:
-            await self._write_and_expect(
-                build_session_create(
-                    "STREAM",
-                    session_id,
-                    destination,
-                    sig_type=sig_type,
-                    options=options,
-                ),
-                timeout=self.session_create_timeout,
-            )
-        except asyncio.TimeoutError as exc:
-            raise ProtocolError(
-                message=(
-                    f"Timed out waiting for SESSION STATUS after {self.session_create_timeout:.0f}s. "
-                    "Routers often reply only after tunnel build (can exceed 1–2 min). "
-                    "Increase I2PCHAT_SAM_SESSION_CREATE_TIMEOUT if needed."
-                ),
-                raw_line="",
-            ) from exc
+        payload = build_session_create(
+            "STREAM",
+            session_id,
+            destination,
+            sig_type=sig_type,
+            options=options,
+        )
+        for attempt in range(2):
+            try:
+                await self._write_and_expect(
+                    payload,
+                    timeout=self.session_create_timeout,
+                )
+                break
+            except asyncio.TimeoutError as exc:
+                raise ProtocolError(
+                    message=(
+                        f"Timed out waiting for SESSION STATUS after {self.session_create_timeout:.0f}s. "
+                        "Routers often reply only after tunnel build (can exceed 1–2 min). "
+                        "Increase I2PCHAT_SAM_SESSION_CREATE_TIMEOUT if needed."
+                    ),
+                    raw_line="",
+                ) from exc
+            except ProtocolError as exc:
+                # i2pd sometimes closes the control socket or sends EOF right after SESSION CREATE
+                # under load (see router.log "Read error: End of file"). One fresh TCP+HELLO retry.
+                if (
+                    attempt == 0
+                    and (exc.message or "").strip() == "Empty SAM reply"
+                ):
+                    await self.close()
+                    await asyncio.sleep(0.2)
+                    await self.open()
+                    continue
+                raise
         if self._reader is None or self._writer is None:
             raise SessionClosed(message="SAM client is not open")
         return SessionHandle(session_id=session_id, reader=self._reader, writer=self._writer)
