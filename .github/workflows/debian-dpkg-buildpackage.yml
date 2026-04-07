@@ -32,6 +32,10 @@ permissions:
 jobs:
   dpkg-buildpackage:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        # debian:sid default /bin/sh is dash — no shopt/nullglob (used below).
+        shell: bash
     container:
       image: debian:sid
     steps:
