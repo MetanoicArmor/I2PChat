@@ -35,6 +35,8 @@ def test_tui_respects_explicit_saved_router_backend_choice(
     from i2pchat.gui.chat_python import I2PChat
     from i2pchat.router.settings import RouterSettings
 
+    # normalize_router_settings() calls bundled_i2pd_allowed from router.settings, not chat_python.
+    monkeypatch.setattr("i2pchat.router.settings.bundled_i2pd_allowed", lambda: True)
     monkeypatch.setattr(
         "i2pchat.gui.chat_python.load_router_settings",
         lambda: RouterSettings(backend="bundled", bundled_auto_start=True),
@@ -66,7 +68,7 @@ def test_tui_forces_system_when_bundled_router_is_disabled(
         lambda: "/tmp/router-prefs.json",
     )
     monkeypatch.setattr("i2pchat.gui.chat_python.os.path.isfile", lambda _path: True)
-    monkeypatch.setattr("i2pchat.gui.chat_python.bundled_i2pd_allowed", lambda: False)
+    monkeypatch.setattr("i2pchat.router.settings.bundled_i2pd_allowed", lambda: False)
 
     settings = I2PChat._load_tui_router_settings()
 
