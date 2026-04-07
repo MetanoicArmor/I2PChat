@@ -1,11 +1,12 @@
 i2pchat (1.2.4) UNRELEASED; urgency=medium
 
-  * Initial Debian packaging: python3-i2pchat, i2pchat, i2pchat-tui; system i2pd
-    (>= 2.59.0~); autopkgtest import-runtime.
+  * Initial Debian packaging: python3-i2pchat, i2pchat, i2pchat-tui; system
+    i2pd (>= 2.59.0~); autopkgtest import-runtime (not superficial-only, so
+    autopkgtest exits 0 on success).
   * Install system-router-only marker via debian/python3-i2pchat.install under
     usr/share/i2pchat/ (not under usr/share/doc; dpkg nodoc path-exclude).
-  * debian/source/options: tar-ignore .git, venv, AppImage staging, vendor, etc.;
-    full dpkg-buildpackage -us -uc; stage versioned artifacts to debian-ci-out/.
+  * debian/source/options: tar-ignore .git, venv, AppImage staging, vendor,
+    packaging/aur (AUR makepkg debris); full dpkg-buildpackage -us -uc.
   * Copyright: Fluent UI emoji (Expat), GUI icons; minimal lintian overrides
     (ITP changelog, console scripts without man pages).
 

@@ -47,6 +47,8 @@ fi
 
 REPO_ROOT="$(pwd)"
 export UV_PROJECT_ENVIRONMENT="${REPO_ROOT}/${VENV_DIR}"
+# Иначе uv ругается, если в шелле активировано другое venv (например .venv314).
+unset VIRTUAL_ENV
 
 echo "==> Checking optional bundled i2pd source"
 "${REPO_ROOT}/scripts/ensure_bundled_i2pd.sh"
