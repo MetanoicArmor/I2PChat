@@ -13,7 +13,6 @@ Rules-Requires-Root: no
 Homepage: https://github.com/MetanoicArmor/I2PChat
 Vcs-Browser: https://github.com/MetanoicArmor/I2PChat
 Vcs-Git: https://github.com/MetanoicArmor/I2PChat.git
-Testsuite: autopkgtest
 
 Package: python3-i2pchat
 Section: python

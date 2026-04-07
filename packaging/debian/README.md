@@ -55,10 +55,10 @@ sudo apt install i2pchat-tui    # терминал (TUI)
 
 Это отдельная линия: **официальный стиль Debian** (`dpkg-buildpackage`), пакеты **`python3-i2pchat`** + мета **`i2pchat`** / **`i2pchat-tui`**, зависимость от **системного `i2pd`**, без бинарника встроенного роутера в `.deb`.
 
-**Статус:** не эквивалентно готовности к **RFS в Debian**; цель ближайшего рубежа — стабильный **`dpkg-buildpackage`**, **lintian** (без ошибок), **autopkgtest** на `virt null`. Дальше — **sbuild** в чистом chroot, расширение **`debian/copyright`**, полировка **`debian/control`**.
+**Статус:** приближение к **RFS**: native **`debian/changelog`** с версией **`1.2.4`** (без `-1`), **`debian/source/options`** отсекает локальный мусор из tarball, **`debian/copyright`** покрывает emoji/icons. Дальше — **sbuild** у спонсора и **ITP**.
 
 - **CI:** [`.github/workflows/debian-dpkg-buildpackage.yml`](../../.github/workflows/debian-dpkg-buildpackage.yml) — контейнер **`debian:sid`**, чтобы из архива ставился **`i2pd` ≥ 2.59** (как в `Depends` у `python3-i2pchat`). В **Ubuntu 24.04** в main сейчас только i2pd **2.49**, поэтому noble без PPA/backports не подходит под текущие зависимости. Python **≥ 3.12** — как в [`pyproject.toml`](../../pyproject.toml).
-- **Локально (Docker):** [`docker-dpkg-buildpackage.sh`](docker-dpkg-buildpackage.sh) — по умолчанию **`debian:sid`** (та же логика, что в CI). Другой образ: `DEBIAN_BUILD_IMAGE=ubuntu:24.04 …` только если вы ослабляете `Depends` на i2pd. Скрипт кладёт `*.deb` / `*.changes` / `*.buildinfo` в **`debian-ci-out/`** (в `.gitignore`), затем lintian, autopkgtest и `apt-get install --reinstall ./debian-ci-out/*.deb`.
+- **Локально (Docker):** [`docker-dpkg-buildpackage.sh`](docker-dpkg-buildpackage.sh) — по умолчанию **`debian:sid`**. Скрипт выполняет **`dpkg-buildpackage -us -uc`** (полный native upload), копирует в **`debian-ci-out/`** артефакты `*.deb` / `*.changes` / `*.buildinfo` / `*.dsc` / `*.tar.xz`, затем **`lintian -E`**, **`autopkgtest`**, переустановку `.deb` и проверку маркера **`/usr/share/i2pchat/system-router-only`**.
 - **Чистый source tree:** в git должны оставаться только «ручные» файлы под `debian/` (`rules`, `control`, `copyright`, `tests/*`, …). Всё, что создаёт `dh`/`dpkg-buildpackage` (`debian/files`, `*.substvars`, `debhelper-build-stamp`, `debian/python3-i2pchat/` и т.д.), перечислено в **`.gitignore`** — после локальной сборки можно смело удалять эти пути.
 - **sbuild (следующий рубеж, вручную):** после `dpkg-buildpackage -S` — например `sbuild -d unstable ../i2pchat_*.dsc` в настроенном chroot; в CI пока не гоняется.
 
@@ -72,6 +72,18 @@ sudo apt install i2pchat-tui    # терминал (TUI)
 dpkg-deb -c ../python3-i2pchat_*_all.deb | grep -E 'usr/share/(i2pchat|doc/python3-i2pchat)/'
 dpkg-deb -c ../i2pchat_*_all.deb | head -20          # .desktop, pixmaps
 ```
+
+### Чеклист перед RFS (кратко)
+
+1. **`dpkg-buildpackage -us -uc`** на **sid** (или `./packaging/debian/docker-dpkg-buildpackage.sh`).
+2. **Версия:** формат **3.0 (native)** → в changelog только **`Upstream-Version`** (например `1.2.4`), без Debian-revision.
+3. **`lintian ../*.changes`** (в CI — `lintian -E` на staged `.changes`): нет ошибок; предупреждения либо исправлены, либо осознанно в **`debian/*.lintian-overrides`** / **`debian/source/lintian-overrides`**.
+4. **`autopkgtest`** (`virt null`): хотя бы **import-runtime**; установка пакетов и маркер system-router-only не ломают сценарий.
+5. **Содержимое `.deb`:** `python3-i2pchat` — модули и entry points; `i2pchat` / `i2pchat-tui` — только desktop-интеграция.
+6. **Политика роутера в .deb:** только системный **i2pd** (**≥ 2.59**), встроенный роутер в Debian-пакете не поставляется; portable/AppImage — отдельная линия.
+7. **`debian/copyright`:** покрыты upstream-ассеты (emoji, иконки и т.д.).
+8. **Дерево:** нет сгенерированного мусора в **`debian/`** под VCS; нет случайных бинарников в коммите.
+9. **Размер tarball:** `debian/source/options` исключает **`.git`** и прочий локальный шум; без этого lintian видит **`.git/lfs`** и ругается на сторонние бинарники. Полный `*.tar.xz` всё равно большой из‑за набора **Fluent emoji PNG** — это ожидаемо для upstream.
 
 ---
 

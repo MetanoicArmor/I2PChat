@@ -53,21 +53,37 @@ jobs:
             python3-all \
             python3-hatchling
 
-      - name: dpkg-buildpackage (binary, unsigned)
-        run: dpkg-buildpackage -us -uc -b
+      - name: dpkg-buildpackage (unsigned, full native upload)
+        run: dpkg-buildpackage -us -uc
 
       - name: Stage built packages inside workspace
         run: |
           mkdir -p debian-ci-out
-          shopt -s nullglob
-          cp ../*.deb ../*.changes ../*.buildinfo debian-ci-out/
+          rm -f debian-ci-out/*
+          ver="$(dpkg-parsechangelog -l debian/changelog -SVersion)"
+          arch="$(dpkg-architecture -qDEB_BUILD_ARCH)"
+          for f in \
+            "../i2pchat_${ver}.dsc" \
+            "../i2pchat_${ver}.tar.xz" \
+            "../i2pchat_${ver}_${arch}.buildinfo" \
+            "../i2pchat_${ver}_${arch}.changes" \
+            "../python3-i2pchat_${ver}_all.deb" \
+            "../i2pchat_${ver}_all.deb" \
+            "../i2pchat-tui_${ver}_all.deb"; do
+            test -e "$f" || { echo "missing $f" >&2; exit 1; }
+            cp "$f" debian-ci-out/
+          done
           ls -la debian-ci-out/
 
-      - name: Upload .deb and .changes (artifact)
+      - name: Upload binaries and metadata (artifact)
         uses: actions/upload-artifact@4cec3e8a04b39d1a68300aeed7a93c7a9f4a636d # v4
         with:
           name: debian-packages-${{ github.run_id }}
-          path: debian-ci-out/
+          path: |
+            debian-ci-out/*.deb
+            debian-ci-out/*.changes
+            debian-ci-out/*.buildinfo
+            debian-ci-out/*.dsc
 
       - name: lintian (errors only; bitmask exit may be 4/8 if only warnings/info)
         run: |

@@ -23,10 +23,29 @@ apt-get install -y -qq \
   python3-all \
   python3-hatchling
 
-dpkg-buildpackage -us -uc -b
+# Full source+binary (native tarball) so lintian sees the same tree as dpkg-source -b.
+dpkg-buildpackage -us -uc
 
 mkdir -p debian-ci-out
-cp ../*.deb ../*.changes ../*.buildinfo debian-ci-out/
+rm -f debian-ci-out/*
+ver="$(dpkg-parsechangelog -l debian/changelog -SVersion)"
+arch="$(dpkg-architecture -qDEB_BUILD_ARCH)"
+stage=(
+  "../i2pchat_${ver}.dsc"
+  "../i2pchat_${ver}.tar.xz"
+  "../i2pchat_${ver}_${arch}.buildinfo"
+  "../i2pchat_${ver}_${arch}.changes"
+  "../python3-i2pchat_${ver}_all.deb"
+  "../i2pchat_${ver}_all.deb"
+  "../i2pchat-tui_${ver}_all.deb"
+)
+for f in "${stage[@]}"; do
+  if [ ! -e "$f" ]; then
+    echo "missing build artifact: $f" >&2
+    exit 1
+  fi
+  cp "$f" debian-ci-out/
+done
 ls -la debian-ci-out/
 
 ch=(debian-ci-out/*.changes)

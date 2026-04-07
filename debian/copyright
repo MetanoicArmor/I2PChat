@@ -19,8 +19,16 @@ License: AGPL-3.0-or-later
 Comment: Raster icon used by .desktop entries in i2pchat / i2pchat-tui packages.
 
 Files: i2pchat/gui/fluent_emoji/*
-Copyright: Microsoft Corporation
-License: MIT
+Copyright: Microsoft Corporation and contributors
+License: Expat
+Comment:
+ Raster emoji derived from microsoft/fluentui-emoji (MIT). See NOTICE and
+ LICENSE-FLUENT-EMOJI in that directory.
+
+Files: i2pchat/gui/icons/*
+Copyright: 2024-2026 Vade and contributors
+License: AGPL-3.0-or-later
+Comment: Small theme / UI chrome PNGs shipped with the application.
 
 License: AGPL-3.0-or-later
  This program is free software: you can redistribute it and/or modify
@@ -31,7 +39,7 @@ License: AGPL-3.0-or-later
  On Debian systems, the full text of the GNU Affero General Public License
  version 3 can be found in /usr/share/common-licenses/AGPL-3.
 
-License: MIT
+License: Expat
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
  in the Software without restriction, including without limitation the rights
@@ -49,3 +57,5 @@ License: MIT
  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  SOFTWARE.
+ .
+ On Debian systems, the Expat license text is in /usr/share/common-licenses/Expat.
