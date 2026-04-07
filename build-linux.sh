@@ -53,15 +53,34 @@ unset VIRTUAL_ENV
 # Удаление onedir после сборки от root или с read-only битами: иначе rm → EACCES.
 safe_rm_rf() {
   local p
+  _try_rm() {
+    local t="$1"
+    chmod -R u+w "$t" 2>/dev/null || true
+    rm -rf "$t"
+  }
   for p in "$@"; do
     [ -e "$p" ] || [ -L "$p" ] || continue
-    chmod -R u+w "$p" 2>/dev/null || true
-    if ! rm -rf "$p"; then
-      echo "ERROR: не удалось удалить «$p» (нет прав или файл занят)." >&2
-      echo "       Закройте запущенные ${APP_NAME} / ${APP_NAME}-tui и повторите, либо:" >&2
-      echo "       sudo chown -R \"\$USER\" \"$p\"" >&2
-      exit 1
+    if _try_rm "$p"; then
+      continue
     fi
+    chmod -R a+rwx "$p" 2>/dev/null || true
+    if _try_rm "$p"; then
+      continue
+    fi
+    # Частый случай: I2PChat.AppDir собирали под root/Docker — chmod от обычного пользователя не помогает.
+    if command -v sudo >/dev/null 2>&1; then
+      echo "WARN: «$p» не удалось снять без sudo (вероятно владелец root); пробую sudo chown…" >&2
+      if sudo chown -R "$(id -u):$(id -g)" "$p" 2>/dev/null; then
+        chmod -R u+rwX "$p" 2>/dev/null || true
+        if _try_rm "$p"; then
+          continue
+        fi
+      fi
+    fi
+    echo "ERROR: не удалось удалить «$p» (нет прав или файл занят)." >&2
+    echo "       Закройте ${APP_NAME} / ${APP_NAME}-tui и снимите монтирование AppImage, если оно из этого каталога." >&2
+    echo "       Вручную: sudo chown -R \"\$(id -u):\$(id -g)\" \"$p\" && rm -rf \"$p\"" >&2
+    exit 1
   done
 }
 
