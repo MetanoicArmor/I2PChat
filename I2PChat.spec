@@ -34,9 +34,14 @@ else:
         _i2pd_sub = 'linux-aarch64'
     else:
         _i2pd_sub = 'linux-x86_64'
-    _i2pd_path = os.path.join('vendor', 'i2pd', _i2pd_sub, 'i2pd')
+    _i2pd_dir = os.path.join('vendor', 'i2pd', _i2pd_sub)
+    _i2pd_path = os.path.join(_i2pd_dir, 'i2pd')
     if os.path.isfile(_i2pd_path):
-        _i2pd_binaries.append((_i2pd_path, os.path.join('vendor', 'i2pd', _i2pd_sub)))
+        _i2pd_binaries.append((_i2pd_path, _i2pd_dir))
+        # Dynamic i2pd builds need Boost/OpenSSL etc. next to the binary (like *.dll on Windows).
+        _i2pd_binaries.extend(
+            (so, _i2pd_dir) for so in glob.glob(os.path.join(_i2pd_dir, '*.so*'))
+        )
 
 # Set I2PCHAT_OMIT_BUNDLED_I2PD=1 for a winget/store-friendly Windows build without embedded i2pd (Microsoft pipeline AV).
 if os.environ.get("I2PCHAT_OMIT_BUNDLED_I2PD", "").strip().lower() in ("1", "true", "yes"):

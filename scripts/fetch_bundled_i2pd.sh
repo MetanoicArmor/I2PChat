@@ -94,6 +94,22 @@ find_source_file() {
   return 1
 }
 
+copy_extra_libs_from_subdir() {
+  # Linux i2pd often needs Boost/OpenSSL *.so next to the binary (same idea as *.dll on Windows).
+  local source_dir="$1"
+  local sub="$2"
+  local pattern="$3"
+  local d="${source_dir}/${sub}"
+  [[ -d "$d" ]] || return 0
+  local f
+  shopt -s nullglob
+  for f in "${d}/${pattern}"; do
+    [[ -f "$f" ]] || continue
+    copy_one "$f" "${TARGET_ROOT}/${sub}/$(basename "$f")"
+  done
+  shopt -u nullglob
+}
+
 copy_from_dir() {
   local source_dir="$1"
   local found=0
@@ -102,18 +118,22 @@ copy_from_dir() {
   if src="$(find_source_file "${source_dir}" "darwin-arm64/i2pd" "i2pd-darwin-arm64")"; then
     copy_one "$src" "${TARGET_ROOT}/darwin-arm64/i2pd"
     found=1
+    copy_extra_libs_from_subdir "$source_dir" "darwin-arm64" "*.dylib"
   fi
   if src="$(find_source_file "${source_dir}" "linux-aarch64/i2pd" "i2pd-linux-aarch64")"; then
     copy_one "$src" "${TARGET_ROOT}/linux-aarch64/i2pd"
     found=1
+    copy_extra_libs_from_subdir "$source_dir" "linux-aarch64" "*.so*"
   fi
   if src="$(find_source_file "${source_dir}" "linux-x86_64/i2pd" "i2pd-linux-x86_64")"; then
     copy_one "$src" "${TARGET_ROOT}/linux-x86_64/i2pd"
     found=1
+    copy_extra_libs_from_subdir "$source_dir" "linux-x86_64" "*.so*"
   fi
   if src="$(find_source_file "${source_dir}" "windows-x64/i2pd.exe" "i2pd-windows-x64.exe")"; then
     copy_one "$src" "${TARGET_ROOT}/windows-x64/i2pd.exe"
     found=1
+    copy_extra_libs_from_subdir "$source_dir" "windows-x64" "*.dll"
   fi
 
   if [[ "$found" -ne 1 ]]; then

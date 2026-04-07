@@ -33,6 +33,9 @@ fi
 
 echo "==> Checking optional bundled i2pd source"
 "$(pwd)/scripts/ensure_bundled_i2pd.sh"
+if [ ! -f "vendor/i2pd/darwin-arm64/i2pd" ]; then
+  echo "WARN: нет vendor/i2pd/darwin-arm64/i2pd — .app будет без встроенного i2pd (см. build-linux.sh / docs/BUILD.md)." >&2
+fi
 
 if command -v python3.14 >/dev/null 2>&1; then
   PYTHON_BIN="python3.14"

@@ -22,7 +22,9 @@ Python **3.12+** is supported (**3.14+** recommended for release-style builds). 
 1. already staged `vendor/i2pd/`
 2. `I2PCHAT_BUNDLED_I2PD_SOURCE_DIR`
 3. sibling repo `../i2pchat-bundled-i2pd`
-4. **Git clone** into `.cache/bundled-i2pd-source/`: default **[`MetanoicArmor/i2pchat-bundled-i2pd`](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd)** (`I2PCHAT_BUNDLED_I2PD_GIT_URL` overrides; empty URL or **`I2PCHAT_SKIP_BUNDLED_I2PD_GIT=1`** skips this step)
+4. **Git clone** into `.cache/bundled-i2pd-source/`: default **`https://github.com/MetanoicArmor/i2pchat-bundled-i2pd.git`** (`I2PCHAT_BUNDLED_I2PD_GIT_URL` overrides; empty URL or **`I2PCHAT_SKIP_BUNDLED_I2PD_GIT=1`** skips this step). The URL must be **cloneable without a prompt** in your environment (public repo, or SSH URL with keys, or cached credentials); otherwise `ensure_bundled_i2pd.sh` logs `NOT FOUND` and portable builds ship **without** embedded `i2pd`. **`build-linux.sh`** prints an extra **WARN** when the expected `vendor/i2pd/…/i2pd` file is still missing.
+
+**Linux dynamic `i2pd`:** if the router binary is linked against Boost/OpenSSL (not fully static), ship the matching **`*.so*`** files in the same `vendor/i2pd/linux-*/` directory; PyInstaller packs them like Windows `*.dll`, and the app prepends that directory to **`LD_LIBRARY_PATH`** when starting i2pd (so AppImage `_internal` does not shadow Boost). On **Arch/CachyOS** (and similar), upstream i2pd may ask for **`libboost_program_options.so.1.89.0`** while the system only ships **1.90** — after placing `i2pd`, run **[`scripts/stage_i2pd_linux_shlibs.sh`](../scripts/stage_i2pd_linux_shlibs.sh)** to copy Boost from `/usr/lib` and add version symlinks so **`uv run`** and AppImage builds work.
 
 For predictable builds, prefer setting **`I2PCHAT_BUNDLED_I2PD_SOURCE_DIR`** explicitly. The sibling-repo path is only a local convenience fallback. For manual staging or URL-based fetching, use [`scripts/fetch_bundled_i2pd.sh`](../scripts/fetch_bundled_i2pd.sh). The staged files are untracked and are not required for Debian/Ubuntu packaging.
 

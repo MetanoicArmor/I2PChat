@@ -86,6 +86,11 @@ safe_rm_rf() {
 
 echo "==> Checking optional bundled i2pd source"
 "${REPO_ROOT}/scripts/ensure_bundled_i2pd.sh"
+if [ ! -f "vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd" ]; then
+  echo "WARN: нет vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd — AppImage и GUI-zip будут без встроенного i2pd." >&2
+  echo "      Частая причина: git clone по умолчанию не удался (приватный репозиторий, офлайн, нет git в PATH)." >&2
+  echo "      Задайте I2PCHAT_BUNDLED_I2PD_SOURCE_DIR, SSH URL в I2PCHAT_BUNDLED_I2PD_GIT_URL, или ./scripts/fetch_bundled_i2pd.sh --from …" >&2
+fi
 
 uv sync --frozen --python "${PYTHON_BIN}" --group build --no-dev
 

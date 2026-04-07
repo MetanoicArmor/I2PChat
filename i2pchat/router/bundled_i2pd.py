@@ -11,7 +11,7 @@ import sys
 import time
 from typing import Iterable, Optional
 
-from .runtime import is_tcp_open, pick_free_tcp_port, wait_for_sam_ready
+from .runtime import is_tcp_open, pick_free_tcp_port, probe_sam_hello, wait_for_sam_ready
 from .settings import RouterSettings, router_runtime_dir
 
 
@@ -191,6 +191,20 @@ def resolve_bundled_i2pd_binary() -> Optional[str]:
         if candidate.is_file():
             return str(candidate)
     return None
+
+
+def _subprocess_env_with_i2pd_libdir(binary: str) -> dict[str, str]:
+    """Put i2pd's directory first on LD_LIBRARY_PATH so bundled *.so (e.g. Boost) load before AppImage _internal."""
+    env = os.environ.copy()
+    if sys.platform == "win32":
+        return env
+    bindir = os.path.dirname(os.path.abspath(binary))
+    if not bindir:
+        return env
+    key = "LD_LIBRARY_PATH"
+    prev = env.get(key, "")
+    env[key] = bindir if not prev else f"{bindir}{os.pathsep}{prev}"
+    return env
 
 
 def _ps_single_quoted(text: str) -> str:
@@ -964,6 +978,32 @@ class BundledI2pdManager:
             f"--pidfile={rt.pidfile_path}",
         ]
 
+    async def _wait_for_bundled_sam_ready(self, rt: BundledI2pdRuntime, timeout: float) -> None:
+        """Like wait_for_sam_ready but fail fast if the i2pd child exits (e.g. missing .so on Linux)."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        last_err: BaseException | None = None
+        proc = self._proc
+        if proc is None:
+            raise RuntimeError("internal error: bundled i2pd process not started")
+        while loop.time() < deadline:
+            if proc.returncode is not None:
+                raise RuntimeError(
+                    "Bundled i2pd exited before SAM was ready "
+                    f"(exit code {proc.returncode}). "
+                    f"See {rt.log_path} — often \"error while loading shared libraries\" "
+                    "(copy ldd-listed *.so into vendor/i2pd/linux-*/ next to i2pd, or use a static i2pd)."
+                )
+            try:
+                await probe_sam_hello(rt.sam_host, rt.sam_port, timeout=2.0)
+                return
+            except Exception as e:
+                last_err = e
+                await asyncio.sleep(0.25)
+        raise TimeoutError(
+            f"SAM did not become ready on {rt.sam_host}:{rt.sam_port}: {last_err}"
+        )
+
     async def start(self) -> tuple[str, int]:
         if self._proc is not None and self._proc.returncode is None:
             return self.sam_address()
@@ -989,11 +1029,12 @@ class BundledI2pdManager:
             stdout=self._log_handle,
             stderr=self._log_handle,
             creationflags=creationflags,
+            env=_subprocess_env_with_i2pd_libdir(binary),
         )
         self._launch_pid = self._proc.pid if self._proc is not None else None
 
         try:
-            await wait_for_sam_ready(rt.sam_host, rt.sam_port, timeout=60.0)
+            await self._wait_for_bundled_sam_ready(rt, 60.0)
         except Exception:
             await self.stop()
             raise
