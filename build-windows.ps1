@@ -28,6 +28,31 @@ function Stop-I2PChatProcessesLockingDist {
     Start-Sleep -Milliseconds 500
 }
 
+function Get-I2PChatGpgExecutable {
+    if ($env:I2PCHAT_GPG_EXE) {
+        if (Test-Path -LiteralPath $env:I2PCHAT_GPG_EXE) {
+            return (Resolve-Path -LiteralPath $env:I2PCHAT_GPG_EXE).Path
+        }
+        return $null
+    }
+    $fromPath = Get-Command gpg -ErrorAction SilentlyContinue
+    if ($fromPath) {
+        return $fromPath.Source
+    }
+    $pf86 = ${env:ProgramFiles(x86)}
+    foreach ($dir in @(
+            (Join-Path $env:ProgramFiles "GnuPG\bin"),
+            (Join-Path $pf86 "GnuPG\bin"),
+            (Join-Path $env:LOCALAPPDATA "Programs\GnuPG\bin")
+        )) {
+        $exe = Join-Path $dir "gpg.exe"
+        if (Test-Path -LiteralPath $exe) {
+            return (Resolve-Path -LiteralPath $exe).Path
+        }
+    }
+    return $null
+}
+
 function Remove-PathWithRetry {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -321,11 +346,11 @@ Write-Host "  MetanoicArmor.I2PChat.TUI: $sumWingetTui"
 if ($env:I2PCHAT_SKIP_GPG_SIGN -eq "1") {
     Write-Warning "Skipping GPG detached signature (I2PCHAT_SKIP_GPG_SIGN=1)"
 }
-elseif (-not (Get-Command gpg -ErrorAction SilentlyContinue)) {
+elseif (-not ($gpgExe = Get-I2PChatGpgExecutable)) {
     if ($env:I2PCHAT_REQUIRE_GPG -eq "1") {
-        throw "gpg is required to create detached release signature"
+        throw "gpg is required to create detached release signature (install GnuPG or set I2PCHAT_GPG_EXE to gpg.exe)"
     }
-    Write-Warning "gpg not found; skipping detached signature (set I2PCHAT_REQUIRE_GPG=1 to enforce)"
+    Write-Warning "gpg not found; skipping detached signature (install GnuPG, add to PATH, or set I2PCHAT_GPG_EXE; I2PCHAT_REQUIRE_GPG=1 to enforce)"
 }
 else {
     $GpgArgs = @("--batch", "--yes", "--armor", "--detach-sign", "--output", "SHA256SUMS.asc")
@@ -333,7 +358,7 @@ else {
         $GpgArgs += @("--local-user", $env:I2PCHAT_GPG_KEY_ID)
     }
     $GpgArgs += "SHA256SUMS"
-    & gpg @GpgArgs
+    & $gpgExe @GpgArgs
     if ($LASTEXITCODE -ne 0) {
         if ($env:I2PCHAT_REQUIRE_GPG -eq "1") {
             throw "gpg failed with exit code $LASTEXITCODE in required mode"
