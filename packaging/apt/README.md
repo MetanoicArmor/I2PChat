@@ -2,6 +2,22 @@
 
 **Пока никто не настроил секреты и не выкатил сайт, зеркала нет:** пользователям нужны **`.deb` с GitHub Releases** (`sudo apt install ./…`). Ниже — инструкция **для будущего мейнтейнера** и готовые команды на тот случай, когда **`KEY.gpg`** уже отдаётся по URL.
 
+## Что нужно для этого apt-зеркала (кроме мейнтейнера)
+
+Имеется в виду **собственное зеркало на GitHub Pages**, а не включение пакета в **официальный архив Debian** (для Debian нужны отдельно: ITP/RFS, сопровождение в `sid`, загрузчик и т.д. — это другой процесс).
+
+Для **Pages + apt** исходный **tarball не нужен**: репозиторий собирается из готовых **`.deb`**.
+
+| Требование | Зачем |
+|------------|--------|
+| **GitHub Pages → источник «GitHub Actions»** | Деплой сайта с `dists/` и `pool/` (не ветка `gh-pages` с большими бинарниками в git). |
+| **Окружение `github-pages`** в Actions | Первый деплой может запросить подтверждение. |
+| **Секреты `APT_REPO_GPG_PRIVATE_KEY`** и при необходимости **`APT_REPO_GPG_PASSPHRASE`** | Подпись `InRelease` / `Release.gpg` и публикация `KEY.gpg`. |
+| На **релизе** `vX.Y.Z` файлы **`i2pchat_X.Y.Z_amd64.deb`** и **`i2pchat-tui_X.Y.Z_amd64.deb`** | Их подтягивает workflow **Publish apt mirror** или шаг apt в **Release Linux packages**. Обычно они появляются после job **deb-amd64** (сборка из Linux zip на релизе). |
+| Linux **x86_64** GUI + TUI **zip** на том же релизе | Нужны **до** сборки `.deb` в CI (`I2PChat-linux-x86_64-v*.zip`, `…-tui-…`). GUI zip — с **AppImage** внутри (режим по умолчанию `build-linux.sh`) или **portable** onedir — скрипт **`packaging/debian/build-deb-from-appimage.sh`** поддерживает оба варианта. |
+
+Зеркало в **`dists/stable/main/binary-amd64`** сейчас рассчитано на **amd64** только для apt-индекса; **arm64** `.deb` можно класть на Releases отдельно (`deb-arm64` в **Release Linux packages**), без добавления в то же дерево Pages (для multi-arch пришлось бы расширять `build-apt-site.sh`).
+
 После деплоя пользователи подключают apt к **`https://<owner>.github.io/<repo>/`** (для **`MetanoicArmor/I2PChat`**: `https://metanoicarmor.github.io/I2PChat/`). В корне зеркала лежит **`index.html`** — витрина с командами установки и ссылками на `KEY.gpg` / индексы.
 
 Сайт публикуется через **GitHub Actions → Pages** (артефакт): в выдачу попадает полное дерево **`dists/`**, **`pool/main/*.deb`**, **`KEY.gpg`**, подписи. Так обходятся два ограничения:

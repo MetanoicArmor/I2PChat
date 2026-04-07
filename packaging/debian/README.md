@@ -33,7 +33,7 @@
 
 | Пакет | Скрипт | Заметки |
 |--------|--------|---------|
-| GUI | [`build-deb-from-appimage.sh`](build-deb-from-appimage.sh) | По умолчанию amd64 (`I2PChat-linux-x86_64-v*.zip`); arm64: `I2PCHAT_DEB_ARCH=arm64 ./packaging/debian/build-deb-from-appimage.sh [версия]` |
+| GUI | [`build-deb-from-appimage.sh`](build-deb-from-appimage.sh) | Zip с **AppImage** внутри (релизный режим по умолчанию) или **portable** onedir (`I2PChat` + `_internal`). amd64 / arm64: `I2PCHAT_DEB_ARCH=arm64 …` |
 | Терминал (TUI) | [`build-tui-deb-from-release-zip.sh`](build-tui-deb-from-release-zip.sh) | Те же архитектуры |
 
 Версия — аргумент или первая строка **`VERSION`** в корне репо.

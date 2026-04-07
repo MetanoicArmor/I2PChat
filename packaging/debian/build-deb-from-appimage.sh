@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Build a minimal .deb from the official Linux release zip (AppImage inside).
-# Architecture: I2PCHAT_DEB_ARCH=amd64 (default, zip I2PChat-linux-x86_64-v*.zip) or arm64 (I2PChat-linux-aarch64-v*.zip).
+# Build a minimal .deb from the official Linux GUI release zip:
+#   - AppImage mode (default build-linux.sh): one *.AppImage inside the zip.
+#   - Portable onedir (I2PCHAT_LINUX_GUI_ZIP_MODE=portable, e.g. aarch64 Docker): I2PChat + _internal/ (+ optional I2PChat-tui, vendor/) at zip root.
+# Architecture: I2PCHAT_DEB_ARCH=amd64 (zip I2PChat-linux-x86_64-v*.zip) or arm64 (I2PChat-linux-aarch64-v*.zip).
 # Usage: from repo root — ./packaging/debian/build-deb-from-appimage.sh [version]
 # Default version: first line of VERSION file in repo root.
 set -euo pipefail
@@ -65,18 +67,32 @@ echo "==> Downloading ${ZIP_URL}"
 curl_retry "$ZIP_URL" "$WORKDIR/${ZIP_NAME}" "$ZIP_ATTEMPTS"
 curl_retry "$ICON_URL" "$WORKDIR/icon.png" 12
 
-echo "==> Extracting AppImage"
+echo "==> Extracting GUI zip"
 unzip -q "$WORKDIR/${ZIP_NAME}" -d "$WORKDIR/stage"
-# Release zip contains one file: I2PChat-linux-<arch>-v<ver>.AppImage (see build-linux.sh)
-APPIMAGE="$WORKDIR/stage/I2PChat-linux-${LINUX_ZIP_ARCH}-v${VER}.AppImage"
+STAGE="$WORKDIR/stage"
+
+APPIMAGE="${STAGE}/I2PChat-linux-${LINUX_ZIP_ARCH}-v${VER}.AppImage"
 if [[ ! -f "$APPIMAGE" ]]; then
-  APPIMAGE="$(find "$WORKDIR/stage" -maxdepth 1 -name '*.AppImage' -print -quit)"
+  APPIMAGE="$(find "$STAGE" -maxdepth 1 -name '*.AppImage' -print -quit)"
 fi
-if [[ -z "$APPIMAGE" || ! -f "$APPIMAGE" ]]; then
-  echo "ERROR: no .AppImage found inside zip" >&2
-  exit 1
+
+PORT_ROOT=""
+if [[ -n "$APPIMAGE" && -f "$APPIMAGE" ]]; then
+  BUNDLE_MODE="appimage"
+elif [[ -f "${STAGE}/I2PChat" ]]; then
+  BUNDLE_MODE="portable"
+  PORT_ROOT="$STAGE"
+else
+  # Optional single top-level directory (re-packed zip)
+  SUB="$(find "$STAGE" -mindepth 1 -maxdepth 1 -type d ! -name '.*' | head -1)"
+  if [[ -n "$SUB" && -f "${SUB}/I2PChat" ]]; then
+    BUNDLE_MODE="portable"
+    PORT_ROOT="$SUB"
+  else
+    echo "ERROR: zip must contain either a .AppImage or a portable onedir (I2PChat + _internal at zip root)" >&2
+    exit 1
+  fi
 fi
-chmod +x "$APPIMAGE"
 
 PKG_ROOT="$WORKDIR/pkg"
 mkdir -p "$PKG_ROOT/DEBIAN"
@@ -85,10 +101,22 @@ mkdir -p "$PKG_ROOT/usr/bin"
 mkdir -p "$PKG_ROOT/usr/share/applications"
 mkdir -p "$PKG_ROOT/usr/share/pixmaps"
 
-cp "$APPIMAGE" "$PKG_ROOT/opt/i2pchat/I2PChat.AppImage"
 cp "$WORKDIR/icon.png" "$PKG_ROOT/usr/share/pixmaps/i2pchat.png"
 
-ln -sf /opt/i2pchat/I2PChat.AppImage "$PKG_ROOT/usr/bin/i2pchat"
+if [[ "$BUNDLE_MODE" == "appimage" ]]; then
+  chmod +x "$APPIMAGE"
+  cp "$APPIMAGE" "$PKG_ROOT/opt/i2pchat/I2PChat.AppImage"
+  ln -sf /opt/i2pchat/I2PChat.AppImage "$PKG_ROOT/usr/bin/i2pchat"
+  DESC_TAIL="Bundled AppImage from upstream GitHub releases; GUI chat over I2P (PyQt6)."
+else
+  cp -a "${PORT_ROOT}/." "$PKG_ROOT/opt/i2pchat/"
+  chmod +x "$PKG_ROOT/opt/i2pchat/I2PChat"
+  if [[ -f "$PKG_ROOT/opt/i2pchat/I2PChat-tui" ]]; then
+    chmod +x "$PKG_ROOT/opt/i2pchat/I2PChat-tui"
+  fi
+  ln -sf /opt/i2pchat/I2PChat "$PKG_ROOT/usr/bin/i2pchat"
+  DESC_TAIL="Bundled PyInstaller onedir from upstream GitHub releases; GUI chat over I2P (PyQt6)."
+fi
 
 cat > "$PKG_ROOT/usr/share/applications/i2pchat.desktop" <<'EOF'
 [Desktop Entry]
@@ -114,7 +142,7 @@ Maintainer: MetanoicArmor <https://github.com/MetanoicArmor/I2PChat>
 Homepage: https://github.com/MetanoicArmor/I2PChat
 Depends: zlib1g
 Description: Experimental peer-to-peer chat client for I2P
- Bundled AppImage from upstream GitHub releases; GUI chat over I2P (PyQt6).
+ ${DESC_TAIL}
 Installed-Size: ${INSTALLED_KB}
 EOF
 
