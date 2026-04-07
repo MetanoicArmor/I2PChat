@@ -121,6 +121,14 @@ PY
 safe_rm_rf "dist/${APP_NAME}" "build/${APP_NAME}"
 "${VENV_PY}" -m PyInstaller --clean -y I2PChat.spec
 
+# Подмешать libcrypt в onedir (нужен и для AppDir копии, и для portable GUI zip).
+for CAND in /usr/lib/libcrypt.so.2 /lib64/libcrypt.so.2 /lib/libcrypt.so.2; do
+  if [ -f "$CAND" ]; then
+    cp "$CAND" "dist/${APP_NAME}/_internal/" 2>/dev/null || true
+    break
+  fi
+done
+
 # 2) упаковка в AppDir
 safe_rm_rf "${APPDIR}"
 mkdir -p "${APPDIR}/usr/bin" \
@@ -259,10 +267,15 @@ else
   fi
 fi
 
-# 4) архив для релиза: версия + архитектура в имени zip
+# 4) архив для релиза: версия + архитектура в имени zip (в корне репозитория)
+#    appimage (default) — внутри один .AppImage (как ожидают .deb из релиза, Flatpak, Fedora).
+#    portable — в корне zip: бинарники I2PChat + I2PChat-tui, _internal/, vendor/ (как PyInstaller onedir).
 ZIP_FILE="${APP_NAME}-linux-${ARCH_SUFFIX}-v${RELEASE_VERSION}.zip"
 rm -f "${ZIP_FILE}"
-"${VENV_PY}" - "${OUTPUT_FILE}" "${ZIP_FILE}" <<'PY'
+ZIP_MODE="${I2PCHAT_LINUX_GUI_ZIP_MODE:-appimage}"
+case "${ZIP_MODE}" in
+  appimage)
+    "${VENV_PY}" - "${OUTPUT_FILE}" "${ZIP_FILE}" <<'PY'
 import os
 import sys
 import zipfile
@@ -271,7 +284,49 @@ src, dst = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     zf.write(src, arcname=os.path.basename(src))
 PY
-echo "✔ Packed ${ZIP_FILE}"
+    ;;
+  portable)
+    ONEDIR="dist/${APP_NAME}"
+    if [ ! -d "${ONEDIR}" ]; then
+      echo "ERROR: missing PyInstaller onedir ${ONEDIR} (portable GUI zip)" >&2
+      exit 1
+    fi
+    "${VENV_PY}" - "${ONEDIR}" "${ZIP_FILE}" <<'PY'
+import os
+import sys
+import zipfile
+
+stage, out = sys.argv[1], sys.argv[2]
+
+
+def add_path(zf, path, arcname):
+    if os.path.islink(path):
+        zi = zipfile.ZipInfo(arcname)
+        zi.create_system = 3  # Unix
+        st = os.lstat(path)
+        zi.external_attr = (st.st_mode & 0xFFFF) << 16
+        zf.writestr(zi, os.fsencode(os.readlink(path)))
+    else:
+        zf.write(path, arcname)
+
+
+with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    for root, dirnames, files in os.walk(stage, followlinks=False):
+        for d in dirnames:
+            p = os.path.join(root, d)
+            if os.path.islink(p):
+                add_path(zf, p, os.path.relpath(p, stage))
+        for name in files:
+            path = os.path.join(root, name)
+            add_path(zf, path, os.path.relpath(path, stage))
+PY
+    ;;
+  *)
+    echo "ERROR: unknown I2PCHAT_LINUX_GUI_ZIP_MODE=${ZIP_MODE} (use appimage or portable)" >&2
+    exit 1
+    ;;
+esac
+echo "✔ Packed ${ZIP_FILE} (GUI zip mode: ${ZIP_MODE})"
 
 echo "==> PyInstaller slim TUI-only onedir (I2PChat-tui.spec, без PyQt6)"
 safe_rm_rf "dist/${APP_NAME}-tui" "build/${APP_NAME}-tui"

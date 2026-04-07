@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build **both** Linux aarch64 release artifacts in Docker (same as ./build-linux.sh end-to-end):
-#   1) GUI — PyInstaller + AppImage → dist/…AppImage + I2PChat-linux-aarch64-v*.zip (AppImage inside)
+#   1) GUI — PyInstaller + AppImage → dist/…AppImage; zip по умолчанию **portable** (бинарники в корне zip)
 #   2) TUI — PyInstaller slim + zip → I2PChat-linux-aarch64-tui-v*.zip
 # Релизные zip лежат в корне репо (канон для SHA256SUMS); в dist/ — AppImage и onedir PyInstaller.
 #
@@ -11,6 +11,10 @@
 #
 # Usage (repo root):
 #   ./packaging/docker/build-linux-aarch64.sh
+#
+# По умолчанию GUI zip — **portable** (в корне архива: I2PChat, I2PChat-tui, _internal, vendor).
+# AppImage по-прежнему собирается в dist/ и I2PChat.AppImage в корне репо.
+# Как в CI (один AppImage в zip): I2PCHAT_LINUX_GUI_ZIP_MODE=appimage ./packaging/docker/build-linux-aarch64.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -28,12 +32,14 @@ echo "==> Building Docker image ${IMAGE} (linux/arm64)"
 docker buildx build --platform linux/arm64 --load -f "${DOCKERFILE}" -t "${IMAGE}" "${ROOT}/packaging/docker"
 
 echo "==> Running full build-linux.sh in container (GUI AppImage + zip, затем TUI zip)"
+export I2PCHAT_LINUX_GUI_ZIP_MODE="${I2PCHAT_LINUX_GUI_ZIP_MODE:-portable}"
 docker run --rm --platform linux/arm64 \
   -v "${ROOT}:/src:rw" \
   -w /src \
   -e QT_QPA_PLATFORM=offscreen \
   -e APPIMAGE_EXTRACT_AND_RUN=1 \
   -e I2PCHAT_SKIP_GPG_SIGN=1 \
+  -e "I2PCHAT_LINUX_GUI_ZIP_MODE=${I2PCHAT_LINUX_GUI_ZIP_MODE}" \
   "${IMAGE}" \
   ./build-linux.sh
 

@@ -15,7 +15,7 @@ i2pchat_print_linux_host_artifacts() {
   echo "    Основные файлы:"
   echo "      ${root}/dist/                          — PyInstaller (onedir), AppImage с архитектурой в имени"
   echo "      ${root}/I2PChat.AppImage               — AppImage (текущая архитектура контейнера)"
-  echo "      ${root}/I2PChat-linux-${arch}-v${ver}.zip   — GUI zip (в корне репо)"
+  echo "      ${root}/I2PChat-linux-${arch}-v${ver}.zip   — GUI zip (в корне репо; aarch64 Docker: portable onedir, иначе часто AppImage внутри)"
   echo "      ${root}/I2PChat-linux-${arch}-tui-v${ver}.zip — TUI zip (в корне репо)"
   echo "      ${root}/SHA256SUMS                     — хеши двух zip (и SHA256SUMS.asc при подписи)"
   echo ""

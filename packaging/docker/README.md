@@ -78,7 +78,7 @@ From the **repository root**:
 ./packaging/docker/build-linux-aarch64.sh
 ```
 
-The script builds the image and runs **`./build-linux.sh`** end-to-end (GUI AppImage + zip, затем TUI zip). Репозиторий смонтирован в `/src`. Оба релизных zip — **в корне репо** (`I2PChat-linux-aarch64-v*.zip`, `*-tui-*`); в **`dist/`** — AppImage и каталоги PyInstaller.
+The script builds the image and runs **`./build-linux.sh`** end-to-end. Репозиторий смонтирован в `/src`. В **корне репо** появляются **два zip**: **`I2PChat-linux-aarch64-v*.zip`** (GUI) и **`…-tui-…`**. По умолчанию GUI zip — **portable**: в **корне архива** лежат бинарники **`I2PChat`**, **`I2PChat-tui`**, каталоги **`_internal/`**, при наличии **`vendor/`** (как PyInstaller onedir). **AppImage** всё равно собирается в **`dist/`** и копируется в корень репо как **`I2PChat.AppImage`**. Чтобы GUI zip как в GitHub Releases (один `.AppImage` внутри): **`I2PCHAT_LINUX_GUI_ZIP_MODE=appimage ./packaging/docker/build-linux-aarch64.sh`**.
 
 ## Prerequisites
 
@@ -102,8 +102,9 @@ docker buildx build --platform linux/arm64 --load \
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `I2PCHAT_LINUX_ARM64_IMAGE` | `i2pchat-linux-build:ubuntu-24.04-arm64` | Image tag for `build-linux-aarch64.sh` |
+| `I2PCHAT_LINUX_GUI_ZIP_MODE` | `portable` (only when using `build-linux-aarch64.sh`) | `portable` = GUI zip is onedir at archive root; `appimage` = single `.AppImage` inside zip (release/Debian helper layout) |
 
-Inside the container, `build-linux.sh` respects **`I2PCHAT_SKIP_GPG_SIGN`**, **`APPIMAGE_EXTRACT_AND_RUN`**, **`QT_QPA_PLATFORM`** (set by the script).
+Inside the container, `build-linux.sh` respects **`I2PCHAT_SKIP_GPG_SIGN`**, **`APPIMAGE_EXTRACT_AND_RUN`**, **`QT_QPA_PLATFORM`** (set by the script), and **`I2PCHAT_LINUX_GUI_ZIP_MODE`** (passed through by `build-linux-aarch64.sh`).
 
 ## Where outputs go (host)
 

@@ -19,6 +19,7 @@ RUN apt-get update -qq \
     python3.14-dev \
     python3.14-venv \
     wget \
+    git \
     desktop-file-utils \
     file \
     patchelf \
