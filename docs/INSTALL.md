@@ -41,16 +41,28 @@ Package pages: [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i
 
 **Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`** (GUI) and **`i2pchat-tui_<version>_amd64.deb`** (TUI only). Install with `sudo apt install ./i2pchat_*_amd64.deb` / `./i2pchat-tui_*_amd64.deb`. If missing, use the Linux zips or build locally — [`packaging/debian/README.md`](../packaging/debian/README.md).
 
-**Optional apt source (Debian/Ubuntu, x86_64, GitHub Pages):** requires maintainers’ signing secret and **Pages → GitHub Actions** — details [`packaging/apt/README.md`](../packaging/apt/README.md).
+**apt mirror (Debian/Ubuntu, x86_64, GitHub Pages)** is **not** guaranteed: it appears only after a maintainer configures **`APT_REPO_GPG_PRIVATE_KEY`** and deploys Pages via Actions — [`packaging/apt/README.md`](../packaging/apt/README.md). **Until then** use **`sudo apt install ./i2pchat_*_amd64.deb`** from Releases (see above).
+
+**If** the mirror is published, add it with **deb822** (Debian 12+ / recent Ubuntu):
 
 ```bash
 sudo mkdir -p /etc/apt/keyrings
 curl -fsSL "https://metanoicarmor.github.io/I2PChat/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
-echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat/ stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list
+sudo tee /etc/apt/sources.list.d/i2pchat.sources >/dev/null <<'EOF'
+Types: deb
+URIs: https://metanoicarmor.github.io/I2PChat
+Suites: stable
+Components: main
+Signed-By: /etc/apt/keyrings/i2pchat.gpg
+Architectures: amd64
+EOF
 sudo apt update
 sudo apt install i2pchat        # GUI
 # or: sudo apt install i2pchat-tui   # TUI only
 ```
+
+Legacy `sources.list` line:  
+`echo 'deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat/ stable main' | sudo tee /etc/apt/sources.list.d/i2pchat.list`
 
 **glibc:** packages from the mirror are the same PyInstaller bundles as the `.deb` on Releases. If they were linked against **GLIBC_2.42**, distros with **older** glibc (e.g. **Ubuntu 24.04 ≈ 2.39**) can still report `GLIBC_2.42 not found` — install a build produced on an older baseline (see [Build Linux release artifacts](../.github/workflows/build-linux-release-artifacts.yml)) or use [Build from source](#build-from-source).
 

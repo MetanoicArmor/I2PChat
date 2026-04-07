@@ -281,7 +281,7 @@
 
     <section class="card" aria-labelledby="install-h">
       <h2 id="install-h">Install</h2>
-      <p class="note" style="margin-top:0;padding-top:0;border:0;margin-bottom:1rem;">Add the key, the source, then install <strong>i2pchat</strong> (GUI) or <strong>i2pchat-tui</strong>.</p>
+      <p class="note" style="margin-top:0;padding-top:0;border:0;margin-bottom:1rem;"><strong>If this site is empty or <code style="font-family:var(--mono);font-size:0.88em;">KEY.gpg</code> 404s,</strong> no mirror is published yet — install <strong><code style="font-family:var(--mono);font-size:0.88em;">.deb</code> from GitHub Releases</strong> instead. When live: <strong>deb822</strong> <code class="code" style="display:inline;padding:0.15rem 0.4rem;font-size:0.85em;">.sources</code>, then <strong>i2pchat</strong> / <strong>i2pchat-tui</strong> (<strong>amd64</strong> only here).</p>
       <pre id="apt-block" class="code" aria-live="polite"></pre>
       <button type="button" class="btn" id="copy-btn" aria-label="Copy install commands">Copy commands</button>
     </section>
@@ -320,13 +320,21 @@
       var btn = document.getElementById("copy-btn");
 
       function rawText() {
+        var uri = debUrl.replace(/\/$/, "");
         return [
           "sudo mkdir -p /etc/apt/keyrings",
           'curl -fsSL "' + baseWithSlash + 'KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg',
-          'echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] ' + debUrl + ' stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list',
+          "sudo tee /etc/apt/sources.list.d/i2pchat.sources >/dev/null <<'EOF'",
+          "Types: deb",
+          "URIs: " + uri,
+          "Suites: stable",
+          "Components: main",
+          "Signed-By: /etc/apt/keyrings/i2pchat.gpg",
+          "Architectures: amd64",
+          "EOF",
           "sudo apt update",
           "sudo apt install i2pchat",
-          "# or: sudo apt install i2pchat-tui",
+          "# или: sudo apt install i2pchat-tui",
         ].join("\n");
       }
 

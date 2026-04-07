@@ -259,7 +259,7 @@ Per-OS paths inside zips, **winget**, **`.deb`**, and edge cases → [**docs/INS
 
 **TUI-only zips** (slim trees): `I2PChat-windows-tui-x64-v1.2.4.zip`, `I2PChat-windows-tui-x64-winget-v1.2.4.zip`, `I2PChat-macOS-arm64-tui-v1.2.4.zip`, `I2PChat-linux-x86_64-tui-v1.2.4.zip`, `I2PChat-linux-aarch64-tui-v1.2.4.zip`.
 
-**Debian/Ubuntu** — on Releases: `i2pchat_1.2.4_amd64.deb` / `i2pchat_1.2.4_arm64.deb` and **`i2pchat-tui_*`**; signed **apt** mirror → [`packaging/apt/README.md`](packaging/apt/README.md).
+**Debian/Ubuntu** — on Releases: `i2pchat_1.2.4_amd64.deb` / `i2pchat_1.2.4_arm64.deb` and **`i2pchat-tui_*`**; install with **`sudo apt install ./i2pchat_*_amd64.deb`** (or the matching **arm64** file). A signed **apt** mirror on GitHub Pages is **optional** and only appears after a maintainer configures CI secrets and deploys it — recipe in [`packaging/apt/README.md`](packaging/apt/README.md); until then, **do not rely** on `metanoicarmor.github.io` for `apt`.
 
 **Direct `latest/download/...` links** (must match the **current** latest release filenames) are in **[Quick Start](#-quick-start)** below.
 
@@ -483,16 +483,35 @@ yay -S i2pchat-tui-bin   # TUI only
 
 > **Not this repo:** [**`i2pchat-git`**](https://aur.archlinux.org/packages/i2pchat-git) (`yay -S i2pchat-git`) builds [**vituperative/i2pchat**](https://github.com/vituperative/i2pchat) — another I2P chat client (**Qt5**). It may still install and run as *that* app, but it is **not** **MetanoicArmor/I2PChat** (Python / PyQt6 / Textual TUI). For this project use **`i2pchat-bin`** / **`i2pchat-tui-bin`**, or clone this repo and run **`python -m i2pchat.gui`** / **`python -m i2pchat.tui`**.
 
-**Debian / Ubuntu — signed apt** ([`packaging/apt/README.md`](packaging/apt/README.md): mirror ships **amd64**; **arm64** `.deb` is on **GitHub Releases** if you need it)
+**Debian / Ubuntu — `.deb` from [Releases](https://github.com/MetanoicArmor/I2PChat/releases)** (works without any mirror):
+
+```bash
+# after downloading e.g. i2pchat_1.2.4_amd64.deb
+sudo apt install ./i2pchat_*_amd64.deb
+# optional TUI-only: sudo apt install ./i2pchat-tui_*_amd64.deb
+```
+
+**Optional apt mirror** (GitHub Pages, **amd64** only): exists **only after** someone sets **`APT_REPO_GPG_PRIVATE_KEY`** and runs the publish workflow — see [`packaging/apt/README.md`](packaging/apt/README.md). **Until then,** `curl …/KEY.gpg` will **404**; use the `.deb` commands above.
+
+If a mirror **is** live, add it with **deb822** (`.sources`):
 
 ```bash
 sudo mkdir -p /etc/apt/keyrings
 curl -fsSL "https://metanoicarmor.github.io/I2PChat/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
-echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list
+sudo tee /etc/apt/sources.list.d/i2pchat.sources >/dev/null <<'EOF'
+Types: deb
+URIs: https://metanoicarmor.github.io/I2PChat
+Suites: stable
+Components: main
+Signed-By: /etc/apt/keyrings/i2pchat.gpg
+Architectures: amd64
+EOF
 sudo apt update
-sudo apt install i2pchat       # GUI
-sudo apt install i2pchat-tui   # terminal (TUI)
+sudo apt install i2pchat i2pchat-tui   # pick one or both
 ```
+
+Legacy one-line:  
+`echo 'deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat stable main' | sudo tee /etc/apt/sources.list.d/i2pchat.list`
 
 ### ℹ️ About
 

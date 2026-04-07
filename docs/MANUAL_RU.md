@@ -448,6 +448,19 @@ GUI‑клиент использует системный трей (`QSystemTra
 
 ### 6. Типичные сценарии использования
 
+#### 6.0. Установка: Debian / Ubuntu
+
+**Сейчас без отдельного мейнтейнера зеркала:** ставьте **`.deb`** с [релизов](https://github.com/MetanoicArmor/I2PChat/releases) (GUI: `i2pchat_<версия>_amd64.deb` / `arm64.deb`; TUI: `i2pchat-tui_…`):
+
+```bash
+sudo apt install ./i2pchat_*_amd64.deb
+# или: sudo apt install ./i2pchat-tui_*_amd64.deb
+```
+
+Нужен системный **`i2pd`** с SAM (в **`.deb`** встроенного роутера нет).
+
+**Опциональное apt-зеркало** на GitHub Pages появится только после настройки секретов CI и публикации — до этого **`curl …/KEY.gpg`** даст **404**. Когда зеркало будет жить, команды подключения (**deb822**) — в [`packaging/apt/README.md`](../packaging/apt/README.md) и в [`docs/INSTALL.md`](INSTALL.md).
+
 #### 6.1. Первый запуск и отправка сообщения
 
 1. Выберите backend I2P‑роутера:

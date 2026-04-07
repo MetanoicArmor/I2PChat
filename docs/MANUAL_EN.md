@@ -448,6 +448,19 @@ sound notifications (`QSoundEffect`) for incoming messages.
 
 ### 6. Typical usage scenarios
 
+#### 6.0. Install: Debian / Ubuntu
+
+**Without a published apt mirror yet:** install **`.deb`** files from [Releases](https://github.com/MetanoicArmor/I2PChat/releases) (GUI: `i2pchat_<version>_{amd64,arm64}.deb`; TUI: `i2pchat-tui_…`):
+
+```bash
+sudo apt install ./i2pchat_*_amd64.deb
+# or: sudo apt install ./i2pchat-tui_*_amd64.deb
+```
+
+Packages expect a **system `i2pd`** with SAM (no embedded router in **`.deb`**).
+
+**Optional GitHub Pages apt mirror** (amd64) only exists after a maintainer configures CI secrets and deploys it — until then **`curl …/KEY.gpg`** returns **404**. When live, use the **deb822** steps in [`packaging/apt/README.md`](../packaging/apt/README.md) and [`docs/INSTALL.md`](INSTALL.md).
+
 #### 6.1. First start and sending a message
 
 1. Choose an I2P router backend:

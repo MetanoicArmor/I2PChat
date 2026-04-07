@@ -11,7 +11,7 @@
 | **AUR** | **Опубликовано:** [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Установка (например **yay**): `yay -S i2pchat-bin`, `yay -S i2pchat-tui-bin`. Шаблоны в репо: [`aur/i2pchat-bin/`](aur/i2pchat-bin/), [`aur/i2pchat-tui-bin/`](aur/i2pchat-tui-bin/); обновление пакетов на AUR — см. [aur/README.md](aur/README.md). |
 | **Flatpak / COPR** | Flatpak — шаблоны в репо ([flatpak/README.md](flatpak/README.md)). COPR — по желанию мейнтейнера ([fedora/i2pchat.spec](fedora/i2pchat.spec)). |
 | **`.deb` на GitHub Release** | Workflow [release-linux-pkgs.yml](../.github/workflows/release-linux-pkgs.yml): **`_amd64.deb`** и **`_arm64.deb`** (GUI + TUI для каждой архитектуры, если на релизе есть соответствующие zip). См. [debian/README.md](debian/README.md). **`.rpm`** — локально или COPR, см. [fedora/README.md](fedora/README.md). |
-| **apt + GitHub Pages (это же репо)** | [`apt/README.md`](apt/README.md): Pages → **GitHub Actions**, секрет **`APT_REPO_GPG_PRIVATE_KEY`**; **Release Linux packages** (job **deploy-apt-site**) / **Publish apt mirror**. |
+| **apt + GitHub Pages (это же репо)** | **Пока не развёрнуто**, пока нет мейнтейнера с секретом **`APT_REPO_GPG_PRIVATE_KEY`** и деплоя. Рецепт: [`apt/README.md`](apt/README.md) (Pages → **GitHub Actions**, job **deploy-apt-site** / **Publish apt mirror**). Пользователям до тех пор — **`.deb` с Release**. |
 
 | Платформа | Каталог | Действие мейнтейнера |
 |-----------|---------|----------------------|

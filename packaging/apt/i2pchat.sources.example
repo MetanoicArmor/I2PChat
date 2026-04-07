@@ -1,0 +1,14 @@
+# Example deb822 source for the GitHub Pages apt mirror.
+# The mirror exists only after a maintainer deploys it; otherwise use .deb from Releases.
+# 1) Install the key:
+#    curl -fsSL "https://metanoicarmor.github.io/I2PChat/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
+# 2) Copy this file (or merge lines below) to:
+#    /etc/apt/sources.list.d/i2pchat.sources
+# 3) sudo apt update && sudo apt install i2pchat
+
+Types: deb
+URIs: https://metanoicarmor.github.io/I2PChat
+Suites: stable
+Components: main
+Signed-By: /etc/apt/keyrings/i2pchat.gpg
+Architectures: amd64

@@ -13,26 +13,17 @@
 
 ---
 
-## Установка через apt (подписанное зеркало)
+## Скачать `.deb` с релиза (основной способ сейчас)
 
-В зеркале сейчас **amd64**. Для **arm64** скачайте `*_arm64.deb` с [релизов](https://github.com/MetanoicArmor/I2PChat/releases) и установите `sudo apt install ./файл.deb`.
-
-```bash
-sudo mkdir -p /etc/apt/keyrings
-curl -fsSL "https://metanoicarmor.github.io/I2PChat/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
-echo "deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat stable main" | sudo tee /etc/apt/sources.list.d/i2pchat.list
-sudo apt update
-sudo apt install i2pchat        # GUI
-sudo apt install i2pchat-tui    # терминал (TUI)
-```
-
-Настройка Pages, секреты CI: [**`packaging/apt/README.md`**](../apt/README.md).
+В **Assets** на [релизах](https://github.com/MetanoicArmor/I2PChat/releases): **`i2pchat_<версия>_{amd64|arm64}.deb`** (GUI), **`i2pchat-tui_<версия>_{amd64|arm64}.deb`** (терминал). Установка: `sudo apt install ./имя.deb`.
 
 ---
 
-## Скачать `.deb` с релиза
+## apt-зеркало (только когда его опубликовали)
 
-В **Assets** на [релизах](https://github.com/MetanoicArmor/I2PChat/releases): **`i2pchat_<версия>_{amd64|arm64}.deb`** (GUI), **`i2pchat-tui_<версия>_{amd64|arm64}.deb`** (терминал). Установка: `sudo apt install ./имя.deb`.
+Подписанное зеркало на GitHub Pages **не обязано существовать**: пока не настроены секреты и workflow, **`curl …/KEY.gpg`** вернёт **404**. Тогда пользуйтесь блоком выше.
+
+Когда зеркало **живо**, в нём обычно **amd64**; для **arm64** по-прежнему **`*.deb`** с релиза. Подключение (**deb822** и legacy) — в [**`packaging/apt/README.md`**](../apt/README.md) и **`index.html`** зеркала.
 
 ---
 
