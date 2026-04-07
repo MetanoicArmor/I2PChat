@@ -213,6 +213,19 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             server.close()
             await server.wait_closed()
 
+    async def test_put_rejects_key_with_whitespace(self) -> None:
+        client = BlindBoxClient(
+            session_id="ktest",
+            blind_boxes=["127.0.0.1:9"],
+            use_sam=False,
+        )
+        await client.start()
+        try:
+            with self.assertRaises(ValueError):
+                await client.put("bad key", b"x")
+        finally:
+            await client.close()
+
     async def test_put_quorum_and_get_dedup(self) -> None:
         storage_a: dict[str, bytes] = {}
         storage_b: dict[str, bytes] = {}

@@ -55,6 +55,31 @@ def _validate_sam_options(options: object) -> str:
     return text
 
 
+def _session_options_dict_to_tokens(
+    options: dict[str, str],
+    *,
+    sig_type: int | None,
+) -> str:
+    """Space-joined name=value tokens for SESSION CREATE (after DESTINATION)."""
+    bits: list[str] = []
+    if sig_type is not None:
+        bits.append(f"SIGNATURE_TYPE={int(sig_type)}")
+    if options:
+        for raw_key, raw_val in options.items():
+            for label, raw in (("OPTION_KEY", raw_key), ("OPTION_VALUE", raw_val)):
+                s = str(raw or "")
+                if any(ch in s for ch in ("\r", "\n", "\x00")):
+                    raise ValueError(f"SAM {label} contains forbidden characters")
+            key_s = _validate_sam_token(
+                raw_key, field_name="OPTION_KEY", allow_equals=False
+            )
+            val_s = _validate_sam_token(
+                raw_val, field_name="OPTION_VALUE", allow_equals=False
+            )
+            bits.append(f"{key_s}={val_s}")
+    return " ".join(bits)
+
+
 def _validate_sam_style(style: object) -> str:
     token = _validate_sam_token(style, field_name="STYLE", allow_equals=False).upper()
     if token not in {"STREAM", "DATAGRAM", "RAW"}:
@@ -117,15 +142,10 @@ def build_session_create(
             f"SESSION CREATE STYLE={style_s} ID={session_s} "
             f"DESTINATION={dest_s} {opts_s}\n"
         ).encode("ascii")
-    option_bits: list[str] = []
-    if sig_type is not None:
-        option_bits.append(f"SIGNATURE_TYPE={int(sig_type)}")
-    if options:
-        # SAM v3: I2CP/streaming options are plain name=value tokens after DESTINATION
-        # (see geti2p SAM spec "[option=value]*"). Do not insert a standalone "OPTION"
-        # keyword — SAM routers expect space-separated name=value pairs only.
-        option_bits.extend(f"{key}={value}" for key, value in options.items())
-    option_string = " ".join(option_bits)
+    # SAM v3: I2CP/streaming options are plain name=value tokens after DESTINATION
+    # (see geti2p SAM spec "[option=value]*"). Do not insert a standalone "OPTION"
+    # keyword — SAM routers expect space-separated name=value pairs only.
+    option_string = _session_options_dict_to_tokens(options or {}, sig_type=sig_type)
     style_s = _validate_sam_style(style)
     session_s = _validate_session_id(session_id)
     dest_s = _validate_sam_destination_token(destination)

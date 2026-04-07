@@ -22,7 +22,11 @@ from i2pchat import sam as i2plib
 from i2pchat.blindbox.blindbox_blob import BLINDBOX_MAX_FRAME_SIZE
 from i2pchat.sam import protocol as sam_protocol
 from i2pchat.sam.errors import LegacySAMException, ProtocolError
-from i2pchat.sam.protocol import expect_ok, parse_reply_line
+from i2pchat.sam.protocol import (
+    build_stream_connect,
+    expect_ok,
+    parse_reply_line,
+)
 
 logger = logging.getLogger("i2pchat")
 
@@ -148,6 +152,15 @@ class BlindBoxClient:
         # Throttle identical Blind Box failure logs (poller hammers GET).
         self._box_warn_next: dict[str, float] = {}
 
+    @staticmethod
+    def _validate_blindbox_key(key: str) -> str:
+        token = str(key or "").strip()
+        if not token:
+            raise ValueError("key is required")
+        if any(ch in token for ch in ("\r", "\n", "\x00", " ", "\t")):
+            raise ValueError("key contains forbidden characters")
+        return token
+
     def _log_box_failure(self, op: str, box_addr: str, err: Exception) -> None:
         now = time.monotonic()
         key = f"{op}|{box_addr}|{type(err).__name__}|{err!s}"
@@ -271,8 +284,7 @@ class BlindBoxClient:
     async def put(self, key: str, blob: bytes) -> list[BlindBoxPutResult]:
         if not self._started:
             await self.start()
-        if not key:
-            raise ValueError("key is required")
+        key = self._validate_blindbox_key(key)
         if not isinstance(blob, (bytes, bytearray)) or len(blob) == 0:
             raise ValueError("blob must be non-empty bytes")
 
@@ -344,8 +356,7 @@ class BlindBoxClient:
     async def get(self, key: str, *, require_quorum: bool = True) -> list[bytes]:
         if not self._started:
             await self.start()
-        if not key:
-            raise ValueError("key is required")
+        key = self._validate_blindbox_key(key)
 
         tasks = [
             asyncio.create_task(self._get_from_blind_box(addr, key))
@@ -384,8 +395,7 @@ class BlindBoxClient:
     ) -> Optional[bytes]:
         if not self._started:
             await self.start()
-        if not key:
-            raise ValueError("key is required")
+        key = self._validate_blindbox_key(key)
 
         pending: dict[asyncio.Task[Optional[bytes]], str] = {
             asyncio.create_task(self._get_from_blind_box(addr, key)): addr
@@ -546,11 +556,13 @@ class BlindBoxClient:
         reader, writer = await asyncio.open_connection(self.sam_host, self.sam_port)
         try:
             await self._sam_hello(reader, writer)
-            cmd = (
-                f"STREAM CONNECT ID={self._active_sam_id} "
-                f"DESTINATION={dest_for_sam} SILENT=false\n"
+            writer.write(
+                build_stream_connect(
+                    self._active_sam_id,
+                    dest_for_sam,
+                    silent="false",
+                )
             )
-            writer.write(cmd.encode("utf-8"))
             await writer.drain()
             response = await asyncio.wait_for(
                 reader.readline(), timeout=self.io_timeout

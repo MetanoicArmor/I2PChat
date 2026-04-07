@@ -35,6 +35,36 @@ class SamInputValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sam.stream_connect("sess", "dest", silent="maybe")
 
+    def test_session_create_rejects_bad_option_key(self) -> None:
+        with self.assertRaises(ValueError):
+            sam.session_create(
+                "STREAM",
+                "sid",
+                "TRANSIENT",
+                options={"evil\nopt": "1"},
+                sig_type=7,
+            )
+
+    def test_session_create_rejects_bad_option_value(self) -> None:
+        with self.assertRaises(ValueError):
+            sam.session_create(
+                "STREAM",
+                "sid",
+                "TRANSIENT",
+                options={"inbound.length": "2\n"},
+                sig_type=7,
+            )
+
+    def test_session_create_rejects_option_key_with_equals(self) -> None:
+        with self.assertRaises(ValueError):
+            sam.session_create(
+                "STREAM",
+                "sid",
+                "TRANSIENT",
+                options={"foo=bar": "1"},
+                sig_type=7,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

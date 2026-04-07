@@ -1,202 +1,155 @@
-# I2PChat — security audit (technical)
+# I2PChat security audit — internal SAM layer (`i2pchat.sam`)
 
-**Document version:** 1.2  
-**Date:** 2026-04-02  
-**Scope revision:** Aligned with **v1.1.3** codebase — live framing is **vNext-only** (obsolete pre-vNext wire parsing removed); outbound file/inline-image disk I/O and ACK **drain batching** unchanged; scope otherwise (`i2pchat/`, GUI entrypoints, storage, protocol, BlindBox, representative tests). **Point-in-time** review, not a formal penetration test or certification.
+**Context:** Transition from PyPI / vendored **`i2plib`** to an in-repository implementation under **`i2pchat/sam/`** (see `docs/SAM_INTERNAL_BACKEND_PLAN.md`, `docs/releases/RELEASE_1.2.4.md`).
 
-**Scope:** Source tree under `i2pchat/`, GUI entrypoints, storage, protocol and BlindBox modules, and representative tests.
+**Audit date:** 2026-04-07 (static review of current tree; no penetration test).
 
-**Methodology:** Static review of architecture, crypto usage, network boundaries, file handling, secrets handling, and common vulnerability classes (injection, path traversal, downgrade, deserialization, command execution). No dynamic exploitation was performed.
+**Remediation (2026-04-07):** `SESSION CREATE` **options** dict entries are validated per key/value (including raw `\r`/`\n`/`\x00` before strip). BlindBox **`STREAM CONNECT`** uses **`build_stream_connect`**. BlindBox **PUT/GET** keys reject whitespace and line breaks. Covered by `tests/test_sam_input_validation.py` and `tests/test_blindbox_client.py`.
 
----
-
-## 1. Product summary
-
-I2PChat is a desktop chat client using **I2P SAM** for streaming connections to peers. It implements a **binary vNext framed protocol**, a **NaCl-based handshake** with ephemeral keys, **authenticated encryption** for payloads, **TOFU-style** signing-key pinning for peers, optional **encrypted local chat history**, and **BlindBox** offline message storage via third-party replicas.
-
-Primary codebase: Python 3, **PyQt6** GUI, **PyNaCl**, internal **`i2pchat.sam`** (SAM), **Pillow** for images.
+**Scope:** SAM control-plane code (`protocol.py`, `client.py`, `backend.py`, `destination.py`, `errors.py`), integration in `i2pchat/core/i2p_chat_core.py` and `i2pchat/blindbox/blindbox_client.py`, and adjacent trust boundaries (BlindBox wire commands, bundled router). Application-layer crypto (NaCl, HKDF, vNext framing) is referenced only where it touches SAM assumptions.
 
 ---
 
-## 2. Threat model and assumptions
+## 1. Executive summary
 
-**In scope threats**
+The internal SAM stack **replicates the previous hardening pattern** from the old `i2plib` path: SAM command tokens are validated for newline/whitespace/control characters, and the main chat path uses **`build_*` helpers** from `i2pchat.sam.protocol`. Removing the external dependency **shrinks third-party supply-chain risk** but **concentrates protocol correctness in this repository**; any regression in parsing or validation is now fully owned here.
 
-- Malicious or buggy peer on the wire (protocol abuse, oversized frames, replays, downgrade attempts).
-- Malicious BlindBox replica or network observer on I2P paths to replicas (confidentiality/integrity of blobs within stated protocol limits).
-- Local attacker with user privileges (reading profile data, tampering with files, clipboard).
-- Supply-chain compromise of dependencies or build pipeline.
-
-**Out of scope / explicit limits**
-
-- Compromise of the I2P router or OS kernel, or physical theft of an unlocked machine with no disk encryption.
-- Usability attacks (spam, social engineering) except where the client amplifies them.
-- Formal verification of cryptographic protocols.
-
-**Trust anchors**
-
-- User trusts the **I2P router** and **SAM** endpoint they configure.
-- User trusts **BlindBox replica** operators when using offline delivery.
-- **TOFU** on first connect: identity binding is only as strong as the first successful verification the user accepts.
+**No critical remote code execution issues** were identified in the reviewed SAM code. Residual risks are dominated by **the inherent SAM trust model** (cleartext TCP to the router, typically loopback) and **operational configuration** (pointing SAM at an untrusted host).
 
 ---
 
-## 3. Executive summary
+## 2. Threat model (SAM-specific)
 
-| Area | Assessment |
-|------|------------|
-| Live transport crypto | **Strong:** modern NaCl primitives, separate MAC key, sequence checks, downgrade blocked after handshake. |
-| Framing / DoS limits | **Good:** `max_frame_body`, resync limits; large transfers chunked. **vNext-only** live codec — no alternate on-wire framing parser. |
-| File receive path | **Good:** filename sanitization, unique paths, size caps; progress/UI throttling reduces jank (availability). |
-| Local history | **Good:** per-file salt, HKDF layering, SecretBox; export uses Argon2id. |
-| BlindBox | **Depends on deployment:** line protocol + optional replica tokens; not TLS in the usual sense—trust is layered on I2P/TCP to replicas. |
-| GUI content injection | **Low risk for chat bubbles:** painted as plain text; rich text mainly in compose with paste sanitization paths documented in code. |
-| Secrets in repo | **No hardcoded API keys** observed; env vars documented for operators. |
-| Subprocess use | **Limited:** notification helpers with fixed command lists; no `shell=True` in application code reviewed. |
-
-**Residual risks:** operator misconfiguration (weak BlindBox tokens), plaintext `.dat` when keyring unused, update check fetches remote HTML (trust in URL), and **peer trust UX** (user must confirm TOFU changes deliberately).
+| Actor | Capability | Relevant mitigations / gaps |
+|--------|------------|------------------------------|
+| Local process on same machine | Connect to SAM port, race user’s router | OS user isolation; firewall; binding SAM to loopback |
+| Malicious / compromised I2P router | Forge SAM replies, observe identities, drop traffic | User chooses router; TLS is not part of standard SAM |
+| Network peer over I2P | Chat protocol attacks (out of SAM scope) | vNext framing + NaCl in `i2pchat.core` / `i2pchat.crypto` |
+| Malicious Blind Box replica | Return bad blobs; DoS | Quorum, size caps, crypto over blobs |
 
 ---
 
-## 4. Detailed findings
+## 3. What improved with the migration
 
-### 4.1 I2P SAM and addressing
-
-- **`i2pchat.sam.protocol`** builders reject dangerous characters in destinations and session IDs (`tests/test_sam_input_validation.py`), reducing command-injection style issues in SAM string building.
-- User-supplied peer strings still rely on **correct router behavior**; the app does not escape I2P’s threat model.
-
-**Severity:** informational (defense in depth).
+- **Supply chain:** `i2plib` is not declared in `pyproject.toml`; policy tests enforce this (`tests/test_audit_remediation.py`). SAM behavior is auditable in-tree.
+- **Injection-style SAM commands:** `i2pchat/sam/protocol.py` validates session IDs, styles, ports, HELLO versions, naming names, stream destinations, and boolean flags before formatting lines.
+- **Logging hygiene:** `_redact_sam_reply` masks sensitive SAM keys (`PRIV`, `PRIVATE`, `DESTINATION`, `SIGNING_PRIVATE_KEY`) in `protocol.py`.
+- **CI:** `.github/workflows/security-audit.yml` runs **`uv export` + `pip-audit`** on locked runtime and build dependency sets.
 
 ---
 
-### 4.2 Live protocol (vNext) and handshake
+## 4. Findings
 
-- **Framing:** `ProtocolCodec` enforces `MAGIC`, version, allowed types, and maximum body size (`i2pchat/protocol/protocol_codec.py`). The live stream is **vNext only**; there is **no** second parser for obsolete line-oriented frames. Non-`MAGIC` streams fail resync within `resync_limit` or protocol checks.
+Severity uses a practical scale: **Critical / High / Medium / Low / Informational**.
 
-- **Post-handshake:** Plaintext application frames after encryption are treated as **protocol violation** and lead to disconnect (`receive_loop`).
+### 4.1 [Medium] `SESSION CREATE` option map — keys and values not token-validated
 
-- **Crypto:** Handshake uses ephemeral X25519, HKDF-derived `k_enc` / `k_mac`, XSalsa20-Poly1305 via SecretBox for payloads, and HMAC over ciphertext/metadata with **monotonic sequence** checks (`i2pchat/crypto.py`, `i2pchat/core/i2p_chat_core.py`). This aligns with common modern practice for channel security.
+**Location:** `i2pchat/sam/protocol.py` — `build_session_create(..., options=dict)`.
 
-- **Replay / ordering:** Strict `expected_seq` enforcement; failures emit errors and disconnect.
+**Issue:** Unlike scalar SAM fields (session ID, style, etc.), each **option key and value** is interpolated as `key=value` without the same `_validate_sam_token` rules. The **joined string** is passed through `_validate_sam_options`, which blocks `\r`, `\n`, and `\x00` but **does not** prevent spaces inside a value, embedded `=`, or unusual keys.
 
-**Recommendations:** Monitor logs for downgrade and MAC failure spikes.
+**Current risk:** Call sites in-tree (`i2p_chat_core.py`, default `BlindBoxClient.sam_options`) use **fixed** keys/values, so exploitation is **not exposed in default flows**. Risk rises if **future or plugin code** passes partially user-controlled entries into `create_session(..., options=...)`.
 
----
-
-### 4.3 Delivery acknowledgements (ACK)
-
-- Pending ACK tables have **TTL and max size** to limit memory growth (`ACK_TTL_SECONDS`, `ACK_MAX_PENDING`, pruning). Spoofed or duplicate ACKs are filtered with counters (`_record_ack_drop`).
-
-**Severity:** low—mainly availability / state hygiene.
+**Recommendation:** Validate each option key/value with the same rules as other SAM tokens (or a documented subset), or accept only a whitelist of I2CP option names.
 
 ---
 
-### 4.4 BlindBox offline delivery
+### 4.2 [Medium] BlindBox `STREAM CONNECT` built with a manual f-string
 
-- Separate **line-oriented replica protocol** from live vNext framing (`docs/PROTOCOL.md`).
-- **Root secret** and pending secrets wrapped for storage with profile-derived keys (`_blindbox_encrypt_root_secret` / decrypt paths).
-- **Replica auth:** optional per-endpoint tokens and local loopback token (`I2PCHAT_BLINDBOX_LOCAL_TOKEN`, `replica_auth` in JSON). Misconfiguration (empty token on shared network paths) is an **operational** risk, not a silent crypto bypass—the code warns and can refuse unsafe combinations in strict paths.
-- **GET size cap:** `max_get_blob_size` defaults tied to blob limits (`BlindBoxClient`).
+**Location:** `i2pchat/blindbox/blindbox_client.py` — `_open_sam_stream_to`.
 
-**Risks:** Replicas see **ciphertext blobs** and metadata dictated by the protocol; traffic is over I2P or TCP depending on endpoint—operators must treat replica hosts as **semi-trusted** infrastructure.
+**Issue:** The line is assembled manually instead of `sam_protocol.build_stream_connect(...)`. `_validate_sam_destination` and `_active_sam_id` generation mitigate injection **today**, but **two code paths** for the same SAM verb increase the chance of **drift** (one path updated, the other not).
 
----
-
-### 4.5 Local storage and profiles
-
-- **Chat history:** Encrypted at rest with profile identity-derived keys and per-peer file keys (`i2pchat/storage/chat_history.py`). Wrong key fails closed (empty history after decrypt failure).
-- **History export:** Password-based encryption with Argon2id + SecretBox (`i2pchat/storage/history_export.py`). Password strength is **user responsibility**.
-- **Profile export/import:** Password-protected archives (`i2pchat/storage/profile_export.py`).
-- **Keyring:** Optional storage of private material via `keyring` service `i2pchat` (`KEYRING_SERVICE`). Fallback is **plaintext-sensitive** `.dat`—expected for portability, users should understand OS access controls.
-- **Atomic writes:** Used in several paths to reduce torn writes (`atomic_write_*` patterns).
-
-**Risk:** Backup files and `.dat` on disk are **high-value assets**; filesystem permissions (Unix 0700 on data dir) help but do not stop malware running as the user.
+**Recommendation:** Route through `build_stream_connect(session_id, destination, silent="false")` so all validation stays centralized.
 
 ---
 
-### 4.6 File and image transfer
+### 4.3 [Low] `DEST GENERATE` — `SIGNATURE_TYPE` not whitelisted
 
-- **Filenames:** `sanitize_filename` strips path components and unsafe characters; `allocate_unique_filename` avoids overwrite (`i2pchat/core/i2p_chat_core.py`).
-- **Sizes:** `MAX_FILE_SIZE`, `MAX_IMAGE_SIZE`, per-chunk validation against declared remainder, base64 decode with bounds checks.
-- **Inline images:** Magic-byte format detection; PIL validation after receive (worker thread in recent versions to keep UI responsive). Malformed images fail closed with user-visible errors.
-- **Outbound disk I/O (v1.1.2):** synchronous `read()` for **file** and **inline (`G`)** send chunks runs in a **thread pool** (`asyncio.to_thread`) so the asyncio event loop is not blocked on large reads—**availability** / responsiveness on the same thread as Qt+qasync.
-- **ACK signalling during outbound transfer (v1.1.2):** automatic **MSG_ACK** / **IMG_ACK** **`S`** frames use **`_write_signal_frame_maybe_soft_drain`**: while **`_file_transfer_active`**, **`drain()`** runs every **`I2PCHAT_MSG_ACK_DRAIN_EVERY`** frames (default **16**, clamped), reducing syscall/`drain` churn. Wrong tuning could delay ACK visibility to the peer slightly; defaults are conservative.
+**Location:** `i2pchat/sam/protocol.py` — `build_dest_generate`.
 
-**Risk:** Quadratic hash/read on very large local sends is a **performance** issue more than security; network still bounded by caps.
+**Issue:** Any `int` is formatted; invalid types are rejected only by the router.
+
+**Recommendation:** Optional allowlist (e.g. Ed25519 = 7 for defaults) to fail fast and match app policy.
 
 ---
 
-### 4.7 GUI and desktop integration
+### 4.4 [Low] Unbounded `readline()` on SAM and BlindBox TCP
 
-- **Chat rendering:** Message bubbles in the main list are drawn with **QPainter** using string text for standard message kinds—not arbitrary HTML from peers—reducing **XSS-in-chat** risk compared to a full HTML view.
-- **Compose field:** Rich text enabled for emoji rendering; paste path strips tags to plain text before protocol send (`MessageInputEdit` / related helpers)—reduces accidental HTML/XML paste issues; peer still receives what user sends as text after that pipeline.
-- **Open URL / folder:** `QDesktopServices.openUrl` with `fromLocalFile` for controlled paths (downloads, app dirs). User-triggered actions.
-- **Subprocess:** Linux notification sound uses `subprocess.Popen` with **argv lists** from `shutil.which` paths—no shell interpolation (`i2pchat/gui/main_qt.py`).
-- **Clipboard:** Standard copy of message text; sensitive content exposure is a **user workflow** concern.
+**Location:** `i2pchat/sam/client.py`, `open_stream_*`, BlindBox helpers.
 
----
+**Issue:** A peer that never sends `\n` can cause memory growth on the reader buffer (DoS / resource exhaustion) unless the transport is trusted.
 
-### 4.8 Updates and external HTTP
-
-- **Check for updates** fetches a **releases HTML page**, parses version strings, does **not** auto-download binaries (`docs/MANUAL_EN.md`).  
-- **Risk:** If `I2PCHAT_RELEASES_PAGE_URL` points to a malicious origin, HTML parsing could theoretically have parser bugs—treat as **trusted configuration**. No raw `eval` on fetched content identified in core paths.
+**Recommendation:** Document as accepted for **loopback SAM**; for non-loopback or hardened builds, consider a max-bytes-per-line read wrapper.
 
 ---
 
-### 4.9 Environment variables and debug flags
+### 4.5 [Low / defense in depth] BlindBox `PUT`/`GET` keys
 
-Several flags affect security or privacy posture:
+**Location:** `i2pchat/blindbox/blindbox_client.py` — `_put_to_blind_box`, `_get_from_blind_box`.
 
-| Variable | Effect |
-|----------|--------|
-| `I2PCHAT_MSG_ACK_DRAIN_EVERY` | During **outgoing** file/image send: drain after every **N** automatic **MSG_ACK**/**IMG_ACK** `S` frames (default **16**, **1–256**). Affects **responsiveness vs backpressure**, not crypto. |
-| `I2PCHAT_BLINDBOX_*` | Replica lists, tokens, quorum—**misconfiguration** leaks or weakens offline security. |
-| `I2PCHAT_FILE_XFER_DEBUG` | Logs timing—**may leak transfer patterns** in logs. |
-| `I2PCHAT_QT_FILE_EVENT_NOOP` | Disables file progress UI—diagnostic only. |
+**Issue:** Keys are interpolated into text commands. **Core** uses **hex** `lookup_token` from `derive_blindbox_message_keys()` (safe charset). Direct use of `BlindBoxClient` with arbitrary strings could break the line protocol.
 
-Operators should avoid debug flags in production unless logs are protected.
+**Recommendation:** Reject keys containing whitespace, `\r`, `\n`, `\x00`, or other delimiters if the API should remain safe for arbitrary callers.
 
 ---
 
-### 4.10 Dependencies and build
+### 4.6 [Informational] Relaxed `expect_ok` for i2pd quirks
 
-- Core crypto in **PyNaCl** (well-audited library).  
-- **PyQt6**, **Pillow**—follow upstream CVE advisories.  
-- No `pickle` on untrusted network data identified in reviewed chat paths.  
-- PyInstaller / build scripts: follow **reproducible build** and **signature** practices (`I2PCHAT_REQUIRE_GPG` mentioned in README for releases).
+**Location:** `i2pchat/sam/protocol.py` — `expect_ok`.
 
----
+**Issue:** Success without `RESULT=OK` is inferred for certain `DEST REPLY` and `SESSION STATUS` shapes (documented for i2pd). A **malicious router** could theoretically influence error/success classification; in practice the app already **fully trusts** the router for SAM.
 
-## 5. Prioritized recommendations
-
-1. **High (operational):** Set **BlindBox tokens** when using TCP/loopback replicas; use **keyring** where OS supports it.
-2. **Medium:** Periodically run `pip audit` / OS package audits on dependency pins used in releases.
-3. **Medium:** Ensure **release binaries** are signed and hashes published (project already describes this).
-4. **Low:** Consider centralizing a **security.txt** or “Reporting vulnerabilities” section in README linking to this audit and contact.
-5. **Low:** For update-check HTML parsing, keep dependencies minimal and add regression tests if the parser grows.
+**Recommendation:** Keep as compatibility behavior; no change required unless moving to an authenticated control channel.
 
 ---
 
-## 6. Conclusion
+### 4.7 [Informational] `Destination(..., path=...)`
 
-I2PChat implements a **credibly designed** stack for encrypted peer chat over I2P: strong **vNext-only** framing rules, modern AEAD and MAC, explicit downgrade handling, and encrypted local history. Remaining risk is dominated by **deployment and trust choices** (TOFU confirmations, BlindBox operators, physical access to profile files), not by an obvious single critical remote code execution flaw in the reviewed paths.
+**Location:** `i2pchat/sam/destination.py`.
 
-This document should be **updated** after major protocol, crypto, BlindBox, or framing changes.
+**Issue:** Loading identity material from disk is powerful; callers must not pass **user-controlled** paths.
+
+**Recommendation:** Grep/audit call sites when adding features; prefer explicit bytes/str keys from keyring.
 
 ---
 
-## 7. Key references (code)
+### 4.8 [Informational] Bundled `i2pd` subprocess
 
-| Topic | Location |
-|-------|----------|
-| Core session / receive loop | `i2pchat/core/i2p_chat_core.py` |
-| Crypto primitives | `i2pchat/crypto.py` |
-| Framing codec | `i2pchat/protocol/protocol_codec.py` |
-| Chat history encryption | `i2pchat/storage/chat_history.py` |
-| History export crypto | `i2pchat/storage/history_export.py` |
-| Profile backup | `i2pchat/storage/profile_export.py` |
-| BlindBox client | `i2pchat/blindbox/blindbox_client.py` |
-| Protocol specification | `docs/PROTOCOL.md` |
-| SAM input validation tests | `tests/test_sam_input_validation.py` |
-| Protocol hardening tests | `tests/test_protocol_hardening.py` |
-| vNext-only framing tests | `tests/test_protocol_framing_vnext.py` |
+**Location:** `i2pchat/router/bundled_i2pd.py`.
+
+**Observation:** Launch uses `asyncio.create_subprocess_exec` with argument lists (no `shell=True` in reviewed path). Integrity of the **binary** depends on packaging and user environment.
+
+**Recommendation:** Continue pinning/checksumming release artifacts (already reflected in build scripts and CI policy tests).
+
+---
+
+## 5. Residual risks (not bugs per se)
+
+1. **Cleartext SAM on TCP** — expected by I2P SAM; secure deployment assumes **loopback** or controlled network.
+2. **Router as TCB** — any I2P client gives the router visibility into tunnels and identities.
+3. **Regression ownership** — protocol edge cases once handled upstream in `i2plib` must be covered by **`i2pchat.sam` tests** (`tests/test_sam_*.py`, `tests/test_blindbox_client.py`).
+
+---
+
+## 6. Recommended next steps
+
+1. Add **unit tests** for malformed multi-line SAM replies and partial reads (**invalid `options` dict** tests are in place).
+2. ~~**Unify** BlindBox `STREAM CONNECT` on `sam_protocol.build_stream_connect`.~~ **Done.**
+3. ~~Tighten **`options`** validation and **BlindBox key** character set.~~ **Done** (see Remediation above).
+4. Keep **scheduled `pip-audit`** and **secret scanning** workflows green on `main`.
+
+---
+
+## 7. Files reviewed (primary)
+
+- `i2pchat/sam/protocol.py`, `client.py`, `backend.py`, `destination.py`, `errors.py`
+- `i2pchat/core/i2p_chat_core.py` (SAM session bootstrap and stream helpers)
+- `i2pchat/blindbox/blindbox_client.py`
+- `i2pchat/blindbox/blindbox_key_schedule.py`
+- `tests/test_sam_input_validation.py`, `tests/test_sam_protocol.py`, `tests/test_audit_remediation.py`
+- `.github/workflows/security-audit.yml`
+
+---
+
+*This document is a point-in-time assessment and does not replace periodic dependency scanning, release signing verification, or targeted penetration testing.*
