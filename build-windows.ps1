@@ -270,7 +270,7 @@ Write-Host "Packed (TUI only): $TuiZipFile"
 
 # Second pass: PyInstaller without embedded i2pd — zips for winget / Microsoft validation (no Riskware.I2PD.A).
 Write-Host ""
-Write-Host "==> Rebuild for winget (I2PCHAT_OMIT_BUNDLED_I2PD=1, no embedded i2pd)"
+Write-Host '==> Rebuild for winget (I2PCHAT_OMIT_BUNDLED_I2PD=1, no embedded i2pd)'
 Stop-I2PChatProcessesLockingDist
 Remove-PathWithRetry -Path "dist\I2PChat"
 Remove-PathWithRetry -Path "dist\I2PChat-tui"
@@ -341,7 +341,7 @@ if (Test-Path "vendor\i2pd\windows-x64\i2pd.exe") {
     Write-Host "==> Restored bundled i2pd beside dist\I2PChat (and TUI onedir if present) for local runs"
 }
 else {
-    Write-Host "==> No vendor\i2pd\windows-x64\i2pd.exe — dist onedirs stay without embedded router (use system i2pd / full release zip)"
+    Write-Host '==> No vendor\i2pd\windows-x64\i2pd.exe - dist onedirs stay without embedded router (use system i2pd / full release zip)'
 }
 
 $sumGui = (Get-FileHash -Path $ZipFile -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -365,13 +365,13 @@ Write-Host "  MetanoicArmor.I2PChat:     $sumWinget"
 Write-Host "  MetanoicArmor.I2PChat.TUI: $sumWingetTui"
 
 if ($env:I2PCHAT_SKIP_GPG_SIGN -eq "1") {
-    Write-Warning "Skipping GPG detached signature (I2PCHAT_SKIP_GPG_SIGN=1)"
+    Write-Warning 'Skipping GPG detached signature (I2PCHAT_SKIP_GPG_SIGN=1)'
 }
 elseif (-not ($gpgExe = Get-I2PChatGpgExecutable)) {
     if ($env:I2PCHAT_REQUIRE_GPG -eq "1") {
         throw "gpg is required to create detached release signature (install GnuPG or set I2PCHAT_GPG_EXE to gpg.exe)"
     }
-    Write-Warning "gpg not found; skipping detached signature (install GnuPG, add to PATH, or set I2PCHAT_GPG_EXE; I2PCHAT_REQUIRE_GPG=1 to enforce)"
+    Write-Warning 'gpg not found; skipping detached signature (install GnuPG, add to PATH, or set I2PCHAT_GPG_EXE; use I2PCHAT_REQUIRE_GPG=1 to enforce)'
 }
 else {
     $GpgArgs = @("--batch", "--yes", "--armor", "--detach-sign", "--output", "SHA256SUMS.asc")
