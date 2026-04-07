@@ -51,6 +51,29 @@ def test_tui_respects_explicit_saved_router_backend_choice(
     assert settings.bundled_auto_start is True
 
 
+def test_tui_forces_system_when_bundled_router_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from i2pchat.gui.chat_python import I2PChat
+    from i2pchat.router.settings import RouterSettings
+
+    monkeypatch.setattr(
+        "i2pchat.gui.chat_python.load_router_settings",
+        lambda: RouterSettings(backend="bundled", bundled_auto_start=True),
+    )
+    monkeypatch.setattr(
+        "i2pchat.gui.chat_python.router_settings_path",
+        lambda: "/tmp/router-prefs.json",
+    )
+    monkeypatch.setattr("i2pchat.gui.chat_python.os.path.isfile", lambda _path: True)
+    monkeypatch.setattr("i2pchat.gui.chat_python.bundled_i2pd_allowed", lambda: False)
+
+    settings = I2PChat._load_tui_router_settings()
+
+    assert settings.backend == "system"
+    assert settings.bundled_auto_start is False
+
+
 def test_tui_fallback_system_router_does_not_persist_shared_router_prefs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

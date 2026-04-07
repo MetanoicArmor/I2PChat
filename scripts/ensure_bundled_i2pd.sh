@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FETCH_SCRIPT="${ROOT}/scripts/fetch_bundled_i2pd.sh"
+SOURCE_DIR="${I2PCHAT_BUNDLED_I2PD_SOURCE_DIR:-}"
+SIBLING_DIR="$(cd "${ROOT}/.." && pwd)/i2pchat-bundled-i2pd"
+GIT_URL="${I2PCHAT_BUNDLED_I2PD_GIT_URL:-}"
+CACHE_DIR="${I2PCHAT_BUNDLED_I2PD_CACHE_DIR:-${ROOT}/.cache/bundled-i2pd-source}"
+
+usage() {
+  cat <<'EOF'
+Ensure local bundled i2pd binaries are staged under vendor/i2pd/.
+
+Resolution order:
+1. existing vendor/i2pd files
+2. I2PCHAT_BUNDLED_I2PD_SOURCE_DIR
+3. sibling repo ../i2pchat-bundled-i2pd
+4. I2PCHAT_BUNDLED_I2PD_GIT_URL cloned into .cache/
+
+Usage:
+  ./scripts/ensure_bundled_i2pd.sh
+EOF
+}
+
+log() {
+  printf '%s\n' "$*"
+}
+
+has_any_bundled() {
+  find "${ROOT}/vendor/i2pd" -maxdepth 3 -type f \
+    \( -name 'i2pd' -o -name 'i2pd.exe' \) 2>/dev/null | grep -q .
+}
+
+stage_from_dir() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 1
+  "${FETCH_SCRIPT}" --from "$dir" >/dev/null
+  return 0
+}
+
+stage_from_git() {
+  [[ -n "${GIT_URL}" ]] || return 1
+  mkdir -p "$(dirname "${CACHE_DIR}")"
+  if [[ -d "${CACHE_DIR}/.git" ]]; then
+    git -C "${CACHE_DIR}" pull --ff-only >/dev/null
+  else
+    rm -rf "${CACHE_DIR}"
+    git clone --depth=1 "${GIT_URL}" "${CACHE_DIR}" >/dev/null
+  fi
+  stage_from_dir "${CACHE_DIR}"
+}
+
+main() {
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+  fi
+
+  if has_any_bundled; then
+    log "==> Bundled i2pd: FOUND in vendor/i2pd/"
+    exit 0
+  fi
+
+  if [[ -n "${SOURCE_DIR}" ]] && stage_from_dir "${SOURCE_DIR}"; then
+    log "==> Bundled i2pd: STAGED from I2PCHAT_BUNDLED_I2PD_SOURCE_DIR=${SOURCE_DIR}"
+    exit 0
+  fi
+
+  if stage_from_dir "${SIBLING_DIR}"; then
+    log "==> Bundled i2pd: STAGED from sibling repo ${SIBLING_DIR}"
+    exit 0
+  fi
+
+  if stage_from_git; then
+    log "==> Bundled i2pd: STAGED from git source ${GIT_URL}"
+    exit 0
+  fi
+
+  log "==> Bundled i2pd: NOT FOUND; building without embedded router"
+}
+
+main "$@"

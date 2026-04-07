@@ -25,7 +25,9 @@ from i2pchat.blindbox.blindbox_diagnostics import build_blindbox_diagnostics_tex
 from i2pchat.router.bundled_i2pd import BundledI2pdManager
 from i2pchat.router.settings import (
     RouterSettings,
+    bundled_i2pd_allowed,
     load_router_settings,
+    normalize_router_settings,
     router_settings_path,
     save_router_settings,
 )
@@ -232,7 +234,7 @@ class I2PChat(App):
     @classmethod
     def _load_tui_router_settings(cls) -> RouterSettings:
         """Keep TUI startup fast by defaulting to external/system SAM until prefs explicitly exist."""
-        settings = load_router_settings()
+        settings = normalize_router_settings(load_router_settings())
         if cls._tui_router_prefs_exist():
             return settings
         return replace(settings, backend="system", bundled_auto_start=False)
@@ -443,7 +445,8 @@ class I2PChat(App):
         )
 
     async def _ensure_router_backend_ready(self) -> tuple[str, int]:
-        settings = self._router_settings
+        settings = normalize_router_settings(self._router_settings)
+        self._router_settings = settings
         if self._router_settings_explicit:
             save_router_settings(settings)
         if settings.backend == "system":
@@ -1715,6 +1718,12 @@ class I2PChat(App):
         if normalized not in {"system", "bundled", "default"}:
             self.post("error", "Usage: /router [status|system|bundled|default|restart]")
             return
+        if normalized == "bundled" and not bundled_i2pd_allowed():
+            self.post(
+                "error",
+                "Bundled router is disabled in this build; use /router system.",
+            )
+            return
         if normalized == "restart":
             await self._restart_router_runtime(
                 f"Restarting router backend: {self._router_settings.backend}…"
@@ -2806,12 +2815,21 @@ class TuiRouterScreen(ModalScreen[None]):
         status = self.query_one("#router_status", Static)
         backend_toggle = self.query_one("#router_backend_toggle", Switch)
         caption = self.query_one("#router_backend_caption", Static)
+        if not bundled_i2pd_allowed():
+            backend_toggle.value = False
+            backend_toggle.disabled = True
         selected_backend = "Bundled i2pd" if backend_toggle.value else "System I2P"
-        caption.update(f"Selected backend: {selected_backend}")
+        if not bundled_i2pd_allowed():
+            caption.update("Bundled router is disabled in this build. Selected backend: System I2P")
+        else:
+            caption.update(f"Selected backend: {selected_backend}")
         status.update(
             self.host._router_status_block()
             + "\n\n"
             + (
+                "Bundled router is disabled in this build; external/system SAM only."
+                if not bundled_i2pd_allowed()
+                else
                 "TUI default = external/system SAM until you explicitly save bundled."
                 if not self.host._router_settings_explicit
                 else "This backend choice is saved in router_prefs.json and reused next start."
@@ -2838,6 +2856,8 @@ class TuiRouterScreen(ModalScreen[None]):
             return None
 
     def _selected_backend(self) -> str:
+        if not bundled_i2pd_allowed():
+            return "system"
         return "bundled" if self.query_one("#router_backend_toggle", Switch).value else "system"
 
     def _schedule_router_change(self, backend: str) -> None:
@@ -2849,6 +2869,8 @@ class TuiRouterScreen(ModalScreen[None]):
         self._refresh_status()
 
     def action_choose_bundled(self) -> None:
+        if not bundled_i2pd_allowed():
+            return
         self.query_one("#router_backend_toggle", Switch).value = True
         self._refresh_status()
 

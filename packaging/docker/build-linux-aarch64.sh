@@ -6,7 +6,7 @@
 #
 # Prerequisites:
 #   - Docker with buildx; on x86_64 hosts use a builder that can run linux/arm64 (QEMU).
-#   - vendor/i2pd/linux-aarch64/i2pd present (see vendor/i2pd/linux-aarch64/README.md).
+#   - Optional bundled i2pd payload if you want portable artifacts with an embedded router.
 #
 # Usage (repo root):
 #   ./packaging/docker/build-linux-aarch64.sh
@@ -20,8 +20,7 @@ DOCKERFILE="${ROOT}/packaging/docker/linux-build-ubuntu2404-arm64.Dockerfile"
 IMAGE="${I2PCHAT_LINUX_ARM64_IMAGE:-i2pchat-linux-build:ubuntu-24.04-arm64}"
 
 if [[ ! -f "${ROOT}/vendor/i2pd/linux-aarch64/i2pd" ]]; then
-  echo "ERROR: missing ${ROOT}/vendor/i2pd/linux-aarch64/i2pd — see vendor/i2pd/linux-aarch64/README.md" >&2
-  exit 1
+  echo "==> No bundled aarch64 i2pd found in vendor/; continuing without embedded router"
 fi
 
 echo "==> Building Docker image ${IMAGE} (linux/arm64)"

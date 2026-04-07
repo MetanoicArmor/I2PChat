@@ -48,6 +48,9 @@ fi
 REPO_ROOT="$(pwd)"
 export UV_PROJECT_ENVIRONMENT="${REPO_ROOT}/${VENV_DIR}"
 
+echo "==> Checking optional bundled i2pd source"
+"${REPO_ROOT}/scripts/ensure_bundled_i2pd.sh"
+
 uv sync --frozen --python "${PYTHON_BIN}" --group build --no-dev
 
 # Не полагаемся на source activate (в Docker + set -u иногда не появляется python в PATH)

@@ -7,15 +7,24 @@ Python **3.12+** is supported (**3.14+** recommended for release-style builds). 
 | Target | Command | Output (typical) |
 |--------|---------|------------------|
 | Linux (AppImage + zip) | `./build-linux.sh` | `I2PChat.AppImage`, **`I2PChat-linux-<arch>-v<version>.zip`** (GUI, AppImage inside), **`I2PChat-linux-<arch>-tui-v<version>.zip`** (только TUI) — **в корне репо**; в **`dist/`** — AppImage и onedir; `<arch>` — **`x86_64`** или **`aarch64`** |
-| Linux aarch64 via Docker | `./packaging/docker/build-linux-aarch64.sh` | Same as above with **`aarch64`** in names; Ubuntu **24.04** arm64 image — see [`packaging/docker/README.md`](../packaging/docker/README.md); requires **`vendor/i2pd/linux-aarch64/i2pd`** |
+| Linux aarch64 via Docker | `./packaging/docker/build-linux-aarch64.sh` | Same as above with **`aarch64`** in names; Ubuntu **24.04** arm64 image — see [`packaging/docker/README.md`](../packaging/docker/README.md); bundled `i2pd` is **optional** for portable builds |
 | macOS (.app + zip) | `./build-macos.sh` | `dist/I2PChat.app`, `I2PChat-macOS-<arch>-v<version>.zip`, **`I2PChat-macos-<arch>-tui-v<version>.zip`** |
 | Windows | `.\build-windows.ps1` | `dist\I2PChat\I2PChat.exe`, **`I2PChat-windows-x64-v<version>.zip`**, **`I2PChat-windows-tui-x64-v<version>.zip`**, plus **`I2PChat-windows-x64-winget-v<version>.zip`** / **`I2PChat-windows-tui-x64-winget-v<version>.zip`** (same trees **without** embedded i2pd — for winget / Microsoft validation) |
 
-**Linux glibc baseline:** for release zips that run on common LTS distros, prefer building on **Ubuntu 22.04** (or use CI). Workflow **[`build-linux-release-artifacts.yml`](../.github/workflows/build-linux-release-artifacts.yml)** (`workflow_dispatch`) runs two jobs in parallel: **`build`** on **ubuntu-22.04** (x86_64) uploads `I2PChat-linux-x86_64-*.zip` + `SHA256SUMS`; **`build-aarch64`** on **ubuntu-22.04-arm** uploads `I2PChat-linux-aarch64-*.zip` + **`SHA256SUMS.linux-aarch64`** (separate file so it does not overwrite the amd64 checksums). The repo must include **`vendor/i2pd/linux-aarch64/i2pd`** or the aarch64 job fails. Inputs: **`tag`**, optional **`source_ref`**. If the checked-out ref has **no `I2PChat-tui.spec`**, the workflow **shallow-fetches `origin/main`** when **`VERSION` on `main` matches** the release. Local builds on bleeding-edge distros can embed a **newer minimum glibc** than users on Debian/Ubuntu LTS have.
+**Linux glibc baseline:** for release zips that run on common LTS distros, prefer building on **Ubuntu 22.04** (or use CI). Workflow **[`build-linux-release-artifacts.yml`](../.github/workflows/build-linux-release-artifacts.yml)** (`workflow_dispatch`) runs two jobs in parallel: **`build`** on **ubuntu-22.04** (x86_64) uploads `I2PChat-linux-x86_64-*.zip` + `SHA256SUMS`; **`build-aarch64`** on **ubuntu-22.04-arm** uploads `I2PChat-linux-aarch64-*.zip` + **`SHA256SUMS.linux-aarch64`** (separate file so it does not overwrite the amd64 checksums). Bundled `i2pd` may be injected locally for portable artifacts, but it is not required to live in the git tree. Inputs: **`tag`**, optional **`source_ref`**. If the checked-out ref has **no `I2PChat-tui.spec`**, the workflow **shallow-fetches `origin/main`** when **`VERSION` on `main` matches** the release. Local builds on bleeding-edge distros can embed a **newer minimum glibc** than users on Debian/Ubuntu LTS have.
 
 **Optional Docker:** **`./packaging/docker/run-linux-build.sh`** — Ubuntu **24.04** on **amd64** (`Dockerfile.linux-noble-glibc239`, glibc **2.39**); newer baseline than 22.04. **`./packaging/docker/build-linux-aarch64.sh`** — Ubuntu **24.04** on **linux/arm64** for **`I2PChat-linux-aarch64-*`** artifacts. Details: [`packaging/docker/README.md`](../packaging/docker/README.md).
 
 **Linux script** uses **uv** (`.venv`, `uv sync --frozen --group build`) and PyInstaller **`I2PChat.spec`** (GUI + TUI exe sharing one Qt onedir), `appimagetool`; the AppImage includes `usr/bin/I2PChat` and **`usr/bin/I2PChat-tui`**, plus a TUI `.desktop` with `Terminal=true`. After that it runs **`I2PChat-tui.spec`** → `dist/I2PChat-tui/` (no Qt) and packs **`I2PChat-linux-*-tui-*.zip`** from that tree.
+
+**Optional bundled router staging:** portable builds can embed `i2pd` if local files are staged under `vendor/i2pd/`. Build scripts now auto-try [`scripts/ensure_bundled_i2pd.sh`](../scripts/ensure_bundled_i2pd.sh), which resolves in this order:
+
+1. already staged `vendor/i2pd/`
+2. `I2PCHAT_BUNDLED_I2PD_SOURCE_DIR`
+3. sibling repo `../i2pchat-bundled-i2pd`
+4. `I2PCHAT_BUNDLED_I2PD_GIT_URL` cloned into `.cache/`
+
+For predictable builds, prefer setting **`I2PCHAT_BUNDLED_I2PD_SOURCE_DIR`** explicitly. The sibling-repo path is only a local convenience fallback. For manual staging or URL-based fetching, use [`scripts/fetch_bundled_i2pd.sh`](../scripts/fetch_bundled_i2pd.sh). The staged files are untracked and are not required for Debian/Ubuntu packaging.
 
 **macOS** builds `dist/I2PChat.app` from **`I2PChat.spec`** (GUI + in-bundle TUI entrypoint sharing Qt), then **`I2PChat-tui.spec`** for the standalone **`I2PChat-macos-*-tui-*.zip`**.
 

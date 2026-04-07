@@ -20,7 +20,9 @@ import qasync
 from i2pchat.router.bundled_i2pd import BundledI2pdManager
 from i2pchat.router.settings import (
     RouterSettings,
+    bundled_i2pd_allowed,
     load_router_settings,
+    normalize_router_settings,
     router_runtime_dir,
     save_router_settings,
 )
@@ -4942,10 +4944,12 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         self._backend_group.setExclusive(True)
         self._backend_group.addButton(self._opt_bundled, 0)
         self._backend_group.addButton(self._opt_system, 1)
-        if settings.backend == "bundled":
+        if settings.backend == "bundled" and bundled_i2pd_allowed():
             self._opt_bundled.setChecked(True)
         else:
             self._opt_system.setChecked(True)
+        if not bundled_i2pd_allowed():
+            self._opt_bundled.setEnabled(False)
 
         bp_lay.addWidget(self._opt_bundled)
         bp_lay.addWidget(self._opt_system)
@@ -5008,17 +5012,28 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         self._sync_enabled()
 
     def _sync_enabled(self) -> None:
+        if not bundled_i2pd_allowed():
+            self._opt_system.setChecked(True)
         use_system = self._opt_system.isChecked()
         self._system_host.setEnabled(use_system)
         self._system_port.setEnabled(use_system)
-        self._bundled_sam_port.setEnabled(not use_system)
-        self._bundled_http_proxy_port.setEnabled(not use_system)
-        self._bundled_socks_proxy_port.setEnabled(not use_system)
-        self._btn_restart.setEnabled(not use_system)
+        bundled_enabled = (not use_system) and bundled_i2pd_allowed()
+        self._bundled_sam_port.setEnabled(bundled_enabled)
+        self._bundled_http_proxy_port.setEnabled(bundled_enabled)
+        self._bundled_socks_proxy_port.setEnabled(bundled_enabled)
+        self._btn_restart.setEnabled(bundled_enabled)
+        if not bundled_i2pd_allowed():
+            self._status_label.setText(
+                "Bundled router is disabled in this build. Configure a system i2pd SAM endpoint."
+            )
 
     def settings(self) -> RouterSettings:
-        backend = "bundled" if self._opt_bundled.isChecked() else "system"
-        return RouterSettings(
+        backend = (
+            "bundled"
+            if self._opt_bundled.isChecked() and bundled_i2pd_allowed()
+            else "system"
+        )
+        return normalize_router_settings(RouterSettings(
             backend=backend,
             system_sam_host=self._system_host.text().strip() or "127.0.0.1",
             system_sam_port=int(self._system_port.value()),
@@ -5028,7 +5043,7 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
             bundled_socks_proxy_port=int(self._bundled_socks_proxy_port.value()),
             bundled_control_http_port=17070,
             bundled_auto_start=True,
-        )
+        ))
 
 
 class _BackupPassphraseDialog(QtWidgets.QDialog):
@@ -8099,7 +8114,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         return core
 
     async def _ensure_router_backend_ready(self) -> tuple[str, int]:
-        settings = self._router_settings
+        settings = normalize_router_settings(self._router_settings)
+        self._router_settings = settings
         save_router_settings(settings)
 
         if settings.backend == "system":

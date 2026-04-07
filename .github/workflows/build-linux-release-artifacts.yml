@@ -246,13 +246,14 @@ jobs:
             libxcb-shm0 libxcb-randr0 libxcb-keysyms1 libxcb-image0 libxcb-icccm4 \
             libxcb-util1 libxcb-sync1 libxcb-xinput0 libxcb-cursor0
 
-      - name: Require bundled i2pd (aarch64)
+      - name: Detect bundled i2pd (aarch64)
         run: |
-          if [ ! -f vendor/i2pd/linux-aarch64/i2pd ]; then
-            echo "ERROR: missing vendor/i2pd/linux-aarch64/i2pd — add and commit the aarch64 i2pd binary." >&2
-            exit 1
+          if [ -f vendor/i2pd/linux-aarch64/i2pd ]; then
+            chmod +x vendor/i2pd/linux-aarch64/i2pd
+            echo "Bundled aarch64 i2pd found; release artifacts may embed it."
+          else
+            echo "No bundled aarch64 i2pd found; building portable artifacts without embedded router."
           fi
-          chmod +x vendor/i2pd/linux-aarch64/i2pd
 
       - name: Build Linux aarch64 zips (PyInstaller + AppImage)
         run: ./build-linux.sh

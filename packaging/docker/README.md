@@ -84,7 +84,7 @@ The script builds the image and runs **`./build-linux.sh`** end-to-end (GUI AppI
 
 1. **Docker Buildx** and an arm64-capable builder. On Apple Silicon, native arm64 is fine. On x86_64 Linux/macOS you typically need QEMU/binfmt (e.g. `docker run --privileged --rm tonistiigi/binfmt --install all` once, then a `docker buildx` builder using the `docker-container` driver).
 
-2. **`vendor/i2pd/linux-aarch64/i2pd`** — executable i2pd for aarch64 (see [`../../vendor/i2pd/linux-aarch64/README.md`](../../vendor/i2pd/linux-aarch64/README.md)). Without it, the script exits with an error before build.
+2. Optional bundled `i2pd` payload for portable builds. If it is absent from the source tree, the script still builds release artifacts, but they will not embed a bundled router.
 
 3. Same **uv** lockfile as a normal local build (`pyproject.toml`, `uv.lock`); the image includes the `uv` binary for `build-linux.sh`.
 

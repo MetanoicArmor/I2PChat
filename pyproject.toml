@@ -18,9 +18,13 @@ dependencies = [
     "Pillow",
     "pynacl",
     "keyring",
-    "cryptography==46.0.6; sys_platform == 'linux'",
+    "cryptography; sys_platform == 'linux'",
     "pywin32-ctypes; sys_platform == 'win32'",
 ]
+
+[project.scripts]
+i2pchat = "i2pchat.gui.main_qt:main"
+i2pchat-tui = "i2pchat.tui:main"
 
 [dependency-groups]
 build = [

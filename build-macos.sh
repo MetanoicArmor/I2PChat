@@ -31,6 +31,9 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "==> Checking optional bundled i2pd source"
+"$(pwd)/scripts/ensure_bundled_i2pd.sh"
+
 if command -v python3.14 >/dev/null 2>&1; then
   PYTHON_BIN="python3.14"
 else
@@ -78,6 +81,8 @@ if [ -f "vendor/i2pd/darwin-arm64/i2pd" ]; then
   cp "vendor/i2pd/darwin-arm64/i2pd" \
     "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/darwin-arm64/i2pd"
   chmod +x "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/darwin-arm64/i2pd"
+else
+  echo "==> No local bundled macOS i2pd found (run ./scripts/fetch_bundled_i2pd.sh to stage one if needed)"
 fi
 if [ -f "I2PChat.icns" ]; then
   cp "I2PChat.icns" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"

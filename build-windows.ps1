@@ -76,6 +76,44 @@ $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $RepoRoot
 $env:UV_PROJECT_ENVIRONMENT = Join-Path $RepoRoot $VenvDir
 
+function Copy-BundledI2pdFromSource {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceDir
+    )
+    if (-not (Test-Path -LiteralPath $SourceDir)) {
+        return $false
+    }
+    $pairs = @(
+        @{ Src = (Join-Path $SourceDir "windows-x64\i2pd.exe"); Dst = "vendor\i2pd\windows-x64\i2pd.exe" }
+    )
+    $copied = $false
+    foreach ($pair in $pairs) {
+        if (Test-Path -LiteralPath $pair.Src) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $pair.Dst) | Out-Null
+            Copy-Item $pair.Src $pair.Dst -Force
+            $copied = $true
+        }
+    }
+    return $copied
+}
+
+if ($env:I2PCHAT_OMIT_BUNDLED_I2PD -ne "1" -and -not (Test-Path "vendor\i2pd\windows-x64\i2pd.exe")) {
+    Write-Host "==> Checking optional bundled Windows i2pd source"
+    if ($env:I2PCHAT_BUNDLED_I2PD_SOURCE_DIR) {
+        if (Copy-BundledI2pdFromSource -SourceDir $env:I2PCHAT_BUNDLED_I2PD_SOURCE_DIR) {
+            Write-Host "==> Bundled i2pd: STAGED from I2PCHAT_BUNDLED_I2PD_SOURCE_DIR=$($env:I2PCHAT_BUNDLED_I2PD_SOURCE_DIR)"
+        }
+    }
+    elseif (Test-Path "..\i2pchat-bundled-i2pd") {
+        if (Copy-BundledI2pdFromSource -SourceDir "..\i2pchat-bundled-i2pd") {
+            Write-Host "==> Bundled i2pd: STAGED from sibling repo ..\\i2pchat-bundled-i2pd"
+        }
+    }
+    elseif (-not (Test-Path "vendor\i2pd\windows-x64\i2pd.exe")) {
+        Write-Host "==> Bundled i2pd: NOT FOUND; building without embedded router"
+    }
+}
+
 Write-Host "==> uv sync (locked runtime + build group, no dev tools)"
 $uvPy = if ($PyLauncherArgs -contains "-3.14") { "3.14" } else { "3" }
 Invoke-NativeChecked "uv" @("sync", "--frozen", "--python", $uvPy, "--group", "build", "--no-dev")
@@ -105,6 +143,9 @@ if ($env:I2PCHAT_OMIT_BUNDLED_I2PD -ne "1") {
         Get-ChildItem "vendor\i2pd\windows-x64\*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
             Copy-Item $_.FullName $BundledRouterDir
         }
+    }
+    else {
+        Write-Host "==> No local bundled Windows i2pd found (run .\\scripts\\fetch_bundled_i2pd.sh from a POSIX shell, or stage vendor\\i2pd manually)"
     }
 }
 
