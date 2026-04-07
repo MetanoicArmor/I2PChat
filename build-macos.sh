@@ -82,7 +82,7 @@ if [ -f "vendor/i2pd/darwin-arm64/i2pd" ]; then
     "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/darwin-arm64/i2pd"
   chmod +x "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/darwin-arm64/i2pd"
 else
-  echo "==> No local bundled macOS i2pd found (run ./scripts/fetch_bundled_i2pd.sh to stage one if needed)"
+  echo "==> No local bundled macOS i2pd found (ensure_bundled_i2pd clones https://github.com/MetanoicArmor/i2pchat-bundled-i2pd by default, or run ./scripts/fetch_bundled_i2pd.sh --from …)"
 fi
 if [ -f "I2PChat.icns" ]; then
   cp "I2PChat.icns" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
@@ -208,7 +208,19 @@ elif ! command -v gpg >/dev/null 2>&1; then
   fi
   echo "⚠ gpg not found; skipping detached signature (set I2PCHAT_REQUIRE_GPG=1 to enforce)"
 else
-  GPG_ARGS=(--batch --yes --armor --detach-sign --output "${SHA256_FILE}.asc")
+  use_gpg_batch=1
+  if [ -t 0 ] || [ -t 1 ]; then
+    use_gpg_batch=0
+  fi
+  case "${I2PCHAT_GPG_BATCH:-}" in
+    0) use_gpg_batch=0 ;;
+    1) use_gpg_batch=1 ;;
+  esac
+  GPG_ARGS=()
+  if [ "$use_gpg_batch" = 1 ]; then
+    GPG_ARGS+=(--batch --yes)
+  fi
+  GPG_ARGS+=(--armor --detach-sign --output "${SHA256_FILE}.asc")
   if [ -n "${I2PCHAT_GPG_KEY_ID:-}" ]; then
     GPG_ARGS+=(--local-user "${I2PCHAT_GPG_KEY_ID}")
   fi
@@ -220,6 +232,7 @@ else
       exit 1
     fi
     echo "⚠ gpg signing failed; continuing without detached signature"
+    echo "   Hint: gpg --list-secret-keys --keyid-format=long; set I2PCHAT_GPG_KEY_ID or default-key in gpg.conf." >&2
   fi
 fi
 echo "  Можно перенести dist/${APP_NAME}.app в /Applications и запускать двойным кликом."

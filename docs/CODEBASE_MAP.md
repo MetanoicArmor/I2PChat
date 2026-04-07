@@ -4,7 +4,7 @@ This document is a low-risk navigation guide for the current repository layout.
 All application code lives under `i2pchat/`; the repo root keeps tooling and
 docs. **I2P SAM** is **`i2pchat/sam/`** (no vendored **i2plib**). Portable
 release builds may optionally inject bundled `i2pd` binaries locally, but they
-are not part of the normal source tree.
+are not part of the normal source tree. By default [`scripts/ensure_bundled_i2pd.sh`](../scripts/ensure_bundled_i2pd.sh) clones [MetanoicArmor/i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd) into `.cache/` when `vendor/i2pd/` is empty.
 
 ## Canonical source tree
 

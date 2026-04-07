@@ -109,8 +109,51 @@ if ($env:I2PCHAT_OMIT_BUNDLED_I2PD -ne "1" -and -not (Test-Path "vendor\i2pd\win
             Write-Host "==> Bundled i2pd: STAGED from sibling repo ..\\i2pchat-bundled-i2pd"
         }
     }
-    elseif (-not (Test-Path "vendor\i2pd\windows-x64\i2pd.exe")) {
-        Write-Host "==> Bundled i2pd: NOT FOUND; building without embedded router"
+    elseif ($env:I2PCHAT_SKIP_BUNDLED_I2PD_GIT -ne "1") {
+        $procGitUrl = [Environment]::GetEnvironmentVariable("I2PCHAT_BUNDLED_I2PD_GIT_URL", "Process")
+        $defaultBundledGit = "https://github.com/MetanoicArmor/i2pchat-bundled-i2pd.git"
+        $gitUrlToUse = $null
+        if ($null -eq $procGitUrl) {
+            $gitUrlToUse = $defaultBundledGit
+        }
+        elseif ($procGitUrl -ne "") {
+            $gitUrlToUse = $procGitUrl
+        }
+        if ($null -ne $gitUrlToUse) {
+            $gitExe = Get-Command git -ErrorAction SilentlyContinue
+            if ($gitExe) {
+                $cacheDir = Join-Path $RepoRoot ".cache\bundled-i2pd-source"
+                $parentCache = Split-Path -Parent $cacheDir
+                if (-not (Test-Path -LiteralPath $parentCache)) {
+                    New-Item -ItemType Directory -Force -Path $parentCache | Out-Null
+                }
+                if (-not (Test-Path -LiteralPath (Join-Path $cacheDir ".git"))) {
+                    Remove-Item -Recurse -Force -Path $cacheDir -ErrorAction SilentlyContinue
+                    & git clone --depth=1 $gitUrlToUse $cacheDir 2>$null
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Host "==> Bundled i2pd: git clone failed; building without embedded router (see https://github.com/MetanoicArmor/i2pchat-bundled-i2pd )"
+                    }
+                }
+                else {
+                    Push-Location $cacheDir
+                    try {
+                        & git pull --ff-only 2>$null | Out-Null
+                    }
+                    finally {
+                        Pop-Location
+                    }
+                }
+                if (Copy-BundledI2pdFromSource -SourceDir $cacheDir) {
+                    Write-Host "==> Bundled i2pd: STAGED from git $gitUrlToUse"
+                }
+            }
+            else {
+                Write-Host "==> Bundled i2pd: git not on PATH; cannot clone $gitUrlToUse"
+            }
+        }
+    }
+    if (-not (Test-Path "vendor\i2pd\windows-x64\i2pd.exe")) {
+        Write-Host "==> Bundled i2pd: NOT FOUND; building without embedded router (optional: https://github.com/MetanoicArmor/i2pchat-bundled-i2pd )"
     }
 }
 
@@ -145,7 +188,7 @@ if ($env:I2PCHAT_OMIT_BUNDLED_I2PD -ne "1") {
         }
     }
     else {
-        Write-Host "==> No local bundled Windows i2pd found (run .\\scripts\\fetch_bundled_i2pd.sh from a POSIX shell, or stage vendor\\i2pd manually)"
+        Write-Host "==> No local bundled Windows i2pd found (build should clone https://github.com/MetanoicArmor/i2pchat-bundled-i2pd when git is on PATH; else fetch_bundled_i2pd.sh / manual vendor\\i2pd)"
     }
 }
 

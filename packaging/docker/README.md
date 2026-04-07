@@ -84,7 +84,7 @@ The script builds the image and runs **`./build-linux.sh`** end-to-end (GUI AppI
 
 1. **Docker Buildx** and an arm64-capable builder. On Apple Silicon, native arm64 is fine. On x86_64 Linux/macOS you typically need QEMU/binfmt (e.g. `docker run --privileged --rm tonistiigi/binfmt --install all` once, then a `docker buildx` builder using the `docker-container` driver).
 
-2. Optional bundled `i2pd` payload for portable builds. If it is absent from the source tree, the script still builds release artifacts, but they will not embed a bundled router.
+2. Optional bundled `i2pd` for portable builds: with an empty `vendor/i2pd/`, `build-linux.sh` runs `ensure_bundled_i2pd.sh`, which by default clones **[MetanoicArmor/i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd)** into `.cache/` (needs network in the container). Set **`I2PCHAT_SKIP_BUNDLED_I2PD_GIT=1`** to skip. If clone fails or is skipped, artifacts build without an embedded router.
 
 3. Same **uv** lockfile as a normal local build (`pyproject.toml`, `uv.lock`); the image includes the `uv` binary for `build-linux.sh`.
 

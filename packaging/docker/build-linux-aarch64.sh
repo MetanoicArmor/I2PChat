@@ -6,7 +6,8 @@
 #
 # Prerequisites:
 #   - Docker with buildx; on x86_64 hosts use a builder that can run linux/arm64 (QEMU).
-#   - Optional bundled i2pd payload if you want portable artifacts with an embedded router.
+#   - Bundled i2pd: empty vendor/i2pd/ triggers ensure_bundled_i2pd.sh → default clone
+#     https://github.com/MetanoicArmor/i2pchat-bundled-i2pd (needs network unless pre-staged).
 #
 # Usage (repo root):
 #   ./packaging/docker/build-linux-aarch64.sh

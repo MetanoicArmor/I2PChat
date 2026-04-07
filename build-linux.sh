@@ -367,7 +367,20 @@ elif ! command -v gpg >/dev/null 2>&1; then
   fi
   echo "⚠ gpg not found; skipping detached signature (set I2PCHAT_REQUIRE_GPG=1 to enforce)"
 else
-  GPG_ARGS=(--batch --yes --armor --detach-sign --output "${SHA256_FILE}.asc")
+  # В CI (нет TTY на stdin/stdout) — --batch; иначе — без batch, чтобы pinentry мог запросить пароль.
+  use_gpg_batch=1
+  if [ -t 0 ] || [ -t 1 ]; then
+    use_gpg_batch=0
+  fi
+  case "${I2PCHAT_GPG_BATCH:-}" in
+    0) use_gpg_batch=0 ;;
+    1) use_gpg_batch=1 ;;
+  esac
+  GPG_ARGS=()
+  if [ "$use_gpg_batch" = 1 ]; then
+    GPG_ARGS+=(--batch --yes)
+  fi
+  GPG_ARGS+=(--armor --detach-sign --output "${SHA256_FILE}.asc")
   if [ -n "${I2PCHAT_GPG_KEY_ID:-}" ]; then
     GPG_ARGS+=(--local-user "${I2PCHAT_GPG_KEY_ID}")
   fi
@@ -379,5 +392,7 @@ else
       exit 1
     fi
     echo "⚠ gpg signing failed; continuing without detached signature"
+    echo "   Подсказка: gpg --list-secret-keys --keyid-format=long  (тот же GNUPGHOME, что у сборки)" >&2
+    echo "   Задайте I2PCHAT_GPG_KEY_ID=<keyid или отпечаток> или default-key в ~/.gnupg/gpg.conf." >&2
   fi
 fi

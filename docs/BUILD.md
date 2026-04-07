@@ -22,9 +22,11 @@ Python **3.12+** is supported (**3.14+** recommended for release-style builds). 
 1. already staged `vendor/i2pd/`
 2. `I2PCHAT_BUNDLED_I2PD_SOURCE_DIR`
 3. sibling repo `../i2pchat-bundled-i2pd`
-4. `I2PCHAT_BUNDLED_I2PD_GIT_URL` cloned into `.cache/`
+4. **Git clone** into `.cache/bundled-i2pd-source/`: default **[`MetanoicArmor/i2pchat-bundled-i2pd`](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd)** (`I2PCHAT_BUNDLED_I2PD_GIT_URL` overrides; empty URL or **`I2PCHAT_SKIP_BUNDLED_I2PD_GIT=1`** skips this step)
 
 For predictable builds, prefer setting **`I2PCHAT_BUNDLED_I2PD_SOURCE_DIR`** explicitly. The sibling-repo path is only a local convenience fallback. For manual staging or URL-based fetching, use [`scripts/fetch_bundled_i2pd.sh`](../scripts/fetch_bundled_i2pd.sh). The staged files are untracked and are not required for Debian/Ubuntu packaging.
+
+**Raw binary URLs:** `I2PCHAT_I2PD_*_URL` variables in `fetch_bundled_i2pd.sh` must point to a **single** `i2pd` / `i2pd.exe` file. Upstream [PurpleI2P/i2pd releases](https://github.com/PurpleI2P/i2pd/releases) ship `.deb`/`.rpm`/archives — extract the `i2pd` executable into a directory and run `fetch_bundled_i2pd.sh --from` that directory (or clone **[i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd)** / rely on `ensure_bundled_i2pd.sh`).
 
 **macOS** builds `dist/I2PChat.app` from **`I2PChat.spec`** (GUI + in-bundle TUI entrypoint sharing Qt), then **`I2PChat-tui.spec`** for the standalone **`I2PChat-macos-*-tui-*.zip`**.
 
@@ -47,7 +49,8 @@ Environment:
 
 - `I2PCHAT_SKIP_GPG_SIGN=1` — skip detached signature;
 - `I2PCHAT_REQUIRE_GPG=1` — fail if GPG signing is unavailable or fails;
-- `I2PCHAT_GPG_KEY_ID=<keyid>` — select signing key.
+- `I2PCHAT_GPG_KEY_ID=<keyid>` — select signing key;
+- `I2PCHAT_GPG_BATCH=0|1` — override `gpg --batch`: omitted when stdin or stdout is a TTY (so pinentry can prompt; works with `| tee`); forced when neither is a TTY (CI). Use `I2PCHAT_GPG_BATCH=1` with gpg-agent if you need batch in a terminal.
 
 **Official release builds** should use `I2PCHAT_REQUIRE_GPG=1` so unsigned archives are not produced silently.
 

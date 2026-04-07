@@ -331,6 +331,7 @@ This script:
 - Builds a self‑contained GUI binary via PyInstaller.
 - Packs it into `I2PChat.AppImage` using `appimagetool`.
 - Creates release archive `I2PChat-linux-<arch>-v<version>.zip` (contains `I2PChat.AppImage`); **`arch`** is **`x86_64`** or **`aarch64`** depending on the host. CI publishes matching **`I2PChat-linux-aarch64-v*.zip`** and may attach **`SHA256SUMS.linux-aarch64`** separately from the amd64 checksum file.
+- **Bundled `i2pd`:** before PyInstaller, [`scripts/ensure_bundled_i2pd.sh`](scripts/ensure_bundled_i2pd.sh) stages binaries under `vendor/i2pd/`. If that tree is empty, it **clones by default** [github.com/MetanoicArmor/i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd) into `.cache/bundled-i2pd-source/` (override with **`I2PCHAT_BUNDLED_I2PD_GIT_URL`**, disable git fetch with **`I2PCHAT_SKIP_BUNDLED_I2PD_GIT=1`** or **`I2PCHAT_BUNDLED_I2PD_GIT_URL=`**). See [`docs/BUILD.md`](docs/BUILD.md).
 
 #### 🍎 macOS (GUI .app bundle)
 
@@ -380,7 +381,8 @@ Build-time controls:
 
 - `I2PCHAT_SKIP_GPG_SIGN=1` — always skip detached signature creation;
 - `I2PCHAT_REQUIRE_GPG=1` — fail build if GPG signing is unavailable or fails;
-- `I2PCHAT_GPG_KEY_ID=<keyid>` — select a specific key for detached signature.
+- `I2PCHAT_GPG_KEY_ID=<keyid>` — select a specific key for detached signature (avoids “no default secret key” when you have several keys or no `default-key` in `gpg.conf`);
+- `I2PCHAT_GPG_BATCH=0|1` — override auto mode: by default the Linux/macOS scripts use **`gpg --batch`** only when **neither** stdin nor stdout is a TTY (typical CI). If either is a TTY (including `build.sh | tee log`), they omit `--batch` so **pinentry** can ask for your passphrase. Force batch with `I2PCHAT_GPG_BATCH=1` (needs **gpg-agent** with a cached passphrase if the key is protected).
 
 **Official release builds** should set `I2PCHAT_REQUIRE_GPG=1` so unsigned archives are not produced silently; publish `SHA256SUMS` and `SHA256SUMS.asc` next to each asset.
 

@@ -11,6 +11,9 @@ Prepare local bundled i2pd binaries for portable builds.
 This script populates vendor/i2pd/ as a LOCAL, UNTRACKED staging area.
 It is intended for AppImage/macOS/Windows portable builds only.
 
+Official binary layouts (git): https://github.com/MetanoicArmor/i2pchat-bundled-i2pd
+Build scripts run ./scripts/ensure_bundled_i2pd.sh first, which clones that repo by default when vendor/i2pd/ is empty.
+
 Usage:
   ./scripts/fetch_bundled_i2pd.sh --from /path/to/binaries
   ./scripts/fetch_bundled_i2pd.sh --clean
@@ -138,7 +141,7 @@ copy_from_urls() {
   fi
 
   if [[ "$found" -ne 1 ]]; then
-    die "No source directory was provided and no I2PCHAT_I2PD_*_URL env vars were set"
+    die "No source directory was provided and no I2PCHAT_I2PD_*_URL env vars were set (try ./scripts/ensure_bundled_i2pd.sh or --from; official repo: https://github.com/MetanoicArmor/i2pchat-bundled-i2pd)"
   fi
 }
 
