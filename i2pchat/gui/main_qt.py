@@ -5042,7 +5042,7 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
             bundled_http_proxy_port=int(self._bundled_http_proxy_port.value()),
             bundled_socks_proxy_port=int(self._bundled_socks_proxy_port.value()),
             bundled_control_http_port=17070,
-            bundled_auto_start=True,
+            bundled_auto_start=(backend == "bundled"),
         ))
 
 

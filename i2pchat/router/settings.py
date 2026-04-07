@@ -19,7 +19,8 @@ _DISABLE_BUNDLED_MARKERS = (
 
 @dataclass
 class RouterSettings:
-    backend: str = "bundled"  # "system" | "bundled"; default until router_prefs.json is saved from the UI
+    # Fresh install / no router_prefs.json: system SAM (portable & winget builds often ship without i2pd).
+    backend: str = "system"  # "system" | "bundled"
 
     system_sam_host: str = "127.0.0.1"
     system_sam_port: int = 7656
@@ -31,7 +32,7 @@ class RouterSettings:
     bundled_socks_proxy_port: int = 14447
     bundled_control_http_port: int = 17070
 
-    bundled_auto_start: bool = True
+    bundled_auto_start: bool = False
 
 
 def bundled_i2pd_allowed() -> bool:

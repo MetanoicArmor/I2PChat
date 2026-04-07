@@ -323,6 +323,27 @@ Compress-Archive -Path "$WingetTuiStage\\*" -DestinationPath $WingetTuiZipFile -
 Remove-Item -Recurse -Force $WingetTuiStage
 Write-Host "Packed (winget TUI, no bundled i2pd): $WingetTuiZipFile"
 
+# Winget pass leaves dist\I2PChat (and dist\I2PChat-tui) as PyInstaller output *without* embedded i2pd.
+# Release zip I2PChat-windows-x64-v* was already packed from the earlier full tree. Copy router from
+# repo vendor/ back beside the onedirs so local `dist\I2PChat\I2PChat.exe` works with bundled backend.
+if (Test-Path "vendor\i2pd\windows-x64\i2pd.exe") {
+    foreach ($root in @("dist\I2PChat", "dist\I2PChat-tui")) {
+        if (-not (Test-Path -LiteralPath $root)) {
+            continue
+        }
+        $BundledRouterDir = Join-Path $root "vendor\i2pd\windows-x64"
+        New-Item -ItemType Directory -Force -Path $BundledRouterDir | Out-Null
+        Copy-Item "vendor\i2pd\windows-x64\i2pd.exe" (Join-Path $BundledRouterDir "i2pd.exe") -Force
+        Get-ChildItem "vendor\i2pd\windows-x64\*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName $BundledRouterDir -Force
+        }
+    }
+    Write-Host "==> Restored bundled i2pd beside dist\I2PChat (and TUI onedir if present) for local runs"
+}
+else {
+    Write-Host "==> No vendor\i2pd\windows-x64\i2pd.exe — dist onedirs stay without embedded router (use system i2pd / full release zip)"
+}
+
 $sumGui = (Get-FileHash -Path $ZipFile -Algorithm SHA256).Hash.ToLowerInvariant()
 $sumTui = (Get-FileHash -Path $TuiZipFile -Algorithm SHA256).Hash.ToLowerInvariant()
 $sumWinget = (Get-FileHash -Path $WingetZipFile -Algorithm SHA256).Hash.ToLowerInvariant()

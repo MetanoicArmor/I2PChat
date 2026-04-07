@@ -70,7 +70,7 @@ Legacy `sources.list` line:
 
 ## Router (I2P)
 
-You need a working I2P router with **SAM** enabled (typical embedded or system **i2pd**). Fresh installs often default to a **bundled** router; you can switch to a system router in the app. Details: [**MANUAL_EN.md**](MANUAL_EN.md) / [**MANUAL_RU.md**](MANUAL_RU.md) and the **Router backend** note in the [README](../README.md) Quick Start section.
+You need a working I2P router with **SAM** enabled (typical system **i2pd**). Fresh installs default to **system** SAM; switch to **bundled** in the app if your build ships embedded `i2pd`. Details: [**MANUAL_EN.md**](MANUAL_EN.md) / [**MANUAL_RU.md**](MANUAL_RU.md) and the **Router backend** note in the [README](../README.md) Quick Start section.
 
 ## Third-party package managers
 
