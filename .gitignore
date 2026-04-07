@@ -93,6 +93,7 @@ debian/files
 debian/debhelper-build-stamp
 debian/*.substvars
 debian/*.debhelper
+debian/*.debhelper.log
 debian/.debhelper/
 debian/tmp/
 debian/python3-i2pchat/

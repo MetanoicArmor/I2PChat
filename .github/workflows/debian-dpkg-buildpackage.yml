@@ -1,5 +1,6 @@
-# First-class Debian source package check (dpkg-buildpackage + lintian + autopkgtest).
-# Local equivalent when Docker runs: packaging/debian/docker-dpkg-buildpackage.sh
+# Debian source package check (dpkg-buildpackage + lintian + autopkgtest).
+# Runs in debian:sid so Depends i2pd (>= 2.59~) is satisfiable from the archive.
+# Local equivalent: packaging/debian/docker-dpkg-buildpackage.sh
 #
 # dpkg-buildpackage writes to the parent of the source tree (..). We copy into
 # debian-ci-out/ so autopkgtest cannot strand later steps.
@@ -29,20 +30,24 @@ permissions:
 
 jobs:
   dpkg-buildpackage:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    container:
+      image: debian:sid
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Debian build toolchain
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
+          apt-get update -qq
+          apt-get install -y -qq \
             autopkgtest \
             build-essential \
+            ca-certificates \
             debhelper \
             devscripts \
             dh-python \
             fakeroot \
+            git \
             lintian \
             pybuild-plugin-pyproject \
             python3-all \
@@ -94,7 +99,7 @@ jobs:
           [ "${#debs[@]}" -ge 1 ]
           apt_debs=()
           for d in "${debs[@]}"; do apt_debs+=("./$d"); done
-          sudo apt-get install --reinstall -y -qq "${apt_debs[@]}"
+          apt-get install --reinstall -y -qq "${apt_debs[@]}"
 
       - name: Verify system-router-only marker
         run: |

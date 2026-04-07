@@ -3,8 +3,9 @@
 # Usage: from repo root — ./packaging/debian/docker-dpkg-buildpackage.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-# Match CI: Ubuntu 24.04 has Python 3.12 (see pyproject.toml requires-python).
-IMAGE="${DEBIAN_BUILD_IMAGE:-ubuntu:24.04}"
+# Default debian:sid: archive i2pd satisfies python3-i2pchat Depends (>= 2.59.0~).
+# Ubuntu 24.04 ships i2pd 2.49 — use DEBIAN_BUILD_IMAGE=ubuntu:24.04 only if you relax Depends.
+IMAGE="${DEBIAN_BUILD_IMAGE:-debian:sid}"
 docker run --rm -i -v "${ROOT}:/src:rw" -w /src "${IMAGE}" bash -s <<'EOS'
 set -euo pipefail
 shopt -s nullglob
