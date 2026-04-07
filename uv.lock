@@ -148,7 +148,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cryptography", marker = "sys_platform == 'linux'", specifier = "==46.0.6" },
+    { name = "cryptography", marker = "sys_platform == 'linux'" },
     { name = "keyring" },
     { name = "pillow" },
     { name = "pynacl" },

@@ -41,6 +41,7 @@ dist/
 I2PChat-macOS-arm64*.zip
 I2PChat-windows*.zip
 I2PChat-*.AppImage
+I2PChat.AppImage
 I2PChat.AppDir/
 appimagetool-*.AppImage
 I2PChat-linux-*.zip
@@ -74,6 +75,7 @@ config.local.*
 
 # IDE / editor (Cursor — не пушить)
 .cursor/
+docs/CURSOR_*.md
 .idea/
 *.log
 *.swp
