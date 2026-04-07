@@ -5,8 +5,8 @@ i2pchat (1.2.4) UNRELEASED; urgency=medium
     autopkgtest exits 0 on success).
   * Install system-router-only marker via debian/python3-i2pchat.install under
     usr/share/i2pchat/ (not under usr/share/doc; dpkg nodoc path-exclude).
-  * debian/source/options: tar-ignore .git, venv, AppImage staging, vendor,
-    packaging/aur (AUR makepkg debris); full dpkg-buildpackage -us -uc.
+  * debian/source/options: tar-ignore .git, .gm, .venv*, AppImage staging,
+    vendor, packaging/aur (AUR makepkg debris); full dpkg-buildpackage -us -uc.
   * Copyright: Fluent UI emoji (Expat), GUI icons; minimal lintian overrides
     (ITP changelog, console scripts without man pages).
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_NAME="I2PChat"
 APPDIR="${APP_NAME}.AppDir"
-VENV_DIR=".venv"
+VENV_DIR=".gm"
 APPIMAGETOOL_VERSION="1.9.1"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -47,8 +47,23 @@ fi
 
 REPO_ROOT="$(pwd)"
 export UV_PROJECT_ENVIRONMENT="${REPO_ROOT}/${VENV_DIR}"
-# Иначе uv ругается, если в шелле активировано другое venv (например .venv314).
+# Иначе uv ругается, если в шелле активировано другое venv (например .venv снаружи).
 unset VIRTUAL_ENV
+
+# Удаление onedir после сборки от root или с read-only битами: иначе rm → EACCES.
+safe_rm_rf() {
+  local p
+  for p in "$@"; do
+    [ -e "$p" ] || [ -L "$p" ] || continue
+    chmod -R u+w "$p" 2>/dev/null || true
+    if ! rm -rf "$p"; then
+      echo "ERROR: не удалось удалить «$p» (нет прав или файл занят)." >&2
+      echo "       Закройте запущенные ${APP_NAME} / ${APP_NAME}-tui и повторите, либо:" >&2
+      echo "       sudo chown -R \"\$USER\" \"$p\"" >&2
+      exit 1
+    fi
+  done
+}
 
 echo "==> Checking optional bundled i2pd source"
 "${REPO_ROOT}/scripts/ensure_bundled_i2pd.sh"
@@ -79,7 +94,7 @@ PY
 
 # 1) сборка PyInstaller с использованием spec файла (анализирует i2pchat/run_gui.py и зависимости)
 # python -m PyInstaller: bin/pyinstaller shebang часто с путём хоста, в Docker путь другой (/src)
-rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"
+safe_rm_rf "dist/${APP_NAME}" "build/${APP_NAME}"
 "${VENV_PY}" -m PyInstaller --clean -y I2PChat.spec
 
 # 2) упаковка в AppDir
@@ -235,6 +250,7 @@ PY
 echo "✔ Packed ${ZIP_FILE}"
 
 echo "==> PyInstaller slim TUI-only onedir (I2PChat-tui.spec, без PyQt6)"
+safe_rm_rf "dist/${APP_NAME}-tui" "build/${APP_NAME}-tui"
 "${VENV_PY}" -m PyInstaller --clean -y I2PChat-tui.spec
 
 # 4b) TUI-only zip (no AppImage): usr/bin layout + root launcher for AUR / manual install

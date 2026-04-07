@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-PYTHON="${REPO_ROOT}/.venv/bin/python"
+PYTHON="${REPO_ROOT}/.gm/bin/python"
 if [[ ! -x "${PYTHON}" ]]; then
   echo "run_tests.sh: no ${PYTHON}" >&2
   echo "Install deps with uv, e.g.: uv sync && uv run pytest tests/ -q" >&2

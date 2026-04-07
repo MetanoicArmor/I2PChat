@@ -1,5 +1,5 @@
 Param(
-    [string]$VenvDir = ".venv"
+    [string]$VenvDir = ".gm"
 )
 
 Set-StrictMode -Version Latest

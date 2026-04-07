@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="I2PChat"
-VENV_DIR=".venv"
+VENV_DIR=".gm"
 BLINDBOX_INSTALL_SRC="i2pchat/blindbox/daemon/install/install.sh"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 

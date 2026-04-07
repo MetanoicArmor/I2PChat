@@ -21,6 +21,6 @@ i2pchat_print_linux_host_artifacts() {
   echo ""
   echo "    Отдельно «извлекать» из образа не нужно: всё пишется прямо в дерево репозитория."
   echo "    Если файлы принадлежат root (Linux + Docker без user namespace), исправьте владельца:"
-  echo "      sudo chown -R \"\$(id -u):\$(id -g)\" \"${root}/dist\" \"${root}/build\" \"${root}/.venv\""
+  echo "      sudo chown -R \"\$(id -u):\$(id -g)\" \"${root}/dist\" \"${root}/build\" \"${root}/.gm\""
   echo "      sudo chown \"\$(id -u):\$(id -g)\" \"${root}/I2PChat.AppImage\" \"${root}/I2PChat-linux-${arch}-v${ver}.zip\" \"${root}/I2PChat-linux-${arch}-tui-v${ver}.zip\" \"${root}/SHA256SUMS\" 2>/dev/null || true"
 }

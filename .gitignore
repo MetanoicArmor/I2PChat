@@ -14,6 +14,7 @@ __pycache__/
 *.pyo
 .Python
 *.so
+.gm/
 .venv/
 .venv*/
 .audit-venv/
