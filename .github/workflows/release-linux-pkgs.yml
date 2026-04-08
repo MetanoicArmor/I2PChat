@@ -120,6 +120,40 @@ jobs:
             "dist/i2pchat-tui_${{ needs.meta.outputs.ver }}_amd64.deb" \
             --clobber
 
+      - name: Wait for arm64 .deb on release (optional, multi-arch apt)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          TAG="${{ needs.meta.outputs.tag }}"
+          VER="${{ needs.meta.outputs.ver }}"
+          for i in $(seq 1 72); do
+            if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "i2pchat_${VER}_arm64.deb" \
+              && gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "i2pchat-tui_${VER}_arm64.deb"; then
+              echo "arm64 .deb packages on release"
+              exit 0
+            fi
+            echo "Waiting for arm64 .deb on release (try $i/72)..."
+            sleep 10
+          done
+          echo "WARN: arm64 .deb not found after wait — apt mirror will be amd64-only"
+          exit 0
+
+      - name: Download arm64 .deb for apt site (optional)
+        id: arm64deb
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER="${{ needs.meta.outputs.ver }}"
+          TAG="${{ needs.meta.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          if gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -Fxq "i2pchat_${VER}_arm64.deb"; then
+            gh release download "$TAG" --repo "$REPO" -p "i2pchat_${VER}_arm64.deb" -p "i2pchat-tui_${VER}_arm64.deb" -D "${{ github.workspace }}"
+            echo "has_arm64=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_arm64=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish apt mirror to GitHub Pages (optional)
         id: apt_pages
         env:
@@ -137,6 +171,10 @@ jobs:
           export VERSION="${{ needs.meta.outputs.ver }}"
           export DEB_PATH="${{ github.workspace }}/dist/i2pchat_${VERSION}_amd64.deb"
           export DEB_PATH_2="${{ github.workspace }}/dist/i2pchat-tui_${VERSION}_amd64.deb"
+          if [ "${{ steps.arm64deb.outputs.has_arm64 }}" = "true" ]; then
+            export DEB_ARM64_PATH="${{ github.workspace }}/i2pchat_${VERSION}_arm64.deb"
+            export DEB_ARM64_PATH_2="${{ github.workspace }}/i2pchat-tui_${VERSION}_arm64.deb"
+          fi
           ./packaging/apt/scripts/build-apt-site.sh
           echo "$APT_REPO_GPG_PRIVATE_KEY" | gpg --import --batch
           export APT_REPO_GPG_PASSPHRASE
@@ -145,11 +183,11 @@ jobs:
 
       - name: Configure GitHub Pages
         if: steps.apt_pages.outputs.publish == 'true'
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
       - name: Upload apt site (Pages artifact)
         if: steps.apt_pages.outputs.publish == 'true'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: packaging/apt/site
 
@@ -236,4 +274,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

@@ -1,12 +1,12 @@
-# Rebuild the signed apt site from i2pchat_<ver>_amd64.deb + i2pchat-tui_<ver>_amd64.deb on a release
-# and deploy via GitHub Actions → Pages (artifact). Set repository Pages source to "GitHub Actions".
+# Rebuild the signed apt site from release .deb (amd64 required; arm64 optional if present).
+# Deploy via GitHub Actions → Pages (artifact). Set repository Pages source to "GitHub Actions".
 name: Publish apt mirror (GitHub Pages)
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version x.y.z — i2pchat_x.y.z_amd64.deb and i2pchat-tui_x.y.z_amd64.deb on release vx.y.z"
+        description: "Version x.y.z — amd64 .deb required on vx.y.z; arm64 pair optional (retried up to ~6 min)"
         required: true
         type: string
 
@@ -55,13 +55,15 @@ jobs:
           sudo apt-get install -y dpkg-dev apt-utils gnupg curl
 
       - name: Download .deb packages from release
+        id: debs
         run: |
           set -euo pipefail
           VER="${{ steps.meta.outputs.ver }}"
           REPO="${{ github.repository }}"
+          BASE="https://github.com/${REPO}/releases/download/v${VER}"
           download_one() {
             local deb="$1"
-            local url="https://github.com/${REPO}/releases/download/v${VER}/${deb}"
+            local url="${BASE}/${deb}"
             local i
             for i in $(seq 1 36); do
               if curl -fsSL --connect-timeout 30 --max-time 600 -o "$deb" "$url"; then
@@ -77,6 +79,23 @@ jobs:
           }
           download_one "i2pchat_${VER}_amd64.deb"
           download_one "i2pchat-tui_${VER}_amd64.deb"
+          HAS_ARM64=false
+          for i in $(seq 1 36); do
+            if curl -fsSL --connect-timeout 30 --max-time 600 -o "i2pchat_${VER}_arm64.deb" "${BASE}/i2pchat_${VER}_arm64.deb" \
+              && curl -fsSL --connect-timeout 30 --max-time 600 -o "i2pchat-tui_${VER}_arm64.deb" "${BASE}/i2pchat-tui_${VER}_arm64.deb"; then
+              echo "Downloaded arm64 .deb pair"
+              HAS_ARM64=true
+              break
+            fi
+            echo "WARN: arm64 .deb not yet available (${i}/36): ${BASE}/i2pchat_${VER}_arm64.deb"
+            sleep 10
+          done
+          if [ "$HAS_ARM64" = true ]; then
+            echo "has_arm64=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_arm64=false" >> "$GITHUB_OUTPUT"
+            echo "WARN: building apt site amd64-only (no arm64 pair on release)"
+          fi
 
       - name: Build and sign apt site
         env:
@@ -87,18 +106,23 @@ jobs:
           APT_REPO_GPG_PASSPHRASE: ${{ secrets.APT_REPO_GPG_PASSPHRASE }}
         run: |
           chmod +x packaging/apt/scripts/build-apt-site.sh packaging/apt/scripts/sign-release.sh
+          VER="${{ steps.meta.outputs.ver }}"
+          if [ "${{ steps.debs.outputs.has_arm64 }}" = "true" ]; then
+            export DEB_ARM64_PATH="${{ github.workspace }}/i2pchat_${VER}_arm64.deb"
+            export DEB_ARM64_PATH_2="${{ github.workspace }}/i2pchat-tui_${VER}_arm64.deb"
+          fi
           ./packaging/apt/scripts/build-apt-site.sh
           echo "$APT_REPO_GPG_PRIVATE_KEY" | gpg --import --batch
           ./packaging/apt/scripts/sign-release.sh
 
       - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
       - name: Upload apt site (Pages artifact)
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: packaging/apt/site
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

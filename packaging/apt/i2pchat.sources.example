@@ -11,4 +11,4 @@ URIs: https://metanoicarmor.github.io/I2PChat
 Suites: stable
 Components: main
 Signed-By: /etc/apt/keyrings/i2pchat.gpg
-Architectures: amd64
+Architectures: amd64 arm64

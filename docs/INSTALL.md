@@ -39,11 +39,11 @@ yay -S i2pchat-tui-bin  # TUI-only: slim Linux zip → /opt/i2pchat-tui, command
 
 Package pages: [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Maintainer sources: [`packaging/aur/`](../packaging/aur/).
 
-**Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`** (GUI) and **`i2pchat-tui_<version>_amd64.deb`** (TUI only). Install with `sudo apt install ./i2pchat_*_amd64.deb` / `./i2pchat-tui_*_amd64.deb`. If missing, use the Linux zips or build locally — [`packaging/debian/README.md`](../packaging/debian/README.md).
+**Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`** / **`i2pchat-tui_<version>_amd64.deb`** and **`i2pchat_<version>_arm64.deb`** / **`i2pchat-tui_<version>_arm64.deb`**. Install with `sudo apt install ./i2pchat_*_<arch>.deb` (or download from the browser). If missing, use the Linux zips or build locally — [`packaging/debian/README.md`](../packaging/debian/README.md).
 
-**apt mirror (Debian/Ubuntu, x86_64, GitHub Pages)** is **not** guaranteed: it appears only after a maintainer configures **`APT_REPO_GPG_PRIVATE_KEY`** and deploys Pages via Actions — [`packaging/apt/README.md`](../packaging/apt/README.md). **Until then** use **`sudo apt install ./i2pchat_*_amd64.deb`** from Releases (see above).
+**apt mirror (Debian/Ubuntu, GitHub Pages)** is **not** guaranteed: it appears only after a maintainer configures **`APT_REPO_GPG_PRIVATE_KEY`** and deploys Pages via Actions — [`packaging/apt/README.md`](../packaging/apt/README.md). **Until then** use **`sudo apt install ./i2pchat_*_*.deb`** from Releases (see above).
 
-**If** the mirror is published, add it with **deb822** (Debian 12+ / recent Ubuntu):
+**If** the mirror is published, add it with **deb822** (Debian 12+ / recent Ubuntu). Use **`Architectures: amd64 arm64`** when the mirror lists both architectures (see **`…/binary-arm64/Packages.gz`** on the site); if the mirror was built **amd64-only**, use **`Architectures: amd64`** or omit the line — [`packaging/apt/README.md`](../packaging/apt/README.md).
 
 ```bash
 sudo mkdir -p /etc/apt/keyrings
@@ -54,7 +54,7 @@ URIs: https://metanoicarmor.github.io/I2PChat
 Suites: stable
 Components: main
 Signed-By: /etc/apt/keyrings/i2pchat.gpg
-Architectures: amd64
+Architectures: amd64 arm64
 EOF
 sudo apt update
 sudo apt install i2pchat        # GUI
