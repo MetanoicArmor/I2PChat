@@ -1,9 +1,9 @@
 cask "i2pchat-tui" do
-  version "1.2.4"
-  # Run: ./packaging/refresh-checksums.sh 1.2.4 — use macOS TUI zip line
-  sha256 "6b698ff77909242c8b8d3d18213c8ac54ac905d75ce92ba2d08775a0e17215cf"
+  version "1.2.5"
+  # Run: ./packaging/refresh-checksums.sh 1.2.5 — use macOS TUI zip line
+  sha256 "227609a289a51a182256d8d5e77b376dc4db6635dc472284203cb470904b94c3"
 
-  url "https://github.com/MetanoicArmor/I2PChat/releases/download/v#{version}/I2PChat-macos-arm64-tui-v#{version}.zip"
+  url "https://github.com/MetanoicArmor/I2PChat/releases/download/v#{version}/I2PChat-macOS-arm64-tui-v#{version}.zip"
   name "I2PChat TUI"
   desc "Terminal UI (Textual) for I2PChat — no PyQt GUI binary"
   homepage "https://github.com/MetanoicArmor/I2PChat"
