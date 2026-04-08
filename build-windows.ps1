@@ -77,11 +77,15 @@ function Remove-PathWithRetry {
     }
 }
 
-$VersionFile = "VERSION"
-if (-not (Test-Path $VersionFile)) {
+# Repo root first: VERSION must be read next to this script, not from $PWD (otherwise zips/exe metadata stay on an old version).
+$RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $RepoRoot
+
+$VersionFile = Join-Path $RepoRoot "VERSION"
+if (-not (Test-Path -LiteralPath $VersionFile)) {
     throw "VERSION file not found: $VersionFile"
 }
-$ReleaseVersion = (Get-Content -Path $VersionFile -Raw).Trim()
+$ReleaseVersion = (Get-Content -LiteralPath $VersionFile -Raw).Trim()
 if (-not $ReleaseVersion) {
     throw "VERSION file is empty: $VersionFile"
 }
@@ -97,8 +101,6 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     throw "uv is required. Install: https://docs.astral.sh/uv/getting-started/installation/ (e.g. irm https://astral.sh/uv/install.ps1 | iex)"
 }
 
-$RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $RepoRoot
 $env:UV_PROJECT_ENVIRONMENT = Join-Path $RepoRoot $VenvDir
 
 function Copy-BundledI2pdFromSource {
