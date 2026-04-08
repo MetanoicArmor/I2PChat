@@ -8741,6 +8741,37 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def refresh_status_label(self) -> None:
         """Обновить строку статуса с учётом профиля и persist-режима."""
+        if self.core is None:
+            status = _network_status_display(self._last_status)
+            pres = build_status_presentation(
+                network_status_raw=self._last_status,
+                connected=False,
+                handshake_complete=False,
+                outbound_connect_busy=False,
+                delivery_state="unknown",
+                send_in_flight=bool(self._status_send_in_flight),
+                profile_name=self.profile,
+                is_transient_profile=self.profile == TRANSIENT_PROFILE_NAME,
+                my_short="none",
+                peer_short="none",
+                stored_short="none",
+                link_state="offline",
+                secure_state="off",
+                delivery_bar="",
+                blindbox_bar="BlindBox: off",
+                blindbox_detail="",
+                ack_part="ACKdrop:0",
+            )
+            self._set_status_text(pres.primary_full, pres.primary_short)
+            current_signature = (status, "offline", "off", "unknown")
+            if (
+                self._status_focus_signature is not None
+                and current_signature != self._status_focus_signature
+            ):
+                self._focus_status_bar(duration_ms=2800)
+            self._status_focus_signature = current_signature
+            return
+
         status = _network_status_display(self._last_status)
         ack_drop_total = 0
         try:
