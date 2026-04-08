@@ -48,4 +48,4 @@ gh release upload v1.2.3 dist/SHA256SUMS --clobber
 
 - [**packaging/docker/README.md**](docker/README.md) — Docker: Linux **x86_64** (`run-linux-build.sh`) и **aarch64** (`build-linux-aarch64.sh`).
 - [**docs/INSTALL.md**](../docs/INSTALL.md) — краткая установка с релизов по платформам (для пользователей).
-- Корневой README: **Prebuilt binaries** и **Quick Start** — официальные ссылки на сборки; краткая заметка про сторонние менеджеры **без** мейнтенерских инструкций.
+- Корневой README: **Quick Start** — официальные ссылки на сборки; краткая заметка про сторонние менеджеры **без** мейнтенерских инструкций.

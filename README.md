@@ -37,7 +37,6 @@
 - [🔌 Protocol overview](#-protocol-overview)
 - [📬 BlindBox in short](#-blindbox-in-short)
 - [📸 Screenshots](#-screenshots)
-- [📦 Prebuilt binaries](#-prebuilt-binaries)
 - [🛠 Running from source](#-running-from-source)
 - [🔧 Cross‑platform builds](#-crossplatform-builds)
 - [📄 License](#-license)
@@ -242,26 +241,6 @@ Practical notes:
 </p>
 
 The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.png`** (profile picker), **`5.png`** (emoji picker), **`6.png`** (BlindBox diagnostics), **`8.png`** (I2P router dialog), **`9.png`** (Blind Box setup examples — `install.sh` / **Copy curl** for a custom replica), and **`10.png`** (TUI) are documented inline in [**MANUAL_EN.md**](docs/MANUAL_EN.md) / [**MANUAL_RU.md**](docs/MANUAL_RU.md).
-
-### 📦 Prebuilt binaries
-
-**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — assets are versioned; **tag `v` + [`VERSION`](VERSION)** must match the filenames you pick (this branch: **v1.2.5** in the examples below — **bump the README when you cut a release** if filenames change).
-
-Per-OS paths inside zips, **winget**, **`.deb`**, and edge cases → [**docs/INSTALL.md**](docs/INSTALL.md). Maintainer-facing recipes → [**packaging/README.md**](packaging/README.md).
-
-**GUI zips** (typically include **bundled `i2pd`**):
-
-- **Windows x64** — `I2PChat-windows-x64-v1.2.5.zip` → `I2PChat\I2PChat.exe` (**Python not** required on the target PC).
-- **Windows x64 — winget / Microsoft validation** — `I2PChat-windows-x64-winget-v1.2.5.zip` — **no** embedded i2pd; ordinary release zip still bundles the router ([`packaging/winget/README.md`](packaging/winget/README.md)).
-- **macOS arm64** — `I2PChat-macOS-arm64-v1.2.5.zip` → `.app` (folder layout inside the zip → **INSTALL.md** / Homebrew cask).
-- **Linux x86_64** — `I2PChat-linux-x86_64-v1.2.5.zip` → `I2PChat.AppImage` inside.
-- **Linux aarch64** — `I2PChat-linux-aarch64-v1.2.5.zip` → AppImage (ARM64); checksums may ship as **`SHA256SUMS.linux-aarch64`** on the release.
-
-**TUI-only zips** (slim trees): `I2PChat-windows-tui-x64-v1.2.5.zip`, `I2PChat-windows-tui-x64-winget-v1.2.5.zip`, `I2PChat-macOS-arm64-tui-v1.2.5.zip`, `I2PChat-linux-x86_64-tui-v1.2.5.zip`, `I2PChat-linux-aarch64-tui-v1.2.5.zip`.
-
-**Debian/Ubuntu** — on Releases: `i2pchat_1.2.5_amd64.deb` / `i2pchat_1.2.5_arm64.deb` and **`i2pchat-tui_*`**; install with **`sudo apt install ./i2pchat_*_amd64.deb`** (or the matching **arm64** file). A signed **apt** mirror on GitHub Pages is **optional** and only appears after a maintainer configures CI secrets and deploys it — recipe in [`packaging/apt/README.md`](packaging/apt/README.md); until then, **do not rely** on `metanoicarmor.github.io` for `apt`.
-
-**Direct `latest/download/...` links** (must match the **current** latest release filenames) are in **[Quick Start](#-quick-start)** below.
 
 ### 🛠 Running from source
 
