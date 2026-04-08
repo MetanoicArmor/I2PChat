@@ -245,21 +245,21 @@ The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.pn
 
 ### 📦 Prebuilt binaries
 
-**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — assets are versioned; **tag `v` + [`VERSION`](VERSION)** must match the filenames you pick (this branch: **v1.2.4** in the examples below — **bump the README when you cut a release** if filenames change).
+**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — assets are versioned; **tag `v` + [`VERSION`](VERSION)** must match the filenames you pick (this branch: **v1.2.5** in the examples below — **bump the README when you cut a release** if filenames change).
 
 Per-OS paths inside zips, **winget**, **`.deb`**, and edge cases → [**docs/INSTALL.md**](docs/INSTALL.md). Maintainer-facing recipes → [**packaging/README.md**](packaging/README.md).
 
 **GUI zips** (typically include **bundled `i2pd`**):
 
-- **Windows x64** — `I2PChat-windows-x64-v1.2.4.zip` → `I2PChat\I2PChat.exe` (**Python not** required on the target PC).
-- **Windows x64 — winget / Microsoft validation** — `I2PChat-windows-x64-winget-v1.2.4.zip` — **no** embedded i2pd; ordinary release zip still bundles the router ([`packaging/winget/README.md`](packaging/winget/README.md)).
-- **macOS arm64** — `I2PChat-macOS-arm64-v1.2.4.zip` → `.app` (folder layout inside the zip → **INSTALL.md** / Homebrew cask).
-- **Linux x86_64** — `I2PChat-linux-x86_64-v1.2.4.zip` → `I2PChat.AppImage` inside.
-- **Linux aarch64** — `I2PChat-linux-aarch64-v1.2.4.zip` → AppImage (ARM64); checksums may ship as **`SHA256SUMS.linux-aarch64`** on the release.
+- **Windows x64** — `I2PChat-windows-x64-v1.2.5.zip` → `I2PChat\I2PChat.exe` (**Python not** required on the target PC).
+- **Windows x64 — winget / Microsoft validation** — `I2PChat-windows-x64-winget-v1.2.5.zip` — **no** embedded i2pd; ordinary release zip still bundles the router ([`packaging/winget/README.md`](packaging/winget/README.md)).
+- **macOS arm64** — `I2PChat-macOS-arm64-v1.2.5.zip` → `.app` (folder layout inside the zip → **INSTALL.md** / Homebrew cask).
+- **Linux x86_64** — `I2PChat-linux-x86_64-v1.2.5.zip` → `I2PChat.AppImage` inside.
+- **Linux aarch64** — `I2PChat-linux-aarch64-v1.2.5.zip` → AppImage (ARM64); checksums may ship as **`SHA256SUMS.linux-aarch64`** on the release.
 
-**TUI-only zips** (slim trees): `I2PChat-windows-tui-x64-v1.2.4.zip`, `I2PChat-windows-tui-x64-winget-v1.2.4.zip`, `I2PChat-macOS-arm64-tui-v1.2.4.zip`, `I2PChat-linux-x86_64-tui-v1.2.4.zip`, `I2PChat-linux-aarch64-tui-v1.2.4.zip`.
+**TUI-only zips** (slim trees): `I2PChat-windows-tui-x64-v1.2.5.zip`, `I2PChat-windows-tui-x64-winget-v1.2.5.zip`, `I2PChat-macOS-arm64-tui-v1.2.5.zip`, `I2PChat-linux-x86_64-tui-v1.2.5.zip`, `I2PChat-linux-aarch64-tui-v1.2.5.zip`.
 
-**Debian/Ubuntu** — on Releases: `i2pchat_1.2.4_amd64.deb` / `i2pchat_1.2.4_arm64.deb` and **`i2pchat-tui_*`**; install with **`sudo apt install ./i2pchat_*_amd64.deb`** (or the matching **arm64** file). A signed **apt** mirror on GitHub Pages is **optional** and only appears after a maintainer configures CI secrets and deploys it — recipe in [`packaging/apt/README.md`](packaging/apt/README.md); until then, **do not rely** on `metanoicarmor.github.io` for `apt`.
+**Debian/Ubuntu** — on Releases: `i2pchat_1.2.5_amd64.deb` / `i2pchat_1.2.5_arm64.deb` and **`i2pchat-tui_*`**; install with **`sudo apt install ./i2pchat_*_amd64.deb`** (or the matching **arm64** file). A signed **apt** mirror on GitHub Pages is **optional** and only appears after a maintainer configures CI secrets and deploys it — recipe in [`packaging/apt/README.md`](packaging/apt/README.md); until then, **do not rely** on `metanoicarmor.github.io` for `apt`.
 
 **Direct `latest/download/...` links** (must match the **current** latest release filenames) are in **[Quick Start](#-quick-start)** below.
 
@@ -447,19 +447,19 @@ If you like this project and want to support development, you can send a small d
 
 ### 📥 Prebuilt Downloads
 
-**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — bundles match **`v` + [`VERSION`](VERSION)** in this repo (**v1.2.4** in the table below; **update these rows when you tag a new release** so `latest/download/…` filenames stay valid). No Python on the target machine for these zips.
+**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — bundles match **`v` + [`VERSION`](VERSION)** in this repo (**v1.2.5** in the table below; **update these rows when you tag a new release** so `latest/download/…` filenames stay valid). No Python on the target machine for these zips.
 
 Full zip layouts, **winget**, **`.deb`**, **Flatpak** notes → [**docs/INSTALL.md**](docs/INSTALL.md).
 
 | Variant | Download | Launch |
 |---------|----------|--------|
-| **Windows — GUI** | [I2PChat-windows-x64-v1.2.4.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.4.zip) | Unzip → run `I2PChat.exe` |
-| **Windows — TUI only** | [I2PChat-windows-tui-x64-v1.2.4.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-tui-x64-v1.2.4.zip) | `I2PChat-tui.exe` in the extracted tree |
-| **macOS — GUI (arm64)** | [I2PChat-macOS-arm64-v1.2.4.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.4.zip) | Unzip → open **`I2PChat-macOS-arm64-bundle/I2PChat.app`** (see **INSTALL.md**) |
-| **macOS — TUI only** | [I2PChat-macOS-arm64-tui-v1.2.4.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-tui-v1.2.4.zip) | Run **`./i2pchat-tui`** from the extracted folder |
-| **Linux — GUI (x86_64)** | [I2PChat-linux-x86_64-v1.2.4.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.4.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
-| **Linux — GUI (aarch64)** | [I2PChat-linux-aarch64-v1.2.4.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-v1.2.4.zip) | Same — AppImage inside the zip |
-| **Linux — TUI** | [x86_64 TUI](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-tui-v1.2.4.zip) · [aarch64 TUI](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-tui-v1.2.4.zip) | After unzip: **`./i2pchat-tui`** |
+| **Windows — GUI** | [I2PChat-windows-x64-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.5.zip) | Unzip → run `I2PChat.exe` |
+| **Windows — TUI only** | [I2PChat-windows-tui-x64-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-tui-x64-v1.2.5.zip) | `I2PChat-tui.exe` in the extracted tree |
+| **macOS — GUI (arm64)** | [I2PChat-macOS-arm64-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.5.zip) | Unzip → open **`I2PChat-macOS-arm64-bundle/I2PChat.app`** (see **INSTALL.md**) |
+| **macOS — TUI only** | [I2PChat-macOS-arm64-tui-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-tui-v1.2.5.zip) | Run **`./i2pchat-tui`** from the extracted folder |
+| **Linux — GUI (x86_64)** | [I2PChat-linux-x86_64-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.5.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
+| **Linux — GUI (aarch64)** | [I2PChat-linux-aarch64-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-v1.2.5.zip) | Same — AppImage inside the zip |
+| **Linux — TUI** | [x86_64 TUI](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-tui-v1.2.5.zip) · [aarch64 TUI](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-tui-v1.2.5.zip) | After unzip: **`./i2pchat-tui`** |
 
 > **Router backend:** On a **fresh install** (no `router_prefs.json` yet), I2PChat defaults to a **system** `i2pd` **SAM** endpoint (typically `127.0.0.1:7656`). Switch to the **bundled** sidecar when your build includes it via **More actions → I2P router…** (shortcut **Cmd/Ctrl+R**); the choice is persisted. The same dialog opens the router data/log paths and can restart the bundled router.
 
@@ -486,7 +486,7 @@ yay -S i2pchat-tui-bin   # TUI only
 **Debian / Ubuntu — `.deb` from [Releases](https://github.com/MetanoicArmor/I2PChat/releases)** (works without any mirror):
 
 ```bash
-# after downloading e.g. i2pchat_1.2.4_amd64.deb
+# after downloading e.g. i2pchat_1.2.5_amd64.deb
 sudo apt install ./i2pchat_*_amd64.deb
 # optional TUI-only: sudo apt install ./i2pchat-tui_*_amd64.deb
 ```
