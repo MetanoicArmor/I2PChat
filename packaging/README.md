@@ -6,7 +6,7 @@
 
 | Канал | Состояние |
 |-------|-----------|
-| **winget** | Манифесты **1.2.5** в репо: [`winget/1.2.5/`](winget/1.2.5/), [`winget-tui/.../TUI/1.2.5/`](winget-tui/manifests/m/MetanoicArmor/I2PChat/TUI/1.2.5/). PR в [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs): после публикации релиза — скопировать YAML в `manifests/m/MetanoicArmor/I2PChat/1.2.5/` и `.../I2PChat/TUI/1.2.5/` (предыдущие релизы: 1.2.4 — [#356480](https://github.com/microsoft/winget-pkgs/pull/356480), [#356481](https://github.com/microsoft/winget-pkgs/pull/356481)). |
+| **winget** | Манифесты **1.2.5** в репо: [`winget/1.2.5/`](winget/1.2.5/), [`winget-tui/.../TUI/1.2.5/`](winget-tui/manifests/m/MetanoicArmor/I2PChat/TUI/1.2.5/). PR в [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs): **MetanoicArmor.I2PChat** [#356552](https://github.com/microsoft/winget-pkgs/pull/356552), **MetanoicArmor.I2PChat.TUI** [#356553](https://github.com/microsoft/winget-pkgs/pull/356553). (Старые PR на 1.2.4 закрыты без merge.) |
 | **Homebrew tap** | Репозиторий [MetanoicArmor/homebrew-i2pchat](https://github.com/MetanoicArmor/homebrew-i2pchat): `brew tap MetanoicArmor/i2pchat`. |
 | **AUR** | **Опубликовано:** [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Установка (например **yay**): `yay -S i2pchat-bin`, `yay -S i2pchat-tui-bin`. Шаблоны в репо: [`aur/i2pchat-bin/`](aur/i2pchat-bin/), [`aur/i2pchat-tui-bin/`](aur/i2pchat-tui-bin/); обновление пакетов на AUR — см. [aur/README.md](aur/README.md). |
 | **Flatpak / COPR** | Flatpak — шаблоны в репо ([flatpak/README.md](flatpak/README.md)). COPR — по желанию мейнтейнера ([fedora/i2pchat.spec](fedora/i2pchat.spec)). |
