@@ -15,7 +15,7 @@
 Local validation (Windows, with winget):
 
 ```powershell
-winget validate --manifest .\packaging\winget-tui\manifests\m\MetanoicArmor\I2PChat\TUI\1.2.4
+winget validate --manifest .\packaging\winget-tui\manifests\m\MetanoicArmor\I2PChat\TUI\1.2.5
 ```
 
 **Folder layout in [winget-pkgs](https://github.com/microsoft/winget-pkgs)** must mirror each `PackageIdentifier` segment after the publisher: for `MetanoicArmor.I2PChat.TUI` use `manifests/m/MetanoicArmor/I2PChat/TUI/<version>/` (not `I2PChat.TUI`). Canonical copies live under [`manifests/m/MetanoicArmor/I2PChat/TUI/`](manifests/m/MetanoicArmor/I2PChat/TUI/) in this tree.
