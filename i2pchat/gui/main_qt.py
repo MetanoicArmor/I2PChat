@@ -6819,11 +6819,16 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _update_peer_lock_indicator(self) -> None:
         # stored_peer в ядре появляется после async init_session; до этого читаем .dat (как сайдбар при старте).
-        locked = bool(
-            self.core.stored_peer or peek_persisted_stored_peer(self.profile)
-        )
-        peer_raw = self.addr_edit.text().strip() or (self.core.current_peer_addr or "")
-        info = self.core.get_peer_trust_info(peer_raw) if peer_raw else None
+        if self.core is None:
+            locked = bool(peek_persisted_stored_peer(self.profile))
+            peer_raw = self.addr_edit.text().strip()
+            info = None
+        else:
+            locked = bool(
+                self.core.stored_peer or peek_persisted_stored_peer(self.profile)
+            )
+            peer_raw = self.addr_edit.text().strip() or (self.core.current_peer_addr or "")
+            info = self.core.get_peer_trust_info(peer_raw) if peer_raw else None
         light = self.theme_id == "ligth"
         dpr = max(1.0, float(self.devicePixelRatioF()))
         pm = _peer_lock_indicator_pixmap(locked=locked, light_theme=light, dpr=dpr)
@@ -6848,10 +6853,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
 
     def _peer_target_available(self) -> bool:
+        if self.core is None:
+            return bool(self.addr_edit.text().strip())
         return bool(self.addr_edit.text().strip()) or bool(self.core.stored_peer)
 
     def _send_action_allowed(self) -> bool:
         """Разрешить Send: live-сессия или готовый BlindBox (очередь офлайн)."""
+        if self.core is None:
+            return False
         d = self.core.get_delivery_telemetry()
         if bool(d.get("secure_live")):
             return True
@@ -6863,6 +6872,26 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _refresh_connection_buttons(self) -> None:
         """Connect — когда сеть уже Pending/Visible, есть адрес и нет сессии; Disconnect — при активной сессии."""
+        if self.core is None:
+            self.connect_button.setEnabled(False)
+            self.disconnect_button.setEnabled(False)
+            no_session = (
+                "I2P session not started. Configure router/SAM (More actions → I2P router…) "
+                "and ensure the router is running, then restart the app or retry."
+            )
+            _set_tooltip_if_changed(
+                self.connect_button,
+                _tooltip_with_portable_shortcut(no_session, _CONNECT_SHORTCUT_PORTABLE),
+            )
+            _set_tooltip_if_changed(
+                self.disconnect_button,
+                _tooltip_with_portable_shortcut(
+                    "No active connection.", _DISCONNECT_SHORTCUT_PORTABLE
+                ),
+            )
+            self._refresh_send_controls()
+            return
+
         connected = self.core.conn is not None
         busy = self.core.is_outbound_connect_busy()
         has_target = self._peer_target_available()
@@ -6918,6 +6947,20 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._refresh_send_controls()
 
     def _refresh_send_controls(self) -> None:
+        if self.core is None:
+            shortcut_tip = _compose_send_shortcut_tooltip_text(
+                enter_sends=self._compose_enter_sends
+            )
+            self.send_button.setEnabled(False)
+            self.send_button.setText("Send")
+            tip = "Start I2P session first (router/SAM reachable)."
+            _set_tooltip_if_changed(self.send_button, f"{tip}\n\n{shortcut_tip}")
+            _set_tooltip_if_changed(
+                self.input_edit,
+                "Session not ready. " + tip + "\n\n" + shortcut_tip,
+            )
+            return
+
         delivery = self.core.get_delivery_telemetry()
         state = str(delivery.get("state", "unknown"))
         short_route, route_tip = _delivery_status_bar_and_tooltip(state)
