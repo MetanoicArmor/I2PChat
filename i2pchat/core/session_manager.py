@@ -107,6 +107,7 @@ class SessionManager:
         self.disconnecting: bool = False
         self.outbound_connect_busy: bool = False
 
+        # Legacy compatibility mirrors. Per-peer state is authoritative.
         self.outbound_streams: dict[str, OutboundStreamInfo] = {}
         self.reconnect = ReconnectMetadata()
         self.last_live_ok_mono: float = 0.0
@@ -163,7 +164,8 @@ class SessionManager:
         if peer is None:
             peer = PeerTransportState(peer_id=normalized)
             self.peer_transport[normalized] = peer
-        self._set_active_peer(normalized)
+        if not self.active_peer_id:
+            self._set_active_peer(normalized)
         return peer
 
     def get_peer_transport(self, peer_id: Optional[str] = None) -> Optional[PeerTransportState]:
@@ -173,44 +175,51 @@ class SessionManager:
         return self.peer_transport.get(normalized)
 
     def _sync_legacy_views(self) -> None:
+        self._rebuild_legacy_outbound_streams()
         self._refresh_active_peer()
         active = self.get_peer_transport()
         if active is None:
-            self.reconnect = ReconnectMetadata()
             self.transition_peer(PeerState.DISCONNECTED, reason="sync-empty")
             return
-        self.reconnect = active.reconnect
         self.transition_peer(active.peer_state, reason=f"sync:{active.peer_id[:24]}")
 
     def _refresh_active_peer(self) -> None:
-        current = self.peer_transport.get(self.active_peer_id)
-        if current is not None:
-            has_live_hints = (
-                current.connected
-                or current.handshake_complete
-                or bool(current.outbound_streams)
-            )
-            if has_live_hints:
-                return
-        best_peer_id = ""
-        best_score = -1
-        for peer_id, peer in self.peer_transport.items():
-            score = 0
-            if peer.connected:
-                score += 2
-            if peer.handshake_complete:
-                score += 2
-            if peer.peer_state == PeerState.SECURE:
-                score += 2
-            if peer.peer_state == PeerState.HANDSHAKING:
-                score += 1
-            if peer.outbound_streams:
-                score += 1
-            if score > best_score:
-                best_score = score
-                best_peer_id = peer_id
-        if best_score > 0:
-            self.active_peer_id = best_peer_id
+        if self.active_peer_id:
+            return
+        if not self.peer_transport:
+            return
+        best_peer: Optional[PeerTransportState] = None
+        for peer in self.peer_transport.values():
+            if best_peer is None:
+                best_peer = peer
+                continue
+            if self._peer_priority(peer) > self._peer_priority(best_peer):
+                best_peer = peer
+        if best_peer is not None:
+            self.active_peer_id = best_peer.peer_id
+
+    @staticmethod
+    def _peer_priority(peer: PeerTransportState) -> int:
+        priority = 0
+        if peer.peer_state == PeerState.SECURE:
+            priority += 8
+        elif peer.peer_state == PeerState.HANDSHAKING:
+            priority += 4
+        elif peer.peer_state == PeerState.CONNECTING:
+            priority += 2
+        if peer.connected:
+            priority += 2
+        if peer.handshake_complete:
+            priority += 2
+        if peer.outbound_streams:
+            priority += 1
+        return priority
+
+    def _rebuild_legacy_outbound_streams(self) -> None:
+        merged: dict[str, OutboundStreamInfo] = {}
+        for peer in self.peer_transport.values():
+            merged.update(peer.outbound_streams)
+        self.outbound_streams = merged
 
     def _touch_peer(self, peer: PeerTransportState) -> None:
         peer.last_activity_mono = time.monotonic()
@@ -293,7 +302,6 @@ class SessionManager:
         peer_id: Optional[str] = None,
     ) -> None:
         info = OutboundStreamInfo(destination=destination, state=state)
-        self.outbound_streams[destination] = info
         key = self._normalize_peer_id(peer_id or destination)
         if not key:
             self.transition_peer(state, reason=f"stream-open:{destination[:24]}")
@@ -306,8 +314,12 @@ class SessionManager:
         self._sync_legacy_views()
 
     def unregister_stream(self, destination: str, *, peer_id: Optional[str] = None) -> None:
-        self.outbound_streams.pop(destination, None)
         key = self._normalize_peer_id(peer_id or destination)
+        if not key:
+            for candidate_id, candidate in self.peer_transport.items():
+                if destination in candidate.outbound_streams:
+                    key = candidate_id
+                    break
         peer = self.peer_transport.get(key)
         if peer is not None:
             peer.outbound_streams.pop(destination, None)
@@ -319,10 +331,7 @@ class SessionManager:
                 peer.stale_since_mono = 0.0
                 peer.inflight_msg_ids.clear()
             self._touch_peer(peer)
-        if not self.outbound_streams:
-            self.transition_peer(PeerState.DISCONNECTED, reason="stream-close")
-        else:
-            self._sync_legacy_views()
+        self._sync_legacy_views()
 
     def update_stream_state(
         self,
@@ -331,15 +340,15 @@ class SessionManager:
         *,
         peer_id: Optional[str] = None,
     ) -> None:
-        info = self.outbound_streams.get(destination)
-        if info is None:
-            info = OutboundStreamInfo(destination=destination, state=state)
-            self.outbound_streams[destination] = info
-        info.state = state
-        info.last_activity_mono = time.monotonic()
         key = self._normalize_peer_id(peer_id or destination)
         if key:
             peer = self.ensure_peer_transport(key)
+            info = peer.outbound_streams.get(destination)
+            if info is None:
+                info = OutboundStreamInfo(destination=destination, state=state)
+                peer.outbound_streams[destination] = info
+            info.state = state
+            info.last_activity_mono = time.monotonic()
             peer.connected = True
             peer.outbound_streams[destination] = info
             peer.peer_state = state
@@ -354,12 +363,17 @@ class SessionManager:
             self.transition_peer(state, reason=f"stream-state:{destination[:24]}")
 
     def touch_stream(self, destination: str, *, peer_id: Optional[str] = None) -> None:
-        info = self.outbound_streams.get(destination)
-        if info is not None:
-            info.last_activity_mono = time.monotonic()
         key = self._normalize_peer_id(peer_id or destination)
         peer = self.peer_transport.get(key)
+        if peer is None and not key:
+            for candidate in self.peer_transport.values():
+                if destination in candidate.outbound_streams:
+                    peer = candidate
+                    break
         if peer is not None:
+            info = peer.outbound_streams.get(destination)
+            if info is not None:
+                info.last_activity_mono = time.monotonic()
             self._touch_peer(peer)
 
     def register_inflight_message(self, msg_id: int, *, peer_id: Optional[str] = None) -> None:
@@ -436,7 +450,6 @@ class SessionManager:
 
     def mark_live_healthy(self, *, peer_id: Optional[str] = None) -> None:
         now = time.monotonic()
-        self.last_live_ok_mono = now
         key = self._resolve_peer_id(peer_id)
         if key:
             peer = self.ensure_peer_transport(key)
@@ -451,6 +464,7 @@ class SessionManager:
             self._touch_peer(peer)
             self._sync_legacy_views()
         else:
+            self.last_live_ok_mono = now
             self.reconnect = ReconnectMetadata()
         if self.transport_state in {
             TransportState.RECONNECTING,
@@ -468,7 +482,6 @@ class SessionManager:
         peer_id: Optional[str] = None,
     ) -> None:
         now = time.monotonic()
-        self.last_live_failure_mono = now
         key = self._resolve_peer_id(peer_id)
         if key:
             peer = self.ensure_peer_transport(key)
@@ -480,7 +493,10 @@ class SessionManager:
                     peer.stale_since_mono = now
             self._touch_peer(peer)
             self._sync_legacy_views()
-        self.transition_transport(TransportState.DEGRADED, reason=reason)
+        else:
+            self.last_live_failure_mono = now
+        if not self._has_ready_peer():
+            self.transition_transport(TransportState.DEGRADED, reason=reason)
 
     def schedule_reconnect_backoff(
         self,
@@ -515,7 +531,8 @@ class SessionManager:
             self._sync_legacy_views()
         else:
             self.reconnect = metadata
-        self.transition_transport(TransportState.RECONNECTING, reason=reason)
+        if not self._has_ready_peer():
+            self.transition_transport(TransportState.RECONNECTING, reason=reason)
         return effective_delay
 
     def is_live_path_alive(
@@ -525,9 +542,12 @@ class SessionManager:
         handshake_complete: Optional[bool] = None,
         peer_id: Optional[str] = None,
     ) -> bool:
+        explicit_peer = self._normalize_peer_id(peer_id or "")
         key = self._resolve_peer_id(peer_id)
         if key and key in self.peer_transport:
             return self.is_peer_secure_channel_ready(peer_id=key)
+        if explicit_peer:
+            return False
         if connected is not None or handshake_complete is not None:
             return bool(connected and handshake_complete)
         return self.is_peer_secure_channel_ready(peer_id=peer_id)
@@ -581,7 +601,6 @@ class SessionManager:
 
         self.outbound_connect_busy = False
         self.disconnecting = False
-        self.outbound_streams.clear()
         for peer in self.peer_transport.values():
             peer.outbound_streams.clear()
             peer.inflight_msg_ids.clear()
@@ -592,6 +611,21 @@ class SessionManager:
             peer.secure_since_mono = 0.0
         self.peer_transport.clear()
         self.active_peer_id = ""
+        self.outbound_streams.clear()
         self.reconnect = ReconnectMetadata()
         self.invalidate_handshake_watchdog()
         self.transition_peer(PeerState.DISCONNECTED, reason="shutdown")
+
+    def get_reconnect_metadata(self, *, peer_id: Optional[str] = None) -> ReconnectMetadata:
+        key = self._normalize_peer_id(peer_id or "")
+        if key:
+            peer = self.peer_transport.get(key)
+            if peer is not None:
+                return peer.reconnect
+        return self.reconnect
+
+    def _has_ready_peer(self) -> bool:
+        for peer_id in self.peer_transport:
+            if self.is_peer_secure_channel_ready(peer_id=peer_id):
+                return True
+        return False
