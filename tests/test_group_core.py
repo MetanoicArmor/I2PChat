@@ -49,6 +49,48 @@ class _DummyWriter:
 
 
 class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
+    def test_core_group_workflow_load_and_save_exposes_state_history_and_next_seq(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_B32)
+
+            created_state = core.create_group(
+                title="Workflow group",
+                members=[BOB_B32],
+                group_id="core-group-workflow",
+                epoch=2,
+            )
+            created = core.load_group(created_state.group_id)
+
+            assert created is not None
+            self.assertEqual(created.state.group_id, "core-group-workflow")
+            self.assertEqual(created.state.title, "Workflow group")
+            self.assertEqual(created.state.epoch, 2)
+            self.assertEqual(created.next_group_seq, 1)
+            self.assertEqual(created.history, ())
+
+            updated_state = GroupState(
+                group_id=created_state.group_id,
+                epoch=4,
+                members=(ALICE_B32, BOB_B32, CAROL_B32),
+                title="Workflow group renamed",
+            )
+
+            saved = core.save_group(updated_state, next_group_seq=5)
+            reloaded = core.load_group(created_state.group_id)
+
+            assert reloaded is not None
+            self.assertEqual(saved.state.title, "Workflow group renamed")
+            self.assertEqual(saved.state.epoch, 4)
+            self.assertEqual(saved.state.members, (ALICE_B32, BOB_B32, CAROL_B32))
+            self.assertEqual(saved.next_group_seq, 5)
+            self.assertEqual(reloaded.state.title, "Workflow group renamed")
+            self.assertEqual(reloaded.state.epoch, 4)
+            self.assertEqual(reloaded.state.members, (ALICE_B32, BOB_B32, CAROL_B32))
+            self.assertEqual(reloaded.next_group_seq, 5)
+            self.assertEqual(reloaded.history, ())
+
     def test_save_group_state_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             core = I2PChatCore(profile="alice")
@@ -133,6 +175,76 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(history[0].epoch, 7)
             self.assertEqual(history[0].group_seq, result.envelope.group_seq)
             self.assertEqual(reloaded_state.epoch, 7)
+
+    async def test_group_next_sequence_survives_create_send_and_import_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_B32)
+            group_state = core.create_group(
+                title="Sequence group",
+                members=[BOB_B32],
+                group_id="core-group-seq",
+                epoch=8,
+            )
+            core.group_manager._send_live = AsyncMock(  # type: ignore[attr-defined]
+                return_value=GroupTransportOutcome(
+                    accepted=True,
+                    reason="live-session",
+                    transport_message_id="live-bob",
+                )
+            )
+            core.group_manager._send_offline = AsyncMock(  # type: ignore[attr-defined]
+                return_value=GroupTransportOutcome(
+                    accepted=True,
+                    reason="blindbox-ready",
+                    transport_message_id="queue-bob",
+                )
+            )
+
+            sent = await core.send_group_text(group_state.group_id, "first")
+            after_send = core.load_group(group_state.group_id)
+
+            assert after_send is not None
+            self.assertEqual(after_send.next_group_seq, sent.envelope.group_seq + 1)
+            self.assertEqual(after_send.state.epoch, 8)
+            self.assertEqual(len(after_send.history), 1)
+            self.assertEqual(after_send.history[0].group_seq, sent.envelope.group_seq)
+
+            imported_envelope = GroupEnvelope(
+                group_id=group_state.group_id,
+                epoch=8,
+                msg_id="seq-import-1",
+                sender_id=BOB_B32,
+                group_seq=sent.envelope.group_seq + 1,
+                content_type=GroupContentType.GROUP_TEXT,
+                payload="second",
+            )
+            imported_wire = encode_group_transport_text(
+                GroupState(
+                    group_id=group_state.group_id,
+                    epoch=8,
+                    members=(ALICE_B32, BOB_B32),
+                    title="Sequence group",
+                ),
+                imported_envelope,
+                GroupRecipientDeliveryMetadata(
+                    recipient_id=ALICE_B32,
+                    delivery_id="seq-import-1:alice",
+                ),
+            )
+
+            imported = core.import_group_transport(imported_wire, source_peer=BOB_B32)
+            after_import = core.load_group(group_state.group_id)
+
+            assert imported is not None
+            assert after_import is not None
+            self.assertEqual(imported.status, GroupImportStatus.IMPORTED)
+            self.assertEqual(after_import.next_group_seq, imported_envelope.group_seq + 1)
+            self.assertEqual(after_import.state.epoch, 8)
+            self.assertEqual(len(after_import.history), 2)
+            self.assertEqual(after_import.history[-1].group_seq, imported_envelope.group_seq)
+            self.assertEqual(after_import.history[-1].epoch, 8)
 
     async def test_local_and_imported_group_text_entries_share_compatible_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -455,6 +567,46 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
             self.assertIsNone(core.import_group_transport("plain direct text"))
             self.assertFalse(core.import_group_transport_text("plain direct text"))
+
+    def test_bool_group_import_wrapper_only_reports_true_for_real_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_B32)
+            state = GroupState(
+                group_id="core-group-bool-wrapper",
+                epoch=1,
+                members=(ALICE_B32, BOB_B32),
+                title="Bool wrapper",
+            )
+            envelope = GroupEnvelope(
+                group_id=state.group_id,
+                epoch=state.epoch,
+                msg_id="bool-wrapper-1",
+                sender_id=BOB_B32,
+                group_seq=1,
+                content_type=GroupContentType.GROUP_TEXT,
+                payload="hello",
+            )
+            wire_text = encode_group_transport_text(
+                state,
+                envelope,
+                GroupRecipientDeliveryMetadata(
+                    recipient_id=ALICE_B32,
+                    delivery_id="bool-wrapper-1:alice",
+                ),
+            )
+            bad_wire = (
+                '__I2PCHAT_GROUP__:{"content_type":"GROUP_TEXT","created_at":"2026-04-09T10:00:00+00:00",'
+                '"delivery_id":"bool-wrapper-bad:alice","epoch":1,"group_id":"core-group-bool-wrapper-bad","group_seq":1,'
+                '"members":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"],'
+                '"msg_id":"bool-wrapper-bad","payload":{"text":"not-a-string"},"recipient_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p",'
+                '"sender_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p","transport":"group","version":1}'
+            )
+
+            self.assertTrue(core.import_group_transport_text(wire_text, source_peer=BOB_B32))
+            self.assertFalse(core.import_group_transport_text(wire_text, source_peer=BOB_B32))
+            self.assertFalse(core.import_group_transport_text(bad_wire, source_peer=BOB_B32))
 
 
 if __name__ == "__main__":

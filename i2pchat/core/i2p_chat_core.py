@@ -1969,8 +1969,29 @@ class I2PChatCore:
             )
         return conversation
 
+    def load_group(self, group_id: str) -> Optional[StoredGroupConversation]:
+        return self._load_group_conversation(group_id)
+
+    def save_group(
+        self,
+        state: GroupState,
+        *,
+        next_group_seq: Optional[int] = None,
+    ) -> StoredGroupConversation:
+        conversation = upsert_group_state(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            state,
+            next_group_seq=next_group_seq,
+        )
+        self.group_manager.prime_group_sequence(
+            state.group_id,
+            next_group_seq=conversation.next_group_seq,
+        )
+        return conversation
+
     def load_group_state(self, group_id: str) -> Optional[GroupState]:
-        conversation = self._load_group_conversation(group_id)
+        conversation = self.load_group(group_id)
         if conversation is not None:
             return conversation.state
         return load_persisted_group_state(
@@ -1985,17 +2006,10 @@ class I2PChatCore:
         *,
         next_group_seq: Optional[int] = None,
     ) -> GroupState:
-        conversation = upsert_group_state(
-            self.get_profile_data_dir(create=True),
-            self.profile,
+        return self.save_group(
             state,
             next_group_seq=next_group_seq,
-        )
-        self.group_manager.prime_group_sequence(
-            state.group_id,
-            next_group_seq=conversation.next_group_seq,
-        )
-        return conversation.state
+        ).state
 
     def list_group_states(self) -> list[GroupState]:
         return list_persisted_group_states(
@@ -2004,7 +2018,7 @@ class I2PChatCore:
         )
 
     def load_group_history(self, group_id: str) -> list[GroupHistoryEntry]:
-        conversation = self._load_group_conversation(group_id)
+        conversation = self.load_group(group_id)
         if conversation is None:
             return []
         return list(conversation.history)
@@ -2028,16 +2042,10 @@ class I2PChatCore:
             created_at=utc_now(),
             updated_at=utc_now(),
         )
-        upsert_group_state(
-            self.get_profile_data_dir(create=True),
-            self.profile,
+        state = self.save_group(
             state,
             next_group_seq=1,
-        )
-        self.group_manager.prime_group_sequence(
-            state.group_id,
-            next_group_seq=1,
-        )
+        ).state
         self._emit_system(
             f"Group ready: {state.title or state.group_id} ({max(0, len(state.members) - 1)} peers)."
         )
@@ -4484,7 +4492,8 @@ class I2PChatCore:
         *,
         source_peer: Optional[str] = None,
     ) -> bool:
-        return self.import_group_transport(text, source_peer=source_peer) is not None
+        result = self.import_group_transport(text, source_peer=source_peer)
+        return bool(result is not None and result.imported)
 
     def is_outbound_connect_busy(self) -> bool:
         """True, пока выполняется исходящий connect_to_peer (ожидание stream_connect)."""
