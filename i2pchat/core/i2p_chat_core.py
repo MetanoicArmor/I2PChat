@@ -27,10 +27,33 @@ from i2pchat.blindbox.blindbox_blob import decrypt_blindbox_blob, encrypt_blindb
 from i2pchat.blindbox.blindbox_client import BlindBoxClient
 from i2pchat.blindbox.blindbox_key_schedule import derive_blindbox_message_keys
 from i2pchat.blindbox.blindbox_local_replica import ensure_local_blindbox_replica
+from i2pchat.groups import (
+    GroupContentType,
+    GroupEnvelope,
+    GroupManager,
+    GroupRecipientDeliveryMetadata,
+    GroupSendResult,
+    GroupState,
+    GroupTransportOutcome,
+)
+from i2pchat.groups.models import normalize_member_id, utc_now
+from i2pchat.groups.wire import (
+    decode_group_transport_text,
+    encode_group_transport_text,
+)
 from i2pchat.storage.blindbox_state import (
     BlindBoxState,
     atomic_write_json,
     atomic_write_text,
+)
+from i2pchat.storage.group_store import (
+    GroupHistoryEntry,
+    StoredGroupConversation,
+    append_group_history_entry,
+    load_group_conversation,
+    load_group_state as load_persisted_group_state,
+    list_group_states as list_persisted_group_states,
+    upsert_group_state,
 )
 from i2pchat.storage.profile_blindbox_replicas import (
     load_profile_blindbox_replicas_bundle,
@@ -282,6 +305,15 @@ class SendTextResult:
     message_id: Optional[str] = None
     delivery_state: Optional[str] = None
     retryable: bool = False
+
+
+@dataclass
+class _BlindBoxPeerSnapshot:
+    peer_addr: str
+    peer_id: str
+    state: BlindBoxState
+    root_secret: Optional[bytes] = None
+    root_epoch: int = 0
 
 
 def _is_host_port_replica(value: str) -> bool:
@@ -1258,6 +1290,11 @@ class I2PChatCore:
             "expired_or_state": 0,
         }
         self.session_manager = SessionManager()
+        self.group_manager = GroupManager(
+            session_manager=self.session_manager,
+            send_live=self._send_group_envelope_live,
+            send_offline=self._send_group_envelope_via_blindbox,
+        )
 
         # Флаг активной передачи файла (для защиты от timeout в receive_loop)
         self._file_transfer_active: bool = False
@@ -1910,6 +1947,76 @@ class I2PChatCore:
         migrate_legacy_profile_files_if_needed(app_root=app, profile=self.profile)
         return get_profile_data_dir(self.profile, create=create, app_root=app)
 
+    def _local_group_member_id(self) -> str:
+        if self.my_dest is None or not getattr(self.my_dest, "base32", ""):
+            raise RuntimeError("Local destination is not initialized")
+        return normalize_member_id(str(self.my_dest.base32))
+
+    def _load_group_conversation(
+        self, group_id: str
+    ) -> Optional[StoredGroupConversation]:
+        return load_group_conversation(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            group_id,
+        )
+
+    def load_group_state(self, group_id: str) -> Optional[GroupState]:
+        return load_persisted_group_state(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            group_id,
+        )
+
+    def list_group_states(self) -> list[GroupState]:
+        return list_persisted_group_states(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+        )
+
+    def load_group_history(self, group_id: str) -> list[GroupHistoryEntry]:
+        conversation = self._load_group_conversation(group_id)
+        if conversation is None:
+            return []
+        return list(conversation.history)
+
+    def create_group(
+        self,
+        *,
+        title: str,
+        members: list[str] | tuple[str, ...],
+        group_id: Optional[str] = None,
+        epoch: int = 0,
+    ) -> GroupState:
+        local_member_id = self._local_group_member_id()
+        normalized_members = [local_member_id]
+        normalized_members.extend(normalize_member_id(member) for member in members)
+        state = GroupState(
+            group_id=(group_id or secrets.token_hex(12)),
+            epoch=int(epoch),
+            members=tuple(normalized_members),
+            title=title,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        upsert_group_state(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            state,
+            next_group_seq=1,
+        )
+        self.group_manager.prime_group_sequence(
+            state.group_id,
+            next_group_seq=1,
+        )
+        self._emit_system(
+            f"Group ready: {state.title or state.group_id} ({max(0, len(state.members) - 1)} peers)."
+        )
+        return state
+
+    def _group_display_name(self, state: GroupState) -> str:
+        return state.title or state.group_id
+
     def _blindbox_peer_id(self) -> Optional[str]:
         peer = self._normalize_peer_addr(self.stored_peer or self.current_peer_addr or "")
         if not peer:
@@ -1918,12 +2025,74 @@ class I2PChatCore:
             return peer[: -len(".b32.i2p")]
         return peer
 
+    def _blindbox_peer_id_for_peer(self, peer_addr: str) -> Optional[str]:
+        peer = self._normalize_peer_addr(peer_addr or "")
+        if not peer:
+            return None
+        if peer.endswith(".b32.i2p"):
+            return peer[: -len(".b32.i2p")]
+        return peer
+
+    def _blindbox_state_path_for_peer(self, peer_id: str) -> str:
+        safe_peer = re.sub(r"[^a-z0-9._-]", "_", peer_id.lower())
+        return self._profile_scoped_path(f"{self.profile}.blindbox.{safe_peer}.json")
+
     def _blindbox_state_path(self) -> str:
         peer_id = self._blindbox_peer_id()
         if not peer_id:
             raise ValueError("BlindBox peer id is not available")
         safe_peer = re.sub(r"[^a-z0-9._-]", "_", peer_id.lower())
         return self._profile_scoped_path(f"{self.profile}.blindbox.{safe_peer}.json")
+
+    def _load_blindbox_peer_snapshot(self, peer_addr: str) -> _BlindBoxPeerSnapshot:
+        peer = self._normalize_peer_addr(peer_addr or "")
+        peer_id = self._blindbox_peer_id_for_peer(peer)
+        if not peer_id:
+            raise ValueError("BlindBox peer id is not available")
+        snapshot = _BlindBoxPeerSnapshot(
+            peer_addr=peer,
+            peer_id=peer_id,
+            state=BlindBoxState(),
+        )
+        path = self._blindbox_state_path_for_peer(peer_id)
+        if not os.path.exists(path):
+            return snapshot
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+        if not isinstance(raw, dict):
+            raise ValueError("BlindBox state must be a JSON object")
+        snapshot.state = BlindBoxState.from_dict(raw)
+        wrap_version_raw = raw.get(
+            "blindbox_wrap_version", BLINDBOX_LOCAL_WRAP_VERSION_LEGACY
+        )
+        try:
+            wrap_version = int(wrap_version_raw)
+        except Exception:
+            wrap_version = BLINDBOX_LOCAL_WRAP_VERSION_LEGACY
+        enc_root = raw.get("blindbox_root_secret_enc")
+        if isinstance(enc_root, str) and enc_root:
+            snapshot.root_secret, _used_wrap_version = self._blindbox_decrypt_root_secret(
+                enc_root,
+                peer_id,
+                wrap_version=wrap_version,
+            )
+        snapshot.root_epoch = int(raw.get("blindbox_root_epoch", 0))
+        return snapshot
+
+    def _save_blindbox_peer_snapshot(self, snapshot: _BlindBoxPeerSnapshot) -> None:
+        if snapshot.root_secret is None:
+            return
+        payload = snapshot.state.to_dict()
+        payload["blindbox_wrap_version"] = BLINDBOX_LOCAL_WRAP_VERSION_CURRENT
+        payload["blindbox_root_secret_enc"] = self._blindbox_encrypt_root_secret(
+            snapshot.root_secret,
+            snapshot.peer_id,
+        )
+        payload["blindbox_root_epoch"] = int(snapshot.root_epoch)
+        atomic_write_json(
+            self._blindbox_state_path_for_peer(snapshot.peer_id),
+            payload,
+        )
 
     def _blindbox_local_wrap_key(
         self,
@@ -3668,6 +3837,8 @@ class I2PChatCore:
             return False
         text = body.decode("utf-8", errors="strict")
         sp = (self.stored_peer or self.current_peer_addr or "").strip() or None
+        if self.import_group_transport_text(text, source_peer=sp):
+            return True
         self._emit_message("peer", text, source_peer=sp)
         self._emit_notify("peer", text, source_peer=sp)
         return True
@@ -3785,6 +3956,409 @@ class I2PChatCore:
                 logger.warning("BlindBox send failed: %s", detail, exc_info=True)
                 self._emit_error(f"BlindBox send failed: {detail}")
                 return None
+
+    def _encode_group_transport_body(
+        self,
+        state: GroupState,
+        envelope: GroupEnvelope,
+        metadata: GroupRecipientDeliveryMetadata,
+    ) -> str:
+        return encode_group_transport_text(state, envelope, metadata)
+
+    def _format_group_text_for_ui(
+        self,
+        state: GroupState,
+        *,
+        sender_id: str,
+        text: str,
+        incoming: bool,
+    ) -> str:
+        group_label = self._group_display_name(state)
+        if incoming:
+            return f"[Group {group_label}] {sender_id}: {text}"
+        return f"[Group {group_label}] {text}"
+
+    def _merge_group_state_snapshot(
+        self,
+        existing: Optional[GroupState],
+        incoming: GroupState,
+        *,
+        envelope: GroupEnvelope,
+    ) -> GroupState:
+        local_member = ""
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            local_member = ""
+        merged_members = list(existing.members if existing is not None else ())
+        merged_members.extend(incoming.members)
+        merged_members.append(envelope.sender_id)
+        if local_member:
+            merged_members.append(local_member)
+        return GroupState(
+            group_id=incoming.group_id,
+            title=(incoming.title or (existing.title if existing is not None else None)),
+            epoch=max(
+                int(envelope.epoch),
+                int(incoming.epoch),
+                int(existing.epoch) if existing is not None else 0,
+            ),
+            members=tuple(merged_members),
+            created_at=existing.created_at if existing is not None else incoming.created_at,
+            updated_at=max(
+                incoming.updated_at,
+                envelope.created_at,
+                existing.updated_at if existing is not None else incoming.updated_at,
+            ),
+        )
+
+    def _apply_group_control_payload(
+        self,
+        state: GroupState,
+        payload: Any,
+        *,
+        updated_at: datetime,
+        epoch: int,
+    ) -> GroupState:
+        if not isinstance(payload, dict):
+            return state
+        title = str(payload.get("title") or "").strip() or state.title
+        members = tuple(
+            str(member)
+            for member in payload.get("members", state.members)
+        )
+        control_epoch = int(payload.get("epoch", epoch))
+        return GroupState(
+            group_id=state.group_id,
+            title=title,
+            epoch=max(int(state.epoch), control_epoch),
+            members=members,
+            created_at=state.created_at,
+            updated_at=updated_at,
+        )
+
+    async def _send_group_envelope_live(
+        self,
+        recipient_id: str,
+        envelope: GroupEnvelope,
+        metadata: GroupRecipientDeliveryMetadata,
+    ) -> GroupTransportOutcome:
+        target_peer = self._normalize_peer_addr(recipient_id)
+        current_peer = self._normalize_peer_addr(self.current_peer_addr or "")
+        if not target_peer or self.conn is None or current_peer != target_peer:
+            return GroupTransportOutcome(accepted=False, reason="needs-live-session")
+        if not self.session_manager.is_live_path_alive(peer_id=target_peer):
+            return GroupTransportOutcome(accepted=False, reason="needs-live-session")
+        state = self.load_group_state(envelope.group_id)
+        if state is None:
+            return GroupTransportOutcome(accepted=False, reason="unknown-group")
+        try:
+            _, writer = self.conn
+            if self._blindbox_ready():
+                await self._send_blindbox_root_if_needed(writer)
+            body = self._encode_group_transport_body(state, envelope, metadata)
+            frame, msg_id = self.frame_message_with_id("U", body)
+            writer.write(frame)
+            await writer.drain()
+            return GroupTransportOutcome(
+                accepted=True,
+                reason="live-session",
+                transport_message_id=str(msg_id),
+            )
+        except Exception as e:
+            self.session_manager.mark_live_failure(
+                reason="group-send-failed",
+                peer_id=target_peer,
+            )
+            self._schedule_disconnect()
+            return GroupTransportOutcome(
+                accepted=False,
+                reason=_exception_user_message(e),
+            )
+
+    async def _send_group_envelope_via_blindbox(
+        self,
+        recipient_id: str,
+        envelope: GroupEnvelope,
+        metadata: GroupRecipientDeliveryMetadata,
+    ) -> GroupTransportOutcome:
+        if not self._blindbox_ready():
+            return GroupTransportOutcome(accepted=False, reason="blindbox-disabled")
+        if self._blindbox_send_lock.locked():
+            return GroupTransportOutcome(accepted=False, reason="blindbox-send-busy")
+        if self.my_dest is None:
+            return GroupTransportOutcome(
+                accepted=False,
+                reason="blindbox-starting-local-session",
+            )
+        await self._ensure_blindbox_runtime_started()
+        if self._blindbox_client is None:
+            return GroupTransportOutcome(
+                accepted=False,
+                reason="blindbox-starting-local-session",
+            )
+        state = self.load_group_state(envelope.group_id)
+        if state is None:
+            return GroupTransportOutcome(accepted=False, reason="unknown-group")
+        try:
+            snapshot = self._load_blindbox_peer_snapshot(recipient_id)
+        except Exception as e:
+            return GroupTransportOutcome(
+                accepted=False,
+                reason=_exception_user_message(e),
+            )
+        if snapshot.root_secret is None:
+            return GroupTransportOutcome(accepted=False, reason="blindbox-await-root")
+
+        async with self._blindbox_send_lock:
+            try:
+                body = self._encode_group_transport_body(state, envelope, metadata)
+                msg_id = self._allocate_msg_id()
+                frame = self._codec.encode(
+                    "U",
+                    body.encode("utf-8"),
+                    msg_id=msg_id,
+                    flags=0,
+                )
+                keys = derive_blindbox_message_keys(
+                    snapshot.root_secret,
+                    self.my_dest.base32,
+                    snapshot.peer_id,
+                    "send",
+                    snapshot.state.send_index,
+                    epoch=snapshot.root_epoch,
+                )
+                blob = encrypt_blindbox_blob(
+                    frame,
+                    keys.blob_key,
+                    "send",
+                    snapshot.state.send_index,
+                    keys.state_tag,
+                    padding_bucket=self._blindbox_padding_bucket,
+                )
+                put_timeout_sec = max(
+                    5.0,
+                    float(os.environ.get("I2PCHAT_BLINDBOX_PUT_TIMEOUT_SEC", "30")),
+                )
+                await asyncio.wait_for(
+                    self._blindbox_client.put(keys.lookup_token, blob),
+                    timeout=put_timeout_sec,
+                )
+                snapshot.state.send_index += 1
+                snapshot.state.updated_at = int(time.time())
+                self._save_blindbox_peer_snapshot(snapshot)
+                self._trigger_blindbox_hot_poll("group-offline-send")
+                return GroupTransportOutcome(
+                    accepted=True,
+                    reason="blindbox-ready",
+                    transport_message_id=str(msg_id),
+                )
+            except asyncio.TimeoutError:
+                return GroupTransportOutcome(
+                    accepted=False,
+                    reason="blindbox-put-timeout",
+                )
+            except Exception as e:
+                detail = _exception_user_message(e)
+                logger.warning("Group BlindBox send failed: %s", detail, exc_info=True)
+                return GroupTransportOutcome(
+                    accepted=False,
+                    reason=detail or "blindbox-put-failed",
+                )
+
+    async def send_group_text(
+        self,
+        group_id: str,
+        text: str,
+        *,
+        route: Literal["auto", "live", "offline"] = "auto",
+    ) -> GroupSendResult:
+        conversation = self._load_group_conversation(group_id)
+        if conversation is None:
+            raise ValueError(f"Unknown group: {group_id}")
+        sender_id = self._local_group_member_id()
+        self.group_manager.prime_group_sequence(
+            group_id,
+            next_group_seq=conversation.next_group_seq,
+        )
+        result = await self.group_manager.send_text(
+            conversation.state,
+            sender_id=sender_id,
+            text=text,
+            requested_route=route,
+        )
+        updated_state = GroupState(
+            group_id=conversation.state.group_id,
+            title=conversation.state.title,
+            epoch=max(int(conversation.state.epoch), int(result.envelope.epoch)),
+            members=conversation.state.members,
+            created_at=conversation.state.created_at,
+            updated_at=utc_now(),
+        )
+        append_group_history_entry(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            updated_state,
+            GroupHistoryEntry(
+                kind="me",
+                sender_id=sender_id,
+                content_type=GroupContentType.GROUP_TEXT,
+                text=str(result.envelope.payload or ""),
+                payload=result.envelope.payload,
+                msg_id=result.envelope.msg_id,
+                group_seq=result.envelope.group_seq,
+                epoch=result.envelope.epoch,
+                created_at=result.envelope.created_at,
+                delivery_results={
+                    peer_id: delivery.status.value
+                    for peer_id, delivery in result.delivery_results.items()
+                },
+            ),
+            next_group_seq=result.envelope.group_seq + 1,
+        )
+        self._emit_message(
+            "me",
+            self._format_group_text_for_ui(
+                updated_state,
+                sender_id=sender_id,
+                text=str(result.envelope.payload or ""),
+                incoming=False,
+            ),
+            message_id=result.envelope.msg_id,
+        )
+        return result
+
+    async def send_group_control(
+        self,
+        group_id: str,
+        payload: dict[str, Any],
+        *,
+        route: Literal["auto", "live", "offline"] = "auto",
+    ) -> GroupSendResult:
+        conversation = self._load_group_conversation(group_id)
+        if conversation is None:
+            raise ValueError(f"Unknown group: {group_id}")
+        sender_id = self._local_group_member_id()
+        self.group_manager.prime_group_sequence(
+            group_id,
+            next_group_seq=conversation.next_group_seq,
+        )
+        result = await self.group_manager.send_control(
+            conversation.state,
+            sender_id=sender_id,
+            payload=payload,
+            requested_route=route,
+        )
+        updated_state = self._apply_group_control_payload(
+            conversation.state,
+            payload,
+            updated_at=utc_now(),
+            epoch=result.envelope.epoch,
+        )
+        append_group_history_entry(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            updated_state,
+            GroupHistoryEntry(
+                kind="system",
+                sender_id=sender_id,
+                content_type=GroupContentType.GROUP_CONTROL,
+                payload=dict(payload),
+                msg_id=result.envelope.msg_id,
+                group_seq=result.envelope.group_seq,
+                epoch=result.envelope.epoch,
+                created_at=result.envelope.created_at,
+                delivery_results={
+                    peer_id: delivery.status.value
+                    for peer_id, delivery in result.delivery_results.items()
+                },
+            ),
+            next_group_seq=result.envelope.group_seq + 1,
+        )
+        return result
+
+    def import_group_transport_text(
+        self,
+        text: str,
+        *,
+        source_peer: Optional[str] = None,
+    ) -> bool:
+        try:
+            decoded = decode_group_transport_text(text)
+        except Exception as e:
+            self._emit_error(f"Invalid group transport payload: {_exception_user_message(e)}")
+            return True
+        if decoded is None:
+            return False
+        existing_state = self.load_group_state(decoded.state.group_id)
+        merged_state = self._merge_group_state_snapshot(
+            existing_state,
+            decoded.state,
+            envelope=decoded.envelope,
+        )
+        if decoded.envelope.content_type == GroupContentType.GROUP_CONTROL:
+            merged_state = self._apply_group_control_payload(
+                merged_state,
+                decoded.envelope.payload,
+                updated_at=decoded.envelope.created_at,
+                epoch=decoded.envelope.epoch,
+            )
+        history_entry = GroupHistoryEntry(
+            kind="peer",
+            sender_id=decoded.envelope.sender_id,
+            content_type=decoded.envelope.content_type,
+            text=(
+                str(decoded.envelope.payload)
+                if decoded.envelope.content_type == GroupContentType.GROUP_TEXT
+                else ""
+            ),
+            payload=decoded.envelope.payload,
+            msg_id=decoded.envelope.msg_id,
+            group_seq=decoded.envelope.group_seq,
+            epoch=decoded.envelope.epoch,
+            created_at=decoded.envelope.created_at,
+            source_peer=self._normalize_peer_addr(
+                source_peer or decoded.envelope.sender_id
+            )
+            or None,
+        )
+        existing_conversation = self._load_group_conversation(decoded.state.group_id)
+        next_group_seq = max(
+            decoded.envelope.group_seq + 1,
+            existing_conversation.next_group_seq if existing_conversation is not None else 1,
+        )
+        _conversation, imported = append_group_history_entry(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            merged_state,
+            history_entry,
+            next_group_seq=next_group_seq,
+        )
+        if not imported:
+            return True
+        if decoded.envelope.content_type == GroupContentType.GROUP_TEXT:
+            rendered_text = self._format_group_text_for_ui(
+                merged_state,
+                sender_id=decoded.envelope.sender_id,
+                text=str(decoded.envelope.payload or ""),
+                incoming=True,
+            )
+            ui_source_peer = (
+                self._normalize_peer_addr(source_peer or decoded.envelope.sender_id)
+                or None
+            )
+            self._emit_message(
+                "peer",
+                rendered_text,
+                source_peer=ui_source_peer,
+                message_id=decoded.envelope.msg_id,
+            )
+            self._emit_notify("peer", rendered_text, source_peer=ui_source_peer)
+        else:
+            self._emit_system(
+                f"Group updated: {self._group_display_name(merged_state)}"
+            )
+        return True
 
     def is_outbound_connect_busy(self) -> bool:
         """True, пока выполняется исходящий connect_to_peer (ожидание stream_connect)."""
@@ -5456,8 +6030,9 @@ class I2PChatCore:
 
                 if msg_type == "U":
                     sp = self.current_peer_addr
-                    self._emit_message("peer", body, source_peer=sp)
-                    self._emit_notify("peer", body, source_peer=sp)
+                    if not self.import_group_transport_text(body, source_peer=sp):
+                        self._emit_message("peer", body, source_peer=sp)
+                        self._emit_notify("peer", body, source_peer=sp)
                     # Подтверждение доставки по MSG_ID (vNext)
                     if msg_id:
                         try:

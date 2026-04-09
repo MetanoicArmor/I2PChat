@@ -49,6 +49,14 @@ class GroupManager:
     def _default_id_factory() -> str:
         return secrets.token_hex(16)
 
+    def prime_group_sequence(self, group_id: str, *, next_group_seq: int) -> None:
+        group_key = (group_id or "").strip()
+        if not group_key:
+            return
+        seeded_last_seq = max(0, int(next_group_seq) - 1)
+        current_last_seq = self._group_seq_by_id.get(group_key, 0)
+        self._group_seq_by_id[group_key] = max(current_last_seq, seeded_last_seq)
+
     def _next_group_seq(self, group_id: str) -> int:
         next_seq = self._group_seq_by_id.get(group_id, 0) + 1
         self._group_seq_by_id[group_id] = next_seq
