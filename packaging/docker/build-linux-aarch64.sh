@@ -40,6 +40,8 @@ docker run --rm --platform linux/arm64 \
   -e APPIMAGE_EXTRACT_AND_RUN=1 \
   -e I2PCHAT_SKIP_GPG_SIGN=1 \
   -e "I2PCHAT_LINUX_GUI_ZIP_MODE=${I2PCHAT_LINUX_GUI_ZIP_MODE}" \
+  -e UV_PROJECT_ENVIRONMENT=/opt/i2pchat-venv \
+  -e UV_LINK_MODE=copy \
   "${IMAGE}" \
   ./build-linux.sh
 

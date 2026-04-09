@@ -46,7 +46,12 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 REPO_ROOT="$(pwd)"
-export UV_PROJECT_ENVIRONMENT="${REPO_ROOT}/${VENV_DIR}"
+# UV_PROJECT_ENVIRONMENT можно задать снаружи (например Docker arm64: /opt/i2pchat-venv),
+# чтобы .venv жил на ФС контейнера, а не на bind-mount — иначе PyInstaller иногда ловит
+# FileNotFoundError на hook-*.py при анализе.
+if [ -z "${UV_PROJECT_ENVIRONMENT:-}" ]; then
+  export UV_PROJECT_ENVIRONMENT="${REPO_ROOT}/${VENV_DIR}"
+fi
 # Явный путь к окружению проекта: не зависит от чужого VIRTUAL_ENV в шелле.
 unset VIRTUAL_ENV
 
@@ -95,7 +100,7 @@ fi
 uv sync --frozen --python "${PYTHON_BIN}" --group build --no-dev
 
 # Не полагаемся на source activate (в Docker + set -u иногда не появляется python в PATH)
-VENV_ABS="$(cd "${VENV_DIR}" && pwd)"
+VENV_ABS="$(cd "${UV_PROJECT_ENVIRONMENT}" && pwd)"
 VENV_PY="${VENV_ABS}/bin/python"
 export VIRTUAL_ENV="${VENV_ABS}"
 export PATH="${VENV_ABS}/bin:${PATH}"
