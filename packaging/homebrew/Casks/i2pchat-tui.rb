@@ -1,7 +1,7 @@
 cask "i2pchat-tui" do
-  version "1.2.5"
-  # Run: ./packaging/refresh-checksums.sh 1.2.5 — use macOS TUI zip line
-  sha256 "227609a289a51a182256d8d5e77b376dc4db6635dc472284203cb470904b94c3"
+  version "1.2.6"
+  # Run: ./packaging/refresh-checksums.sh 1.2.6 — use macOS TUI zip line
+  sha256 "50fe60a8ed0d1c6ff2cfcfd6119f74d4e3a7682926f687023309e5e514dae0c1"
 
   url "https://github.com/MetanoicArmor/I2PChat/releases/download/v#{version}/I2PChat-macOS-arm64-tui-v#{version}.zip"
   name "I2PChat TUI"
