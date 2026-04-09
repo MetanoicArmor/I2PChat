@@ -51,9 +51,11 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
         core = I2PChatCore(profile="alice")
         core.conn = (object(), _DummyWriter())
         core.handshake_complete = False
+        core._send_text_via_blindbox = AsyncMock(return_value=99)  # type: ignore[method-assign]
         result = await core.send_text("x", route="live")
         self.assertFalse(result.accepted)
         self.assertEqual(result.reason, "handshake-in-progress")
+        core._send_text_via_blindbox.assert_not_called()  # type: ignore[attr-defined]
 
     async def test_send_text_offline_route_uses_blindbox_when_live_connected(self) -> None:
         with patch.dict(
@@ -108,6 +110,60 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
         result = await core.send_text("hello-after-stale")
         self.assertTrue(result.accepted)
         self.assertEqual(result.route, "online-live")
+
+    async def test_send_text_auto_prefers_live_even_when_blindbox_busy(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = I2PChatCore(profile="alice")
+            core.stored_peer = STORED_PEER_1
+            core.current_peer_addr = STORED_PEER_1
+            writer = _DummyWriter()
+            core.conn = (object(), writer)
+            core.handshake_complete = True
+            core.session_manager.set_peer_connected(
+                STORED_PEER_1, state=PeerState.HANDSHAKING
+            )
+            core.session_manager.set_peer_handshake_complete(STORED_PEER_1)
+            await core._blindbox_send_lock.acquire()  # noqa: SLF001 - route preference behavior
+            try:
+                result = await core.send_text("hello-live-while-blindbox-busy")
+            finally:
+                core._blindbox_send_lock.release()  # noqa: SLF001
+            self.assertTrue(result.accepted)
+            self.assertEqual(result.route, "online-live")
+
+    async def test_send_text_auto_queues_offline_during_handshake_when_blindbox_ready(
+        self,
+    ) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = I2PChatCore(profile="alice")
+            core.stored_peer = STORED_PEER_2
+            core.current_peer_addr = STORED_PEER_2
+            core.my_dest = _DummyDest()
+            core.conn = (object(), _DummyWriter())
+            core.handshake_complete = False
+            core.session_manager.set_peer_connected(
+                STORED_PEER_2, state=PeerState.HANDSHAKING
+            )
+            core._send_text_via_blindbox = AsyncMock(return_value=123)  # type: ignore[method-assign]
+            result = await core.send_text("hello-handshaking-auto")
+            self.assertTrue(result.accepted)
+            self.assertEqual(result.route, "offline-queued")
+            self.assertEqual(result.reason, "blindbox-ready")
+            core._send_text_via_blindbox.assert_awaited_once()  # type: ignore[attr-defined]
 
     async def test_send_text_queues_offline_when_blindbox_ready(self) -> None:
         with patch.dict(
