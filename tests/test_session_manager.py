@@ -157,6 +157,8 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         sm = SessionManager()
         sm.set_active_peer("peer-a.b32.i2p")
         sm.register_inflight_message(101)
+        self.assertIsNone(sm.get_peer_transport("peer-a.b32.i2p"))
+        sm.register_inflight_message(101, peer_id="peer-a.b32.i2p")
         sm.register_inflight_message(202, peer_id="peer-b.b32.i2p")
 
         peer_a = sm.get_peer_transport("peer-a.b32.i2p")
@@ -165,6 +167,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         assert peer_b is not None
         self.assertEqual(peer_a.inflight_msg_ids, {101})
         self.assertEqual(peer_b.inflight_msg_ids, {202})
+        self.assertFalse(sm.acknowledge_inflight_message(101))
         self.assertTrue(sm.acknowledge_inflight_message(101, peer_id="peer-a.b32.i2p"))
         self.assertFalse(sm.acknowledge_inflight_message(999, peer_id="peer-a.b32.i2p"))
         self.assertEqual(peer_a.inflight_msg_ids, set())
@@ -222,6 +225,66 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         sm.mark_live_failure(reason="peer-b-fail", peer_id="peer-b.b32.i2p")
 
         self.assertEqual(sm.transport_state, TransportState.READY)
+
+    def test_global_reconnect_backoff_does_not_mutate_active_peer(self) -> None:
+        sm = SessionManager()
+        sm.set_active_peer("peer-a.b32.i2p")
+        sm.set_peer_handshake_complete("peer-a.b32.i2p")
+
+        sm.schedule_reconnect_backoff(reason="global-fail")
+
+        peer_a = sm.get_peer_transport("peer-a.b32.i2p")
+        assert peer_a is not None
+        self.assertEqual(peer_a.reconnect.attempt, 0)
+        self.assertEqual(sm.reconnect.attempt, 1)
+
+    def test_reset_peer_transport_is_scoped_to_target_peer(self) -> None:
+        sm = SessionManager()
+        sm.set_peer_handshake_complete("peer-a.b32.i2p")
+        sm.set_peer_handshake_complete("peer-b.b32.i2p")
+        sm.register_inflight_message(11, peer_id="peer-a.b32.i2p")
+        sm.register_inflight_message(22, peer_id="peer-b.b32.i2p")
+        sm.register_stream(
+            "peer-a.b32.i2p",
+            state=PeerState.SECURE,
+            peer_id="peer-a.b32.i2p",
+        )
+        sm.register_stream(
+            "peer-b.b32.i2p",
+            state=PeerState.SECURE,
+            peer_id="peer-b.b32.i2p",
+        )
+
+        changed = sm.reset_peer_transport("peer-a.b32.i2p", reason="target-reset")
+
+        self.assertTrue(changed)
+        peer_a = sm.get_peer_transport("peer-a.b32.i2p")
+        peer_b = sm.get_peer_transport("peer-b.b32.i2p")
+        assert peer_a is not None
+        assert peer_b is not None
+        self.assertEqual(peer_a.peer_state, PeerState.DISCONNECTED)
+        self.assertEqual(peer_a.inflight_msg_ids, set())
+        self.assertEqual(peer_a.outbound_streams, {})
+        self.assertEqual(peer_b.peer_state, PeerState.SECURE)
+        self.assertEqual(peer_b.inflight_msg_ids, {22})
+        self.assertEqual(set(peer_b.outbound_streams), {"peer-b.b32.i2p"})
+
+    def test_reset_peer_transport_can_drop_peer_without_shutdown(self) -> None:
+        sm = SessionManager()
+        sm.set_active_peer("peer-a.b32.i2p")
+        sm.set_peer_handshake_complete("peer-a.b32.i2p")
+        sm.set_peer_handshake_complete("peer-b.b32.i2p")
+
+        removed = sm.reset_peer_transport(
+            "peer-a.b32.i2p",
+            reason="drop-a",
+            drop_peer=True,
+        )
+
+        self.assertTrue(removed)
+        self.assertIsNone(sm.get_peer_transport("peer-a.b32.i2p"))
+        self.assertIsNotNone(sm.get_peer_transport("peer-b.b32.i2p"))
+        self.assertEqual(sm.get_active_peer(), "peer-b.b32.i2p")
 
     async def test_cancel_tasks_and_close_session(self) -> None:
         sm = SessionManager()

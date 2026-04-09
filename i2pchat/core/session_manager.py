@@ -138,11 +138,18 @@ class SessionManager:
     def _normalize_peer_id(peer_id: str) -> str:
         return (peer_id or "").strip().lower()
 
-    def _resolve_peer_id(self, peer_id: Optional[str] = None) -> str:
+    def _resolve_peer_id(
+        self,
+        peer_id: Optional[str] = None,
+        *,
+        allow_active_fallback: bool = True,
+    ) -> str:
         normalized = self._normalize_peer_id(peer_id or "")
         if normalized:
             return normalized
-        return self.active_peer_id
+        if allow_active_fallback:
+            return self.active_peer_id
+        return ""
 
     def _set_active_peer(self, peer_id: str) -> None:
         normalized = self._normalize_peer_id(peer_id)
@@ -258,7 +265,26 @@ class SessionManager:
         reason: str = "disconnected",
         keep_reconnect_metadata: bool = True,
     ) -> None:
-        peer = self.ensure_peer_transport(peer_id)
+        self.reset_peer_transport(
+            peer_id,
+            reason=reason,
+            keep_reconnect_metadata=keep_reconnect_metadata,
+        )
+
+    def reset_peer_transport(
+        self,
+        peer_id: str,
+        *,
+        reason: str = "peer-reset",
+        keep_reconnect_metadata: bool = True,
+        drop_peer: bool = False,
+    ) -> bool:
+        key = self._normalize_peer_id(peer_id)
+        if not key:
+            return False
+        peer = self.peer_transport.get(key)
+        if peer is None:
+            return False
         peer.connected = False
         peer.handshake_complete = False
         peer.peer_state = PeerState.DISCONNECTED
@@ -269,8 +295,13 @@ class SessionManager:
         if not keep_reconnect_metadata:
             peer.reconnect = ReconnectMetadata()
         self._touch_peer(peer)
+        if drop_peer:
+            self.peer_transport.pop(key, None)
+            if self.active_peer_id == key:
+                self.active_peer_id = ""
         self._sync_legacy_views()
-        logger.debug("Peer disconnected: %s (%s)", peer.peer_id[:24], reason)
+        logger.debug("Peer transport reset: %s (%s)", key[:24], reason)
+        return True
 
     def mark_peer_failed(self, peer_id: str, *, reason: str) -> None:
         now = time.monotonic()
@@ -377,7 +408,7 @@ class SessionManager:
             self._touch_peer(peer)
 
     def register_inflight_message(self, msg_id: int, *, peer_id: Optional[str] = None) -> None:
-        key = self._resolve_peer_id(peer_id)
+        key = self._resolve_peer_id(peer_id, allow_active_fallback=False)
         if not key:
             return
         peer = self.ensure_peer_transport(key)
@@ -385,7 +416,7 @@ class SessionManager:
         self._touch_peer(peer)
 
     def acknowledge_inflight_message(self, msg_id: int, *, peer_id: Optional[str] = None) -> bool:
-        key = self._resolve_peer_id(peer_id)
+        key = self._resolve_peer_id(peer_id, allow_active_fallback=False)
         if not key:
             return False
         peer = self.peer_transport.get(key)
@@ -398,7 +429,7 @@ class SessionManager:
         return removed
 
     def clear_inflight_messages(self, *, peer_id: Optional[str] = None) -> None:
-        key = self._resolve_peer_id(peer_id)
+        key = self._resolve_peer_id(peer_id, allow_active_fallback=False)
         if not key:
             return
         peer = self.peer_transport.get(key)
@@ -450,7 +481,7 @@ class SessionManager:
 
     def mark_live_healthy(self, *, peer_id: Optional[str] = None) -> None:
         now = time.monotonic()
-        key = self._resolve_peer_id(peer_id)
+        key = self._normalize_peer_id(peer_id or "")
         if key:
             peer = self.ensure_peer_transport(key)
             peer.connected = True
@@ -482,7 +513,7 @@ class SessionManager:
         peer_id: Optional[str] = None,
     ) -> None:
         now = time.monotonic()
-        key = self._resolve_peer_id(peer_id)
+        key = self._normalize_peer_id(peer_id or "")
         if key:
             peer = self.ensure_peer_transport(key)
             peer.last_live_failure_mono = now
@@ -506,7 +537,7 @@ class SessionManager:
         max_delay_sec: float = 30.0,
         peer_id: Optional[str] = None,
     ) -> float:
-        key = self._resolve_peer_id(peer_id)
+        key = self._normalize_peer_id(peer_id or "")
         if key:
             peer = self.ensure_peer_transport(key)
             reconnect = peer.reconnect
