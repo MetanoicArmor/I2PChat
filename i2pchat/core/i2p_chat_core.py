@@ -1713,7 +1713,12 @@ class I2PChatCore:
         if not self.conn:
             self._emit_error("No active connection.")
             return False
-        if not self.handshake_complete:
+        peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+        if not self.session_manager.is_live_path_alive(
+            connected=True,
+            handshake_complete=self.handshake_complete,
+            peer_id=peer_addr_norm,
+        ):
             self._emit_error("Secure channel not ready yet. Wait for 'Ready'.")
             return False
         return True
@@ -1764,9 +1769,11 @@ class I2PChatCore:
             return
         if self.conn == connection and not self.handshake_complete:
             self._emit_error("Secure handshake timed out")
-            self.session_manager.transition_peer(
-                PeerState.FAILED, reason="handshake-timeout"
-            )
+            peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+            if peer_addr_norm:
+                self.session_manager.mark_peer_failed(
+                    peer_addr_norm, reason="handshake-timeout"
+                )
             self._schedule_disconnect()
 
     # ---------- протокол ----------
@@ -2356,6 +2363,7 @@ class I2PChatCore:
             )
             return False
         self.current_peer_addr = normalized_addr
+        self.session_manager.set_active_peer(normalized_addr)
         self.current_peer_dest_b64 = canonical_dest
         self.peer_identity_binding_verified = True
         return True
@@ -2893,6 +2901,9 @@ class I2PChatCore:
         self._ack_session_epoch += 1
         if self._ack_session_epoch > 0x7FFFFFFF:
             self._ack_session_epoch = 1
+        self.session_manager.clear_inflight_messages(
+            peer_id=self._current_ack_peer()
+        )
 
     def _current_ack_peer(self) -> str:
         return self._normalize_peer_addr(self.current_peer_addr or "")
@@ -2953,6 +2964,10 @@ class I2PChatCore:
             peer_addr=self._current_ack_peer(),
             ack_session_epoch=self._ack_session_epoch,
             state="awaiting_ack",
+        )
+        self.session_manager.register_inflight_message(
+            msg_id,
+            peer_id=self._current_ack_peer(),
         )
         self._prune_pending_acks(force=False)
 
@@ -3035,10 +3050,14 @@ class I2PChatCore:
 
     def get_delivery_telemetry(self) -> dict[str, Any]:
         """Returns current delivery route hints for UI decisions."""
+        peer_for_route = self._normalize_peer_addr(
+            self.current_peer_addr or self.stored_peer or ""
+        )
         connected = self.conn is not None
         secure_live = self.session_manager.is_live_path_alive(
             connected=connected,
             handshake_complete=self.handshake_complete,
+            peer_id=peer_for_route,
         )
         has_target = bool(self.current_peer_addr or self.stored_peer)
         ready = bool(self._blindbox_ready())
@@ -3051,7 +3070,12 @@ class I2PChatCore:
             requested_route="auto",
             connected=connected,
             handshake_complete=self.handshake_complete,
+            peer_id=peer_for_route,
         ).value
+        peer_transport = self.session_manager.get_peer_transport(peer_for_route)
+        reconnect_meta = (
+            peer_transport.reconnect if peer_transport is not None else self.session_manager.reconnect
+        )
 
         if connected and not self.handshake_complete:
             state = "connecting-handshake"
@@ -3096,11 +3120,9 @@ class I2PChatCore:
             "peer_state": self.session_manager.peer_state.value,
             "outbound_policy": outbound_policy,
             "outbound_streams": len(self.session_manager.outbound_streams),
-            "reconnect_attempt": int(self.session_manager.reconnect.attempt),
-            "reconnect_next_retry_mono": float(self.session_manager.reconnect.next_retry_mono),
-            "reconnect_last_failure_reason": str(
-                self.session_manager.reconnect.last_failure_reason
-            ),
+            "reconnect_attempt": int(reconnect_meta.attempt),
+            "reconnect_next_retry_mono": float(reconnect_meta.next_retry_mono),
+            "reconnect_last_failure_reason": str(reconnect_meta.last_failure_reason),
         }
 
     def _offline_send_block_feedback(self) -> tuple[str, str]:
@@ -3776,9 +3798,10 @@ class I2PChatCore:
         if self.session_manager.outbound_connect_busy:
             self._emit_system("Connection attempt already in progress.")
             return
-        self.session_manager.set_outbound_connect_busy(True)
-        self.session_manager.transition_peer(
-            PeerState.CONNECTING, reason="outbound-connect"
+        self.session_manager.set_active_peer(normalized_target)
+        self.session_manager.set_outbound_connect_busy(True, peer_id=normalized_target)
+        self.session_manager.set_peer_connected(
+            normalized_target, state=PeerState.CONNECTING, reason="outbound-connect"
         )
         self.session_manager.transition_transport(
             TransportState.RECONNECTING, reason="outbound-connect"
@@ -3787,7 +3810,6 @@ class I2PChatCore:
         deferred_system: Optional[str] = None
         try:
             try:
-                self.current_peer_addr = normalized_target
                 self._reset_crypto_state()
                 self.current_peer_addr = normalized_target
                 self._emit_system(
@@ -3836,7 +3858,9 @@ class I2PChatCore:
 
                 self.conn = (reader, writer)
                 self.session_manager.register_stream(
-                    normalized_target, state=PeerState.HANDSHAKING
+                    normalized_target,
+                    state=PeerState.HANDSHAKING,
+                    peer_id=normalized_target,
                 )
                 self._activate_ack_session()
                 self._emit_message(
@@ -3852,11 +3876,12 @@ class I2PChatCore:
                 )
             except asyncio.TimeoutError:
                 self.conn = None
-                self.session_manager.transition_peer(
-                    PeerState.FAILED, reason="connect-timeout"
+                self.session_manager.mark_peer_failed(
+                    normalized_target, reason="connect-timeout"
                 )
                 delay = self.session_manager.schedule_reconnect_backoff(
-                    reason="connect-timeout"
+                    reason="connect-timeout",
+                    peer_id=normalized_target,
                 )
                 logger.info("Outbound connect backoff scheduled: %.2fs", delay)
                 deferred_error = (
@@ -3865,9 +3890,12 @@ class I2PChatCore:
                 deferred_system = "Waiting for incoming connections..."
             except Exception as e:
                 self.conn = None
-                self.session_manager.transition_peer(PeerState.FAILED, reason="connect-failed")
+                self.session_manager.mark_peer_failed(
+                    normalized_target, reason="connect-failed"
+                )
                 delay = self.session_manager.schedule_reconnect_backoff(
-                    reason=type(e).__name__
+                    reason=type(e).__name__,
+                    peer_id=normalized_target,
                 )
                 logger.info("Outbound connect backoff scheduled: %.2fs", delay)
                 # Пустое сообщение у SAM-исключений (например CantReachPeer()) — только имя типа,
@@ -3879,7 +3907,9 @@ class I2PChatCore:
                 )
                 deferred_system = "Waiting for incoming connections..."
         finally:
-            self.session_manager.set_outbound_connect_busy(False)
+            self.session_manager.set_outbound_connect_busy(
+                False, peer_id=normalized_target
+            )
 
         # После сброса busy — иначе UI обновится с is_outbound_connect_busy()==True и Connect останется серым.
         if deferred_error:
@@ -3909,11 +3939,15 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
         r = route if route in ("auto", "live", "offline") else "auto"
+        peer_for_route = self._normalize_peer_addr(
+            self.current_peer_addr or self.stored_peer or ""
+        )
         connected = self.conn is not None
         policy = self.session_manager.select_outbound_policy(
             requested_route=r,
             connected=connected,
             handshake_complete=self.handshake_complete,
+            peer_id=peer_for_route,
         )
 
         if policy == OutboundPolicy.BLINDBOX_ONLY:
@@ -3971,6 +4005,7 @@ class I2PChatCore:
         secure_live = self.session_manager.is_live_path_alive(
             connected=connected,
             handshake_complete=self.handshake_complete,
+            peer_id=peer_for_route,
         )
 
         if policy == OutboundPolicy.LIVE_ONLY:
@@ -4113,8 +4148,10 @@ class I2PChatCore:
             )
         except Exception as e:
             self._emit_error(f"Failed to send message: {e}")
-            self.session_manager.transition_peer(PeerState.STALE, reason="send-failed")
-            self.session_manager.mark_live_failure(reason="send-failed")
+            self.session_manager.mark_live_failure(
+                reason="send-failed",
+                peer_id=peer_for_route,
+            )
             self._schedule_disconnect()
             lifecycle = delivery_lifecycle_from_send_result(
                 route="blocked",
@@ -4570,12 +4607,16 @@ class I2PChatCore:
                 pass
             self._reset_crypto_state()
             if peer_before_disconnect:
-                self.session_manager.unregister_stream(peer_before_disconnect)
-            self.session_manager.transition_peer(
-                PeerState.DISCONNECTED, reason="disconnect"
-            )
+                self.session_manager.unregister_stream(
+                    peer_before_disconnect, peer_id=peer_before_disconnect
+                )
+                self.session_manager.set_peer_disconnected(
+                    peer_before_disconnect, reason="disconnect"
+                )
             self.session_manager.mark_live_failure(
-                reason="disconnect", mark_peer_stale=False
+                reason="disconnect",
+                mark_peer_stale=False,
+                peer_id=peer_before_disconnect,
             )
             self._emit_message("info", "You disconnected.")
             self._emit_system("Waiting for incoming connections...")
@@ -4596,7 +4637,10 @@ class I2PChatCore:
                     writer.write(self.frame_message("P", ""))
                     await writer.drain()
                 except Exception:
-                    self.session_manager.mark_live_failure(reason="keepalive-failed")
+                    self.session_manager.mark_live_failure(
+                        reason="keepalive-failed",
+                        peer_id=self._normalize_peer_addr(self.current_peer_addr or ""),
+                    )
                     break
     
     def _reset_crypto_state(self) -> None:
@@ -4962,9 +5006,11 @@ class I2PChatCore:
                     self._emit_error(
                         "Handshake role conflict detected; reconnecting."
                     )
-                    self.session_manager.transition_peer(
-                        PeerState.FAILED, reason="handshake-role-conflict"
-                    )
+                    peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                    if peer_addr_norm:
+                        self.session_manager.mark_peer_failed(
+                            peer_addr_norm, reason="handshake-role-conflict"
+                        )
                     self._schedule_disconnect()
                     return
                 if not self.current_peer_addr or not self.my_dest:
@@ -5028,17 +5074,21 @@ class I2PChatCore:
                 self._recv_seq = 0
                 self._send_seq = 0
                 self._cancel_handshake_watchdog()
+                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                if peer_addr_norm:
+                    self.session_manager.set_peer_handshake_complete(
+                        peer_addr_norm, reason="handshake-ok"
+                    )
+                    self.session_manager.update_stream_state(
+                        peer_addr_norm,
+                        PeerState.SECURE,
+                        peer_id=peer_addr_norm,
+                    )
+                self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
                 self._emit_message("info", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
                 self._trigger_blindbox_hot_poll("peer-online")
                 await self._send_blindbox_root_if_needed(writer)
-                self.session_manager.transition_peer(PeerState.SECURE, reason="handshake-ok")
-                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-                if peer_addr_norm:
-                    self.session_manager.update_stream_state(
-                        peer_addr_norm, PeerState.SECURE
-                    )
-                self.session_manager.mark_live_healthy()
                 logger.info("Handshake completed (responder)")
 
             elif body.startswith("RESP:"):
@@ -5048,9 +5098,11 @@ class I2PChatCore:
                     or self.my_ephemeral_public is None
                 ):
                     logger.warning("Received RESP without prior INIT")
-                    self.session_manager.transition_peer(
-                        PeerState.FAILED, reason="handshake-resp-without-init"
-                    )
+                    peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                    if peer_addr_norm:
+                        self.session_manager.mark_peer_failed(
+                            peer_addr_norm, reason="handshake-resp-without-init"
+                        )
                     self._schedule_disconnect()
                     return
                 if not self.current_peer_addr or not self.my_dest:
@@ -5094,17 +5146,21 @@ class I2PChatCore:
                 self._recv_seq = 0
                 self._send_seq = 0
                 self._cancel_handshake_watchdog()
+                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                if peer_addr_norm:
+                    self.session_manager.set_peer_handshake_complete(
+                        peer_addr_norm, reason="handshake-ok"
+                    )
+                    self.session_manager.update_stream_state(
+                        peer_addr_norm,
+                        PeerState.SECURE,
+                        peer_id=peer_addr_norm,
+                    )
+                self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
                 self._emit_message("info", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
                 self._trigger_blindbox_hot_poll("peer-online")
                 await self._send_blindbox_root_if_needed(writer)
-                self.session_manager.transition_peer(PeerState.SECURE, reason="handshake-ok")
-                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-                if peer_addr_norm:
-                    self.session_manager.update_stream_state(
-                        peer_addr_norm, PeerState.SECURE
-                    )
-                self.session_manager.mark_live_healthy()
                 logger.info("Handshake completed (initiator)")
 
             else:
@@ -5113,8 +5169,15 @@ class I2PChatCore:
         except Exception as e:
             logger.error(f"Handshake error: {e}")
             self._emit_error(f"Secure handshake failed: {e}")
-            self.session_manager.transition_peer(PeerState.FAILED, reason="handshake-error")
-            self.session_manager.mark_live_failure(reason="handshake-error")
+            peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+            if peer_addr_norm:
+                self.session_manager.mark_peer_failed(
+                    peer_addr_norm, reason="handshake-error"
+                )
+            self.session_manager.mark_live_failure(
+                reason="handshake-error",
+                peer_id=peer_addr_norm,
+            )
             self._schedule_disconnect()
 
     async def shutdown(self) -> None:
@@ -5123,7 +5186,10 @@ class I2PChatCore:
             TransportState.SHUTTING_DOWN, reason="shutdown"
         )
         self.session_manager.invalidate_handshake_watchdog()
-        self.session_manager.set_outbound_connect_busy(False)
+        self.session_manager.set_outbound_connect_busy(
+            False,
+            peer_id=self._normalize_peer_addr(self.current_peer_addr or ""),
+        )
         if self.conn:
             await self.disconnect()
 
@@ -5207,7 +5273,9 @@ class I2PChatCore:
                 peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
                 if peer_addr_norm:
                     self.session_manager.register_stream(
-                        peer_addr_norm, state=PeerState.HANDSHAKING
+                        peer_addr_norm,
+                        state=PeerState.HANDSHAKING,
+                        peer_id=peer_addr_norm,
                     )
                 self._activate_ack_session()
                 self.session_manager.transition_transport(
@@ -5752,6 +5820,10 @@ class I2PChatCore:
                                     if self.on_text_delivered:
                                         self.on_text_delivered(str(ack_id))
                                     self._pending_text_acks.pop(ack_id, None)
+                                    self.session_manager.acknowledge_inflight_message(
+                                        ack_id,
+                                        peer_id=self._current_ack_peer(),
+                                    )
                             except Exception:
                                 self._record_ack_drop("invalid_format", "MSG_ACK parse failed")
                         if "IMG_ACK|" in body:
@@ -5782,6 +5854,10 @@ class I2PChatCore:
                                             and entry.ack_session_epoch == self._ack_session_epoch
                                         ):
                                             self._pending_image_acks.pop(ack_id, None)
+                                            self.session_manager.acknowledge_inflight_message(
+                                                ack_id,
+                                                peer_id=self._current_ack_peer(),
+                                            )
                                             ack_valid = True
                                         else:
                                             self._record_ack_drop(
@@ -5824,6 +5900,10 @@ class I2PChatCore:
                                             and entry.ack_session_epoch == self._ack_session_epoch
                                         ):
                                             self._pending_file_acks.pop(ack_id, None)
+                                            self.session_manager.acknowledge_inflight_message(
+                                                ack_id,
+                                                peer_id=self._current_ack_peer(),
+                                            )
                                             ack_valid = True
                                         else:
                                             self._record_ack_drop(
@@ -5932,12 +6012,16 @@ class I2PChatCore:
                 self.conn = None
                 self._reset_crypto_state()
                 if peer_before_cleanup:
-                    self.session_manager.unregister_stream(peer_before_cleanup)
-                self.session_manager.transition_peer(
-                    PeerState.DISCONNECTED, reason="receive-loop-cleanup"
-                )
+                    self.session_manager.unregister_stream(
+                        peer_before_cleanup, peer_id=peer_before_cleanup
+                    )
+                    self.session_manager.set_peer_disconnected(
+                        peer_before_cleanup, reason="receive-loop-cleanup"
+                    )
                 self.session_manager.mark_live_failure(
-                    reason="peer-disconnect", mark_peer_stale=False
+                    reason="peer-disconnect",
+                    mark_peer_stale=False,
+                    peer_id=peer_before_cleanup,
                 )
                 self._emit_message("info", "Peer disconnected.")
                 self.peer_b32 = "Waiting for incoming connections..."
