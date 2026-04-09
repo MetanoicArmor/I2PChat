@@ -172,7 +172,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(sm.acknowledge_inflight_message(999, peer_id="peer-a.b32.i2p"))
         self.assertEqual(peer_a.inflight_msg_ids, set())
 
-    def test_is_live_path_alive_keeps_legacy_routing_semantics(self) -> None:
+    def test_is_live_path_alive_legacy_fallback_is_compatibility_only(self) -> None:
         sm = SessionManager()
         sm.transition_peer(PeerState.FAILED, reason="test")
         self.assertTrue(
@@ -180,6 +180,13 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(
             sm.is_live_path_alive(connected=True, handshake_complete=False)
+        )
+        self.assertFalse(
+            sm.is_live_path_alive(
+                connected=True,
+                handshake_complete=True,
+                peer_id="missing-peer.b32.i2p",
+            )
         )
 
     def test_route_selection_does_not_reuse_live_flags_for_other_peer(self) -> None:
@@ -238,7 +245,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(peer_a.reconnect.attempt, 0)
         self.assertEqual(sm.reconnect.attempt, 1)
 
-    def test_reset_peer_transport_is_scoped_to_target_peer(self) -> None:
+    def test_reset_peer_session_is_scoped_to_target_peer(self) -> None:
         sm = SessionManager()
         sm.set_peer_handshake_complete("peer-a.b32.i2p")
         sm.set_peer_handshake_complete("peer-b.b32.i2p")
@@ -255,7 +262,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             peer_id="peer-b.b32.i2p",
         )
 
-        changed = sm.reset_peer_transport("peer-a.b32.i2p", reason="target-reset")
+        changed = sm.reset_peer_session("peer-a.b32.i2p", reason="target-reset")
 
         self.assertTrue(changed)
         peer_a = sm.get_peer_transport("peer-a.b32.i2p")
@@ -269,13 +276,13 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(peer_b.inflight_msg_ids, {22})
         self.assertEqual(set(peer_b.outbound_streams), {"peer-b.b32.i2p"})
 
-    def test_reset_peer_transport_can_drop_peer_without_shutdown(self) -> None:
+    def test_reset_peer_session_can_drop_peer_without_auto_switching_active_peer(self) -> None:
         sm = SessionManager()
         sm.set_active_peer("peer-a.b32.i2p")
         sm.set_peer_handshake_complete("peer-a.b32.i2p")
         sm.set_peer_handshake_complete("peer-b.b32.i2p")
 
-        removed = sm.reset_peer_transport(
+        removed = sm.reset_peer_session(
             "peer-a.b32.i2p",
             reason="drop-a",
             drop_peer=True,
@@ -284,7 +291,29 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(removed)
         self.assertIsNone(sm.get_peer_transport("peer-a.b32.i2p"))
         self.assertIsNotNone(sm.get_peer_transport("peer-b.b32.i2p"))
-        self.assertEqual(sm.get_active_peer(), "peer-b.b32.i2p")
+        self.assertEqual(sm.get_active_peer(), "")
+
+    async def test_peer_reset_does_not_imply_full_manager_shutdown(self) -> None:
+        sm = SessionManager()
+        writer = _DummyWriter()
+        sm.session_socket = (object(), writer)  # type: ignore[assignment]
+        sm.set_peer_handshake_complete("peer-a.b32.i2p")
+        sm.set_peer_handshake_complete("peer-b.b32.i2p")
+
+        changed = sm.reset_peer_session("peer-a.b32.i2p", reason="peer-a-disconnect")
+
+        self.assertTrue(changed)
+        self.assertIsNotNone(sm.session_socket)
+        peer_a = sm.get_peer_transport("peer-a.b32.i2p")
+        peer_b = sm.get_peer_transport("peer-b.b32.i2p")
+        assert peer_a is not None
+        assert peer_b is not None
+        self.assertEqual(peer_a.peer_state, PeerState.DISCONNECTED)
+        self.assertEqual(peer_b.peer_state, PeerState.SECURE)
+
+        await sm.cancel_tasks_and_close_session()
+        self.assertIsNone(sm.session_socket)
+        self.assertEqual(sm.peer_transport, {})
 
     async def test_cancel_tasks_and_close_session(self) -> None:
         sm = SessionManager()

@@ -1714,11 +1714,11 @@ class I2PChatCore:
             self._emit_error("No active connection.")
             return False
         peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-        if not self.session_manager.is_live_path_alive(
-            connected=True,
-            handshake_complete=self.handshake_complete,
-            peer_id=peer_addr_norm,
-        ):
+        live_kwargs: dict[str, Any] = {"peer_id": peer_addr_norm}
+        if not peer_addr_norm:
+            live_kwargs["connected"] = True
+            live_kwargs["handshake_complete"] = self.handshake_complete
+        if not self.session_manager.is_live_path_alive(**live_kwargs):
             self._emit_error("Secure channel not ready yet. Wait for 'Ready'.")
             return False
         return True
@@ -3054,11 +3054,18 @@ class I2PChatCore:
             self.current_peer_addr or self.stored_peer or ""
         )
         connected = self.conn is not None
-        secure_live = self.session_manager.is_live_path_alive(
-            connected=connected,
-            handshake_complete=self.handshake_complete,
-            peer_id=peer_for_route,
-        )
+        live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
+        policy_kwargs: dict[str, Any] = {
+            "requested_route": "auto",
+            "peer_id": peer_for_route,
+        }
+        if not peer_for_route:
+            live_kwargs["connected"] = connected
+            live_kwargs["handshake_complete"] = self.handshake_complete
+            policy_kwargs["connected"] = connected
+            policy_kwargs["handshake_complete"] = self.handshake_complete
+
+        secure_live = self.session_manager.is_live_path_alive(**live_kwargs)
         has_target = bool(self.current_peer_addr or self.stored_peer)
         ready = bool(self._blindbox_ready())
         has_root_secret = self._blindbox_root_secret is not None
@@ -3067,10 +3074,7 @@ class I2PChatCore:
             bb_client is not None and bb_client.is_runtime_ready()
         )
         outbound_policy = self.session_manager.select_outbound_policy(
-            requested_route="auto",
-            connected=connected,
-            handshake_complete=self.handshake_complete,
-            peer_id=peer_for_route,
+            **policy_kwargs
         ).value
         peer_transport = self.session_manager.get_peer_transport(peer_for_route)
         reconnect_meta = self.session_manager.get_reconnect_metadata(
@@ -3953,12 +3957,18 @@ class I2PChatCore:
             self.current_peer_addr or self.stored_peer or ""
         )
         connected = self.conn is not None
-        policy = self.session_manager.select_outbound_policy(
-            requested_route=r,
-            connected=connected,
-            handshake_complete=self.handshake_complete,
-            peer_id=peer_for_route,
-        )
+        live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
+        policy_kwargs: dict[str, Any] = {
+            "requested_route": r,
+            "peer_id": peer_for_route,
+        }
+        if not peer_for_route:
+            live_kwargs["connected"] = connected
+            live_kwargs["handshake_complete"] = self.handshake_complete
+            policy_kwargs["connected"] = connected
+            policy_kwargs["handshake_complete"] = self.handshake_complete
+
+        policy = self.session_manager.select_outbound_policy(**policy_kwargs)
 
         if policy == OutboundPolicy.BLINDBOX_ONLY:
             if self._blindbox_send_lock.locked():
@@ -4012,11 +4022,7 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
 
-        secure_live = self.session_manager.is_live_path_alive(
-            connected=connected,
-            handshake_complete=self.handshake_complete,
-            peer_id=peer_for_route,
-        )
+        secure_live = self.session_manager.is_live_path_alive(**live_kwargs)
 
         if policy == OutboundPolicy.LIVE_ONLY:
             if not secure_live:
@@ -4617,7 +4623,7 @@ class I2PChatCore:
                 pass
             self._reset_crypto_state()
             if peer_before_disconnect:
-                self.session_manager.reset_peer_transport(
+                self.session_manager.reset_peer_session(
                     peer_before_disconnect, reason="disconnect"
                 )
             self.session_manager.mark_live_failure(
@@ -6019,7 +6025,7 @@ class I2PChatCore:
                 self.conn = None
                 self._reset_crypto_state()
                 if peer_before_cleanup:
-                    self.session_manager.reset_peer_transport(
+                    self.session_manager.reset_peer_session(
                         peer_before_cleanup, reason="receive-loop-cleanup"
                     )
                 self.session_manager.mark_live_failure(

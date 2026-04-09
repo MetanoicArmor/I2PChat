@@ -183,44 +183,11 @@ class SessionManager:
 
     def _sync_legacy_views(self) -> None:
         self._rebuild_legacy_outbound_streams()
-        self._refresh_active_peer()
         active = self.get_peer_transport()
         if active is None:
             self.transition_peer(PeerState.DISCONNECTED, reason="sync-empty")
             return
         self.transition_peer(active.peer_state, reason=f"sync:{active.peer_id[:24]}")
-
-    def _refresh_active_peer(self) -> None:
-        if self.active_peer_id:
-            return
-        if not self.peer_transport:
-            return
-        best_peer: Optional[PeerTransportState] = None
-        for peer in self.peer_transport.values():
-            if best_peer is None:
-                best_peer = peer
-                continue
-            if self._peer_priority(peer) > self._peer_priority(best_peer):
-                best_peer = peer
-        if best_peer is not None:
-            self.active_peer_id = best_peer.peer_id
-
-    @staticmethod
-    def _peer_priority(peer: PeerTransportState) -> int:
-        priority = 0
-        if peer.peer_state == PeerState.SECURE:
-            priority += 8
-        elif peer.peer_state == PeerState.HANDSHAKING:
-            priority += 4
-        elif peer.peer_state == PeerState.CONNECTING:
-            priority += 2
-        if peer.connected:
-            priority += 2
-        if peer.handshake_complete:
-            priority += 2
-        if peer.outbound_streams:
-            priority += 1
-        return priority
 
     def _rebuild_legacy_outbound_streams(self) -> None:
         merged: dict[str, OutboundStreamInfo] = {}
@@ -265,13 +232,13 @@ class SessionManager:
         reason: str = "disconnected",
         keep_reconnect_metadata: bool = True,
     ) -> None:
-        self.reset_peer_transport(
+        self.reset_peer_session(
             peer_id,
             reason=reason,
             keep_reconnect_metadata=keep_reconnect_metadata,
         )
 
-    def reset_peer_transport(
+    def reset_peer_session(
         self,
         peer_id: str,
         *,
@@ -300,8 +267,24 @@ class SessionManager:
             if self.active_peer_id == key:
                 self.active_peer_id = ""
         self._sync_legacy_views()
-        logger.debug("Peer transport reset: %s (%s)", key[:24], reason)
+        logger.debug("Peer session reset: %s (%s)", key[:24], reason)
         return True
+
+    def reset_peer_transport(
+        self,
+        peer_id: str,
+        *,
+        reason: str = "peer-reset",
+        keep_reconnect_metadata: bool = True,
+        drop_peer: bool = False,
+    ) -> bool:
+        # Compatibility alias; peer-scoped session reset is authoritative.
+        return self.reset_peer_session(
+            peer_id,
+            reason=reason,
+            keep_reconnect_metadata=keep_reconnect_metadata,
+            drop_peer=drop_peer,
+        )
 
     def mark_peer_failed(self, peer_id: str, *, reason: str) -> None:
         now = time.monotonic()
@@ -574,14 +557,19 @@ class SessionManager:
         peer_id: Optional[str] = None,
     ) -> bool:
         explicit_peer = self._normalize_peer_id(peer_id or "")
+        if explicit_peer and explicit_peer in self.peer_transport:
+            return self.is_peer_secure_channel_ready(peer_id=explicit_peer)
+        if explicit_peer:
+            return False
+
+        # Compatibility-only fallback for legacy callers that do not provide peer scope.
+        if connected is not None or handshake_complete is not None:
+            return bool(connected and handshake_complete)
+
         key = self._resolve_peer_id(peer_id)
         if key and key in self.peer_transport:
             return self.is_peer_secure_channel_ready(peer_id=key)
-        if explicit_peer:
-            return False
-        if connected is not None or handshake_complete is not None:
-            return bool(connected and handshake_complete)
-        return self.is_peer_secure_channel_ready(peer_id=peer_id)
+        return False
 
     def select_outbound_policy(
         self,
