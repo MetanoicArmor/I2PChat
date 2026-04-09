@@ -67,7 +67,7 @@
 
 ### 🧠 Core architecture
 
-The runtime is built around one shared async engine — `I2PChatCore` — with thin UI adapters on top and protocol / crypto / BlindBox services below.
+The runtime is built around one shared async engine — `I2PChatCore` — plus **`SessionManager`** (per-peer transport lifecycle and outbound policy since v1.2.6), with thin UI adapters on top and protocol / crypto / BlindBox services below.
 
 **Toolchain:** Python dependencies are managed with **[uv](https://docs.astral.sh/uv/)** ([`pyproject.toml`](pyproject.toml), [`uv.lock`](uv.lock)). **I2P SAM** (router control connection, sessions, streams, naming lookups) is implemented in-tree as **`i2pchat.sam`** — not the PyPI **`i2plib`** package; the old vendored `i2plib` tree was removed.
 
@@ -105,10 +105,16 @@ I2PChatCore
 • send/receive loops
 • ACK tracking + delivery telemetry
 • text / file / image flows
-• BlindBox root exchange"]
+• BlindBox root exchange
+• delegates transport lifecycle → SessionManager"]
+        sessionMgr["i2pchat/core/session_manager.py
+SessionManager
+per-peer transport state
+outbound policy · streams · reconnect"]
         retry["Retry helpers
 send_retry_policy.py
 transfer_retry.py"]
+        core --> sessionMgr
         core --> retry
     end
 
@@ -184,10 +190,11 @@ delivery callbacks"| qt
 Runtime in practice:
 
 1. **Startup**: `main_qt.py` runs **profile directory migration** when needed (flat `*.dat` in the data root → `profiles/<name>/`) before the profile picker, then creates `ChatWindow`; `start_core()` calls `I2PChatCore.init_session()`, which loads or creates the profile identity, opens the long-lived SAM session, warms up tunnels, and starts `accept_loop()` / `tunnel_watcher()`.
-2. **Live chat path**: `connect_to_peer()` or `accept_loop()` establishes an I2P stream; `I2PChatCore` runs the plaintext handshake boundary, verifies/pins the peer signing key (TOFU), derives session subkeys, then switches to encrypted vNext frames through `ProtocolCodec` + `crypto`.
-3. **Delivery tracking**: each outgoing text / file / image gets a `MSG_ID` and ACK context; `message_delivery.py` turns low-level outcomes into UI states (`sending`, `queued`, `delivered`, `failed`).
-4. **Offline path (BlindBox)**: when no live secure session is available, `send_text()` can route through BlindBox — derive deterministic lookup/blob keys, encrypt a padded blob, PUT it to one or more BlindBox replicas, and later poll / decrypt GET results back into the chat stream.
-5. **UI responsibility split**: `I2PChatCore` stays UI-agnostic and emits callbacks only; the Qt layer renders chat, status and notifications, while GUI-side storage modules persist chat history, contacts, drafts and backup/export data.
+2. **Transport lifecycle (`SessionManager`, since v1.2.6)**: per-peer transport state (connecting / handshaking / secure / stale / failed), outbound send policy (`LIVE_ONLY`, `PREFER_LIVE_FALLBACK_BLINDBOX`, `QUEUE_THEN_RETRY_LIVE`, `BLINDBOX_ONLY`), stream registry, reconnect metadata, and inflight ACK hooks live in **`SessionManager`**; `I2PChatCore` still owns the live stream handle (`self.conn`), protocol framing, and crypto. Delivery telemetry and UI routing read this layer so labels like **Send** vs **Send offline** stay in sync after a secure handshake completes.
+3. **Live chat path**: `connect_to_peer()` or `accept_loop()` establishes an I2P stream; `I2PChatCore` runs the plaintext handshake boundary, verifies/pins the peer signing key (TOFU), derives session subkeys, then switches to encrypted vNext frames through `ProtocolCodec` + `crypto`.
+4. **Delivery tracking**: each outgoing text / file / image gets a `MSG_ID` and ACK context; `message_delivery.py` turns low-level outcomes into UI states (`sending`, `queued`, `delivered`, `failed`).
+5. **Offline path (BlindBox)**: when no live secure session is available, `send_text()` can route through BlindBox — derive deterministic lookup/blob keys, encrypt a padded blob, PUT it to one or more BlindBox replicas, and later poll / decrypt GET results back into the chat stream.
+6. **UI responsibility split**: `I2PChatCore` stays UI-agnostic and emits callbacks only; the Qt layer renders chat, status and notifications, while GUI-side storage modules persist chat history, contacts, drafts and backup/export data.
 
 ### 🔌 Protocol overview
 
@@ -426,19 +433,19 @@ If you like this project and want to support development, you can send a small d
 
 ### 📥 Prebuilt Downloads
 
-**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — bundles match **`v` + [`VERSION`](VERSION)** in this repo (**v1.2.5** in the table below; **update these rows when you tag a new release** so `latest/download/…` filenames stay valid). No Python on the target machine for these zips.
+**[Latest release](https://github.com/MetanoicArmor/I2PChat/releases/latest)** — bundles match **`v` + [`VERSION`](VERSION)** in this repo (**v1.2.6** in the table below; **update these rows when you tag a new release** so `latest/download/…` filenames stay valid). No Python on the target machine for these zips.
 
 Full zip layouts, **winget**, **`.deb`**, **Flatpak** notes → [**docs/INSTALL.md**](docs/INSTALL.md).
 
 | Variant | Download | Launch |
 |---------|----------|--------|
-| **Windows — GUI** | [I2PChat-windows-x64-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.5.zip) | Unzip → run `I2PChat.exe` |
-| **Windows — TUI only** | [I2PChat-windows-tui-x64-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-tui-x64-v1.2.5.zip) | `I2PChat-tui.exe` in the extracted tree |
-| **macOS — GUI (arm64)** | [I2PChat-macOS-arm64-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.5.zip) | Unzip → open **`I2PChat-macOS-arm64-bundle/I2PChat.app`** (see **INSTALL.md**) |
-| **macOS — TUI only** | [I2PChat-macOS-arm64-tui-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-tui-v1.2.5.zip) | Run **`./i2pchat-tui`** from the extracted folder |
-| **Linux — GUI (x86_64)** | [I2PChat-linux-x86_64-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.5.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
-| **Linux — GUI (aarch64)** | [I2PChat-linux-aarch64-v1.2.5.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-v1.2.5.zip) | Same — AppImage inside the zip |
-| **Linux — TUI** | [x86_64 TUI](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-tui-v1.2.5.zip) · [aarch64 TUI](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-tui-v1.2.5.zip) | After unzip: **`./i2pchat-tui`** |
+| **Windows — GUI** | [I2PChat-windows-x64-v1.2.6.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-x64-v1.2.6.zip) | Unzip → run `I2PChat.exe` |
+| **Windows — TUI only** | [I2PChat-windows-tui-x64-v1.2.6.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-windows-tui-x64-v1.2.6.zip) | `I2PChat-tui.exe` in the extracted tree |
+| **macOS — GUI (arm64)** | [I2PChat-macOS-arm64-v1.2.6.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-v1.2.6.zip) | Unzip → open **`I2PChat-macOS-arm64-bundle/I2PChat.app`** (see **INSTALL.md**) |
+| **macOS — TUI only** | [I2PChat-macOS-arm64-tui-v1.2.6.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-macOS-arm64-tui-v1.2.6.zip) | Run **`./i2pchat-tui`** from the extracted folder |
+| **Linux — GUI (x86_64)** | [I2PChat-linux-x86_64-v1.2.6.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-v1.2.6.zip) | Unzip → `chmod +x I2PChat.AppImage` → run |
+| **Linux — GUI (aarch64)** | [I2PChat-linux-aarch64-v1.2.6.zip](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-v1.2.6.zip) | Same — AppImage inside the zip |
+| **Linux — TUI** | [x86_64 TUI](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-x86_64-tui-v1.2.6.zip) · [aarch64 TUI](https://github.com/MetanoicArmor/I2PChat/releases/latest/download/I2PChat-linux-aarch64-tui-v1.2.6.zip) | After unzip: **`./i2pchat-tui`** |
 
 > **Router backend:** On a **fresh install** (no `router_prefs.json` yet), I2PChat defaults to a **system** `i2pd` **SAM** endpoint (typically `127.0.0.1:7656`). Switch to the **bundled** sidecar when your build includes it via **More actions → I2P router…** (shortcut **Cmd/Ctrl+R**); the choice is persisted. The same dialog opens the router data/log paths and can restart the bundled router.
 
@@ -465,7 +472,7 @@ yay -S i2pchat-tui-bin   # TUI only
 **Debian / Ubuntu — `.deb` from [Releases](https://github.com/MetanoicArmor/I2PChat/releases)** (works without any mirror):
 
 ```bash
-# after downloading e.g. i2pchat_1.2.5_amd64.deb
+# after downloading e.g. i2pchat_1.2.6_amd64.deb
 sudo apt install ./i2pchat_*_amd64.deb
 # optional TUI-only: sudo apt install ./i2pchat-tui_*_amd64.deb
 ```

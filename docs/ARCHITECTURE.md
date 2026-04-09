@@ -1,12 +1,13 @@
 # I2PChat architecture
 
-The runtime is built around one shared async engine — `I2PChatCore` — with thin UI adapters on top and protocol / crypto / BlindBox services below.
+The runtime is built around one shared async engine — `I2PChatCore` — with **`SessionManager`** (v1.2.6+) owning transport/session lifecycle state per peer, thin UI adapters on top, and protocol / crypto / BlindBox services below.
 
 This page is a plain-text map (GitHub’s Mermaid renderer can fail to load third-party script chunks in some browsers).
 
 ## Component map
 
 - **UI / entrypoints** — `i2pchat/run_gui.py`, `python -m i2pchat.gui`, PyQt6 [`../i2pchat/gui/main_qt.py`](../i2pchat/gui/main_qt.py) (`ChatWindow` + qasync), [`../i2pchat/presentation/`](../i2pchat/presentation/) (status, drafts, replies, unread, notifications), GUI-side persistence (`chat_history`, `contact_book`, `profile_backup`). The Qt layer calls into **I2PChatCore** and receives status / message / file / delivery callbacks.
+- **Session / transport lifecycle (`SessionManager`, v1.2.6+)** — [`../i2pchat/core/session_manager.py`](../i2pchat/core/session_manager.py): per-peer transport state (connecting / handshaking / secure / stale / failed / disconnected), outbound policy (`LIVE_ONLY`, `PREFER_LIVE_FALLBACK_BLINDBOX`, `QUEUE_THEN_RETRY_LIVE`, `BLINDBOX_ONLY`), per-peer reconnect metadata, outbound stream registry, inflight message IDs for ACK correlation, secure-session TTL / stale health. **`I2PChatCore`** updates this layer on connect, handshake completion/failure, disconnect, and keepalive loss; live availability for routing and `get_delivery_telemetry()` is derived here (with legacy fallbacks where no peer record exists yet). The live TCP stream handle remains owned by **`I2PChatCore`** (`self.conn`).
 - **Shared async core** — [`../i2pchat/core/i2p_chat_core.py`](../i2pchat/core/i2p_chat_core.py): profile/session bootstrap, accept/connect, secure handshake + TOFU pinning, send/receive loops, ACKs and delivery telemetry, text/file/image, BlindBox root exchange; retry helpers [`../i2pchat/core/send_retry_policy.py`](../i2pchat/core/send_retry_policy.py), [`../i2pchat/core/transfer_retry.py`](../i2pchat/core/transfer_retry.py).
 - **Protocol + security** — framing in [`../i2pchat/protocol/protocol_codec.py`](../i2pchat/protocol/protocol_codec.py); delivery semantics in [`../i2pchat/protocol/message_delivery.py`](../i2pchat/protocol/message_delivery.py); [`../i2pchat/crypto.py`](../i2pchat/crypto.py) (X25519, Ed25519, HKDF, SecretBox, HMAC).
 - **BlindBox** — client ([`../i2pchat/blindbox/blindbox_client.py`](../i2pchat/blindbox/blindbox_client.py)), key schedule, blobs, [`../i2pchat/storage/blindbox_state.py`](../i2pchat/storage/blindbox_state.py), optional [`../i2pchat/blindbox/blindbox_local_replica.py`](../i2pchat/blindbox/blindbox_local_replica.py); replicas over I2P or loopback.
@@ -21,10 +22,11 @@ This page is a plain-text map (GitHub’s Mermaid renderer can fail to load thir
 ## Runtime in practice
 
 1. **Startup**: `main_qt.py` runs **profile directory migration** when needed (flat `*.dat` in the data root → `profiles/<name>/`) before the profile picker, then creates `ChatWindow`; `start_core()` calls `I2PChatCore.init_session()`, which loads or creates the profile identity, opens the long-lived SAM session, warms up tunnels, and starts `accept_loop()` / `tunnel_watcher()`.
-2. **Live chat path**: `connect_to_peer()` or `accept_loop()` establishes an I2P stream; `I2PChatCore` runs the plaintext handshake boundary, verifies/pins the peer signing key (TOFU), derives session subkeys, then switches to encrypted vNext frames through `ProtocolCodec` + `crypto`.
-3. **Delivery tracking**: each outgoing text / file / image gets a `MSG_ID` and ACK context; `message_delivery.py` turns low-level outcomes into UI states (`sending`, `queued`, `delivered`, `failed`).
-4. **Offline path (BlindBox)**: when no live secure session is available, `send_text()` can route through BlindBox — derive deterministic lookup/blob keys, encrypt a padded blob, PUT it to one or more BlindBox replicas, and later poll / decrypt GET results back into the chat stream.
-5. **UI responsibility split**: `I2PChatCore` stays UI-agnostic and emits callbacks only; the Qt layer renders chat, status and notifications, while GUI-side storage modules persist chat history, contacts, drafts and backup/export data.
+2. **Transport lifecycle**: connect/disconnect, handshake success/failure, stream registration, and live-health signals update **`SessionManager`** so **`get_delivery_telemetry()`** and outbound policy agree with UI (e.g. **Send** vs **Send offline**). System/UI notifications after handshake are emitted only after the manager records a secure peer, so the Qt send button label updates immediately when the live path becomes ready.
+3. **Live chat path**: `connect_to_peer()` or `accept_loop()` establishes an I2P stream; `I2PChatCore` runs the plaintext handshake boundary, verifies/pins the peer signing key (TOFU), derives session subkeys, then switches to encrypted vNext frames through `ProtocolCodec` + `crypto`.
+4. **Delivery tracking**: each outgoing text / file / image gets a `MSG_ID` and ACK context; `message_delivery.py` turns low-level outcomes into UI states (`sending`, `queued`, `delivered`, `failed`).
+5. **Offline path (BlindBox)**: when no live secure session is available, `send_text()` can route through BlindBox — derive deterministic lookup/blob keys, encrypt a padded blob, PUT it to one or more BlindBox replicas, and later poll / decrypt GET results back into the chat stream.
+6. **UI responsibility split**: `I2PChatCore` stays UI-agnostic and emits callbacks only; the Qt layer renders chat, status and notifications, while GUI-side storage modules persist chat history, contacts, drafts and backup/export data.
 
 ## Wire format (summary)
 
@@ -45,4 +47,5 @@ Full specification: [**PROTOCOL.md**](PROTOCOL.md). Optional payload padding for
 ## See also
 
 - [MANUAL_EN.md](MANUAL_EN.md) / [MANUAL_RU.md](MANUAL_RU.md) — user-facing behavior
+- [releases/RELEASE_1.2.6.md](releases/RELEASE_1.2.6.md) — SessionManager transport refactor and test notes (v1.2.6)
 - [BUILD.md](BUILD.md) — release builds and operational env vars
