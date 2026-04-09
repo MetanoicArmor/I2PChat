@@ -315,6 +315,36 @@ class BlindBoxCoreTelemetryTests(unittest.IsolatedAsyncioTestCase):
             else:
                 os.environ["I2PCHAT_BLINDBOX_RECV_LOOKAHEAD"] = old_lookahead
 
+    def test_blindbox_recv_candidates_default_lookahead_extends_window(self) -> None:
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        old_lookahead = os.environ.get("I2PCHAT_BLINDBOX_RECV_LOOKAHEAD")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "r1.b32.i2p"
+        os.environ.pop("I2PCHAT_BLINDBOX_RECV_LOOKAHEAD", None)
+        try:
+            core = I2PChatCore(profile="alice")
+            core._blindbox_state.recv_base = 3  # noqa: SLF001 - internal behavior test
+            core._blindbox_state.recv_window = 16  # noqa: SLF001 - internal behavior test
+            candidates = core._blindbox_recv_candidates()  # noqa: SLF001 - internal behavior test
+            self.assertIn(3, candidates)
+            self.assertIn(63, candidates)
+            self.assertIn(66, candidates)
+            self.assertNotIn(67, candidates)
+        finally:
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+            if old_lookahead is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_RECV_LOOKAHEAD", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_RECV_LOOKAHEAD"] = old_lookahead
+
     def test_previous_roots_pruned_by_limit(self) -> None:
         old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
         old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
