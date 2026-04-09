@@ -196,6 +196,8 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         sm.set_active_peer("peer-a.b32.i2p")
 
         self.assertEqual(sm.get_active_peer(), "peer-a.b32.i2p")
+        self.assertIsNone(sm.get_peer_transport())
+        self.assertIsNone(sm.get_active_peer_transport())
         self.assertFalse(sm.is_live_path_alive())
         self.assertFalse(sm.is_live_path_alive(peer_id="peer-a.b32.i2p"))
         self.assertTrue(sm.is_live_path_alive(peer_id="peer-b.b32.i2p"))
@@ -333,23 +335,46 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         assert peer_a is not None
         self.assertEqual(peer_a.peer_state, PeerState.DISCONNECTED)
 
+    def test_reset_peer_transport_remains_compatibility_alias(self) -> None:
+        sm = SessionManager()
+        sm.set_peer_handshake_complete("peer-a.b32.i2p")
+
+        changed = sm.reset_peer_transport("peer-a.b32.i2p", reason="compat-reset")
+
+        self.assertTrue(changed)
+        peer_a = sm.get_peer_transport("peer-a.b32.i2p")
+        assert peer_a is not None
+        self.assertEqual(peer_a.peer_state, PeerState.DISCONNECTED)
+
     async def test_peer_reset_does_not_imply_full_manager_shutdown(self) -> None:
         sm = SessionManager()
         writer = _DummyWriter()
         sm.session_socket = (object(), writer)  # type: ignore[assignment]
         sm.set_peer_handshake_complete("peer-a.b32.i2p")
         sm.set_peer_handshake_complete("peer-b.b32.i2p")
+        sm.register_inflight_message(22, peer_id="peer-b.b32.i2p")
+        sm.register_stream(
+            "peer-b.b32.i2p",
+            state=PeerState.SECURE,
+            peer_id="peer-b.b32.i2p",
+        )
+        sm.keepalive_task = asyncio.create_task(asyncio.sleep(60))
 
         changed = sm.reset_peer_lifecycle("peer-a.b32.i2p", reason="peer-a-disconnect")
 
         self.assertTrue(changed)
         self.assertIsNotNone(sm.session_socket)
+        self.assertFalse(writer.closed)
+        assert sm.keepalive_task is not None
+        self.assertFalse(sm.keepalive_task.done())
         peer_a = sm.get_peer_transport("peer-a.b32.i2p")
         peer_b = sm.get_peer_transport("peer-b.b32.i2p")
         assert peer_a is not None
         assert peer_b is not None
         self.assertEqual(peer_a.peer_state, PeerState.DISCONNECTED)
         self.assertEqual(peer_b.peer_state, PeerState.SECURE)
+        self.assertEqual(peer_b.inflight_msg_ids, {22})
+        self.assertIn("peer-b.b32.i2p", peer_b.outbound_streams)
 
         await sm.cancel_tasks_and_close_session()
         self.assertIsNone(sm.session_socket)

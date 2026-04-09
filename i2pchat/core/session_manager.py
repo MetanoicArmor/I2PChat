@@ -139,25 +139,13 @@ class SessionManager:
     def _normalize_peer_id(peer_id: str) -> str:
         return (peer_id or "").strip().lower()
 
-    def _resolve_peer_id(
-        self,
-        peer_id: Optional[str] = None,
-        *,
-        allow_active_fallback: bool = False,
-    ) -> str:
+    def _resolve_peer_id(self, peer_id: Optional[str] = None) -> str:
         normalized = self._normalize_peer_id(peer_id or "")
-        if normalized:
-            return normalized
-        if allow_active_fallback:
-            return self.active_peer_id
-        return ""
-
-    def _set_active_peer(self, peer_id: str) -> None:
-        self.active_peer_id = self._normalize_peer_id(peer_id)
+        return normalized
 
     def set_active_peer(self, peer_id: str) -> None:
-        self._set_active_peer(peer_id)
-        self._sync_legacy_views()
+        # Compatibility/view-only pointer; does not drive transport truth.
+        self.active_peer_id = self._normalize_peer_id(peer_id)
 
     def get_active_peer(self) -> str:
         return self.active_peer_id
@@ -173,13 +161,15 @@ class SessionManager:
         return peer
 
     def get_peer_transport(self, peer_id: Optional[str] = None) -> Optional[PeerTransportState]:
-        normalized = self._resolve_peer_id(
-            peer_id,
-            allow_active_fallback=peer_id is None,
-        )
+        normalized = self._resolve_peer_id(peer_id)
         if not normalized:
             return None
         return self.peer_transport.get(normalized)
+
+    def get_active_peer_transport(self) -> Optional[PeerTransportState]:
+        if not self.active_peer_id:
+            return None
+        return self.peer_transport.get(self.active_peer_id)
 
     def _derive_aggregate_peer_state(self) -> PeerState:
         if not self.peer_transport:
@@ -419,7 +409,7 @@ class SessionManager:
             self._touch_peer(peer)
 
     def register_inflight_message(self, msg_id: int, *, peer_id: Optional[str] = None) -> None:
-        key = self._resolve_peer_id(peer_id, allow_active_fallback=False)
+        key = self._resolve_peer_id(peer_id)
         if not key:
             return
         peer = self.ensure_peer_transport(key)
@@ -427,7 +417,7 @@ class SessionManager:
         self._touch_peer(peer)
 
     def acknowledge_inflight_message(self, msg_id: int, *, peer_id: Optional[str] = None) -> bool:
-        key = self._resolve_peer_id(peer_id, allow_active_fallback=False)
+        key = self._resolve_peer_id(peer_id)
         if not key:
             return False
         peer = self.peer_transport.get(key)
@@ -440,7 +430,7 @@ class SessionManager:
         return removed
 
     def clear_inflight_messages(self, *, peer_id: Optional[str] = None) -> None:
-        key = self._resolve_peer_id(peer_id, allow_active_fallback=False)
+        key = self._resolve_peer_id(peer_id)
         if not key:
             return
         peer = self.peer_transport.get(key)
@@ -450,7 +440,7 @@ class SessionManager:
         self._touch_peer(peer)
 
     def refresh_peer_health(self, *, peer_id: Optional[str] = None) -> None:
-        key = self._resolve_peer_id(peer_id, allow_active_fallback=False)
+        key = self._resolve_peer_id(peer_id)
         if not key:
             return
         peer = self.peer_transport.get(key)
@@ -472,7 +462,7 @@ class SessionManager:
                     self._sync_legacy_views()
 
     def is_peer_secure_channel_ready(self, *, peer_id: Optional[str] = None) -> bool:
-        key = self._resolve_peer_id(peer_id, allow_active_fallback=False)
+        key = self._resolve_peer_id(peer_id)
         if not key:
             return False
         peer = self.peer_transport.get(key)
