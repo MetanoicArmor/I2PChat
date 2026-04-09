@@ -459,6 +459,86 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(second.status, GroupImportStatus.DUPLICATE)
             self.assertEqual(len(core.load_group_history("core-group-3")), 1)
 
+    def test_duplicate_import_is_a_safe_no_op_for_state_and_next_seq(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_B32)
+            original_state = GroupState(
+                group_id="core-group-dup-safe",
+                epoch=2,
+                members=(ALICE_B32, BOB_B32),
+                title="Original title",
+            )
+            original_envelope = GroupEnvelope(
+                group_id=original_state.group_id,
+                epoch=2,
+                msg_id="dup-safe-msg-1",
+                sender_id=BOB_B32,
+                group_seq=1,
+                content_type=GroupContentType.GROUP_TEXT,
+                payload="first import",
+            )
+            original_wire = encode_group_transport_text(
+                original_state,
+                original_envelope,
+                GroupRecipientDeliveryMetadata(
+                    recipient_id=ALICE_B32,
+                    delivery_id="dup-safe-msg-1:alice",
+                ),
+            )
+
+            first = core.import_group_transport(original_wire, source_peer=BOB_B32)
+            renamed_state = GroupState(
+                group_id=original_state.group_id,
+                epoch=3,
+                members=(ALICE_B32, BOB_B32),
+                title="Renamed title",
+            )
+            rename_envelope = GroupEnvelope(
+                group_id=renamed_state.group_id,
+                epoch=3,
+                msg_id="dup-safe-rename-1",
+                sender_id=BOB_B32,
+                group_seq=2,
+                content_type=GroupContentType.GROUP_CONTROL,
+                payload={"op": "rename", "title": "Renamed title", "epoch": 3},
+            )
+            rename_wire = encode_group_transport_text(
+                renamed_state,
+                rename_envelope,
+                GroupRecipientDeliveryMetadata(
+                    recipient_id=ALICE_B32,
+                    delivery_id="dup-safe-rename-1:alice",
+                ),
+            )
+
+            renamed = core.import_group_transport(rename_wire, source_peer=BOB_B32)
+            before_duplicate = core.load_group("core-group-dup-safe")
+            duplicate = core.import_group_transport(original_wire, source_peer=BOB_B32)
+            after_duplicate = core.load_group("core-group-dup-safe")
+
+            assert first is not None
+            assert renamed is not None
+            assert before_duplicate is not None
+            assert duplicate is not None
+            assert after_duplicate is not None
+            self.assertEqual(first.status, GroupImportStatus.IMPORTED)
+            self.assertEqual(renamed.status, GroupImportStatus.IMPORTED)
+            self.assertEqual(duplicate.status, GroupImportStatus.DUPLICATE)
+            self.assertEqual(duplicate.state, before_duplicate.state)
+            self.assertEqual(before_duplicate.state.title, "Renamed title")
+            self.assertEqual(after_duplicate.state.title, "Renamed title")
+            self.assertEqual(before_duplicate.state.epoch, 3)
+            self.assertEqual(after_duplicate.state.epoch, 3)
+            self.assertEqual(len(after_duplicate.history), 2)
+            self.assertEqual(after_duplicate.next_group_seq, 3)
+            self.assertEqual(before_duplicate.next_group_seq, after_duplicate.next_group_seq)
+            self.assertEqual(
+                [entry.msg_id for entry in after_duplicate.history],
+                ["dup-safe-msg-1", "dup-safe-rename-1"],
+            )
+
     def test_invalid_group_text_payload_is_rejected_without_persisting(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             messages: list[object] = []

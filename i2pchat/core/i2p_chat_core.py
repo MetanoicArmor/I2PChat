@@ -4423,6 +4423,21 @@ class I2PChatCore:
                 ),
                 error=detail,
             )
+        history_source_peer = source_peer or decoded.envelope.sender_id
+        normalized_source_peer = self._normalize_peer_addr(history_source_peer) or None
+        existing_conversation = self._load_group_conversation(decoded.state.group_id)
+        normalized_msg_id = str(decoded.envelope.msg_id or "").strip()
+        if (
+            existing_conversation is not None
+            and normalized_msg_id
+            and normalized_msg_id in set(existing_conversation.seen_msg_ids)
+        ):
+            return GroupImportResult(
+                status=GroupImportStatus.DUPLICATE,
+                envelope=decoded.envelope,
+                state=existing_conversation.state,
+                source_peer=normalized_source_peer,
+            )
         existing_state = self.load_group_state(decoded.state.group_id)
         merged_state = self._merge_group_state_snapshot(
             existing_state,
@@ -4436,13 +4451,10 @@ class I2PChatCore:
                 updated_at=decoded.envelope.created_at,
                 epoch=decoded.envelope.epoch,
             )
-        history_source_peer = source_peer or decoded.envelope.sender_id
-        normalized_source_peer = self._normalize_peer_addr(history_source_peer) or None
         history_entry = self._build_group_history_entry(
             decoded.envelope,
             source_peer=history_source_peer,
         )
-        existing_conversation = self._load_group_conversation(decoded.state.group_id)
         next_group_seq = max(
             decoded.envelope.group_seq + 1,
             existing_conversation.next_group_seq if existing_conversation is not None else 1,
