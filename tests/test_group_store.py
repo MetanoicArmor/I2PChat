@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 import unittest
 
@@ -156,6 +158,56 @@ class GroupStoreTests(unittest.TestCase):
             self.assertEqual(conversation.state.epoch, 3)
             self.assertIn("carol.b32.i2p", conversation.state.members)
             self.assertEqual(conversation.next_group_seq, 6)
+
+    def test_duplicate_detection_backfills_seen_ids_from_existing_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="group-store-legacy-dedupe",
+                epoch=2,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="Legacy dedupe",
+            )
+            upsert_group_state(tmpdir, "alice", state, next_group_seq=2)
+            entry = GroupHistoryEntry(
+                kind="peer",
+                sender_id="bob.b32.i2p",
+                content_type=GroupContentType.GROUP_TEXT,
+                text="legacy hello",
+                payload="legacy hello",
+                msg_id="legacy-msg-1",
+                group_seq=1,
+                epoch=2,
+            )
+            append_group_history_entry(
+                tmpdir,
+                "alice",
+                state,
+                entry,
+                next_group_seq=2,
+            )
+
+            record_path = os.path.join(
+                tmpdir,
+                next(name for name in os.listdir(tmpdir) if name.startswith("alice.group.")),
+            )
+            with open(record_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            payload["seen_msg_ids"] = []
+            with open(record_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+
+            conversation, imported = append_group_history_entry(
+                tmpdir,
+                "alice",
+                state,
+                entry,
+                next_group_seq=4,
+            )
+
+            self.assertFalse(imported)
+            self.assertEqual(len(conversation.history), 1)
+            self.assertEqual(conversation.seen_msg_ids, ("legacy-msg-1",))
+            self.assertEqual(conversation.next_group_seq, 4)
 
 
 if __name__ == "__main__":

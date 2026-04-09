@@ -4004,9 +4004,74 @@ class I2PChatCore:
             pass
         return "peer"
 
+    def _build_group_history_entry(
+        self,
+        envelope: GroupEnvelope,
+        *,
+        source_peer: Optional[str] = None,
+        delivery_results: Optional[dict[str, str]] = None,
+    ) -> GroupHistoryEntry:
+        payload = envelope.payload
+        text = ""
+        if envelope.content_type == GroupContentType.GROUP_TEXT:
+            text = str(envelope.payload or "")
+        elif envelope.content_type == GroupContentType.GROUP_CONTROL and isinstance(
+            envelope.payload, dict
+        ):
+            payload = dict(envelope.payload)
+        return GroupHistoryEntry(
+            kind=self._group_history_kind(envelope.sender_id),
+            sender_id=envelope.sender_id,
+            content_type=envelope.content_type,
+            text=text,
+            payload=payload,
+            msg_id=envelope.msg_id,
+            group_seq=envelope.group_seq,
+            epoch=envelope.epoch,
+            created_at=envelope.created_at,
+            source_peer=self._normalize_peer_addr(source_peer or "") or None,
+            delivery_results=dict(delivery_results or {}),
+        )
+
     def _validate_imported_group_transport(self, decoded: Any) -> None:
+        if getattr(decoded, "state", None) is None or getattr(decoded, "envelope", None) is None:
+            raise ValueError("Group transport state and envelope are required")
+        state = decoded.state
+        envelope = decoded.envelope
+        group_id = str(getattr(envelope, "group_id", "") or "").strip()
+        if not group_id:
+            raise ValueError("Missing required group transport field: group_id")
+        if group_id != str(getattr(state, "group_id", "") or "").strip():
+            raise ValueError("Group transport group_id does not match state snapshot")
+        try:
+            envelope_epoch = int(envelope.epoch)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid group transport integer field: epoch") from exc
+        if envelope_epoch < 0:
+            raise ValueError("Invalid group transport integer field: epoch")
+        msg_id = str(getattr(envelope, "msg_id", "") or "").strip()
+        if not msg_id:
+            raise ValueError("Missing required group transport field: msg_id")
+        sender_id = normalize_member_id(str(getattr(envelope, "sender_id", "") or ""))
+        if not sender_id:
+            raise ValueError("Missing required group transport field: sender_id")
+        try:
+            group_seq = int(envelope.group_seq)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid group transport integer field: group_seq") from exc
+        if group_seq < 1:
+            raise ValueError("Invalid group transport integer field: group_seq")
+        if envelope.content_type not in (
+            GroupContentType.GROUP_TEXT,
+            GroupContentType.GROUP_CONTROL,
+        ):
+            raise ValueError("Unsupported group transport content type")
+        if sender_id not in state.members:
+            raise ValueError("Group transport sender is not a group member")
         if not decoded.recipient_id or not decoded.delivery_id:
             raise ValueError("Group transport recipient metadata is required")
+        if decoded.recipient_id not in state.members:
+            raise ValueError("Group transport recipient is not a group member")
         local_member_id = ""
         try:
             local_member_id = self._local_group_member_id()
@@ -4014,6 +4079,14 @@ class I2PChatCore:
             local_member_id = ""
         if local_member_id and decoded.recipient_id != local_member_id:
             raise ValueError("Group transport recipient does not match this profile")
+        if envelope.content_type == GroupContentType.GROUP_TEXT and not isinstance(
+            envelope.payload, str
+        ):
+            raise ValueError("GROUP_TEXT payload must be a string")
+        if envelope.content_type == GroupContentType.GROUP_CONTROL and not isinstance(
+            envelope.payload, dict
+        ):
+            raise ValueError("GROUP_CONTROL payload must be an object")
 
     def _merge_group_state_snapshot(
         self,
@@ -4236,16 +4309,8 @@ class I2PChatCore:
             self.get_profile_data_dir(create=True),
             self.profile,
             updated_state,
-            GroupHistoryEntry(
-                kind=self._group_history_kind(sender_id),
-                sender_id=sender_id,
-                content_type=GroupContentType.GROUP_TEXT,
-                text=str(result.envelope.payload or ""),
-                payload=result.envelope.payload,
-                msg_id=result.envelope.msg_id,
-                group_seq=result.envelope.group_seq,
-                epoch=result.envelope.epoch,
-                created_at=result.envelope.created_at,
+            self._build_group_history_entry(
+                result.envelope,
                 delivery_results={
                     peer_id: delivery.status.value
                     for peer_id, delivery in result.delivery_results.items()
@@ -4296,15 +4361,8 @@ class I2PChatCore:
             self.get_profile_data_dir(create=True),
             self.profile,
             updated_state,
-            GroupHistoryEntry(
-                kind=self._group_history_kind(sender_id),
-                sender_id=sender_id,
-                content_type=GroupContentType.GROUP_CONTROL,
-                payload=dict(payload),
-                msg_id=result.envelope.msg_id,
-                group_seq=result.envelope.group_seq,
-                epoch=result.envelope.epoch,
-                created_at=result.envelope.created_at,
+            self._build_group_history_entry(
+                result.envelope,
                 delivery_results={
                     peer_id: delivery.status.value
                     for peer_id, delivery in result.delivery_results.items()
@@ -4345,24 +4403,9 @@ class I2PChatCore:
                 updated_at=decoded.envelope.created_at,
                 epoch=decoded.envelope.epoch,
             )
-        history_entry = GroupHistoryEntry(
-            kind=self._group_history_kind(decoded.envelope.sender_id),
-            sender_id=decoded.envelope.sender_id,
-            content_type=decoded.envelope.content_type,
-            text=(
-                str(decoded.envelope.payload)
-                if decoded.envelope.content_type == GroupContentType.GROUP_TEXT
-                else ""
-            ),
-            payload=decoded.envelope.payload,
-            msg_id=decoded.envelope.msg_id,
-            group_seq=decoded.envelope.group_seq,
-            epoch=decoded.envelope.epoch,
-            created_at=decoded.envelope.created_at,
-            source_peer=self._normalize_peer_addr(
-                source_peer or decoded.envelope.sender_id
-            )
-            or None,
+        history_entry = self._build_group_history_entry(
+            decoded.envelope,
+            source_peer=source_peer or decoded.envelope.sender_id,
         )
         existing_conversation = self._load_group_conversation(decoded.state.group_id)
         next_group_seq = max(

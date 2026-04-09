@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+from datetime import datetime
 from unittest.mock import AsyncMock
 
 if "PIL" not in sys.modules:
@@ -69,6 +70,22 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(loaded.epoch, 11)
             self.assertEqual(history, [])
 
+    def test_new_group_starts_with_empty_history_until_messages_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_B32)
+
+            group_state = core.create_group(
+                title="Fresh group",
+                members=[BOB_B32],
+                group_id="core-group-empty",
+                epoch=1,
+            )
+
+            self.assertEqual(group_state.group_id, "core-group-empty")
+            self.assertEqual(core.load_group_history(group_state.group_id), [])
+
     async def test_send_group_text_from_core_through_group_manager(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             core = I2PChatCore(profile="alice")
@@ -115,6 +132,81 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(history[0].epoch, 7)
             self.assertEqual(history[0].group_seq, result.envelope.group_seq)
             self.assertEqual(reloaded_state.epoch, 7)
+
+    async def test_local_and_imported_group_text_entries_share_compatible_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_B32)
+            group_state = core.create_group(
+                title="Shape group",
+                members=[BOB_B32],
+                group_id="core-group-shape",
+                epoch=6,
+            )
+            core.group_manager._send_live = AsyncMock(  # type: ignore[attr-defined]
+                return_value=GroupTransportOutcome(
+                    accepted=True,
+                    reason="live-session",
+                    transport_message_id="live-bob",
+                )
+            )
+            core.group_manager._send_offline = AsyncMock(  # type: ignore[attr-defined]
+                return_value=GroupTransportOutcome(
+                    accepted=True,
+                    reason="blindbox-ready",
+                    transport_message_id="queue-bob",
+                )
+            )
+
+            sent = await core.send_group_text(group_state.group_id, "from alice")
+            imported_envelope = GroupEnvelope(
+                group_id=group_state.group_id,
+                epoch=6,
+                msg_id="shape-import-1",
+                sender_id=BOB_B32,
+                group_seq=sent.envelope.group_seq + 1,
+                content_type=GroupContentType.GROUP_TEXT,
+                payload="from bob",
+            )
+            imported_wire = encode_group_transport_text(
+                GroupState(
+                    group_id=group_state.group_id,
+                    epoch=6,
+                    members=(ALICE_B32, BOB_B32),
+                    title="Shape group",
+                ),
+                imported_envelope,
+                GroupRecipientDeliveryMetadata(
+                    recipient_id=ALICE_B32,
+                    delivery_id="shape-import-1:alice",
+                ),
+            )
+
+            self.assertTrue(
+                core.import_group_transport_text(imported_wire, source_peer=BOB_B32)
+            )
+            history = core.load_group_history(group_state.group_id)
+
+            self.assertEqual(len(history), 2)
+            sent_entry, imported_entry = history
+            self.assertIs(type(sent_entry), type(imported_entry))
+            self.assertEqual(sent_entry.kind, "me")
+            self.assertEqual(imported_entry.kind, "peer")
+            self.assertEqual(sent_entry.sender_id, ALICE_B32)
+            self.assertEqual(imported_entry.sender_id, BOB_B32)
+            self.assertEqual(sent_entry.content_type, GroupContentType.GROUP_TEXT)
+            self.assertEqual(imported_entry.content_type, GroupContentType.GROUP_TEXT)
+            self.assertEqual(sent_entry.text, "from alice")
+            self.assertEqual(imported_entry.text, "from bob")
+            self.assertEqual(sent_entry.payload, "from alice")
+            self.assertEqual(imported_entry.payload, "from bob")
+            self.assertEqual(sent_entry.epoch, 6)
+            self.assertEqual(imported_entry.epoch, 6)
+            self.assertEqual(sent_entry.group_seq, sent.envelope.group_seq)
+            self.assertEqual(imported_entry.group_seq, imported_envelope.group_seq)
+            self.assertIsInstance(sent_entry.created_at, datetime)
+            self.assertIsInstance(imported_entry.created_at, datetime)
 
     def test_incoming_group_text_imports_into_local_group_history_and_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -271,8 +363,15 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(after_send_state.title, "Renamed title")
             self.assertEqual(after_send_state.epoch, 4)
             self.assertEqual(after_send_history[-1].kind, "me")
+            self.assertEqual(after_send_history[-1].sender_id, ALICE_B32)
+            self.assertEqual(after_send_history[-1].text, "")
+            self.assertEqual(
+                after_send_history[-1].payload,
+                {"op": "rename", "title": "Renamed title", "epoch": 4},
+            )
             self.assertEqual(after_send_history[-1].content_type, GroupContentType.GROUP_CONTROL)
             self.assertEqual(after_send_history[-1].group_seq, sent.envelope.group_seq)
+            self.assertIsInstance(after_send_history[-1].created_at, datetime)
 
             imported_state = GroupState(
                 group_id=group_state.group_id,
@@ -314,9 +413,13 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(final_state.epoch, 5)
             self.assertIn(CAROL_B32, final_state.members)
             self.assertEqual(final_history[-1].kind, "peer")
+            self.assertEqual(final_history[-1].sender_id, BOB_B32)
+            self.assertEqual(final_history[-1].text, "")
+            self.assertEqual(final_history[-1].payload, imported_envelope.payload)
             self.assertEqual(final_history[-1].content_type, GroupContentType.GROUP_CONTROL)
             self.assertEqual(final_history[-1].msg_id, "control-import-1")
             self.assertEqual(final_history[-1].group_seq, imported_envelope.group_seq)
+            self.assertIsInstance(final_history[-1].created_at, datetime)
 
     async def test_direct_chat_behavior_still_works(self) -> None:
         core = I2PChatCore(profile="alice")
