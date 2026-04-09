@@ -3,7 +3,7 @@ import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 # test environment may not have Pillow installed
 if "PIL" not in sys.modules:
@@ -17,7 +17,7 @@ if "PIL" not in sys.modules:
 from i2pchat.core.i2p_chat_core import I2PChatCore
 
 
-class BlindBoxCoreTelemetryTests(unittest.TestCase):
+class BlindBoxCoreTelemetryTests(unittest.IsolatedAsyncioTestCase):
     def test_blindbox_disabled_for_transient_profile(self) -> None:
         old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
         os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
@@ -56,8 +56,13 @@ class BlindBoxCoreTelemetryTests(unittest.TestCase):
             self.assertFalse(telemetry["has_root_secret"])
             self.assertEqual(telemetry["send_index"], 0)
             self.assertEqual(telemetry["privacy_profile"], "high")
-            self.assertEqual(float(telemetry["poll_min_sec"]), 5.0)
-            self.assertEqual(float(telemetry["poll_max_sec"]), 12.0)
+            self.assertEqual(str(telemetry["poll_mode"]), "idle")
+            self.assertEqual(float(telemetry["poll_min_sec"]), 20.0)
+            self.assertEqual(float(telemetry["poll_max_sec"]), 30.0)
+            self.assertEqual(float(telemetry["poll_hot_sec"]), 2.5)
+            self.assertEqual(float(telemetry["poll_hot_window_sec"]), 20.0)
+            self.assertEqual(float(telemetry["poll_cooldown_sec"]), 5.0)
+            self.assertEqual(float(telemetry["poll_cooldown_window_sec"]), 20.0)
             self.assertEqual(int(telemetry["cover_gets"]), 2)
             self.assertEqual(int(telemetry["padding_bucket"]), 1024)
             self.assertEqual(int(telemetry["root_epoch"]), 0)
@@ -452,6 +457,54 @@ class BlindBoxCoreTelemetryTests(unittest.TestCase):
                 os.environ.pop("I2PCHAT_BLINDBOX_MAX_SEEN_HASHES", None)
             else:
                 os.environ["I2PCHAT_BLINDBOX_MAX_SEEN_HASHES"] = old_limit
+
+    def test_blindbox_poll_mode_transitions_from_hot_to_cooldown_to_idle(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = I2PChatCore(profile="alice")
+            with patch("time.monotonic", return_value=100.0):
+                core._trigger_blindbox_hot_poll("test")  # noqa: SLF001
+            with patch("time.monotonic", return_value=110.0):
+                self.assertEqual(core._blindbox_poll_mode(), "hot")  # noqa: SLF001
+                self.assertEqual(core.get_blindbox_telemetry()["poll_mode"], "hot")
+            with patch("time.monotonic", return_value=125.0):
+                self.assertEqual(core._blindbox_poll_mode(), "cooldown")  # noqa: SLF001
+                self.assertEqual(
+                    core.get_blindbox_telemetry()["poll_mode"], "cooldown"
+                )
+            with patch("time.monotonic", return_value=145.0):
+                self.assertEqual(core._blindbox_poll_mode(), "idle")  # noqa: SLF001
+                self.assertEqual(core.get_blindbox_telemetry()["poll_mode"], "idle")
+
+    async def test_successful_offline_send_triggers_hot_poll_window(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = I2PChatCore(profile="alice")
+            core.stored_peer = "g" * 52 + ".b32.i2p"
+            core.my_dest = types.SimpleNamespace(base32="f" * 52)
+            core._blindbox_root_secret = b"x" * 32  # noqa: SLF001
+            core._blindbox_client = types.SimpleNamespace(put=AsyncMock())
+            core._save_blindbox_state = lambda: None  # type: ignore[method-assign]
+            with patch("time.monotonic", return_value=200.0):
+                result = await core._send_text_via_blindbox("hello")  # noqa: SLF001
+            self.assertIsNotNone(result)
+            self.assertEqual(core._blindbox_poll_mode(now_mono=205.0), "hot")  # noqa: SLF001
+            self.assertEqual(
+                core._blindbox_poll_mode(now_mono=225.0), "cooldown"
+            )  # noqa: SLF001
+            self.assertTrue(core._blindbox_poll_wakeup.is_set())  # noqa: SLF001
 
     def test_normalize_peer_addr_rejects_forbidden_chars(self) -> None:
         core = I2PChatCore(profile="default")

@@ -744,10 +744,13 @@ BLINDBOX_SUPPORTED_PRIVACY_PROFILES = {
     BLINDBOX_PRIVACY_HIGH,
 }
 BLINDBOX_DEFAULT_PRIVACY_PROFILE = BLINDBOX_PRIVACY_HIGH
+BLINDBOX_POLL_MODE_IDLE = "idle"
+BLINDBOX_POLL_MODE_HOT = "hot"
+BLINDBOX_POLL_MODE_COOLDOWN = "cooldown"
 BLINDBOX_PRIVACY_DEFAULTS: dict[str, dict[str, float | int]] = {
     BLINDBOX_PRIVACY_LOW: {
-        "poll_min_sec": 2.0,
-        "poll_max_sec": 4.0,
+        "poll_min_sec": 20.0,
+        "poll_max_sec": 30.0,
         "cover_gets": 0,
         "padding_bucket": 256,
         "root_rotate_messages": 1024,
@@ -756,8 +759,8 @@ BLINDBOX_PRIVACY_DEFAULTS: dict[str, dict[str, float | int]] = {
         "max_previous_roots": 1,
     },
     BLINDBOX_PRIVACY_MEDIUM: {
-        "poll_min_sec": 3.0,
-        "poll_max_sec": 7.0,
+        "poll_min_sec": 20.0,
+        "poll_max_sec": 30.0,
         "cover_gets": 1,
         "padding_bucket": 512,
         "root_rotate_messages": 512,
@@ -766,8 +769,8 @@ BLINDBOX_PRIVACY_DEFAULTS: dict[str, dict[str, float | int]] = {
         "max_previous_roots": 2,
     },
     BLINDBOX_PRIVACY_HIGH: {
-        "poll_min_sec": 5.0,
-        "poll_max_sec": 12.0,
+        "poll_min_sec": 20.0,
+        "poll_max_sec": 30.0,
         "cover_gets": 2,
         "padding_bucket": 1024,
         "root_rotate_messages": 256,
@@ -1454,6 +1457,27 @@ class I2PChatCore:
         )
         self._blindbox_poll_min_sec = max(0.5, min(poll_min_raw, poll_max_raw))
         self._blindbox_poll_max_sec = max(self._blindbox_poll_min_sec, poll_max_raw)
+        self._blindbox_poll_hot_sec = max(
+            0.5,
+            float(os.environ.get("I2PCHAT_BLINDBOX_POLL_HOT_SEC", "2.5")),
+        )
+        self._blindbox_poll_hot_window_sec = max(
+            0.0,
+            float(os.environ.get("I2PCHAT_BLINDBOX_POLL_HOT_WINDOW_SEC", "20")),
+        )
+        self._blindbox_poll_cooldown_sec = max(
+            0.5,
+            float(os.environ.get("I2PCHAT_BLINDBOX_POLL_COOLDOWN_SEC", "5")),
+        )
+        self._blindbox_poll_cooldown_window_sec = max(
+            0.0,
+            float(
+                os.environ.get("I2PCHAT_BLINDBOX_POLL_COOLDOWN_WINDOW_SEC", "20")
+            ),
+        )
+        self._blindbox_poll_hot_until_mono = 0.0
+        self._blindbox_poll_cooldown_until_mono = 0.0
+        self._blindbox_poll_wakeup = asyncio.Event()
         self._blindbox_cover_gets = max(
             0,
             int(
@@ -2891,8 +2915,15 @@ class I2PChatCore:
             "recv_window": int(self._blindbox_state.recv_window),
             "root_epoch": int(self._blindbox_root_epoch),
             "privacy_profile": str(self._blindbox_privacy_profile),
+            "poll_mode": self._blindbox_poll_mode(),
             "poll_min_sec": float(self._blindbox_poll_min_sec),
             "poll_max_sec": float(self._blindbox_poll_max_sec),
+            "poll_hot_sec": float(self._blindbox_poll_hot_sec),
+            "poll_hot_window_sec": float(self._blindbox_poll_hot_window_sec),
+            "poll_cooldown_sec": float(self._blindbox_poll_cooldown_sec),
+            "poll_cooldown_window_sec": float(
+                self._blindbox_poll_cooldown_window_sec
+            ),
             "cover_gets": int(self._blindbox_cover_gets),
             "padding_bucket": int(self._blindbox_padding_bucket),
             "root_rotate_messages": int(self._blindbox_root_rotate_messages),
@@ -3004,11 +3035,54 @@ class I2PChatCore:
         return ("blocked", "No active secure session. Connect to peer or retry later.")
 
     def _blindbox_poll_sleep_interval(self) -> float:
+        mode = self._blindbox_poll_mode()
+        if mode == BLINDBOX_POLL_MODE_HOT:
+            return self._blindbox_poll_hot_sec
+        if mode == BLINDBOX_POLL_MODE_COOLDOWN:
+            return self._blindbox_poll_cooldown_sec
         if self._blindbox_poll_max_sec <= self._blindbox_poll_min_sec:
             return self._blindbox_poll_min_sec
         return self._blindbox_rng.uniform(
             self._blindbox_poll_min_sec, self._blindbox_poll_max_sec
         )
+
+    def _blindbox_poll_mode(self, *, now_mono: Optional[float] = None) -> str:
+        now = time.monotonic() if now_mono is None else now_mono
+        if now < self._blindbox_poll_hot_until_mono:
+            return BLINDBOX_POLL_MODE_HOT
+        if now < self._blindbox_poll_cooldown_until_mono:
+            return BLINDBOX_POLL_MODE_COOLDOWN
+        return BLINDBOX_POLL_MODE_IDLE
+
+    def _trigger_blindbox_hot_poll(self, reason: str) -> None:
+        now = time.monotonic()
+        if self._blindbox_poll_hot_window_sec > 0:
+            self._blindbox_poll_hot_until_mono = max(
+                self._blindbox_poll_hot_until_mono,
+                now + self._blindbox_poll_hot_window_sec,
+            )
+        cooldown_anchor = max(self._blindbox_poll_hot_until_mono, now)
+        if self._blindbox_poll_cooldown_window_sec > 0:
+            self._blindbox_poll_cooldown_until_mono = max(
+                self._blindbox_poll_cooldown_until_mono,
+                cooldown_anchor + self._blindbox_poll_cooldown_window_sec,
+            )
+        logger.debug("BlindBox poller -> HOT (%s)", reason)
+        self._blindbox_poll_wakeup.set()
+
+    async def _blindbox_poll_sleep(self) -> None:
+        interval = self._blindbox_poll_sleep_interval()
+        if interval <= 0:
+            return
+        if self._blindbox_poll_wakeup.is_set():
+            self._blindbox_poll_wakeup.clear()
+            return
+        try:
+            await asyncio.wait_for(self._blindbox_poll_wakeup.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            self._blindbox_poll_wakeup.clear()
 
     def _remember_blindbox_seen_hash(self, digest: str) -> None:
         token = str(digest or "").strip()
@@ -3201,6 +3275,7 @@ class I2PChatCore:
         try:
             await client.start()
             self._emit_system("BlindBox runtime started")
+            self._trigger_blindbox_hot_poll("startup")
         except Exception as e:
             detail = _exception_user_message(e)
             logger.exception("BlindBox startup failed: %s", detail)
@@ -3209,19 +3284,19 @@ class I2PChatCore:
         try:
             while True:
                 if not self._blindbox_ready() or self.conn is not None:
-                    await asyncio.sleep(self._blindbox_poll_sleep_interval())
+                    await self._blindbox_poll_sleep()
                     continue
                 if self._blindbox_root_secret is None:
-                    await asyncio.sleep(self._blindbox_poll_sleep_interval())
+                    await self._blindbox_poll_sleep()
                     continue
                 peer_id = self._blindbox_peer_id()
                 if not peer_id or not self.my_dest:
-                    await asyncio.sleep(self._blindbox_poll_sleep_interval())
+                    await self._blindbox_poll_sleep()
                     continue
                 local_id = self.my_dest.base32
                 root_candidates = self._blindbox_root_candidates()
                 if not root_candidates:
-                    await asyncio.sleep(self._blindbox_poll_sleep_interval())
+                    await self._blindbox_poll_sleep()
                     continue
                 for recv_index in self._blindbox_recv_candidates():
                     got_valid = False
@@ -3269,8 +3344,9 @@ class I2PChatCore:
                     if got_valid:
                         self._blindbox_state.mark_consumed(recv_index)
                         self._save_blindbox_state()
+                        self._trigger_blindbox_hot_poll("received-offline-message")
                 await self._blindbox_emit_cover_gets(client)
-                await asyncio.sleep(self._blindbox_poll_sleep_interval())
+                await self._blindbox_poll_sleep()
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -3364,6 +3440,7 @@ class I2PChatCore:
                         retryable=False,
                     )
                     last_msg_id = msg_id
+                self._trigger_blindbox_hot_poll("offline-send")
                 return last_msg_id
             except Exception as e:
                 detail = _exception_user_message(e)
@@ -4574,6 +4651,7 @@ class I2PChatCore:
                 self._cancel_handshake_watchdog()
                 self._emit_message("info", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
+                self._trigger_blindbox_hot_poll("peer-online")
                 await self._send_blindbox_root_if_needed(writer)
                 logger.info("Handshake completed (responder)")
 
@@ -4629,6 +4707,7 @@ class I2PChatCore:
                 self._cancel_handshake_watchdog()
                 self._emit_message("info", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
+                self._trigger_blindbox_hot_poll("peer-online")
                 await self._send_blindbox_root_if_needed(writer)
                 logger.info("Handshake completed (initiator)")
 
