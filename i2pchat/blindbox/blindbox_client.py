@@ -84,6 +84,9 @@ class BlindBoxClient:
         retry_attempts: int = 3,
         retry_backoff_base: float = 0.25,
         io_timeout: float = 15.0,
+        # After first replica result for GET-first mode, wait at most this long
+        # for a better candidate from slower replicas before moving on.
+        get_first_accept_grace: float = 1.2,
         # HELLO + SESSION CREATE can block a long time on a busy Java I2P router.
         sam_session_timeout: float = 120.0,
         # Optional token sent only to loopback host:port replicas when no per-replica map entry.
@@ -105,6 +108,8 @@ class BlindBoxClient:
             raise ValueError("retry_attempts must be >= 1")
         if io_timeout <= 0:
             raise ValueError("io_timeout must be positive")
+        if get_first_accept_grace < 0:
+            raise ValueError("get_first_accept_grace must be non-negative")
         if sam_session_timeout <= 0:
             raise ValueError("sam_session_timeout must be positive")
         if int(max_get_blob_size) <= 0:
@@ -131,6 +136,7 @@ class BlindBoxClient:
         self.retry_attempts = retry_attempts
         self.retry_backoff_base = retry_backoff_base
         self.io_timeout = io_timeout
+        self.get_first_accept_grace = float(get_first_accept_grace)
         self.sam_session_timeout = sam_session_timeout
         self.local_auth_token = str(local_auth_token or "").strip()
         ra: dict[str, str] = {}
@@ -430,10 +436,20 @@ class BlindBoxClient:
         key: str,
         *,
         accept_blob: BlobAcceptor,
+        miss_grace_sec: Optional[float] = None,
+        diag: Optional[Dict[str, Any]] = None,
     ) -> Optional[bytes]:
         if not self._started:
             await self.start()
         key = self._validate_blindbox_key(key)
+        grace = self.get_first_accept_grace if miss_grace_sec is None else miss_grace_sec
+        grace = max(0.0, float(grace))
+        started_mono = time.monotonic()
+        diag_data = diag
+        if diag_data is not None:
+            diag_data.clear()
+            diag_data["completed_addrs"] = []
+            diag_data["canceled_pending_addrs"] = []
 
         pending: dict[asyncio.Task[Optional[bytes]], str] = {
             asyncio.create_task(
@@ -441,29 +457,84 @@ class BlindBoxClient:
             ): addr
             for addr in self.blind_boxes
         }
+        soft_deadline_mono: Optional[float] = None
         try:
             while pending:
                 task_addrs = dict(pending)
-                done, pending_set = await asyncio.wait(
-                    pending.keys(), return_when=asyncio.FIRST_COMPLETED
-                )
+                timeout: Optional[float] = None
+                if soft_deadline_mono is not None:
+                    remaining = soft_deadline_mono - time.monotonic()
+                    if remaining <= 0:
+                        await self._cancel_pending_tasks(list(pending.keys()))
+                        pending.clear()
+                        return None
+                    timeout = remaining
+
+                if timeout is None:
+                    done, pending_set = await asyncio.wait(
+                        pending.keys(), return_when=asyncio.FIRST_COMPLETED
+                    )
+                else:
+                    done, pending_set = await asyncio.wait(
+                        pending.keys(),
+                        return_when=asyncio.FIRST_COMPLETED,
+                        timeout=timeout,
+                    )
+                    if not done:
+                        if diag_data is not None:
+                            diag_data["first_result_kind"] = diag_data.get(
+                                "first_result_kind", "timeout"
+                            )
+                            diag_data["canceled_pending_addrs"] = sorted(
+                                task_addrs[t]
+                                for t in pending.keys()
+                                if t in task_addrs
+                            )
+                        await self._cancel_pending_tasks(list(pending.keys()))
+                        pending.clear()
+                        return None
+
                 pending = {task: task_addrs[task] for task in pending_set}
                 for task in done:
+                    addr = task_addrs.get(task, "")
+                    if diag_data is not None:
+                        if addr:
+                            diag_data["completed_addrs"].append(addr)
                     try:
                         blob = task.result()
                     except Exception:
+                        if diag_data is not None and "first_result_kind" not in diag_data:
+                            diag_data["first_result_kind"] = "error"
+                            diag_data["first_result_addr"] = addr
                         continue
                     if blob is None:
+                        if diag_data is not None and "first_result_kind" not in diag_data:
+                            diag_data["first_result_kind"] = "miss"
+                            diag_data["first_result_addr"] = addr
                         continue
+                    if diag_data is not None and "first_result_kind" not in diag_data:
+                        diag_data["first_result_kind"] = "blob"
+                        diag_data["first_result_addr"] = addr
                     accepted = accept_blob(blob)
                     if asyncio.iscoroutine(accepted):
                         accepted = await accepted
                     if accepted:
+                        if diag_data is not None:
+                            diag_data["accepted_addr"] = addr
+                            diag_data["canceled_pending_addrs"] = sorted(
+                                task_addrs[t]
+                                for t in pending.keys()
+                                if t in task_addrs
+                            )
                         await self._cancel_pending_tasks(list(pending.keys()))
                         pending.clear()
                         return blob
+                if soft_deadline_mono is None and pending:
+                    soft_deadline_mono = time.monotonic() + grace
             return None
         finally:
+            if diag_data is not None:
+                diag_data["elapsed_sec"] = max(0.0, time.monotonic() - started_mono)
             await self._cancel_pending_tasks(list(pending.keys()))
 
     async def _put_to_blind_box(

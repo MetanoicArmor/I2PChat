@@ -58,6 +58,12 @@ from i2pchat.core.transient_profile import (
     coalesce_profile_name,
     is_transient_profile_name,
 )
+from i2pchat.core.session_manager import (
+    OutboundPolicy,
+    PeerState,
+    SessionManager,
+    TransportState,
+)
 
 logger = logging.getLogger("i2pchat")
 PROTOCOL_VERSION = 4
@@ -1197,7 +1203,6 @@ class I2PChatCore:
         self.current_peer_dest_b64: Optional[str] = None
         self.peer_identity_binding_verified: bool = False
         self.conn: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
-        self._outbound_connect_busy: bool = False
         self.proven: bool = False
 
         # файловый приём
@@ -1250,17 +1255,8 @@ class I2PChatCore:
             "invalid_format": 0,
             "expired_or_state": 0,
         }
+        self.session_manager = SessionManager()
 
-        self._accept_task: Optional[asyncio.Task[Any]] = None
-        self._tunnel_task: Optional[asyncio.Task[Any]] = None
-        self._keepalive_task: Optional[asyncio.Task[Any]] = None
-        self._handshake_watchdog_task: Optional[asyncio.Task[Any]] = None
-        self._handshake_watchdog_generation: int = 0
-        self._disconnect_task: Optional[asyncio.Task[Any]] = None
-        self._disconnecting: bool = False
-        # Сокет сессии SAM: по спецификации сессия живёт только пока этот сокет открыт.
-        # Если его не хранить, сокет закрывается и сессия умирает — при Connect роутер может падать.
-        self._session_socket: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
         # Флаг активной передачи файла (для защиты от timeout в receive_loop)
         self._file_transfer_active: bool = False
         # Счётчик MSG_ACK/IMG_ACK без drain во время исходящей передачи (см. _write_signal_frame_maybe_soft_drain)
@@ -1480,6 +1476,47 @@ class I2PChatCore:
         self._blindbox_poll_hot_until_mono = 0.0
         self._blindbox_poll_cooldown_until_mono = 0.0
         self._blindbox_poll_wakeup = asyncio.Event()
+        self._blindbox_recv_scan_budget = max(
+            1,
+            int(os.environ.get("I2PCHAT_BLINDBOX_RECV_SCAN_BUDGET", "8")),
+        )
+        self._blindbox_get_first_timeout_sec = max(
+            0.2,
+            float(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_GET_FIRST_TIMEOUT_SEC", "2.5"
+                )
+            ),
+        )
+        self._blindbox_get_first_miss_grace_sec = max(
+            0.05,
+            float(
+                os.environ.get(
+                    "I2PCHAT_BLINDBOX_GET_FIRST_MISS_GRACE_SEC", "1.2"
+                )
+            ),
+        )
+        self._blindbox_debug_ui = _env_truthy("I2PCHAT_BLINDBOX_DEBUG_UI")
+        self._blindbox_debug_ui_interval_sec = max(
+            1.0,
+            float(os.environ.get("I2PCHAT_BLINDBOX_DEBUG_UI_INTERVAL_SEC", "8")),
+        )
+        self._blindbox_debug_ui_slow_sec = max(
+            0.05,
+            float(os.environ.get("I2PCHAT_BLINDBOX_DEBUG_UI_SLOW_SEC", "0.8")),
+        )
+        self._blindbox_debug_ui_last_emit_mono = 0.0
+        self._blindbox_slow_warn_sec = max(
+            0.2,
+            float(os.environ.get("I2PCHAT_BLINDBOX_SLOW_WARN_SEC", "5.0")),
+        )
+        self._blindbox_slow_warn_interval_sec = max(
+            1.0,
+            float(
+                os.environ.get("I2PCHAT_BLINDBOX_SLOW_WARN_INTERVAL_SEC", "30.0")
+            ),
+        )
+        self._blindbox_slow_warn_last_mono = 0.0
         self._blindbox_cover_gets = max(
             0,
             int(
@@ -1539,6 +1576,18 @@ class I2PChatCore:
 
     def _emit_status(self, status: str) -> None:
         self.network_status = status
+        if status == "visible":
+            self.session_manager.transition_transport(
+                TransportState.READY, reason="status-visible"
+            )
+        elif status == "local_ok":
+            self.session_manager.transition_transport(
+                TransportState.DEGRADED, reason="status-local-ok"
+            )
+        elif status == "initializing":
+            self.session_manager.transition_transport(
+                TransportState.STARTING, reason="status-initializing"
+            )
         if self.on_status:
             self.on_status(status)
 
@@ -1672,8 +1721,7 @@ class I2PChatCore:
     def _cancel_handshake_watchdog(self) -> None:
         # Не отменяем задачу напрямую внутри активной корутины: в некоторых
         # loop-интеграциях (Qt/qasync) это может вызвать re-entrant step Task.
-        self._handshake_watchdog_generation += 1
-        self._handshake_watchdog_task = None
+        self.session_manager.invalidate_handshake_watchdog()
 
     def _start_handshake_watchdog(
         self, connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter]
@@ -1683,21 +1731,27 @@ class I2PChatCore:
         except RuntimeError:
             return
         self._cancel_handshake_watchdog()
-        generation = self._handshake_watchdog_generation
-        self._handshake_watchdog_task = loop.create_task(
+        generation = self.session_manager.handshake_watchdog_generation
+        self.session_manager.handshake_watchdog_task = loop.create_task(
             self._handshake_watchdog(connection, generation)
         )
 
     def _schedule_disconnect(self) -> None:
-        if self._disconnecting or self.conn is None:
+        if self.session_manager.disconnecting or self.conn is None:
             return
-        if self._disconnect_task is not None and not self._disconnect_task.done():
+        if (
+            self.session_manager.disconnect_task is not None
+            and not self.session_manager.disconnect_task.done()
+        ):
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._disconnect_task = loop.create_task(self.disconnect())
+        self.session_manager.disconnect_task = loop.create_task(self.disconnect())
+        self.session_manager.transition_transport(
+            TransportState.RECONNECTING, reason="scheduled-disconnect"
+        )
 
     async def _handshake_watchdog(
         self,
@@ -1706,10 +1760,13 @@ class I2PChatCore:
     ) -> None:
         """Закрывает соединение, если handshake не завершился вовремя."""
         await asyncio.sleep(self.HANDSHAKE_TIMEOUT)
-        if generation != self._handshake_watchdog_generation:
+        if generation != self.session_manager.handshake_watchdog_generation:
             return
         if self.conn == connection and not self.handshake_complete:
             self._emit_error("Secure handshake timed out")
+            self.session_manager.transition_peer(
+                PeerState.FAILED, reason="handshake-timeout"
+            )
             self._schedule_disconnect()
 
     # ---------- протокол ----------
@@ -2637,8 +2694,14 @@ class I2PChatCore:
     async def init_session(self) -> None:
         """Создать/загрузить идентичность и SAM-сессию."""
         try:
+            self.session_manager.transition_transport(
+                TransportState.STARTING, reason="init-session"
+            )
             await self._do_init_session()
         except Exception as e:
+            self.session_manager.transition_transport(
+                TransportState.FAILED, reason=f"init-session:{type(e).__name__}"
+            )
             if _tcp_refusal_in_exception_chain(e):
                 msg = _sam_unreachable_user_message(self.sam_address)
                 self._emit_error(msg)
@@ -2732,7 +2795,7 @@ class I2PChatCore:
 
         # Важно: сохраняем сокет сессии и не закрываем его до shutdown.
         # Иначе по SAM-спеку сессия умирает при закрытии сокета, и STREAM CONNECT/ACCEPT ломают роутер.
-        self._session_socket = await i2plib.create_session(
+        self.session_manager.session_socket = await i2plib.create_session(
             self.session_id,
             destination=self.my_dest,
             sam_address=self.sam_address,
@@ -2743,6 +2806,9 @@ class I2PChatCore:
                 "outbound.quantity": "3",
             },
             session_create_timeout=self._sam_session_create_timeout,
+        )
+        self.session_manager.transition_transport(
+            TransportState.SAM_CONNECTED, reason="sam-session-created"
         )
 
         # Blind Box uses a second SAM stream session; starting it here overlaps with
@@ -2756,6 +2822,9 @@ class I2PChatCore:
 
         my_address = self.my_dest.base32 + ".b32.i2p"
         self._emit_system("Building I2P tunnels (may take 1–2 min)...")
+        self.session_manager.transition_transport(
+            TransportState.WARMING_TUNNELS, reason="tunnel-warmup"
+        )
         tunnels_ready = False
         wait_until = time.monotonic() + 90
         while time.monotonic() < wait_until:
@@ -2776,19 +2845,25 @@ class I2PChatCore:
             self._emit_status("visible")
             self._emit_message("success", f"Online! My Address: {my_address}")
             self._emit_system("Tunnels ready. Waiting for incoming connections...")
+            self.session_manager.transition_transport(
+                TransportState.READY, reason="tunnels-ready"
+            )
         else:
             self._emit_status("local_ok")
             self._emit_message("success", f"Online! My Address: {my_address}")
             self._emit_system(
                 "Tunnels may still be building. Wait 1–2 min before connecting."
             )
+            self.session_manager.transition_transport(
+                TransportState.DEGRADED, reason="tunnels-pending"
+            )
 
         self.peer_b32 = f"My Addr: {my_address}"
 
         # запуск фоновых задач
         loop = asyncio.get_running_loop()
-        self._accept_task = loop.create_task(self.accept_loop())
-        self._tunnel_task = loop.create_task(self.tunnel_watcher())
+        self.session_manager.accept_task = loop.create_task(self.accept_loop())
+        self.session_manager.tunnel_task = loop.create_task(self.tunnel_watcher())
         if self._blindbox_ready():
             # Sync with early parallel boot (or run once if that task has not won yet).
             await self._ensure_blindbox_runtime_started()
@@ -2961,7 +3036,10 @@ class I2PChatCore:
     def get_delivery_telemetry(self) -> dict[str, Any]:
         """Returns current delivery route hints for UI decisions."""
         connected = self.conn is not None
-        secure_live = bool(connected and self.handshake_complete)
+        secure_live = self.session_manager.is_live_path_alive(
+            connected=connected,
+            handshake_complete=self.handshake_complete,
+        )
         has_target = bool(self.current_peer_addr or self.stored_peer)
         ready = bool(self._blindbox_ready())
         has_root_secret = self._blindbox_root_secret is not None
@@ -2969,6 +3047,11 @@ class I2PChatCore:
         blindbox_runtime_ready = bool(
             bb_client is not None and bb_client.is_runtime_ready()
         )
+        outbound_policy = self.session_manager.select_outbound_policy(
+            requested_route="auto",
+            connected=connected,
+            handshake_complete=self.handshake_complete,
+        ).value
 
         if connected and not self.handshake_complete:
             state = "connecting-handshake"
@@ -3009,6 +3092,15 @@ class I2PChatCore:
             "blind_boxes": len(self.blindbox_replicas),
             "replicas": len(self.blindbox_replicas),
             "network_status": str(self.network_status),
+            "transport_state": self.session_manager.transport_state.value,
+            "peer_state": self.session_manager.peer_state.value,
+            "outbound_policy": outbound_policy,
+            "outbound_streams": len(self.session_manager.outbound_streams),
+            "reconnect_attempt": int(self.session_manager.reconnect.attempt),
+            "reconnect_next_retry_mono": float(self.session_manager.reconnect.next_retry_mono),
+            "reconnect_last_failure_reason": str(
+                self.session_manager.reconnect.last_failure_reason
+            ),
         }
 
     def _offline_send_block_feedback(self) -> tuple[str, str]:
@@ -3104,6 +3196,19 @@ class I2PChatCore:
         logger.debug("BlindBox poller -> HOT (%s)", reason)
         self._blindbox_poll_wakeup.set()
 
+    def _emit_blindbox_debug_poll(self, text: str, *, force: bool = False) -> None:
+        if not self._blindbox_debug_ui:
+            return
+        now = time.monotonic()
+        if (
+            not force
+            and now - self._blindbox_debug_ui_last_emit_mono
+            < self._blindbox_debug_ui_interval_sec
+        ):
+            return
+        self._blindbox_debug_ui_last_emit_mono = now
+        self._emit_system(f"[BBDBG] {text}")
+
     async def _blindbox_poll_sleep(self) -> None:
         interval = self._blindbox_poll_sleep_interval()
         if interval <= 0:
@@ -3135,16 +3240,29 @@ class I2PChatCore:
         recv_lookahead = max(
             0, int(os.environ.get("I2PCHAT_BLINDBOX_RECV_LOOKAHEAD", "64"))
         )
+        recv_max_per_poll = max(
+            1, int(os.environ.get("I2PCHAT_BLINDBOX_RECV_MAX_PER_POLL", "64"))
+        )
         recv_start = max(0, self._blindbox_state.recv_base - recv_backtrack)
         recv_span = max(self._blindbox_state.recv_window, recv_lookahead)
         recv_end = self._blindbox_state.recv_base + recv_span
-        candidates = [
+        # Fast path for latency: probe from recv_base forward first (most probable
+        # next indexes), then optional backtrack tail. Random full-window shuffle
+        # increases median delivery latency when Blind Box GET is slow.
+        forward = (
             idx
-            for idx in range(recv_start, recv_end)
+            for idx in range(self._blindbox_state.recv_base, recv_end)
             if idx not in self._blindbox_state.consumed_recv
-        ]
-        self._blindbox_rng.shuffle(candidates)
-        return candidates
+        )
+        backtrack = (
+            idx
+            for idx in range(recv_start, self._blindbox_state.recv_base)
+            if idx not in self._blindbox_state.consumed_recv
+        )
+        ordered = [*forward, *backtrack]
+        if len(ordered) > recv_max_per_poll:
+            return ordered[:recv_max_per_poll]
+        return ordered
 
     async def _blindbox_emit_cover_gets(self, client: BlindBoxClient) -> None:
         if self._blindbox_cover_gets <= 0:
@@ -3341,8 +3459,17 @@ class I2PChatCore:
                 if not root_candidates:
                     await self._blindbox_poll_sleep()
                     continue
+                cycle_started_mono = time.monotonic()
+                cycle_checked = 0
+                cycle_hit = 0
+                cycle_miss = 0
+                cycle_timeout = 0
+                slow_samples: list[str] = []
                 recv_cands = self._blindbox_recv_candidates()
+                if len(recv_cands) > self._blindbox_recv_scan_budget:
+                    recv_cands = recv_cands[: self._blindbox_recv_scan_budget]
                 for recv_index in recv_cands:
+                    cycle_checked += 1
                     got_valid = False
                     for root_item in root_candidates:
                         keys = derive_blindbox_message_keys(
@@ -3375,11 +3502,23 @@ class I2PChatCore:
                                 return True
                             return False
 
+                        get_diag: dict[str, Any] = {}
+                        get_started_mono = time.monotonic()
+                        timed_out = False
                         try:
-                            accepted_blob = await client.get_first_accepted(
-                                keys.lookup_token,
-                                accept_blob=_accept_blob,
+                            accepted_blob = await asyncio.wait_for(
+                                client.get_first_accepted(
+                                    keys.lookup_token,
+                                    accept_blob=_accept_blob,
+                                    miss_grace_sec=self._blindbox_get_first_miss_grace_sec,
+                                    diag=get_diag,
+                                ),
+                                timeout=self._blindbox_get_first_timeout_sec,
                             )
+                        except asyncio.TimeoutError:
+                            timed_out = True
+                            accepted_blob = None
+                            cycle_timeout += 1
                         except Exception as exc:
                             logger.debug(
                                 "BlindBox get_first_accepted failed recv_index=%s epoch=%s: %s",
@@ -3389,6 +3528,28 @@ class I2PChatCore:
                                 exc_info=True,
                             )
                             continue
+                        get_elapsed = max(
+                            0.0, time.monotonic() - get_started_mono
+                        )
+                        if get_elapsed >= self._blindbox_debug_ui_slow_sec:
+                            accepted_addr = str(get_diag.get("accepted_addr", "")).strip()
+                            first_addr = str(get_diag.get("first_result_addr", "")).strip()
+                            canceled = [
+                                str(x).strip()
+                                for x in (get_diag.get("canceled_pending_addrs") or [])
+                                if str(x).strip()
+                            ]
+                            if accepted_addr:
+                                slow_addr = accepted_addr
+                            elif canceled:
+                                slow_addr = canceled[0]
+                            else:
+                                slow_addr = first_addr or "unknown"
+                            if timed_out:
+                                slow_addr = f"{slow_addr} (timeout)"
+                            slow_samples.append(
+                                f"idx={recv_index} t={get_elapsed:.2f}s box={slow_addr}"
+                            )
                         if accepted_blob is not None:
                             got_valid = True
                             break
@@ -3396,6 +3557,48 @@ class I2PChatCore:
                         self._blindbox_state.mark_consumed(recv_index)
                         self._save_blindbox_state()
                         self._trigger_blindbox_hot_poll("received-offline-message")
+                        cycle_hit += 1
+                    else:
+                        cycle_miss += 1
+                cycle_elapsed = max(0.0, time.monotonic() - cycle_started_mono)
+                if self._blindbox_debug_ui and cycle_checked > 0:
+                    slow_note = slow_samples[0] if slow_samples else ""
+                    should_emit = (
+                        cycle_hit > 0
+                        or bool(slow_samples)
+                        or cycle_elapsed >= self._blindbox_debug_ui_slow_sec
+                        or (
+                            cycle_miss > 0
+                            and (
+                                time.monotonic() - self._blindbox_debug_ui_last_emit_mono
+                                >= self._blindbox_debug_ui_interval_sec
+                            )
+                        )
+                    )
+                    if should_emit:
+                        msg = (
+                            f"poll checked={cycle_checked} hit={cycle_hit} miss={cycle_miss} "
+                            f"timeout={cycle_timeout} cycle={cycle_elapsed:.2f}s"
+                        )
+                        if slow_note:
+                            msg += f" slow={slow_note}"
+                        self._emit_blindbox_debug_poll(msg)
+                elif (
+                    cycle_checked > 0
+                    and cycle_elapsed >= self._blindbox_slow_warn_sec
+                    and cycle_hit == 0
+                ):
+                    now_mono = time.monotonic()
+                    if (
+                        now_mono - self._blindbox_slow_warn_last_mono
+                        >= self._blindbox_slow_warn_interval_sec
+                    ):
+                        self._blindbox_slow_warn_last_mono = now_mono
+                        self._emit_system(
+                            "BlindBox polling is slow; a replica may be lagging "
+                            f"(timeouts this cycle: {cycle_timeout}). "
+                            "Delivery can be delayed."
+                        )
                 await self._blindbox_emit_cover_gets(client)
                 await self._blindbox_poll_sleep()
         except asyncio.CancelledError:
@@ -3545,7 +3748,7 @@ class I2PChatCore:
 
     def is_outbound_connect_busy(self) -> bool:
         """True, пока выполняется исходящий connect_to_peer (ожидание stream_connect)."""
-        return self._outbound_connect_busy
+        return self.session_manager.outbound_connect_busy
 
     async def connect_to_peer(self, target_address: str) -> None:
         if not crypto.NACL_AVAILABLE:
@@ -3570,10 +3773,16 @@ class I2PChatCore:
         if self.conn is not None:
             self._emit_system("Already connected. Disconnect first.")
             return
-        if self._outbound_connect_busy:
+        if self.session_manager.outbound_connect_busy:
             self._emit_system("Connection attempt already in progress.")
             return
-        self._outbound_connect_busy = True
+        self.session_manager.set_outbound_connect_busy(True)
+        self.session_manager.transition_peer(
+            PeerState.CONNECTING, reason="outbound-connect"
+        )
+        self.session_manager.transition_transport(
+            TransportState.RECONNECTING, reason="outbound-connect"
+        )
         deferred_error: Optional[str] = None
         deferred_system: Optional[str] = None
         try:
@@ -3626,6 +3835,9 @@ class I2PChatCore:
                     self._emit_status("visible")
 
                 self.conn = (reader, writer)
+                self.session_manager.register_stream(
+                    normalized_target, state=PeerState.HANDSHAKING
+                )
                 self._activate_ack_session()
                 self._emit_message(
                     "info", "Handshake sent. Establishing secure channel... Wait"
@@ -3635,15 +3847,29 @@ class I2PChatCore:
                 loop.create_task(self.receive_loop(self.conn))
                 loop.create_task(self.initiate_secure_handshake())
                 self._start_handshake_watchdog(self.conn)
-                self._keepalive_task = loop.create_task(self._keepalive_loop())
+                self.session_manager.keepalive_task = loop.create_task(
+                    self._keepalive_loop()
+                )
             except asyncio.TimeoutError:
                 self.conn = None
+                self.session_manager.transition_peer(
+                    PeerState.FAILED, reason="connect-timeout"
+                )
+                delay = self.session_manager.schedule_reconnect_backoff(
+                    reason="connect-timeout"
+                )
+                logger.info("Outbound connect backoff scheduled: %.2fs", delay)
                 deferred_error = (
                     "Connection timed out. Check: I2P router running, peer address correct, peer online."
                 )
                 deferred_system = "Waiting for incoming connections..."
             except Exception as e:
                 self.conn = None
+                self.session_manager.transition_peer(PeerState.FAILED, reason="connect-failed")
+                delay = self.session_manager.schedule_reconnect_backoff(
+                    reason=type(e).__name__
+                )
+                logger.info("Outbound connect backoff scheduled: %.2fs", delay)
                 # Пустое сообщение у SAM-исключений (например CantReachPeer()) — только имя типа,
                 # без «CantReachPeer: CantReachPeer()».
                 detail = str(e).strip() or type(e).__name__
@@ -3653,7 +3879,7 @@ class I2PChatCore:
                 )
                 deferred_system = "Waiting for incoming connections..."
         finally:
-            self._outbound_connect_busy = False
+            self.session_manager.set_outbound_connect_busy(False)
 
         # После сброса busy — иначе UI обновится с is_outbound_connect_busy()==True и Connect останется серым.
         if deferred_error:
@@ -3683,8 +3909,14 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
         r = route if route in ("auto", "live", "offline") else "auto"
+        connected = self.conn is not None
+        policy = self.session_manager.select_outbound_policy(
+            requested_route=r,
+            connected=connected,
+            handshake_complete=self.handshake_complete,
+        )
 
-        if r == "offline":
+        if policy == OutboundPolicy.BLINDBOX_ONLY:
             if self._blindbox_send_lock.locked():
                 reason, hint = self._blindbox_send_busy_feedback()
                 self._emit_error(hint)
@@ -3736,9 +3968,12 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
 
-        secure_live = bool(self.conn and self.handshake_complete)
+        secure_live = self.session_manager.is_live_path_alive(
+            connected=connected,
+            handshake_complete=self.handshake_complete,
+        )
 
-        if r == "live":
+        if policy == OutboundPolicy.LIVE_ONLY:
             if not secure_live:
                 if self.conn is not None and not self.handshake_complete:
                     hint = (
@@ -3768,7 +4003,7 @@ class I2PChatCore:
                     retryable=lifecycle.retryable,
                 )
 
-        if r == "auto" and not secure_live:
+        if policy == OutboundPolicy.QUEUE_THEN_RETRY_LIVE and not secure_live:
             if self._blindbox_send_lock.locked():
                 reason, hint = self._blindbox_send_busy_feedback()
                 self._emit_error(hint)
@@ -3878,6 +4113,8 @@ class I2PChatCore:
             )
         except Exception as e:
             self._emit_error(f"Failed to send message: {e}")
+            self.session_manager.transition_peer(PeerState.STALE, reason="send-failed")
+            self.session_manager.mark_live_failure(reason="send-failed")
             self._schedule_disconnect()
             lifecycle = delivery_lifecycle_from_send_result(
                 route="blocked",
@@ -4307,16 +4544,17 @@ class I2PChatCore:
             pass
 
     async def disconnect(self) -> None:
-        if self._disconnecting or not self.conn:
+        if self.session_manager.disconnecting or not self.conn:
             return
-        self._disconnecting = True
+        self.session_manager.disconnecting = True
         try:
             self._cancel_handshake_watchdog()
             # Останавливаем keepalive
-            if self._keepalive_task:
-                asyncio.get_running_loop().call_soon(self._keepalive_task.cancel)
-                self._keepalive_task = None
+            if self.session_manager.keepalive_task:
+                asyncio.get_running_loop().call_soon(self.session_manager.keepalive_task.cancel)
+                self.session_manager.keepalive_task = None
             _, writer = self.conn
+            peer_before_disconnect = self._normalize_peer_addr(self.current_peer_addr or "")
             self.conn = None
             self.peer_b32 = "Waiting for incoming connections..."
             had_secure_channel = self.handshake_complete and self.use_encryption and bool(self.shared_key)
@@ -4331,12 +4569,20 @@ class I2PChatCore:
             except Exception:
                 pass
             self._reset_crypto_state()
+            if peer_before_disconnect:
+                self.session_manager.unregister_stream(peer_before_disconnect)
+            self.session_manager.transition_peer(
+                PeerState.DISCONNECTED, reason="disconnect"
+            )
+            self.session_manager.mark_live_failure(
+                reason="disconnect", mark_peer_stale=False
+            )
             self._emit_message("info", "You disconnected.")
             self._emit_system("Waiting for incoming connections...")
         finally:
-            self._disconnecting = False
-            if self._disconnect_task is asyncio.current_task():
-                self._disconnect_task = None
+            self.session_manager.disconnecting = False
+            if self.session_manager.disconnect_task is asyncio.current_task():
+                self.session_manager.disconnect_task = None
     
     async def _keepalive_loop(self) -> None:
         """Отправляет Ping каждые 15 секунд для поддержания соединения при простое."""
@@ -4350,6 +4596,7 @@ class I2PChatCore:
                     writer.write(self.frame_message("P", ""))
                     await writer.drain()
                 except Exception:
+                    self.session_manager.mark_live_failure(reason="keepalive-failed")
                     break
     
     def _reset_crypto_state(self) -> None:
@@ -4715,6 +4962,9 @@ class I2PChatCore:
                     self._emit_error(
                         "Handshake role conflict detected; reconnecting."
                     )
+                    self.session_manager.transition_peer(
+                        PeerState.FAILED, reason="handshake-role-conflict"
+                    )
                     self._schedule_disconnect()
                     return
                 if not self.current_peer_addr or not self.my_dest:
@@ -4782,6 +5032,13 @@ class I2PChatCore:
                 self._emit_system("✔ Ready! You can now send messages.")
                 self._trigger_blindbox_hot_poll("peer-online")
                 await self._send_blindbox_root_if_needed(writer)
+                self.session_manager.transition_peer(PeerState.SECURE, reason="handshake-ok")
+                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                if peer_addr_norm:
+                    self.session_manager.update_stream_state(
+                        peer_addr_norm, PeerState.SECURE
+                    )
+                self.session_manager.mark_live_healthy()
                 logger.info("Handshake completed (responder)")
 
             elif body.startswith("RESP:"):
@@ -4791,6 +5048,9 @@ class I2PChatCore:
                     or self.my_ephemeral_public is None
                 ):
                     logger.warning("Received RESP without prior INIT")
+                    self.session_manager.transition_peer(
+                        PeerState.FAILED, reason="handshake-resp-without-init"
+                    )
                     self._schedule_disconnect()
                     return
                 if not self.current_peer_addr or not self.my_dest:
@@ -4838,6 +5098,13 @@ class I2PChatCore:
                 self._emit_system("✔ Ready! You can now send messages.")
                 self._trigger_blindbox_hot_poll("peer-online")
                 await self._send_blindbox_root_if_needed(writer)
+                self.session_manager.transition_peer(PeerState.SECURE, reason="handshake-ok")
+                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                if peer_addr_norm:
+                    self.session_manager.update_stream_state(
+                        peer_addr_norm, PeerState.SECURE
+                    )
+                self.session_manager.mark_live_healthy()
                 logger.info("Handshake completed (initiator)")
 
             else:
@@ -4846,45 +5113,34 @@ class I2PChatCore:
         except Exception as e:
             logger.error(f"Handshake error: {e}")
             self._emit_error(f"Secure handshake failed: {e}")
+            self.session_manager.transition_peer(PeerState.FAILED, reason="handshake-error")
+            self.session_manager.mark_live_failure(reason="handshake-error")
             self._schedule_disconnect()
 
     async def shutdown(self) -> None:
         """Аккуратно остановить фоновые задачи и закрыть соединения."""
-        self._handshake_watchdog_generation += 1
-        self._outbound_connect_busy = False
+        self.session_manager.transition_transport(
+            TransportState.SHUTTING_DOWN, reason="shutdown"
+        )
+        self.session_manager.invalidate_handshake_watchdog()
+        self.session_manager.set_outbound_connect_busy(False)
         if self.conn:
             await self.disconnect()
 
-        tasks_to_cancel: list[asyncio.Task[Any]] = []
-        for attr in (
-            "_accept_task",
-            "_tunnel_task",
-            "_keepalive_task",
-            "_handshake_watchdog_task",
-            "_disconnect_task",
-            "_blindbox_task",
-        ):
-            task = getattr(self, attr)
-            if task is not None and not task.done():
-                task.cancel()
-                tasks_to_cancel.append(task)
-            setattr(self, attr, None)
-        if tasks_to_cancel:
-            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-
-        if self._session_socket:
-            try:
-                _, writer = self._session_socket
-                writer.close()
-            except Exception:
-                pass
-            self._session_socket = None
+        await self.session_manager.cancel_tasks_and_close_session()
+        if self._blindbox_task is not None and not self._blindbox_task.done():
+            self._blindbox_task.cancel()
+            await asyncio.gather(self._blindbox_task, return_exceptions=True)
+        self._blindbox_task = None
         if self._blindbox_client is not None:
             try:
                 await self._blindbox_client.close()
             except Exception:
                 pass
             self._blindbox_client = None
+        self.session_manager.transition_transport(
+            TransportState.STOPPED, reason="shutdown-complete"
+        )
 
     # ---------- фоновые циклы ----------
 
@@ -4948,12 +5204,22 @@ class I2PChatCore:
                     await writer.drain()
 
                 self.conn = (reader, writer)
+                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                if peer_addr_norm:
+                    self.session_manager.register_stream(
+                        peer_addr_norm, state=PeerState.HANDSHAKING
+                    )
                 self._activate_ack_session()
+                self.session_manager.transition_transport(
+                    TransportState.RECONNECTING, reason="incoming-connection"
+                )
 
                 loop = asyncio.get_running_loop()
                 loop.create_task(self.receive_loop(self.conn))
                 self._start_handshake_watchdog(self.conn)
-                self._keepalive_task = loop.create_task(self._keepalive_loop())
+                self.session_manager.keepalive_task = loop.create_task(
+                    self._keepalive_loop()
+                )
             except Exception:
                 await asyncio.sleep(1)
 
@@ -5099,6 +5365,9 @@ class I2PChatCore:
                     break
 
                 body = body_data.decode("utf-8")
+                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                if peer_addr_norm:
+                    self.session_manager.touch_stream(peer_addr_norm)
 
                 if msg_type == "U":
                     sp = self.current_peer_addr
@@ -5656,11 +5925,20 @@ class I2PChatCore:
                 and self.inline_image_info is None
             ):
                 self._cancel_handshake_watchdog()
-                if self._keepalive_task:
-                    self._keepalive_task.cancel()
-                    self._keepalive_task = None
+                if self.session_manager.keepalive_task:
+                    self.session_manager.keepalive_task.cancel()
+                    self.session_manager.keepalive_task = None
+                peer_before_cleanup = self._normalize_peer_addr(self.current_peer_addr or "")
                 self.conn = None
                 self._reset_crypto_state()
+                if peer_before_cleanup:
+                    self.session_manager.unregister_stream(peer_before_cleanup)
+                self.session_manager.transition_peer(
+                    PeerState.DISCONNECTED, reason="receive-loop-cleanup"
+                )
+                self.session_manager.mark_live_failure(
+                    reason="peer-disconnect", mark_peer_stale=False
+                )
                 self._emit_message("info", "Peer disconnected.")
                 self.peer_b32 = "Waiting for incoming connections..."
                 self._emit_system("Waiting for incoming connections...")
@@ -5689,11 +5967,20 @@ class I2PChatCore:
                         "success",
                         "Tunnels confirmed. You are now VISIBLE.",
                     )
+                self.session_manager.transition_transport(
+                    TransportState.READY, reason="tunnel-watch-ok"
+                )
             except asyncio.TimeoutError:
-                pass
+                if self.session_manager.transport_state == TransportState.READY:
+                    self.session_manager.transition_transport(
+                        TransportState.DEGRADED, reason="tunnel-watch-timeout"
+                    )
             except Exception:
                 # Keep current network status on transient lookup errors.
-                pass
+                if self.session_manager.transport_state == TransportState.READY:
+                    self.session_manager.transition_transport(
+                        TransportState.DEGRADED, reason="tunnel-watch-error"
+                    )
 
             await asyncio.sleep(20)
 

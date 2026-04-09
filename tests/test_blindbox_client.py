@@ -592,6 +592,69 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             await fast.stop()
             await slow.stop()
 
+    async def test_get_first_accepted_miss_does_not_wait_for_slowest_replica(self) -> None:
+        fast_storage: dict[str, bytes] = {}
+        slow_storage: dict[str, bytes] = {}
+        fast = _ReplicaServer("ok", fast_storage)
+        slow = _ReplicaServer("ok", slow_storage, get_delay=0.8)
+        await fast.start()
+        await slow.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-get-miss-grace",
+                blind_boxes=[f"127.0.0.1:{fast.port}", f"127.0.0.1:{slow.port}"],
+                use_sam=False,
+                retry_attempts=1,
+                io_timeout=1.2,
+                get_first_accept_grace=0.15,
+            )
+            started = time.monotonic()
+            diag: dict[str, object] = {}
+            blob = await client.get_first_accepted(
+                "k-miss",
+                accept_blob=lambda _b: True,
+                diag=diag,
+            )
+            elapsed = time.monotonic() - started
+            self.assertIsNone(blob)
+            self.assertLess(elapsed, 0.4)
+            self.assertEqual(diag.get("first_result_kind"), "miss")
+            canceled = list(diag.get("canceled_pending_addrs", []))
+            self.assertIn(f"127.0.0.1:{slow.port}", canceled)
+            await client.close()
+        finally:
+            await fast.stop()
+            await slow.stop()
+
+    async def test_get_first_accepted_default_grace_can_pick_slow_valid_replica(self) -> None:
+        fast_storage: dict[str, bytes] = {}
+        slow_storage: dict[str, bytes] = {"k-slow-hit": b"payload-slow-hit"}
+        fast = _ReplicaServer("ok", fast_storage)
+        slow = _ReplicaServer("ok", slow_storage, get_delay=0.8)
+        await fast.start()
+        await slow.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-get-default-grace",
+                blind_boxes=[f"127.0.0.1:{fast.port}", f"127.0.0.1:{slow.port}"],
+                use_sam=False,
+                retry_attempts=1,
+                io_timeout=1.5,
+            )
+            started = time.monotonic()
+            blob = await client.get_first_accepted(
+                "k-slow-hit",
+                accept_blob=lambda b: b == b"payload-slow-hit",
+            )
+            elapsed = time.monotonic() - started
+            self.assertEqual(blob, b"payload-slow-hit")
+            self.assertGreater(elapsed, 0.7)
+            self.assertLess(elapsed, 1.35)
+            await client.close()
+        finally:
+            await fast.stop()
+            await slow.stop()
+
 
 if __name__ == "__main__":
     unittest.main()
