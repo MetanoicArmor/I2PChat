@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import sys
 import tempfile
 import types
@@ -245,6 +247,52 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(after_import.history), 2)
             self.assertEqual(after_import.history[-1].group_seq, imported_envelope.group_seq)
             self.assertEqual(after_import.history[-1].epoch, 8)
+
+    async def test_reload_primes_group_sequence_from_persisted_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_B32)
+            group_state = core.create_group(
+                title="Reloaded sequence group",
+                members=[BOB_B32],
+                group_id="core-group-reload-seq",
+                epoch=5,
+            )
+            core.group_manager._send_live = AsyncMock(  # type: ignore[attr-defined]
+                return_value=GroupTransportOutcome(
+                    accepted=True,
+                    reason="live-session",
+                    transport_message_id="live-bob",
+                )
+            )
+            core.group_manager._send_offline = AsyncMock(  # type: ignore[attr-defined]
+                return_value=GroupTransportOutcome(
+                    accepted=True,
+                    reason="blindbox-ready",
+                    transport_message_id="queue-bob",
+                )
+            )
+
+            first = await core.send_group_text(group_state.group_id, "first")
+            record_path = os.path.join(
+                tmpdir,
+                next(name for name in os.listdir(tmpdir) if name.startswith("alice.group.")),
+            )
+            with open(record_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            payload["next_group_seq"] = 1
+            with open(record_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+
+            reloaded = core.load_group(group_state.group_id)
+            second = await core.send_group_text(group_state.group_id, "second")
+            history = core.load_group_history(group_state.group_id)
+
+            assert reloaded is not None
+            self.assertEqual(reloaded.next_group_seq, first.envelope.group_seq + 1)
+            self.assertEqual(second.envelope.group_seq, first.envelope.group_seq + 1)
+            self.assertEqual([entry.group_seq for entry in history], [1, 2])
 
     async def test_local_and_imported_group_text_entries_share_compatible_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

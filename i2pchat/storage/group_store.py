@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from i2pchat.groups.models import GroupContentType, GroupState, utc_now
+from i2pchat.groups.models import (
+    GroupContentType,
+    GroupState,
+    normalize_member_id,
+    utc_now,
+)
 from i2pchat.storage.blindbox_state import atomic_write_json
 
 GROUP_RECORD_VERSION = 1
@@ -62,6 +67,48 @@ class GroupHistoryEntry:
     source_peer: str | None = None
     delivery_results: dict[str, str] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        content_type = (
+            self.content_type
+            if isinstance(self.content_type, GroupContentType)
+            else GroupContentType(str(self.content_type))
+        )
+        payload = self.payload
+        text = str(self.text or "")
+        if content_type == GroupContentType.GROUP_TEXT:
+            text = text or (str(payload) if payload is not None else "")
+            payload = text
+        elif content_type == GroupContentType.GROUP_CONTROL and isinstance(payload, dict):
+            payload = dict(payload)
+        created_at = self.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        else:
+            created_at = created_at.astimezone(timezone.utc)
+        object.__setattr__(
+            self,
+            "kind",
+            "me" if str(self.kind or "").strip().lower() == "me" else "peer",
+        )
+        object.__setattr__(self, "sender_id", normalize_member_id(self.sender_id))
+        object.__setattr__(self, "content_type", content_type)
+        object.__setattr__(self, "text", text)
+        object.__setattr__(self, "payload", payload)
+        object.__setattr__(self, "msg_id", str(self.msg_id or "").strip() or None)
+        object.__setattr__(self, "group_seq", max(0, int(self.group_seq)))
+        object.__setattr__(self, "epoch", max(0, int(self.epoch)))
+        object.__setattr__(self, "created_at", created_at)
+        object.__setattr__(self, "source_peer", str(self.source_peer or "").strip() or None)
+        object.__setattr__(
+            self,
+            "delivery_results",
+            {
+                recipient_id: str(status or "").strip()
+                for raw_recipient_id, status in dict(self.delivery_results or {}).items()
+                if (recipient_id := normalize_member_id(str(raw_recipient_id)))
+            },
+        )
+
 
 @dataclass(slots=True, frozen=True)
 class StoredGroupConversation:
@@ -69,6 +116,25 @@ class StoredGroupConversation:
     next_group_seq: int = 1
     history: tuple[GroupHistoryEntry, ...] = ()
     seen_msg_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        history = tuple(self.history or ())
+        highest_group_seq = max((entry.group_seq for entry in history), default=0)
+        normalized_seen_msg_ids = _resolve_seen_msg_ids(
+            history,
+            tuple(
+                str(raw_msg_id).strip()
+                for raw_msg_id in tuple(self.seen_msg_ids or ())
+                if str(raw_msg_id).strip()
+            ),
+        )
+        object.__setattr__(self, "history", history)
+        object.__setattr__(self, "seen_msg_ids", normalized_seen_msg_ids)
+        object.__setattr__(
+            self,
+            "next_group_seq",
+            max(1, int(self.next_group_seq), highest_group_seq + 1),
+        )
 
 
 def _serialize_state(state: GroupState) -> dict[str, Any]:

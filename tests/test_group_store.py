@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 
 from i2pchat.groups import GroupContentType, GroupState
 from i2pchat.storage.group_store import (
@@ -207,6 +208,99 @@ class GroupStoreTests(unittest.TestCase):
             self.assertFalse(imported)
             self.assertEqual(len(conversation.history), 1)
             self.assertEqual(conversation.seen_msg_ids, ("legacy-msg-1",))
+            self.assertEqual(conversation.next_group_seq, 4)
+
+    def test_load_conversation_backfills_next_group_seq_from_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="group-store-5",
+                epoch=9,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="Reload sequence",
+            )
+            upsert_group_state(tmpdir, "alice", state, next_group_seq=1)
+            append_group_history_entry(
+                tmpdir,
+                "alice",
+                state,
+                GroupHistoryEntry(
+                    kind="me",
+                    sender_id="alice.b32.i2p",
+                    content_type=GroupContentType.GROUP_TEXT,
+                    text="persisted",
+                    payload="persisted",
+                    msg_id="persisted-1",
+                    group_seq=5,
+                    epoch=9,
+                ),
+                next_group_seq=6,
+            )
+
+            record_path = os.path.join(
+                tmpdir,
+                next(name for name in os.listdir(tmpdir) if name.startswith("alice.group.")),
+            )
+            with open(record_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            payload["next_group_seq"] = 1
+            with open(record_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+
+            conversation = load_group_conversation(tmpdir, "alice", "group-store-5")
+
+            assert conversation is not None
+            self.assertEqual(len(conversation.history), 1)
+            self.assertEqual(conversation.history[0].group_seq, 5)
+            self.assertEqual(conversation.next_group_seq, 6)
+
+    def test_group_history_entries_are_normalized_on_append_and_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="group-store-6",
+                epoch=4,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="Normalized history",
+            )
+            upsert_group_state(tmpdir, "alice", state, next_group_seq=1)
+
+            append_group_history_entry(
+                tmpdir,
+                "alice",
+                state,
+                GroupHistoryEntry(
+                    kind=" PEER ",
+                    sender_id="  BOB.B32.I2P ",
+                    content_type="GROUP_TEXT",
+                    text="",
+                    payload="hello normalized",
+                    msg_id="  msg-normalized  ",
+                    group_seq=3,
+                    epoch=4,
+                    created_at=datetime(2026, 4, 9, 10, 0, 0),
+                    source_peer="  bob.b32.i2p  ",
+                    delivery_results={"  ALICE.B32.I2P  ": " delivered_live "},
+                ),
+                next_group_seq=4,
+            )
+
+            conversation = load_group_conversation(tmpdir, "alice", "group-store-6")
+
+            assert conversation is not None
+            assert conversation.history
+            entry = conversation.history[0]
+            self.assertEqual(entry.kind, "peer")
+            self.assertEqual(entry.sender_id, "bob.b32.i2p")
+            self.assertEqual(entry.content_type, GroupContentType.GROUP_TEXT)
+            self.assertEqual(entry.text, "hello normalized")
+            self.assertEqual(entry.payload, "hello normalized")
+            self.assertEqual(entry.msg_id, "msg-normalized")
+            self.assertEqual(entry.source_peer, "bob.b32.i2p")
+            self.assertEqual(
+                entry.delivery_results,
+                {"alice.b32.i2p": "delivered_live"},
+            )
+            self.assertEqual(entry.created_at.tzinfo, timezone.utc)
+            self.assertEqual(conversation.seen_msg_ids, ("msg-normalized",))
             self.assertEqual(conversation.next_group_seq, 4)
 
 
