@@ -30,6 +30,8 @@ from i2pchat.blindbox.blindbox_local_replica import ensure_local_blindbox_replic
 from i2pchat.groups import (
     GroupContentType,
     GroupEnvelope,
+    GroupImportResult,
+    GroupImportStatus,
     GroupManager,
     GroupRecipientDeliveryMetadata,
     GroupSendResult,
@@ -1955,13 +1957,22 @@ class I2PChatCore:
     def _load_group_conversation(
         self, group_id: str
     ) -> Optional[StoredGroupConversation]:
-        return load_group_conversation(
+        conversation = load_group_conversation(
             self.get_profile_data_dir(create=True),
             self.profile,
             group_id,
         )
+        if conversation is not None:
+            self.group_manager.prime_group_sequence(
+                group_id,
+                next_group_seq=conversation.next_group_seq,
+            )
+        return conversation
 
     def load_group_state(self, group_id: str) -> Optional[GroupState]:
+        conversation = self._load_group_conversation(group_id)
+        if conversation is not None:
+            return conversation.state
         return load_persisted_group_state(
             self.get_profile_data_dir(create=True),
             self.profile,
@@ -3855,7 +3866,7 @@ class I2PChatCore:
             return False
         text = body.decode("utf-8", errors="strict")
         sp = (self.stored_peer or self.current_peer_addr or "").strip() or None
-        if self.import_group_transport_text(text, source_peer=sp):
+        if self.import_group_transport(text, source_peer=sp) is not None:
             return True
         self._emit_message("peer", text, source_peer=sp)
         self._emit_notify("peer", text, source_peer=sp)
@@ -4372,24 +4383,38 @@ class I2PChatCore:
         )
         return result
 
-    def import_group_transport_text(
+    def import_group_transport(
         self,
         text: str,
         *,
         source_peer: Optional[str] = None,
-    ) -> bool:
+    ) -> GroupImportResult | None:
         try:
             decoded = decode_group_transport_text(text)
         except Exception as e:
-            self._emit_error(f"Invalid group transport payload: {_exception_user_message(e)}")
-            return True
+            detail = _exception_user_message(e)
+            self._emit_error(f"Invalid group transport payload: {detail}")
+            return GroupImportResult(
+                status=GroupImportStatus.INVALID,
+                error=detail,
+            )
         if decoded is None:
-            return False
+            return None
         try:
             self._validate_imported_group_transport(decoded)
         except Exception as e:
-            self._emit_error(f"Invalid group transport payload: {_exception_user_message(e)}")
-            return True
+            detail = _exception_user_message(e)
+            self._emit_error(f"Invalid group transport payload: {detail}")
+            return GroupImportResult(
+                status=GroupImportStatus.INVALID,
+                envelope=decoded.envelope,
+                state=decoded.state,
+                source_peer=(
+                    self._normalize_peer_addr(source_peer or decoded.envelope.sender_id)
+                    or None
+                ),
+                error=detail,
+            )
         existing_state = self.load_group_state(decoded.state.group_id)
         merged_state = self._merge_group_state_snapshot(
             existing_state,
@@ -4403,16 +4428,18 @@ class I2PChatCore:
                 updated_at=decoded.envelope.created_at,
                 epoch=decoded.envelope.epoch,
             )
+        history_source_peer = source_peer or decoded.envelope.sender_id
+        normalized_source_peer = self._normalize_peer_addr(history_source_peer) or None
         history_entry = self._build_group_history_entry(
             decoded.envelope,
-            source_peer=source_peer or decoded.envelope.sender_id,
+            source_peer=history_source_peer,
         )
         existing_conversation = self._load_group_conversation(decoded.state.group_id)
         next_group_seq = max(
             decoded.envelope.group_seq + 1,
             existing_conversation.next_group_seq if existing_conversation is not None else 1,
         )
-        _conversation, imported = append_group_history_entry(
+        conversation, imported = append_group_history_entry(
             self.get_profile_data_dir(create=True),
             self.profile,
             merged_state,
@@ -4420,30 +4447,44 @@ class I2PChatCore:
             next_group_seq=next_group_seq,
         )
         if not imported:
-            return True
+            return GroupImportResult(
+                status=GroupImportStatus.DUPLICATE,
+                envelope=decoded.envelope,
+                state=conversation.state,
+                source_peer=normalized_source_peer,
+            )
         if decoded.envelope.content_type == GroupContentType.GROUP_TEXT:
             rendered_text = self._format_group_text_for_ui(
-                merged_state,
+                conversation.state,
                 sender_id=decoded.envelope.sender_id,
                 text=str(decoded.envelope.payload or ""),
                 incoming=True,
             )
-            ui_source_peer = (
-                self._normalize_peer_addr(source_peer or decoded.envelope.sender_id)
-                or None
-            )
             self._emit_message(
                 "peer",
                 rendered_text,
-                source_peer=ui_source_peer,
+                source_peer=normalized_source_peer,
                 message_id=decoded.envelope.msg_id,
             )
-            self._emit_notify("peer", rendered_text, source_peer=ui_source_peer)
+            self._emit_notify("peer", rendered_text, source_peer=normalized_source_peer)
         else:
             self._emit_system(
-                f"Group updated: {self._group_display_name(merged_state)}"
+                f"Group updated: {self._group_display_name(conversation.state)}"
             )
-        return True
+        return GroupImportResult(
+            status=GroupImportStatus.IMPORTED,
+            envelope=decoded.envelope,
+            state=conversation.state,
+            source_peer=normalized_source_peer,
+        )
+
+    def import_group_transport_text(
+        self,
+        text: str,
+        *,
+        source_peer: Optional[str] = None,
+    ) -> bool:
+        return self.import_group_transport(text, source_peer=source_peer) is not None
 
     def is_outbound_connect_busy(self) -> bool:
         """True, пока выполняется исходящий connect_to_peer (ожидание stream_connect)."""
@@ -6115,7 +6156,7 @@ class I2PChatCore:
 
                 if msg_type == "U":
                     sp = self.current_peer_addr
-                    if not self.import_group_transport_text(body, source_peer=sp):
+                    if self.import_group_transport(body, source_peer=sp) is None:
                         self._emit_message("peer", body, source_peer=sp)
                         self._emit_notify("peer", body, source_peer=sp)
                     # Подтверждение доставки по MSG_ID (vNext)

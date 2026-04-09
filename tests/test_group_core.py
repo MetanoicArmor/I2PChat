@@ -20,6 +20,7 @@ from i2pchat.groups import (
     GroupContentType,
     GroupDeliveryStatus,
     GroupEnvelope,
+    GroupImportStatus,
     GroupRecipientDeliveryMetadata,
     GroupState,
     GroupTransportOutcome,
@@ -183,11 +184,15 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-            self.assertTrue(
-                core.import_group_transport_text(imported_wire, source_peer=BOB_B32)
-            )
+            imported = core.import_group_transport(imported_wire, source_peer=BOB_B32)
             history = core.load_group_history(group_state.group_id)
 
+            assert imported is not None
+            self.assertEqual(imported.status, GroupImportStatus.IMPORTED)
+            assert imported.state is not None
+            self.assertEqual(imported.state.group_id, group_state.group_id)
+            assert imported.envelope is not None
+            self.assertEqual(imported.envelope.msg_id, "shape-import-1")
             self.assertEqual(len(history), 2)
             sent_entry, imported_entry = history
             self.assertIs(type(sent_entry), type(imported_entry))
@@ -238,12 +243,13 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-            handled = core.import_group_transport_text(
+            handled = core.import_group_transport(
                 wire_text,
                 source_peer=BOB_B32,
             )
 
-            self.assertTrue(handled)
+            assert handled is not None
+            self.assertEqual(handled.status, GroupImportStatus.IMPORTED)
             loaded_state = core.load_group_state("core-group-2")
             history = core.load_group_history("core-group-2")
             assert loaded_state is not None
@@ -284,8 +290,13 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-            self.assertTrue(core.import_group_transport_text(wire_text, source_peer=BOB_B32))
-            self.assertTrue(core.import_group_transport_text(wire_text, source_peer=BOB_B32))
+            first = core.import_group_transport(wire_text, source_peer=BOB_B32)
+            second = core.import_group_transport(wire_text, source_peer=BOB_B32)
+
+            assert first is not None
+            assert second is not None
+            self.assertEqual(first.status, GroupImportStatus.IMPORTED)
+            self.assertEqual(second.status, GroupImportStatus.DUPLICATE)
             self.assertEqual(len(core.load_group_history("core-group-3")), 1)
 
     def test_invalid_group_text_payload_is_rejected_without_persisting(self) -> None:
@@ -302,7 +313,10 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 '"sender_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p","transport":"group","version":1}'
             )
 
-            self.assertTrue(core.import_group_transport_text(bad_wire, source_peer=BOB_B32))
+            result = core.import_group_transport(bad_wire, source_peer=BOB_B32)
+
+            assert result is not None
+            self.assertEqual(result.status, GroupImportStatus.INVALID)
             self.assertIsNone(core.load_group_state("core-group-bad-text"))
             self.assertEqual(core.load_group_history("core-group-bad-text"), [])
             self.assertTrue(messages)
@@ -321,7 +335,10 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 '"sender_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p","transport":"group","version":1}'
             )
 
-            self.assertTrue(core.import_group_transport_text(bad_wire, source_peer=BOB_B32))
+            result = core.import_group_transport(bad_wire, source_peer=BOB_B32)
+
+            assert result is not None
+            self.assertEqual(result.status, GroupImportStatus.INVALID)
             self.assertIsNone(core.load_group_state("core-group-bad-control"))
             self.assertEqual(core.load_group_history("core-group-bad-control"), [])
 
@@ -402,12 +419,12 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
 
-            self.assertTrue(
-                core.import_group_transport_text(imported_wire, source_peer=BOB_B32)
-            )
+            imported = core.import_group_transport(imported_wire, source_peer=BOB_B32)
             final_state = core.load_group_state(group_state.group_id)
             final_history = core.load_group_history(group_state.group_id)
 
+            assert imported is not None
+            self.assertEqual(imported.status, GroupImportStatus.IMPORTED)
             assert final_state is not None
             self.assertEqual(final_state.title, "Imported title")
             self.assertEqual(final_state.epoch, 5)
@@ -436,6 +453,7 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             core = I2PChatCore(profile="alice")
             core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            self.assertIsNone(core.import_group_transport("plain direct text"))
             self.assertFalse(core.import_group_transport_text("plain direct text"))
 
 

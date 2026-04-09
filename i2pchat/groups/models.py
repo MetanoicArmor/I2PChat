@@ -25,6 +25,12 @@ class GroupDeliveryStatus(StrEnum):
     FAILED = "failed"
 
 
+class GroupImportStatus(StrEnum):
+    IMPORTED = "imported"
+    DUPLICATE = "duplicate"
+    INVALID = "invalid"
+
+
 @dataclass(slots=True, frozen=True)
 class GroupState:
     group_id: str
@@ -91,3 +97,24 @@ class GroupMemberDeliveryResult:
 class GroupSendResult:
     envelope: GroupEnvelope
     delivery_results: dict[str, GroupMemberDeliveryResult]
+
+
+@dataclass(slots=True, frozen=True)
+class GroupImportResult:
+    status: GroupImportStatus
+    envelope: GroupEnvelope | None = None
+    state: GroupState | None = None
+    source_peer: str | None = None
+    error: str | None = None
+
+    @property
+    def imported(self) -> bool:
+        return self.status == GroupImportStatus.IMPORTED
+
+    @property
+    def duplicate(self) -> bool:
+        return self.status == GroupImportStatus.DUPLICATE
+
+    @property
+    def invalid(self) -> bool:
+        return self.status == GroupImportStatus.INVALID
