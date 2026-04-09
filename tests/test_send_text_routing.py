@@ -286,6 +286,42 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
                 core.get_delivery_telemetry()["state"], "connecting-handshake"
             )
 
+    def test_delivery_telemetry_uses_selected_peer_transport_snapshot(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = I2PChatCore(profile="alice")
+            core.stored_peer = STORED_PEER_1
+            core.current_peer_addr = STORED_PEER_1
+
+            core.session_manager.set_active_peer(STORED_PEER_2)
+            core.session_manager.set_peer_connected(
+                STORED_PEER_2, state=PeerState.HANDSHAKING
+            )
+            core.session_manager.register_stream(
+                STORED_PEER_2,
+                state=PeerState.HANDSHAKING,
+                peer_id=STORED_PEER_2,
+            )
+            core.session_manager.schedule_reconnect_backoff(
+                reason="other-peer-fail",
+                peer_id=STORED_PEER_2,
+            )
+
+            core.session_manager.set_peer_connected(
+                STORED_PEER_1, state=PeerState.CONNECTING
+            )
+
+            telemetry = core.get_delivery_telemetry()
+            self.assertEqual(telemetry["peer_state"], PeerState.CONNECTING.value)
+            self.assertEqual(telemetry["outbound_streams"], 0)
+            self.assertEqual(telemetry["reconnect_attempt"], 0)
+
     def test_auto_connect_retry_policy_is_single_attempt_with_cooldown(self) -> None:
         self.assertFalse(
             should_start_auto_connect_retry(

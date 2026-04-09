@@ -3073,8 +3073,18 @@ class I2PChatCore:
             peer_id=peer_for_route,
         ).value
         peer_transport = self.session_manager.get_peer_transport(peer_for_route)
-        reconnect_meta = (
-            peer_transport.reconnect if peer_transport is not None else self.session_manager.reconnect
+        reconnect_meta = self.session_manager.get_reconnect_metadata(
+            peer_id=peer_for_route
+        )
+        peer_state = (
+            peer_transport.peer_state.value
+            if peer_transport is not None
+            else self.session_manager.peer_state.value
+        )
+        outbound_streams = (
+            len(peer_transport.outbound_streams)
+            if peer_transport is not None
+            else len(self.session_manager.outbound_streams)
         )
 
         if connected and not self.handshake_complete:
@@ -3117,9 +3127,9 @@ class I2PChatCore:
             "replicas": len(self.blindbox_replicas),
             "network_status": str(self.network_status),
             "transport_state": self.session_manager.transport_state.value,
-            "peer_state": self.session_manager.peer_state.value,
+            "peer_state": peer_state,
             "outbound_policy": outbound_policy,
-            "outbound_streams": len(self.session_manager.outbound_streams),
+            "outbound_streams": outbound_streams,
             "reconnect_attempt": int(reconnect_meta.attempt),
             "reconnect_next_retry_mono": float(reconnect_meta.next_retry_mono),
             "reconnect_last_failure_reason": str(reconnect_meta.last_failure_reason),
