@@ -123,7 +123,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             PeerState.CONNECTING,
         )
 
-    def test_unreg_recomputes_effective_peer_state_from_remaining_streams(self) -> None:
+    def test_unreg_recomputes_aggregate_peer_state_from_remaining_streams(self) -> None:
         sm = SessionManager()
         sm.register_stream("peer-a.b32.i2p", state=PeerState.HANDSHAKING)
         sm.register_stream("peer-b.b32.i2p", state=PeerState.SECURE)
@@ -132,7 +132,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         sm.unregister_stream("peer-a.b32.i2p")
 
         self.assertEqual(sm.get_active_peer(), "peer-a.b32.i2p")
-        self.assertEqual(sm.peer_state, PeerState.DISCONNECTED)
+        self.assertEqual(sm.peer_state, PeerState.SECURE)
         peer_b = sm.get_peer_transport("peer-b.b32.i2p")
         assert peer_b is not None
         self.assertEqual(peer_b.peer_state, PeerState.SECURE)
@@ -188,6 +188,34 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
                 peer_id="missing-peer.b32.i2p",
             )
         )
+        self.assertFalse(sm.is_live_path_alive())
+
+    def test_active_peer_is_view_only_for_routing_truth(self) -> None:
+        sm = SessionManager()
+        sm.set_peer_handshake_complete("peer-b.b32.i2p")
+        sm.set_active_peer("peer-a.b32.i2p")
+
+        self.assertEqual(sm.get_active_peer(), "peer-a.b32.i2p")
+        self.assertFalse(sm.is_live_path_alive())
+        self.assertFalse(sm.is_live_path_alive(peer_id="peer-a.b32.i2p"))
+        self.assertTrue(sm.is_live_path_alive(peer_id="peer-b.b32.i2p"))
+        self.assertEqual(
+            sm.select_outbound_policy(
+                requested_route="auto",
+                connected=True,
+                handshake_complete=True,
+                peer_id="peer-a.b32.i2p",
+            ),
+            OutboundPolicy.QUEUE_THEN_RETRY_LIVE,
+        )
+        self.assertEqual(
+            sm.select_outbound_policy(
+                requested_route="auto",
+                connected=True,
+                handshake_complete=True,
+            ),
+            OutboundPolicy.PREFER_LIVE_FALLBACK_BLINDBOX,
+        )
 
     def test_route_selection_does_not_reuse_live_flags_for_other_peer(self) -> None:
         sm = SessionManager()
@@ -211,15 +239,17 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             OutboundPolicy.QUEUE_THEN_RETRY_LIVE,
         )
 
-    def test_non_active_peer_updates_do_not_override_active_peer_state(self) -> None:
+    def test_aggregate_peer_state_is_authoritative_not_active_peer_pointer(self) -> None:
         sm = SessionManager()
-        sm.set_active_peer("peer-a.b32.i2p")
         sm.set_peer_handshake_complete("peer-a.b32.i2p")
+        sm.set_active_peer("peer-a.b32.i2p")
 
         sm.mark_peer_failed("peer-b.b32.i2p", reason="link-fail")
 
         self.assertEqual(sm.get_active_peer(), "peer-a.b32.i2p")
         self.assertEqual(sm.peer_state, PeerState.SECURE)
+        sm.reset_peer_lifecycle("peer-a.b32.i2p", reason="peer-a-reset")
+        self.assertEqual(sm.peer_state, PeerState.FAILED)
         peer_b = sm.get_peer_transport("peer-b.b32.i2p")
         assert peer_b is not None
         self.assertEqual(peer_b.peer_state, PeerState.FAILED)
@@ -233,9 +263,8 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(sm.transport_state, TransportState.READY)
 
-    def test_global_reconnect_backoff_does_not_mutate_active_peer(self) -> None:
+    def test_global_reconnect_backoff_does_not_mutate_peer_scoped_metadata(self) -> None:
         sm = SessionManager()
-        sm.set_active_peer("peer-a.b32.i2p")
         sm.set_peer_handshake_complete("peer-a.b32.i2p")
 
         sm.schedule_reconnect_backoff(reason="global-fail")
@@ -245,7 +274,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(peer_a.reconnect.attempt, 0)
         self.assertEqual(sm.reconnect.attempt, 1)
 
-    def test_reset_peer_session_is_scoped_to_target_peer(self) -> None:
+    def test_reset_peer_lifecycle_is_scoped_to_target_peer(self) -> None:
         sm = SessionManager()
         sm.set_peer_handshake_complete("peer-a.b32.i2p")
         sm.set_peer_handshake_complete("peer-b.b32.i2p")
@@ -262,7 +291,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
             peer_id="peer-b.b32.i2p",
         )
 
-        changed = sm.reset_peer_session("peer-a.b32.i2p", reason="target-reset")
+        changed = sm.reset_peer_lifecycle("peer-a.b32.i2p", reason="target-reset")
 
         self.assertTrue(changed)
         peer_a = sm.get_peer_transport("peer-a.b32.i2p")
@@ -276,13 +305,13 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(peer_b.inflight_msg_ids, {22})
         self.assertEqual(set(peer_b.outbound_streams), {"peer-b.b32.i2p"})
 
-    def test_reset_peer_session_can_drop_peer_without_auto_switching_active_peer(self) -> None:
+    def test_reset_peer_lifecycle_can_drop_peer_without_auto_switching_active_peer(self) -> None:
         sm = SessionManager()
         sm.set_active_peer("peer-a.b32.i2p")
         sm.set_peer_handshake_complete("peer-a.b32.i2p")
         sm.set_peer_handshake_complete("peer-b.b32.i2p")
 
-        removed = sm.reset_peer_session(
+        removed = sm.reset_peer_lifecycle(
             "peer-a.b32.i2p",
             reason="drop-a",
             drop_peer=True,
@@ -293,6 +322,17 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(sm.get_peer_transport("peer-b.b32.i2p"))
         self.assertEqual(sm.get_active_peer(), "")
 
+    def test_reset_peer_session_remains_compatibility_alias(self) -> None:
+        sm = SessionManager()
+        sm.set_peer_handshake_complete("peer-a.b32.i2p")
+
+        changed = sm.reset_peer_session("peer-a.b32.i2p", reason="compat-reset")
+
+        self.assertTrue(changed)
+        peer_a = sm.get_peer_transport("peer-a.b32.i2p")
+        assert peer_a is not None
+        self.assertEqual(peer_a.peer_state, PeerState.DISCONNECTED)
+
     async def test_peer_reset_does_not_imply_full_manager_shutdown(self) -> None:
         sm = SessionManager()
         writer = _DummyWriter()
@@ -300,7 +340,7 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         sm.set_peer_handshake_complete("peer-a.b32.i2p")
         sm.set_peer_handshake_complete("peer-b.b32.i2p")
 
-        changed = sm.reset_peer_session("peer-a.b32.i2p", reason="peer-a-disconnect")
+        changed = sm.reset_peer_lifecycle("peer-a.b32.i2p", reason="peer-a-disconnect")
 
         self.assertTrue(changed)
         self.assertIsNotNone(sm.session_socket)

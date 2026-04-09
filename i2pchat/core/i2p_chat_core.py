@@ -4623,7 +4623,7 @@ class I2PChatCore:
                 pass
             self._reset_crypto_state()
             if peer_before_disconnect:
-                self.session_manager.reset_peer_session(
+                self.session_manager.reset_peer_lifecycle(
                     peer_before_disconnect, reason="disconnect"
                 )
             self.session_manager.mark_live_failure(
@@ -6025,7 +6025,7 @@ class I2PChatCore:
                 self.conn = None
                 self._reset_crypto_state()
                 if peer_before_cleanup:
-                    self.session_manager.reset_peer_session(
+                    self.session_manager.reset_peer_lifecycle(
                         peer_before_cleanup, reason="receive-loop-cleanup"
                     )
                 self.session_manager.mark_live_failure(
