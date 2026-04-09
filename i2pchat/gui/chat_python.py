@@ -425,7 +425,7 @@ class I2PChat(App):
     # ----- core wiring -----
 
     def _create_core(self, profile: str, sam_address: tuple[str, int]) -> I2PChatCore:
-        return I2PChatCore(
+        core = I2PChatCore(
             profile=profile,
             sam_address=sam_address,
             on_status=self.handle_status,
@@ -443,6 +443,12 @@ class I2PChat(App):
             on_trust_decision=self.handle_trust_decision,
             on_trust_mismatch_decision=self.handle_trust_mismatch_decision,
         )
+        setattr(
+            core,
+            "on_outbound_delivery_update",
+            self.handle_outbound_delivery_update,
+        )
+        return core
 
     async def _ensure_router_backend_ready(self) -> tuple[str, int]:
         settings = normalize_router_settings(self._router_settings)
@@ -1197,6 +1203,38 @@ class I2PChat(App):
         else:
             self.post("success", f"Message delivered ({message_id}).")
         self._update_history_delivery_state(message_id, DELIVERY_STATE_DELIVERED)
+        self._refresh_status_bar()
+
+    def handle_outbound_delivery_update(
+        self,
+        message_id: str,
+        delivery_state: str,
+        delivery_hint: str,
+        delivery_reason: str,
+        retryable: bool,
+    ) -> None:
+        """BlindBox offline: core updates bubble state after I2P PUT (TUI keeps ref + history)."""
+        if not message_id:
+            return
+        ref_id = self._message_ref_by_id.get(message_id)
+        if ref_id is not None:
+            ref = self._find_recent_ref(ref_id)
+            if ref is not None:
+                ref.delivery_state = delivery_state
+        for idx in range(len(self._history_entries) - 1, -1, -1):
+            entry = self._history_entries[idx]
+            if entry.message_id != message_id:
+                continue
+            self._history_entries[idx] = replace(
+                entry,
+                delivery_state=delivery_state,
+                delivery_hint=delivery_hint or entry.delivery_hint,
+                delivery_reason=delivery_reason or entry.delivery_reason,
+                retryable=retryable,
+            )
+            self._history_dirty = True
+            self._save_history_if_needed()
+            break
         self._refresh_status_bar()
 
     def handle_image_delivered(self, filename: str) -> None:

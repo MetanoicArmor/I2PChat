@@ -18,7 +18,7 @@ dependencies = [
     "Pillow",
     "pynacl",
     "keyring",
-    "cryptography; sys_platform == 'linux'",
+    "cryptography>=46.0.7; sys_platform == 'linux'",
     "pywin32-ctypes; sys_platform == 'win32'",
 ]
 

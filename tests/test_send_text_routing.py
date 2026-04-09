@@ -155,6 +155,48 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.reason, "blindbox-disabled")
             self.assertEqual(result.delivery_state, "failed")
 
+    async def test_send_text_auto_offline_fails_fast_when_blindbox_send_busy(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = I2PChatCore(profile="alice")
+            core.stored_peer = STORED_PEER_3
+            core.my_dest = _DummyDest()
+            await core._blindbox_send_lock.acquire()  # noqa: SLF001 - concurrency behavior
+            try:
+                result = await core.send_text("hello-busy-auto")
+            finally:
+                core._blindbox_send_lock.release()  # noqa: SLF001
+            self.assertFalse(result.accepted)
+            self.assertEqual(result.reason, "blindbox-send-busy")
+            self.assertEqual(result.delivery_state, "failed")
+
+    async def test_send_text_offline_fails_fast_when_blindbox_send_busy(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            core = I2PChatCore(profile="alice")
+            core.stored_peer = STORED_PEER_4
+            core.my_dest = _DummyDest()
+            await core._blindbox_send_lock.acquire()  # noqa: SLF001 - concurrency behavior
+            try:
+                result = await core.send_text("hello-busy-offline", route="offline")
+            finally:
+                core._blindbox_send_lock.release()  # noqa: SLF001
+            self.assertFalse(result.accepted)
+            self.assertEqual(result.reason, "blindbox-send-busy")
+            self.assertEqual(result.delivery_state, "failed")
+
     def test_delivery_telemetry_states(self) -> None:
         with patch.dict(
             os.environ,

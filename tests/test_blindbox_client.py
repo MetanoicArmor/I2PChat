@@ -474,10 +474,72 @@ class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
             elapsed = time.monotonic() - started
             self.assertGreaterEqual(len(result), 1)
             self.assertLess(elapsed, 0.30)
+            self.assertEqual(slow.put_calls, 0)
             await client.close()
         finally:
             await fast.stop()
             await slow.stop()
+
+    async def test_put_quorum_one_uses_single_fallback_and_skips_third_replica(self) -> None:
+        storage_a: dict[str, bytes] = {}
+        storage_b: dict[str, bytes] = {}
+        storage_c: dict[str, bytes] = {}
+        first = _ReplicaServer("error", storage_a)
+        second = _ReplicaServer("ok", storage_b)
+        third = _ReplicaServer("ok", storage_c)
+        await first.start()
+        await second.start()
+        await third.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-put-fallback-2",
+                blind_boxes=[
+                    f"127.0.0.1:{first.port}",
+                    f"127.0.0.1:{second.port}",
+                    f"127.0.0.1:{third.port}",
+                ],
+                use_sam=False,
+                put_quorum=1,
+                retry_attempts=1,
+            )
+            result = await client.put("k-fallback", b"payload")
+            self.assertGreaterEqual(len(result), 1)
+            self.assertEqual(first.put_calls, 1)
+            self.assertEqual(second.put_calls, 1)
+            self.assertEqual(third.put_calls, 0)
+            await client.close()
+        finally:
+            await first.stop()
+            await second.stop()
+            await third.stop()
+
+    async def test_put_quorum_one_falls_back_without_retries_on_primary(self) -> None:
+        storage_a: dict[str, bytes] = {}
+        storage_b: dict[str, bytes] = {}
+        first = _ReplicaServer("ok", storage_a, flaky_first_put=True)
+        second = _ReplicaServer("ok", storage_b)
+        await first.start()
+        await second.start()
+        try:
+            client = BlindBoxClient(
+                session_id="test-put-fallback-no-retry",
+                blind_boxes=[
+                    f"127.0.0.1:{first.port}",
+                    f"127.0.0.1:{second.port}",
+                ],
+                use_sam=False,
+                put_quorum=1,
+                retry_attempts=3,
+                retry_backoff_base=0.01,
+            )
+            result = await client.put("k-fallback-noretry", b"payload")
+            self.assertGreaterEqual(len(result), 1)
+            self.assertEqual(first.put_calls, 1)
+            self.assertEqual(second.put_calls, 1)
+            await client.close()
+        finally:
+            await first.stop()
+            await second.stop()
 
     async def test_get_first_accepted_returns_before_slow_replica(self) -> None:
         fast_storage: dict[str, bytes] = {"k-fast-get": b"payload-fast"}
