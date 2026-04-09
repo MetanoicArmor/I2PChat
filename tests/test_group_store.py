@@ -75,6 +75,41 @@ class GroupStoreTests(unittest.TestCase):
             self.assertEqual(len(second.history), 1)
             self.assertEqual(second.seen_msg_ids, ("msg-1",))
 
+    def test_persist_and_load_group_text_history_locally(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="group-store-3",
+                epoch=5,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="History test",
+            )
+            upsert_group_state(tmpdir, "alice", state, next_group_seq=1)
+
+            append_group_history_entry(
+                tmpdir,
+                "alice",
+                state,
+                GroupHistoryEntry(
+                    kind="me",
+                    sender_id="alice.b32.i2p",
+                    content_type=GroupContentType.GROUP_TEXT,
+                    text="persist me",
+                    msg_id="persist-msg",
+                    group_seq=7,
+                    epoch=5,
+                ),
+                next_group_seq=8,
+            )
+
+            loaded = load_group_conversation(tmpdir, "alice", "group-store-3")
+
+            assert loaded is not None
+            self.assertEqual(len(loaded.history), 1)
+            self.assertEqual(loaded.history[0].text, "persist me")
+            self.assertEqual(loaded.history[0].group_seq, 7)
+            self.assertEqual(loaded.history[0].epoch, 5)
+            self.assertEqual(loaded.next_group_seq, 8)
+
 
 if __name__ == "__main__":
     unittest.main()

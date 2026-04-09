@@ -1968,6 +1968,24 @@ class I2PChatCore:
             group_id,
         )
 
+    def save_group_state(
+        self,
+        state: GroupState,
+        *,
+        next_group_seq: Optional[int] = None,
+    ) -> GroupState:
+        conversation = upsert_group_state(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            state,
+            next_group_seq=next_group_seq,
+        )
+        self.group_manager.prime_group_sequence(
+            state.group_id,
+            next_group_seq=conversation.next_group_seq,
+        )
+        return conversation.state
+
     def list_group_states(self) -> list[GroupState]:
         return list_persisted_group_states(
             self.get_profile_data_dir(create=True),
