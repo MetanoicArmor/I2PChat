@@ -112,6 +112,17 @@ Behavior remains backward-compatible:
 1. `534cc88` — Make SessionManager the per-peer transport state owner
 2. `6b35ae0` — Route core lifecycle decisions through SessionManager peer state
 
+### Post-`88a7707` polish (small scope)
+
+- `active_peer` was narrowed to explicit compatibility/view-only behavior:
+  - no implicit active-peer fallback in generic peer resolution paths;
+  - route/liveness truth remains peer-scoped (`peer_id`) and transport-state driven.
+- Internal reset lifecycle usage remains centered on `reset_peer_lifecycle()`:
+  - compatibility aliases `reset_peer_session()` / `reset_peer_transport()` stay as wrappers only.
+- Peer-reset isolation tests were strengthened:
+  - reset of one peer does not imply full manager shutdown;
+  - reset preserves other peer state (streams/inflight/secure state) until explicit full shutdown.
+
 ### What still remains in core (intentional for this step)
 
 - Protocol framing, crypto, handshake message semantics, UI callbacks.
@@ -146,6 +157,16 @@ Introduce a SessionManager-managed peer connection slot abstraction (per-peer co
 ```bash
 uv run pytest tests/test_session_manager.py tests/test_send_text_routing.py tests/test_shutdown_cleanup.py -q
 ```
+
+### Полировка после `88a7707` (узкий scope)
+
+- `active_peer` дополнительно зафиксирован как compatibility/view-only указатель:
+  - убран неявный fallback через active-peer в общих путях резолва peer.
+- Внутренний reset-поток закреплён за `reset_peer_lifecycle()`:
+  - `reset_peer_session()` и `reset_peer_transport()` оставлены как совместимые алиасы-обёртки.
+- Усилены тесты изоляции peer reset:
+  - reset одного пира не означает полный shutdown менеджера;
+  - состояние других пиров (secure/streams/inflight) не должно затрагиваться до явного полного shutdown.
 
 ---
 
