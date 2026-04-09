@@ -128,6 +128,16 @@ def _deserialize_entry(data: dict[str, Any]) -> GroupHistoryEntry:
     )
 
 
+def _resolve_next_group_seq(
+    existing: StoredGroupConversation | None,
+    next_group_seq: int | None,
+) -> int:
+    resolved = existing.next_group_seq if existing is not None else 1
+    if next_group_seq is not None:
+        resolved = max(resolved, int(max(1, next_group_seq)))
+    return resolved
+
+
 def save_group_conversation(
     profile_data_dir: str,
     profile: str,
@@ -187,11 +197,7 @@ def upsert_group_state(
     existing = load_group_conversation(profile_data_dir, profile, state.group_id)
     conversation = StoredGroupConversation(
         state=state,
-        next_group_seq=(
-            int(max(1, next_group_seq))
-            if next_group_seq is not None
-            else (existing.next_group_seq if existing is not None else 1)
-        ),
+        next_group_seq=_resolve_next_group_seq(existing, next_group_seq),
         history=existing.history if existing is not None else (),
         seen_msg_ids=existing.seen_msg_ids if existing is not None else (),
     )
@@ -210,11 +216,17 @@ def append_group_history_entry(
     existing = load_group_conversation(profile_data_dir, profile, state.group_id)
     history = list(existing.history) if existing is not None else []
     seen_msg_ids = list(existing.seen_msg_ids) if existing is not None else []
+    resolved_next_group_seq = _resolve_next_group_seq(existing, next_group_seq)
     normalized_msg_id = str(entry.msg_id or "").strip()
     if normalized_msg_id and normalized_msg_id in seen_msg_ids:
-        if existing is None:
-            existing = StoredGroupConversation(state=state)
-        return existing, False
+        conversation = StoredGroupConversation(
+            state=state,
+            next_group_seq=resolved_next_group_seq,
+            history=tuple(history),
+            seen_msg_ids=tuple(seen_msg_ids),
+        )
+        save_group_conversation(profile_data_dir, profile, conversation)
+        return conversation, False
     history.append(entry)
     if normalized_msg_id:
         seen_msg_ids.append(normalized_msg_id)
@@ -222,11 +234,7 @@ def append_group_history_entry(
             seen_msg_ids = seen_msg_ids[-MAX_SEEN_GROUP_MSG_IDS:]
     conversation = StoredGroupConversation(
         state=state,
-        next_group_seq=(
-            int(max(1, next_group_seq))
-            if next_group_seq is not None
-            else (existing.next_group_seq if existing is not None else 1)
-        ),
+        next_group_seq=resolved_next_group_seq,
         history=tuple(history),
         seen_msg_ids=tuple(seen_msg_ids),
     )

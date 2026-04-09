@@ -196,6 +196,43 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(core.import_group_transport_text(wire_text, source_peer=BOB_B32))
             self.assertEqual(len(core.load_group_history("core-group-3")), 1)
 
+    def test_invalid_group_text_payload_is_rejected_without_persisting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            messages: list[object] = []
+            core = I2PChatCore(profile="alice", on_message=messages.append)
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_B32)
+            bad_wire = (
+                '__I2PCHAT_GROUP__:{"content_type":"GROUP_TEXT","created_at":"2026-04-09T10:00:00+00:00",'
+                '"delivery_id":"bad-1:alice","epoch":1,"group_id":"core-group-bad-text","group_seq":1,'
+                '"members":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"],'
+                '"msg_id":"bad-1","payload":{"text":"not-a-string"},"recipient_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p",'
+                '"sender_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p","transport":"group","version":1}'
+            )
+
+            self.assertTrue(core.import_group_transport_text(bad_wire, source_peer=BOB_B32))
+            self.assertIsNone(core.load_group_state("core-group-bad-text"))
+            self.assertEqual(core.load_group_history("core-group-bad-text"), [])
+            self.assertTrue(messages)
+            self.assertEqual(getattr(messages[-1], "kind", None), "error")
+
+    def test_invalid_group_control_recipient_is_rejected_without_persisting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_B32)
+            bad_wire = (
+                '__I2PCHAT_GROUP__:{"content_type":"GROUP_CONTROL","created_at":"2026-04-09T10:00:00+00:00",'
+                '"delivery_id":"bad-2:carol","epoch":2,"group_id":"core-group-bad-control","group_seq":2,'
+                '"members":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p","cccccccccccccccccccccccccccccccccccccccc.b32.i2p"],'
+                '"msg_id":"bad-2","payload":{"op":"rename","title":"Nope"},"recipient_id":"cccccccccccccccccccccccccccccccccccccccc.b32.i2p",'
+                '"sender_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p","transport":"group","version":1}'
+            )
+
+            self.assertTrue(core.import_group_transport_text(bad_wire, source_peer=BOB_B32))
+            self.assertIsNone(core.load_group_state("core-group-bad-control"))
+            self.assertEqual(core.load_group_history("core-group-bad-control"), [])
+
     async def test_group_control_can_be_persisted_and_imported_minimally(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             core = I2PChatCore(profile="alice")
@@ -233,6 +270,7 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sent.envelope.content_type, GroupContentType.GROUP_CONTROL)
             self.assertEqual(after_send_state.title, "Renamed title")
             self.assertEqual(after_send_state.epoch, 4)
+            self.assertEqual(after_send_history[-1].kind, "me")
             self.assertEqual(after_send_history[-1].content_type, GroupContentType.GROUP_CONTROL)
             self.assertEqual(after_send_history[-1].group_seq, sent.envelope.group_seq)
 
@@ -275,6 +313,7 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(final_state.title, "Imported title")
             self.assertEqual(final_state.epoch, 5)
             self.assertIn(CAROL_B32, final_state.members)
+            self.assertEqual(final_history[-1].kind, "peer")
             self.assertEqual(final_history[-1].content_type, GroupContentType.GROUP_CONTROL)
             self.assertEqual(final_history[-1].msg_id, "control-import-1")
             self.assertEqual(final_history[-1].group_seq, imported_envelope.group_seq)

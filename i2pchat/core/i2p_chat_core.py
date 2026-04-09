@@ -3996,6 +3996,25 @@ class I2PChatCore:
             return f"[Group {group_label}] {sender_id}: {text}"
         return f"[Group {group_label}] {text}"
 
+    def _group_history_kind(self, sender_id: str) -> str:
+        try:
+            if normalize_member_id(sender_id) == self._local_group_member_id():
+                return "me"
+        except Exception:
+            pass
+        return "peer"
+
+    def _validate_imported_group_transport(self, decoded: Any) -> None:
+        if not decoded.recipient_id or not decoded.delivery_id:
+            raise ValueError("Group transport recipient metadata is required")
+        local_member_id = ""
+        try:
+            local_member_id = self._local_group_member_id()
+        except Exception:
+            local_member_id = ""
+        if local_member_id and decoded.recipient_id != local_member_id:
+            raise ValueError("Group transport recipient does not match this profile")
+
     def _merge_group_state_snapshot(
         self,
         existing: Optional[GroupState],
@@ -4218,7 +4237,7 @@ class I2PChatCore:
             self.profile,
             updated_state,
             GroupHistoryEntry(
-                kind="me",
+                kind=self._group_history_kind(sender_id),
                 sender_id=sender_id,
                 content_type=GroupContentType.GROUP_TEXT,
                 text=str(result.envelope.payload or ""),
@@ -4278,7 +4297,7 @@ class I2PChatCore:
             self.profile,
             updated_state,
             GroupHistoryEntry(
-                kind="system",
+                kind=self._group_history_kind(sender_id),
                 sender_id=sender_id,
                 content_type=GroupContentType.GROUP_CONTROL,
                 payload=dict(payload),
@@ -4308,6 +4327,11 @@ class I2PChatCore:
             return True
         if decoded is None:
             return False
+        try:
+            self._validate_imported_group_transport(decoded)
+        except Exception as e:
+            self._emit_error(f"Invalid group transport payload: {_exception_user_message(e)}")
+            return True
         existing_state = self.load_group_state(decoded.state.group_id)
         merged_state = self._merge_group_state_snapshot(
             existing_state,
@@ -4322,7 +4346,7 @@ class I2PChatCore:
                 epoch=decoded.envelope.epoch,
             )
         history_entry = GroupHistoryEntry(
-            kind="peer",
+            kind=self._group_history_kind(decoded.envelope.sender_id),
             sender_id=decoded.envelope.sender_id,
             content_type=decoded.envelope.content_type,
             text=(

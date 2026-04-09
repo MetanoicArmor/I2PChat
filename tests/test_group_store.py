@@ -110,6 +110,53 @@ class GroupStoreTests(unittest.TestCase):
             self.assertEqual(loaded.history[0].epoch, 5)
             self.assertEqual(loaded.next_group_seq, 8)
 
+    def test_duplicate_append_preserves_state_and_next_sequence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            initial_state = GroupState(
+                group_id="group-store-4",
+                epoch=1,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="Initial title",
+            )
+            upsert_group_state(tmpdir, "alice", initial_state, next_group_seq=2)
+            entry = GroupHistoryEntry(
+                kind="peer",
+                sender_id="bob.b32.i2p",
+                content_type=GroupContentType.GROUP_CONTROL,
+                payload={"op": "rename", "title": "Renamed title", "epoch": 3},
+                msg_id="control-1",
+                group_seq=2,
+                epoch=3,
+            )
+            append_group_history_entry(
+                tmpdir,
+                "alice",
+                initial_state,
+                entry,
+                next_group_seq=3,
+            )
+
+            updated_state = GroupState(
+                group_id="group-store-4",
+                epoch=3,
+                members=("alice.b32.i2p", "bob.b32.i2p", "carol.b32.i2p"),
+                title="Renamed title",
+            )
+            conversation, imported = append_group_history_entry(
+                tmpdir,
+                "alice",
+                updated_state,
+                entry,
+                next_group_seq=6,
+            )
+
+            self.assertFalse(imported)
+            self.assertEqual(len(conversation.history), 1)
+            self.assertEqual(conversation.state.title, "Renamed title")
+            self.assertEqual(conversation.state.epoch, 3)
+            self.assertIn("carol.b32.i2p", conversation.state.members)
+            self.assertEqual(conversation.next_group_seq, 6)
+
 
 if __name__ == "__main__":
     unittest.main()
