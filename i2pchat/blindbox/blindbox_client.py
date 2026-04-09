@@ -291,53 +291,91 @@ class BlindBoxClient:
         ok_results: list[BlindBoxPutResult] = []
         put_failures: list[tuple[str, Exception]] = []
         success_count = 0
-        pending: dict[asyncio.Task[BlindBoxPutResult], str] = {
-            asyncio.create_task(self._put_to_blind_box(addr, key, bytes(blob))): addr
-            for addr in self.blind_boxes
-        }
-        try:
-            while pending:
-                task_addrs = dict(pending)
-                done, pending_set = await asyncio.wait(
-                    pending.keys(), return_when=asyncio.FIRST_COMPLETED
-                )
-                pending = {task: task_addrs[task] for task in pending_set}
-                for task in done:
-                    addr = task_addrs.get(task, "")
+        if self.put_quorum == 1:
+            # Practical default for text: try one endpoint first, then a single fallback.
+            # This avoids waiting on a large replica fanout when one healthy box is enough.
+            put_targets = self.blind_boxes[:2]
+            for addr in put_targets:
+                try:
+                    result = await self._put_to_blind_box(
+                        addr, key, bytes(blob), retry_attempts=1
+                    )
+                except Exception as exc:
+                    put_failures.append((addr, exc))
+                    continue
+                ok_results.append(result)
+                if result.status == "OK":
+                    success_count += 1
+                elif result.status == "EXISTS":
                     try:
-                        result = task.result()
+                        existing_blob = await self._get_from_blind_box(result.address, key)
                     except Exception as exc:
-                        put_failures.append((addr, exc))
+                        put_failures.append(
+                            (
+                                result.address,
+                                RuntimeError(f"PUT EXISTS verification failed: {exc}"),
+                            )
+                        )
                         continue
-                    ok_results.append(result)
-                    if result.status == "OK":
+                    if existing_blob == bytes(blob):
                         success_count += 1
-                    elif result.status == "EXISTS":
+                    else:
+                        put_failures.append(
+                            (
+                                result.address,
+                                RuntimeError("PUT EXISTS verification mismatch"),
+                            )
+                        )
+                if success_count >= self.put_quorum:
+                    break
+        else:
+            pending: dict[asyncio.Task[BlindBoxPutResult], str] = {
+                asyncio.create_task(self._put_to_blind_box(addr, key, bytes(blob))): addr
+                for addr in self.blind_boxes
+            }
+            try:
+                while pending:
+                    task_addrs = dict(pending)
+                    done, pending_set = await asyncio.wait(
+                        pending.keys(), return_when=asyncio.FIRST_COMPLETED
+                    )
+                    pending = {task: task_addrs[task] for task in pending_set}
+                    for task in done:
+                        addr = task_addrs.get(task, "")
                         try:
-                            existing_blob = await self._get_from_blind_box(result.address, key)
+                            result = task.result()
                         except Exception as exc:
-                            put_failures.append(
-                                (
-                                    result.address,
-                                    RuntimeError(f"PUT EXISTS verification failed: {exc}"),
-                                )
-                            )
+                            put_failures.append((addr, exc))
                             continue
-                        if existing_blob == bytes(blob):
+                        ok_results.append(result)
+                        if result.status == "OK":
                             success_count += 1
-                        else:
-                            put_failures.append(
-                                (
-                                    result.address,
-                                    RuntimeError("PUT EXISTS verification mismatch"),
+                        elif result.status == "EXISTS":
+                            try:
+                                existing_blob = await self._get_from_blind_box(result.address, key)
+                            except Exception as exc:
+                                put_failures.append(
+                                    (
+                                        result.address,
+                                        RuntimeError(f"PUT EXISTS verification failed: {exc}"),
+                                    )
                                 )
-                            )
-                    if success_count >= self.put_quorum:
-                        await self._cancel_pending_tasks(list(pending.keys()))
-                        pending.clear()
-                        break
-        finally:
-            await self._cancel_pending_tasks(list(pending.keys()))
+                                continue
+                            if existing_blob == bytes(blob):
+                                success_count += 1
+                            else:
+                                put_failures.append(
+                                    (
+                                        result.address,
+                                        RuntimeError("PUT EXISTS verification mismatch"),
+                                    )
+                                )
+                        if success_count >= self.put_quorum:
+                            await self._cancel_pending_tasks(list(pending.keys()))
+                            pending.clear()
+                            break
+            finally:
+                await self._cancel_pending_tasks(list(pending.keys()))
         if success_count < self.put_quorum:
             for addr, err in put_failures:
                 self._log_box_failure("PUT", addr, err)
@@ -398,7 +436,9 @@ class BlindBoxClient:
         key = self._validate_blindbox_key(key)
 
         pending: dict[asyncio.Task[Optional[bytes]], str] = {
-            asyncio.create_task(self._get_from_blind_box(addr, key)): addr
+            asyncio.create_task(
+                self._get_from_blind_box(addr, key, retry_attempts=1)
+            ): addr
             for addr in self.blind_boxes
         }
         try:
@@ -427,7 +467,12 @@ class BlindBoxClient:
             await self._cancel_pending_tasks(list(pending.keys()))
 
     async def _put_to_blind_box(
-        self, box_addr: str, key: str, blob: bytes
+        self,
+        box_addr: str,
+        key: str,
+        blob: bytes,
+        *,
+        retry_attempts: Optional[int] = None,
     ) -> BlindBoxPutResult:
         async def _op() -> BlindBoxPutResult:
             reader, writer = await self._connect(box_addr)
@@ -446,9 +491,19 @@ class BlindBoxClient:
             finally:
                 await self._safe_close(writer)
 
-        return await self._with_retries(_op, op_name=f"PUT {box_addr}")
+        return await self._with_retries(
+            _op,
+            op_name=f"PUT {box_addr}",
+            retry_attempts=retry_attempts,
+        )
 
-    async def _get_from_blind_box(self, box_addr: str, key: str) -> Optional[bytes]:
+    async def _get_from_blind_box(
+        self,
+        box_addr: str,
+        key: str,
+        *,
+        retry_attempts: Optional[int] = None,
+    ) -> Optional[bytes]:
         async def _op() -> Optional[bytes]:
             reader, writer = await self._connect(box_addr)
             try:
@@ -475,7 +530,11 @@ class BlindBoxClient:
             finally:
                 await self._safe_close(writer)
 
-        return await self._with_retries(_op, op_name=f"GET {box_addr}")
+        return await self._with_retries(
+            _op,
+            op_name=f"GET {box_addr}",
+            retry_attempts=retry_attempts,
+        )
 
     def _token_for_endpoint(self, box_addr: str) -> str:
         addr = (box_addr or "").strip()
@@ -500,14 +559,25 @@ class BlindBoxClient:
             return False
         return host in {"127.0.0.1", "localhost", "::1"}
 
-    async def _with_retries(self, op, *, op_name: str):
+    async def _with_retries(
+        self,
+        op,
+        *,
+        op_name: str,
+        retry_attempts: Optional[int] = None,
+    ):
         last_exc: Optional[Exception] = None
-        for attempt in range(1, self.retry_attempts + 1):
+        attempts = (
+            self.retry_attempts
+            if retry_attempts is None
+            else max(1, int(retry_attempts))
+        )
+        for attempt in range(1, attempts + 1):
             try:
                 return await op()
             except Exception as exc:
                 last_exc = exc
-                if attempt >= self.retry_attempts:
+                if attempt >= attempts:
                     break
                 delay = self.retry_backoff_base * (2 ** (attempt - 1))
                 logger.debug("%s attempt %d failed, retrying in %.3fs", op_name, attempt, delay)

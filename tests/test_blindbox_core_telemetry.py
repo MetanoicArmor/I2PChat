@@ -290,8 +290,10 @@ class BlindBoxCoreTelemetryTests(unittest.IsolatedAsyncioTestCase):
     def test_blindbox_recv_candidates_skip_consumed_indexes(self) -> None:
         old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
         old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        old_lookahead = os.environ.get("I2PCHAT_BLINDBOX_RECV_LOOKAHEAD")
         os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
         os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "r1.b32.i2p"
+        os.environ["I2PCHAT_BLINDBOX_RECV_LOOKAHEAD"] = "0"
         try:
             core = I2PChatCore(profile="alice")
             core._blindbox_state.recv_base = 10  # noqa: SLF001 - internal behavior test
@@ -308,6 +310,10 @@ class BlindBoxCoreTelemetryTests(unittest.IsolatedAsyncioTestCase):
                 os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
             else:
                 os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+            if old_lookahead is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_RECV_LOOKAHEAD", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_RECV_LOOKAHEAD"] = old_lookahead
 
     def test_previous_roots_pruned_by_limit(self) -> None:
         old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")

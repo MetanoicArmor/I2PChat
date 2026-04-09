@@ -41,6 +41,8 @@ from i2pchat.protocol.chat_text_chunking import split_long_chat_text
 from i2pchat.protocol.message_delivery import (
     DELIVERY_STATE_DELIVERED,
     DELIVERY_STATE_FAILED,
+    DELIVERY_STATE_QUEUED,
+    DELIVERY_STATE_SENDING,
     delivery_lifecycle_from_send_result,
 )
 from i2pchat.protocol.protocol_codec import (
@@ -1403,9 +1405,9 @@ class I2PChatCore:
                     "Set a token or explicitly opt out with "
                     "I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1."
                 )
-        # Default 1: still PUT to every Blind Box in parallel, but accept success if any
-        # one responds (I2P paths are often asymmetric). Set I2PCHAT_BLINDBOX_PUT_QUORUM=2
-        # to require all configured boxes to ACK each offline message.
+        # Default 1: practical fast path for text — try one Blind Box and, on failure,
+        # fallback to the next endpoint. Set I2PCHAT_BLINDBOX_PUT_QUORUM=2 to require
+        # all configured boxes to ACK each offline message.
         self.blindbox_put_quorum = max(
             1,
             int(os.environ.get("I2PCHAT_BLINDBOX_PUT_QUORUM", "1")),
@@ -1568,6 +1570,30 @@ class I2PChatCore:
                 retryable=retryable,
             )
             self.on_message(msg)
+
+    def _emit_outbound_delivery_update(
+        self,
+        message_id: str,
+        *,
+        delivery_state: str,
+        delivery_hint: str = "",
+        delivery_reason: str = "",
+        retryable: bool = False,
+    ) -> None:
+        """UI: update an existing outbound bubble (e.g. sending → queued after BlindBox PUT)."""
+        cb = getattr(self, "on_outbound_delivery_update", None)
+        if cb is None:
+            return
+        try:
+            cb(
+                message_id,
+                delivery_state,
+                delivery_hint,
+                delivery_reason,
+                retryable,
+            )
+        except Exception:
+            logger.debug("on_outbound_delivery_update callback failed", exc_info=True)
 
     def _emit_notify(
         self, kind: str, text: str, source_peer: Optional[str] = None
@@ -3034,6 +3060,14 @@ class I2PChatCore:
             )
         return ("blocked", "No active secure session. Connect to peer or retry later.")
 
+    @staticmethod
+    def _blindbox_send_busy_feedback() -> tuple[str, str]:
+        return (
+            "blindbox-send-busy",
+            "Previous BlindBox upload is still in progress. "
+            "Wait for queued/failed status, then send again.",
+        )
+
     def _blindbox_poll_sleep_interval(self) -> float:
         mode = self._blindbox_poll_mode()
         if mode == BLINDBOX_POLL_MODE_HOT:
@@ -3095,8 +3129,15 @@ class I2PChatCore:
             self._blindbox_seen_hashes.discard(oldest)
 
     def _blindbox_recv_candidates(self) -> list[int]:
-        recv_start = self._blindbox_state.recv_base
-        recv_end = recv_start + self._blindbox_state.recv_window
+        recv_backtrack = max(
+            0, int(os.environ.get("I2PCHAT_BLINDBOX_RECV_BACKTRACK", "0"))
+        )
+        recv_lookahead = max(
+            0, int(os.environ.get("I2PCHAT_BLINDBOX_RECV_LOOKAHEAD", "64"))
+        )
+        recv_start = max(0, self._blindbox_state.recv_base - recv_backtrack)
+        recv_span = max(self._blindbox_state.recv_window, recv_lookahead)
+        recv_end = self._blindbox_state.recv_base + recv_span
         candidates = [
             idx
             for idx in range(recv_start, recv_end)
@@ -3283,9 +3324,11 @@ class I2PChatCore:
             return
         try:
             while True:
-                if not self._blindbox_ready() or self.conn is not None:
+                if not self._blindbox_ready():
                     await self._blindbox_poll_sleep()
                     continue
+                # Poll even when a live TCP session exists: offline sends only hit Blind Box;
+                # the peer must GET+decrypt while connected too, otherwise messages never arrive.
                 if self._blindbox_root_secret is None:
                     await self._blindbox_poll_sleep()
                     continue
@@ -3298,7 +3341,8 @@ class I2PChatCore:
                 if not root_candidates:
                     await self._blindbox_poll_sleep()
                     continue
-                for recv_index in self._blindbox_recv_candidates():
+                recv_cands = self._blindbox_recv_candidates()
+                for recv_index in recv_cands:
                     got_valid = False
                     for root_item in root_candidates:
                         keys = derive_blindbox_message_keys(
@@ -3336,7 +3380,14 @@ class I2PChatCore:
                                 keys.lookup_token,
                                 accept_blob=_accept_blob,
                             )
-                        except Exception:
+                        except Exception as exc:
+                            logger.debug(
+                                "BlindBox get_first_accepted failed recv_index=%s epoch=%s: %s",
+                                recv_index,
+                                int(root_item["epoch"]),
+                                exc,
+                                exc_info=True,
+                            )
                             continue
                         if accepted_blob is not None:
                             got_valid = True
@@ -3425,16 +3476,60 @@ class I2PChatCore:
                         keys.state_tag,
                         padding_bucket=self._blindbox_padding_bucket,
                     )
-                    await self._blindbox_client.put(keys.lookup_token, blob)
-                    self._blindbox_state.send_index += 1
-                    self._blindbox_state.updated_at = int(time.time())
-                    self._save_blindbox_state()
+                    # Optimistic UI: show the bubble immediately; PUT over I2P can take many seconds.
                     self._emit_message(
                         "me",
                         chunk,
                         message_id=str(msg_id),
-                        delivery_state="queued",
-                        delivery_route="offline-queued",
+                        delivery_state=DELIVERY_STATE_SENDING,
+                        delivery_route="offline-pending",
+                        delivery_hint="Uploading to Blind Box (I2P)…",
+                        delivery_reason="blindbox-put",
+                        retryable=False,
+                    )
+                    # Max wait for upload to a replica (sender). Peer pickup depends on their poll interval + I2P.
+                    put_timeout_sec = max(
+                        5.0,
+                        float(
+                            os.environ.get(
+                                "I2PCHAT_BLINDBOX_PUT_TIMEOUT_SEC", "30"
+                            )
+                        ),
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            self._blindbox_client.put(keys.lookup_token, blob),
+                            timeout=put_timeout_sec,
+                        )
+                    except asyncio.TimeoutError:
+                        self._emit_outbound_delivery_update(
+                            str(msg_id),
+                            delivery_state=DELIVERY_STATE_FAILED,
+                            delivery_hint=(
+                                f"Blind Box upload timed out after {put_timeout_sec:.0f}s "
+                                "(I2P path to replica may be stalled)."
+                            ),
+                            delivery_reason="blindbox-put-timeout",
+                            retryable=False,
+                        )
+                        raise RuntimeError(
+                            f"Blind Box PUT timed out after {put_timeout_sec:.0f}s"
+                        ) from None
+                    except Exception:
+                        self._emit_outbound_delivery_update(
+                            str(msg_id),
+                            delivery_state=DELIVERY_STATE_FAILED,
+                            delivery_hint="Blind Box upload failed.",
+                            delivery_reason="blindbox-put-failed",
+                            retryable=False,
+                        )
+                        raise
+                    self._blindbox_state.send_index += 1
+                    self._blindbox_state.updated_at = int(time.time())
+                    self._save_blindbox_state()
+                    self._emit_outbound_delivery_update(
+                        str(msg_id),
+                        delivery_state=DELIVERY_STATE_QUEUED,
                         delivery_hint="Message queued for offline delivery.",
                         delivery_reason="blindbox-ready",
                         retryable=False,
@@ -3590,6 +3685,23 @@ class I2PChatCore:
         r = route if route in ("auto", "live", "offline") else "auto"
 
         if r == "offline":
+            if self._blindbox_send_lock.locked():
+                reason, hint = self._blindbox_send_busy_feedback()
+                self._emit_error(hint)
+                lifecycle = delivery_lifecycle_from_send_result(
+                    route="blocked",
+                    accepted=False,
+                    reason=reason,
+                    hint=hint,
+                )
+                return SendTextResult(
+                    route="blocked",
+                    accepted=False,
+                    reason=reason,
+                    hint=hint,
+                    delivery_state=lifecycle.state,
+                    retryable=lifecycle.retryable,
+                )
             sent_offline = await self._send_text_via_blindbox(text)
             if sent_offline is None:
                 reason, hint = self._offline_send_block_feedback()
@@ -3657,6 +3769,23 @@ class I2PChatCore:
                 )
 
         if r == "auto" and not secure_live:
+            if self._blindbox_send_lock.locked():
+                reason, hint = self._blindbox_send_busy_feedback()
+                self._emit_error(hint)
+                lifecycle = delivery_lifecycle_from_send_result(
+                    route="blocked",
+                    accepted=False,
+                    reason=reason,
+                    hint=hint,
+                )
+                return SendTextResult(
+                    route="blocked",
+                    accepted=False,
+                    reason=reason,
+                    hint=hint,
+                    delivery_state=lifecycle.state,
+                    retryable=lifecycle.retryable,
+                )
             sent_offline = await self._send_text_via_blindbox(text)
             if sent_offline is None:
                 reason, hint = self._offline_send_block_feedback()

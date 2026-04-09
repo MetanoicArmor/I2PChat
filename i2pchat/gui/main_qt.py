@@ -6506,11 +6506,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.contacts_list.viewport().update()
 
     def _peer_key_for_contact_selection(self) -> Optional[str]:
-        raw = (
-            (self.core.stored_peer or "").strip()
-            or (self.core.current_peer_addr or "").strip()
-            or self.addr_edit.text().strip()
-        )
+        if self.core is None:
+            raw = self.addr_edit.text().strip()
+        else:
+            raw = (
+                (self.core.stored_peer or "").strip()
+                or (self.core.current_peer_addr or "").strip()
+                or self.addr_edit.text().strip()
+            )
         if not raw:
             return None
         return normalize_peer_addr(raw)
@@ -6536,7 +6539,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         norm = normalize_peer_address(addr)
         if not norm:
             return
-        stored = normalize_peer_address(self.core.stored_peer or "")
+        if self.core is not None:
+            stored = normalize_peer_address(self.core.stored_peer or "")
+        else:
+            stored = normalize_peer_address(
+                peek_persisted_stored_peer(self.profile) or ""
+            )
         if stored and norm != stored:
             QtWidgets.QMessageBox.information(
                 self,
@@ -6709,6 +6717,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         return False
 
     def _peer_matches_active_connection(self, norm_cb: str) -> bool:
+        if self.core is None:
+            return False
         if self.core.conn is None:
             return False
         cur = (self.core.current_peer_addr or "").strip()
@@ -8035,7 +8045,9 @@ class ChatWindow(QtWidgets.QMainWindow):
     def handle_text_delivered(self, message_id: str) -> None:
         if not message_id:
             return
-        for row in range(self.chat_model.rowCount()):
+        # Message IDs are session-local and may repeat after core re-init.
+        # Prefer the newest matching outbound bubble.
+        for row in range(self.chat_model.rowCount() - 1, -1, -1):
             idx = self.chat_model.index(row, 0)
             item = idx.data(QtCore.Qt.ItemDataRole.DisplayRole)
             if (
@@ -8058,6 +8070,47 @@ class ChatWindow(QtWidgets.QMainWindow):
             delivery_state=DELIVERY_STATE_DELIVERED,
             delivery_hint="Message delivered by peer ACK.",
             retryable=False,
+        )
+
+    @QtCore.pyqtSlot(str, str, str, str, bool)
+    def handle_outbound_delivery_update(
+        self,
+        message_id: str,
+        delivery_state: str,
+        delivery_hint: str,
+        delivery_reason: str,
+        retryable: bool,
+    ) -> None:
+        """BlindBox offline: sending → queued (or failed) after I2P PUT completes."""
+        if not message_id:
+            return
+        # Message IDs may collide with older history entries after session restart.
+        # Update the most recent matching outbound bubble.
+        for row in range(self.chat_model.rowCount() - 1, -1, -1):
+            idx = self.chat_model.index(row, 0)
+            item = idx.data(QtCore.Qt.ItemDataRole.DisplayRole)
+            if (
+                isinstance(item, ChatItem)
+                and item.kind == "me"
+                and item.message_id == message_id
+            ):
+                self.chat_model.update_item(
+                    row,
+                    replace(
+                        item,
+                        delivery_state=delivery_state,
+                        delivery_hint=delivery_hint or item.delivery_hint,
+                        delivery_reason=delivery_reason or item.delivery_reason,
+                        retryable=retryable,
+                    ),
+                )
+                break
+        self._update_history_delivery_state(
+            message_id,
+            delivery_state=delivery_state,
+            delivery_hint=delivery_hint,
+            delivery_reason=delivery_reason,
+            retryable=retryable,
         )
 
     @QtCore.pyqtSlot(str)
@@ -8154,6 +8207,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         # динамически навешиваем колбэк уведомлений,
         # чтобы не менять публичную сигнатуру конструктора ядра
         setattr(core, "on_notify", self.handle_notify)
+        setattr(
+            core,
+            "on_outbound_delivery_update",
+            self.handle_outbound_delivery_update,
+        )
         return core
 
     async def _ensure_router_backend_ready(self) -> tuple[str, int]:
@@ -8165,13 +8223,16 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._active_http_proxy_address = ("127.0.0.1", 4444)
             return (settings.system_sam_host, int(settings.system_sam_port))
 
-        if self._bundled_router_manager is None:
-            self._bundled_router_manager = BundledI2pdManager(settings)
+        # Hold a local reference: another asyncio task may clear
+        # ``self._bundled_router_manager`` during ``await manager.start()`` (shutdown / router dialog).
+        manager = self._bundled_router_manager
+        if manager is None:
+            manager = BundledI2pdManager(settings)
+            self._bundled_router_manager = manager
 
-        sam_address = await self._bundled_router_manager.start()
-        self._active_http_proxy_address = (
-            self._bundled_router_manager.http_proxy_address()
-        )
+        sam_address = await manager.start()
+        self._bundled_router_manager = manager
+        self._active_http_proxy_address = manager.http_proxy_address()
         return sam_address
 
     async def _shutdown_router_backend(self) -> None:
@@ -9200,6 +9261,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.handle_system(f"Opened app directory: {app_dir}")
 
     def _current_history_peer(self) -> Optional[str]:
+        if self.core is None:
+            text = self.addr_edit.text().strip()
+            return text or None
         return (
             self.core.current_peer_addr
             or self.core.stored_peer
@@ -9294,6 +9358,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         """Показать сохранённую историю для выбранного пира до подключения (если SAM уже выдал ключ)."""
         if not self._history_enabled:
             return
+        if self.core is None:
+            return
         if self.core.conn is not None:
             return
         raw = (self._current_history_peer() or "").strip()
@@ -9335,6 +9401,8 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _try_load_history(self) -> None:
         if not self._history_enabled:
+            return
+        if self.core is None:
             return
         peer = self._current_history_peer()
         if not peer:
@@ -9413,6 +9481,8 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _save_history_if_needed(self) -> None:
         if not self._history_enabled or not self._history_dirty:
+            return
+        if self.core is None:
             return
         peer = self._history_loaded_for_peer or self._current_history_peer()
         if not peer:
