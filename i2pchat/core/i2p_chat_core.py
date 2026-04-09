@@ -5074,10 +5074,6 @@ class I2PChatCore:
                 self._recv_seq = 0
                 self._send_seq = 0
                 self._cancel_handshake_watchdog()
-                self._emit_message("info", "Secure channel with PFS established")
-                self._emit_system("✔ Ready! You can now send messages.")
-                self._trigger_blindbox_hot_poll("peer-online")
-                await self._send_blindbox_root_if_needed(writer)
                 peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
                 if peer_addr_norm:
                     self.session_manager.set_peer_handshake_complete(
@@ -5089,6 +5085,10 @@ class I2PChatCore:
                         peer_id=peer_addr_norm,
                     )
                 self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
+                self._emit_message("info", "Secure channel with PFS established")
+                self._emit_system("✔ Ready! You can now send messages.")
+                self._trigger_blindbox_hot_poll("peer-online")
+                await self._send_blindbox_root_if_needed(writer)
                 logger.info("Handshake completed (responder)")
 
             elif body.startswith("RESP:"):
@@ -5146,10 +5146,6 @@ class I2PChatCore:
                 self._recv_seq = 0
                 self._send_seq = 0
                 self._cancel_handshake_watchdog()
-                self._emit_message("info", "Secure channel with PFS established")
-                self._emit_system("✔ Ready! You can now send messages.")
-                self._trigger_blindbox_hot_poll("peer-online")
-                await self._send_blindbox_root_if_needed(writer)
                 peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
                 if peer_addr_norm:
                     self.session_manager.set_peer_handshake_complete(
@@ -5161,6 +5157,10 @@ class I2PChatCore:
                         peer_id=peer_addr_norm,
                     )
                 self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
+                self._emit_message("info", "Secure channel with PFS established")
+                self._emit_system("✔ Ready! You can now send messages.")
+                self._trigger_blindbox_hot_poll("peer-online")
+                await self._send_blindbox_root_if_needed(writer)
                 logger.info("Handshake completed (initiator)")
 
             else:
