@@ -215,6 +215,8 @@ BLINDBOX_LOCAL_WRAP_VERSION_CURRENT = 2
 # I2PCHAT_BLINDBOX_REPLICAS, I2PCHAT_BLINDBOX_DEFAULT_REPLICAS,
 # I2PCHAT_BLINDBOX_DEFAULT_REPLICAS_FILE и нет файла {profile}.blindbox_replicas.json;
 # отключить встроенный набор: I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS=1.
+# I2PCHAT_BLINDBOX_SLOW_WARN=1 — показывать в чате предупреждение о медленном опросе реплик
+#   (по умолчанию выключено). Детальная диагностика: I2PCHAT_BLINDBOX_DEBUG_UI=1.
 # (Эфемерный профиль TRANSIENT_PROFILE_NAME — отдельно: BlindBox выключен, см. __init__.)
 # Формат строки: <base32>.b32.i2p:19444 — порт TCP сервера Blind Box.
 DEFAULT_RELEASE_BLINDBOX_ENDPOINTS: Tuple[str, ...] = (
@@ -1516,6 +1518,7 @@ class I2PChatCore:
                 os.environ.get("I2PCHAT_BLINDBOX_SLOW_WARN_INTERVAL_SEC", "30.0")
             ),
         )
+        self._blindbox_slow_warn_ui = _env_truthy("I2PCHAT_BLINDBOX_SLOW_WARN")
         self._blindbox_slow_warn_last_mono = 0.0
         self._blindbox_cover_gets = max(
             0,
@@ -3620,7 +3623,8 @@ class I2PChatCore:
                             msg += f" slow={slow_note}"
                         self._emit_blindbox_debug_poll(msg)
                 elif (
-                    cycle_checked > 0
+                    self._blindbox_slow_warn_ui
+                    and cycle_checked > 0
                     and cycle_elapsed >= self._blindbox_slow_warn_sec
                     and cycle_hit == 0
                 ):
