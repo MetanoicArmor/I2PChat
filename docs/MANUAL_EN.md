@@ -1,6 +1,6 @@
 ## I2PChat GUI Buttons Guide
 
-This guide matches **I2PChat 1.0.1** (see [`VERSION`](../VERSION) at the repository root).
+This guide matches **I2PChat 1.2.6** (see [`VERSION`](../VERSION) at the repository root). For the transport-layer refactor in this line, see [**ARCHITECTURE.md**](ARCHITECTURE.md) and [**releases/RELEASE_1.2.6.md**](releases/RELEASE_1.2.6.md).
 
 ### Profile selection dialog
 
@@ -346,6 +346,7 @@ Using this button you can:
   - with `Send: offline queue`, text is queued via BlindBox (without mandatory manual Connect);
   - with `Send: need Connect once`, input text is kept and UI asks for one live Connect to bootstrap root.
 - In offline-ready mode, the send button label switches to `Send offline` (shown on two lines in the button).
+- When a **live secure session** finishes handshaking, the label switches back to **`Send` immediately** — you do not need to send a message first for the button to update.
 - BlindBox queue/receive debug lines are not shown in the chat feed; delivery details remain in status/tooltips.
 - Runtime state appears in the **status row** (`Send:*` and BlindBox fields); hover for hints if something is misconfigured.
 - **Compatibility:** peers on older builds may not support BlindBox traffic; live chat and file/image transfer work as before.
@@ -622,6 +623,10 @@ launcher [`i2pchat/run_gui.py`](../i2pchat/run_gui.py)); terminal TUI —
 Application code lives only under `i2pchat/`; there are no flat root-level Python shims.
 
 Trade-off: more padding lowers metadata correlation but increases bandwidth use.
+
+#### 8.1 Core layout (maintainers)
+
+For a map of **`I2PChatCore`**, **`SessionManager`** (per-peer transport state, outbound send policy, streams, reconnect bookkeeping), and how this ties to the status row and **Send** routing, see [**ARCHITECTURE.md**](ARCHITECTURE.md). Release notes for the v1.2.6 transport work: [**releases/RELEASE_1.2.6.md**](releases/RELEASE_1.2.6.md).
 
 ### 9. Summary
 
