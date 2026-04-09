@@ -14,6 +14,7 @@ if "PIL" not in sys.modules:
     sys.modules["PIL.Image"] = pil_image_module
 
 from i2pchat.core.i2p_chat_core import I2PChatCore
+from i2pchat.core.session_manager import PeerState
 from i2pchat.core.send_retry_policy import should_start_auto_connect_retry
 
 DUMMY_DEST_B32 = "ffffffffffffffffffffffffffffffffffffffff.b32.i2p"
@@ -97,6 +98,16 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.accepted)
         self.assertEqual(result.route, "online-live")
         self.assertGreaterEqual(len(writer.frames), 2)
+
+    async def test_send_text_auto_keeps_live_route_even_when_peer_marked_stale(self) -> None:
+        core = I2PChatCore(profile="alice")
+        writer = _DummyWriter()
+        core.conn = (object(), writer)
+        core.handshake_complete = True
+        core.session_manager.transition_peer(PeerState.STALE, reason="test")
+        result = await core.send_text("hello-after-stale")
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.route, "online-live")
 
     async def test_send_text_queues_offline_when_blindbox_ready(self) -> None:
         with patch.dict(
