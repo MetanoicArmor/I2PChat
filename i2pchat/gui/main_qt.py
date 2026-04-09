@@ -41,6 +41,14 @@ from i2pchat.blindbox.local_server_example import (
     get_i2pd_blindbox_tunnel_example_source,
 )
 from i2pchat.presentation.compose_drafts import apply_compose_draft_peer_switch
+from i2pchat.presentation.group_conversations import (
+    make_group_conversation_key,
+    render_group_control_text,
+    render_group_delivery_summary,
+    render_group_history_preview,
+    short_member_label,
+    split_group_member_tokens,
+)
 from i2pchat.protocol.message_delivery import (
     DELIVERY_STATE_DELIVERED,
     DELIVERY_STATE_FAILED,
@@ -5509,6 +5517,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_actions_popup.closed.connect(self._on_more_actions_popup_closed)
 
         self._history_loaded_for_peer: Optional[str] = None
+        self._loaded_group_history_id: Optional[str] = None
+        self._active_group_id: Optional[str] = None
         self._history_entries: list[HistoryEntry] = []
         self._history_dirty = False
         self._history_save_error_reported = False
@@ -5903,6 +5913,36 @@ class ChatWindow(QtWidgets.QMainWindow):
             g, g, self._CONTACTS_RESIZE_GRIP_WIDTH_PX, g
         )
         sidebar_layout.setSpacing(self._UI_GRID_PX)
+        groups_header = QtWidgets.QWidget(self.contacts_sidebar)
+        groups_header_layout = QtWidgets.QHBoxLayout(groups_header)
+        groups_header_layout.setContentsMargins(0, 0, 0, 0)
+        groups_header_layout.setSpacing(max(4, self._UI_GRID_PX // 2))
+        groups_title = QtWidgets.QLabel("Groups", self.contacts_sidebar)
+        groups_title.setObjectName("ContactsSidebarTitle")
+        groups_title.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.groups_create_btn = QtWidgets.QPushButton("New", self.contacts_sidebar)
+        self.groups_create_btn.setObjectName("GroupsCreateButton")
+        self.groups_create_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.groups_create_btn.setToolTip("Create a text-only group.")
+        groups_header_layout.addWidget(groups_title, 1)
+        groups_header_layout.addWidget(self.groups_create_btn, 0)
+        self.groups_list = QtWidgets.QListWidget(self.contacts_sidebar)
+        self.groups_list.setObjectName("GroupsList")
+        self.groups_list.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.groups_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.groups_list.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.groups_list.setMinimumHeight(72)
+        self.groups_list.setMaximumHeight(220)
+        self.groups_list.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Maximum,
+        )
         contacts_title = QtWidgets.QLabel("Saved peers", self.contacts_sidebar)
         contacts_title.setObjectName("ContactsSidebarTitle")
         contacts_title.setAlignment(
@@ -5927,6 +5967,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.contacts_list.customContextMenuRequested.connect(
             self._on_saved_peers_context_menu
         )
+        sidebar_layout.addWidget(groups_header)
+        sidebar_layout.addWidget(self.groups_list)
         sidebar_layout.addWidget(contacts_title)
         sidebar_layout.addWidget(self.contacts_list, 1)
 
@@ -6040,9 +6082,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.input_edit.imagePasteReady.connect(self.on_clipboard_image_ready)
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
+        self.groups_create_btn.clicked.connect(self._show_create_group_dialog)
         self.addr_edit.textChanged.connect(lambda _t: self._refresh_connection_buttons())
         self.addr_edit.textChanged.connect(lambda _t: self._sync_contacts_list_selection())
         self.addr_edit.textChanged.connect(lambda _t: self._update_peer_lock_indicator())
+        self.addr_edit.textEdited.connect(self._on_addr_text_edited)
         self.peer_lock_label.clicked.connect(self.on_lock_peer_clicked)
         self.addr_edit.editingFinished.connect(self._on_addr_editing_finished_for_drafts)
         self.input_edit.composeTextChanged.connect(self._on_compose_text_changed)
@@ -6063,6 +6107,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.on_send_file_clicked,
             tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_SEND_FILE, "Ctrl+F"),
             shortcut_hint=_native_shortcut_text("Ctrl+F"),
+        )
+        self.more_actions_popup.add_action(
+            "New text group…",
+            self._show_create_group_dialog,
+            tool_tip="Create a text-only group with a title and member addresses.",
         )
         self.more_actions_popup.add_action(
             "BlindBox diagnostics",
@@ -6201,6 +6250,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._load_compose_drafts_from_disk()
         self._load_contacts_book()
         self._ensure_stored_peer_in_contact_book()
+        self._refresh_groups_list()
         self._refresh_contacts_list()
         self._apply_startup_peer_from_book()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
@@ -6234,6 +6284,199 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _save_contacts_book(self) -> None:
         save_book(_contacts_file_path_for_write(self.profile), self._contact_book)
+
+    def _group_display_name(
+        self, group_id: str, *, title: Optional[str] = None
+    ) -> str:
+        clean_title = (title or "").strip()
+        return clean_title or (group_id or "").strip() or "Group"
+
+    def _group_member_label(self, member_id: Optional[str]) -> str:
+        normalized = normalize_peer_address(member_id or "") if member_id else ""
+        record = self._contact_book.get(normalized) if normalized else None
+        if record and record.display_name.strip():
+            return record.display_name.strip()
+        return short_member_label(member_id or "", fallback="Member")
+
+    def _clear_active_group_selection(self) -> bool:
+        if not self._active_group_id:
+            return False
+        self._active_group_id = None
+        self._loaded_group_history_id = None
+        self._sync_groups_list_selection()
+        return True
+
+    def _refresh_groups_list(self) -> None:
+        self.groups_list.setUpdatesEnabled(False)
+        try:
+            while self.groups_list.count() > 0:
+                self.groups_list.takeItem(self.groups_list.count() - 1)
+            if self.core is None:
+                return
+            for state in self.core.list_group_states():
+                conversation = self.core.load_group(state.group_id)
+                peer_count = max(0, len(state.members) - 1)
+                preview = (
+                    f"{peer_count} peer{'s' if peer_count != 1 else ''}"
+                    if peer_count
+                    else "Only you are in this group."
+                )
+                if conversation is not None and conversation.history:
+                    preview = (
+                        f"{preview} · {render_group_history_preview(conversation.history[-1])}"
+                    )
+                row = ContactRowWidget(
+                    ContactRecord(
+                        addr=state.group_id,
+                        display_name=self._group_display_name(
+                            state.group_id,
+                            title=state.title,
+                        ),
+                        note=preview,
+                    )
+                )
+                row.activate.connect(self._on_group_row_activated)
+                item = QtWidgets.QListWidgetItem()
+                self.groups_list.addItem(item)
+                self.groups_list.setItemWidget(item, row)
+                hint = row.sizeHint()
+                item.setSizeHint(QtCore.QSize(hint.width(), max(56, hint.height())))
+        finally:
+            self.groups_list.setUpdatesEnabled(True)
+        self._sync_groups_list_selection()
+        self.groups_list.viewport().update()
+
+    def _sync_groups_list_selection(self) -> None:
+        if not self._active_group_id:
+            self.groups_list.clearSelection()
+            return
+        for i in range(self.groups_list.count()):
+            item = self.groups_list.item(i)
+            widget = self.groups_list.itemWidget(item)
+            if isinstance(widget, ContactRowWidget) and widget.contact_addr == self._active_group_id:
+                self.groups_list.setCurrentRow(i)
+                return
+        self.groups_list.clearSelection()
+
+    def _set_active_group(self, group_id: str) -> bool:
+        if self.core is None:
+            return False
+        state = self.core.load_group_state(group_id)
+        if state is None:
+            return False
+        self._save_history_if_needed()
+        self._active_group_id = state.group_id
+        self._loaded_group_history_id = None
+        self._sync_groups_list_selection()
+        self.contacts_list.clearSelection()
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+        self._refresh_offline_history_display()
+        self.refresh_status_label()
+        self._refresh_connection_buttons()
+        return True
+
+    def _on_group_row_activated(self, group_id: str) -> None:
+        if self._set_active_group(group_id):
+            return
+        self.handle_error(f"Could not open group: {group_id}")
+        self._refresh_groups_list()
+
+    def _normalize_group_member_list(self, raw_members: str) -> list[str]:
+        members: list[str] = []
+        invalid: list[str] = []
+        for token in split_group_member_tokens(raw_members):
+            normalized = normalize_peer_address(token)
+            if not normalized:
+                invalid.append(token)
+                continue
+            if normalized not in members:
+                members.append(normalized)
+        if invalid:
+            raise ValueError(
+                "Invalid member address: " + ", ".join(invalid[:3])
+            )
+        if not members:
+            raise ValueError("Add at least one member address.")
+        return members
+
+    def _create_group_from_values(self, *, title: str, members_text: str) -> str:
+        if self.core is None:
+            raise RuntimeError("I2P session is not ready yet.")
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("Group title is required.")
+        created = self.core.create_group(
+            title=clean_title,
+            members=self._normalize_group_member_list(members_text),
+        )
+        self._refresh_groups_list()
+        self._set_active_group(created.group_id)
+        return created.group_id
+
+    def _show_create_group_dialog(self) -> None:
+        if self.core is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "New group",
+                "Wait for the local I2P session to finish starting, then try again.",
+            )
+            return
+
+        dialog = QtWidgets.QDialog(self)
+        _apply_dialog_theme_sheet(dialog, self.theme_id)
+        dialog.setWindowTitle("New text-only group")
+        dialog.resize(420, 280)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title_label = QtWidgets.QLabel("Title", dialog)
+        title_edit = QtWidgets.QLineEdit(dialog)
+        title_edit.setPlaceholderText("Weekend plans")
+        members_label = QtWidgets.QLabel("Members", dialog)
+        members_edit = QtWidgets.QPlainTextEdit(dialog)
+        members_edit.setPlaceholderText(
+            "One .b32.i2p address per line, or separate addresses with commas."
+        )
+        hint = QtWidgets.QLabel(
+            "Files, images, voice, invites, and roles are not part of this first group flow.",
+            dialog,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(title_label)
+        layout.addWidget(title_edit)
+        layout.addWidget(members_label)
+        layout.addWidget(members_edit, 1)
+        layout.addWidget(hint)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText("Create")
+        layout.addWidget(buttons)
+
+        def _accept() -> None:
+            try:
+                group_id = self._create_group_from_values(
+                    title=title_edit.text(),
+                    members_text=members_edit.toPlainText(),
+                )
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(
+                    dialog,
+                    "New group",
+                    str(exc).strip() or type(exc).__name__,
+                )
+                return
+            self.handle_system(f"Created group: {group_id}")
+            dialog.accept()
+
+        buttons.accepted.connect(_accept)
+        buttons.rejected.connect(dialog.reject)
+        title_edit.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+        dialog.exec()
 
     def _stop_contacts_sidebar_animation(self) -> None:
         if self._contacts_sidebar_anim is None:
@@ -6506,6 +6749,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.contacts_list.viewport().update()
 
     def _peer_key_for_contact_selection(self) -> Optional[str]:
+        if self._active_group_id:
+            return None
         if self.core is None:
             raw = self.addr_edit.text().strip()
         else:
@@ -6561,6 +6806,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             changed = True
         if changed:
             self._save_contacts_book()
+        self._clear_active_group_selection()
         self._refresh_contacts_list()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self._refresh_offline_history_display()
@@ -6871,6 +7117,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         """Разрешить Send: live-сессия или готовый BlindBox (очередь офлайн)."""
         if self.core is None:
             return False
+        if self._active_group_id:
+            return self.core.load_group_state(self._active_group_id) is not None
         d = self.core.get_delivery_telemetry()
         if bool(d.get("secure_live")):
             return True
@@ -6957,10 +7205,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._refresh_send_controls()
 
     def _refresh_send_controls(self) -> None:
+        shortcut_tip = _compose_send_shortcut_tooltip_text(
+            enter_sends=self._compose_enter_sends
+        )
         if self.core is None:
-            shortcut_tip = _compose_send_shortcut_tooltip_text(
-                enter_sends=self._compose_enter_sends
-            )
             self.send_button.setEnabled(False)
             self.send_button.setText("Send")
             tip = "Start I2P session first (router/SAM reachable)."
@@ -6971,12 +7219,33 @@ class ChatWindow(QtWidgets.QMainWindow):
             )
             return
 
+        if self._active_group_id:
+            state = self.core.load_group_state(self._active_group_id)
+            can_send = state is not None
+            self.send_button.setEnabled(can_send)
+            self.send_button.setText("Send")
+            group_name = self._group_display_name(
+                self._active_group_id,
+                title=state.title if state is not None else None,
+            )
+            send_tip = (
+                f"Send text to {group_name}. Each member uses the existing live-or-BlindBox route."
+                if can_send
+                else "This group is no longer available."
+            )
+            _set_tooltip_if_changed(
+                self.send_button,
+                f"{send_tip}\n\n{shortcut_tip}",
+            )
+            _set_tooltip_if_changed(
+                self.input_edit,
+                "Current mode: active group conversation.\n\n" + shortcut_tip,
+            )
+            return
+
         delivery = self.core.get_delivery_telemetry()
         state = str(delivery.get("state", "unknown"))
         short_route, route_tip = _delivery_status_bar_and_tooltip(state)
-        shortcut_tip = _compose_send_shortcut_tooltip_text(
-            enter_sends=self._compose_enter_sends
-        )
         secure_live = bool(delivery.get("secure_live"))
         bb_runtime = bool(delivery.get("blindbox_runtime_ready"))
         can_send = self._send_action_allowed()
@@ -7563,6 +7832,55 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def handle_message(self, msg: ChatMessage) -> None:
+        if msg.conversation_kind == "group" and msg.conversation_id:
+            group_key = make_group_conversation_key(msg.conversation_id)
+            if msg.kind == "peer":
+                bump_unread_for_incoming_peer_message(
+                    self._unread_by_peer,
+                    active_key=self._compose_peer_key_from_ui(),
+                    msg_peer_key=group_key,
+                    chat_is_foreground=self._peer_chat_is_foreground(),
+                )
+                self._update_unread_chrome()
+            self._refresh_groups_list()
+            if self._active_group_id != msg.conversation_id:
+                self.refresh_status_label()
+                self._refresh_connection_buttons()
+                return
+
+            ts = msg.timestamp.strftime("%H:%M:%S")
+            if msg.kind == "system":
+                self._append_item(
+                    ChatItem(
+                        kind="system",
+                        timestamp=ts,
+                        sender="SYSTEM",
+                        text=msg.group_plain_text or msg.text,
+                        message_id=msg.message_id,
+                    )
+                )
+            else:
+                sender = "Me" if msg.kind == "me" else self._group_member_label(
+                    msg.group_sender_id or msg.source_peer
+                )
+                plain_text = msg.group_plain_text or msg.text
+                visible_text = plain_text if msg.kind == "me" else f"{sender}: {plain_text}"
+                self._append_item(
+                    ChatItem(
+                        kind=msg.kind,
+                        timestamp=ts,
+                        sender=sender,
+                        text=visible_text,
+                        message_id=msg.message_id,
+                    )
+                )
+            if msg.kind != "peer" or self._peer_chat_is_foreground():
+                clear_unread_for_peer(self._unread_by_peer, group_key)
+            self._update_unread_chrome()
+            self.refresh_status_label()
+            self._refresh_connection_buttons()
+            return
+
         kind = msg.kind
         ts = msg.timestamp.strftime("%H:%M:%S")
         text = msg.text
@@ -7689,7 +8007,19 @@ class ChatWindow(QtWidgets.QMainWindow):
         if not isinstance(msg, ChatMessage):
             return
 
-        if msg.kind == "peer":
+        if msg.conversation_kind == "group" and msg.conversation_id and msg.kind == "peer":
+            notify_kind = "peer"
+            group_title = self._group_display_name(
+                msg.conversation_id,
+                title=msg.conversation_title,
+            )
+            sender_label = self._group_member_label(msg.group_sender_id or msg.source_peer)
+            preview = f"{sender_label}: {(msg.group_plain_text or msg.text or '').replace(chr(10), ' ')}"
+            title = f"New group message in {group_title}"
+            msg_key = make_group_conversation_key(msg.conversation_id)
+            active = self._compose_peer_key_from_ui()
+            same_chat = msg_key == active
+        elif msg.kind == "peer":
             notify_kind = "peer"
             preview = (msg.text or "").replace("\n", " ")
             title = "New message"
@@ -7699,6 +8029,13 @@ class ChatWindow(QtWidgets.QMainWindow):
                 if len(clean_peer) > 12:
                     clean_peer = f"{clean_peer[:6]}..{clean_peer[-6:]}"
                 title = f"New message from {clean_peer}"
+            msg_key = normalize_peer_addr(msg.source_peer) if msg.source_peer else None
+            active = self._compose_peer_key_from_ui()
+            same_chat = (
+                msg_key is not None
+                and active is not None
+                and msg_key == active
+            )
         elif msg.kind == "connect":
             notify_kind = "connect"
             peer = (msg.text or "").strip()
@@ -7707,6 +8044,9 @@ class ChatWindow(QtWidgets.QMainWindow):
                 clean_peer = f"{clean_peer[:6]}..{clean_peer[-6:]}"
             title = "Incoming connection"
             preview = f"{clean_peer}.b32.i2p connected" if peer else "Peer connected"
+            msg_key = None
+            active = None
+            same_chat = False
         else:
             return
 
@@ -7721,15 +8061,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         is_window_active = self.isActiveWindow() and not self.isMinimized()
 
         if msg.kind == "peer":
-            msg_key = (
-                normalize_peer_addr(msg.source_peer) if msg.source_peer else None
-            )
-            active = self._compose_peer_key_from_ui()
-            same_chat = (
-                msg_key is not None
-                and active is not None
-                and msg_key == active
-            )
             if is_app_active and is_window_active and same_chat:
                 return
         elif msg.kind == "connect":
@@ -9041,6 +9372,27 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.refresh_status_label()
         try:
             draft_key = self._compose_peer_key_from_ui()
+            if self._active_group_id:
+                result = await self.core.send_group_text(self._active_group_id, text)
+                if draft_key:
+                    self._compose_drafts.pop(draft_key, None)
+                self.input_edit.clear()
+                self._schedule_compose_drafts_persist()
+                self._append_item(
+                    ChatItem(
+                        kind="system",
+                        timestamp="",
+                        sender="SYSTEM",
+                        text=render_group_delivery_summary(
+                            {
+                                peer_id: delivery.status.value
+                                for peer_id, delivery in result.delivery_results.items()
+                            }
+                        ),
+                    )
+                )
+                self._refresh_groups_list()
+                return
             result = await self.core.send_text(text)
             if result.accepted:
                 if draft_key:
@@ -9261,6 +9613,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.handle_system(f"Opened app directory: {app_dir}")
 
     def _current_history_peer(self) -> Optional[str]:
+        if self._active_group_id:
+            return None
         if self.core is None:
             text = self.addr_edit.text().strip()
             return text or None
@@ -9272,6 +9626,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
 
     def _compose_peer_key_from_ui(self) -> Optional[str]:
+        if self._active_group_id:
+            return make_group_conversation_key(self._active_group_id)
         peer = self._current_history_peer()
         if not peer:
             return None
@@ -9325,6 +9681,15 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self._refresh_offline_history_display()
 
+    @QtCore.pyqtSlot(str)
+    def _on_addr_text_edited(self, _text: str) -> None:
+        if not self._clear_active_group_selection():
+            return
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+        self._refresh_offline_history_display()
+        self.refresh_status_label()
+        self._refresh_connection_buttons()
+
     def _sync_compose_draft_to_peer_key(self, new_key: Optional[str]) -> None:
         if new_key == self._compose_draft_active_key:
             return
@@ -9354,8 +9719,129 @@ class ChatWindow(QtWidgets.QMainWindow):
                 return True
         return False
 
+    def _append_group_history_entry_to_chat(self, entry: object) -> None:
+        content_type = getattr(entry, "content_type", None)
+        timestamp = getattr(entry, "created_at", None)
+        ts_display = ""
+        if isinstance(timestamp, datetime):
+            ts_display = timestamp.strftime("%H:%M:%S")
+
+        if str(content_type) == "GROUP_CONTROL":
+            actor_label = "You" if getattr(entry, "kind", "") == "me" else self._group_member_label(
+                getattr(entry, "sender_id", None)
+            )
+            payload = getattr(entry, "payload", None)
+            self._append_item(
+                ChatItem(
+                    kind="system",
+                    timestamp=ts_display,
+                    sender="SYSTEM",
+                    text=render_group_control_text(
+                        payload if isinstance(payload, dict) else None,
+                        actor_label=actor_label,
+                    ),
+                    message_id=getattr(entry, "msg_id", None),
+                )
+            )
+            return
+
+        plain_text = str(getattr(entry, "text", "") or "")
+        sender_id = getattr(entry, "sender_id", None)
+        kind = getattr(entry, "kind", "peer")
+        sender = "Me" if kind == "me" else self._group_member_label(sender_id)
+        visible_text = plain_text if kind == "me" else f"{sender}: {plain_text}"
+        self._append_item(
+            ChatItem(
+                kind=kind,
+                timestamp=ts_display,
+                sender=sender,
+                text=visible_text,
+                message_id=getattr(entry, "msg_id", None),
+            )
+        )
+        delivery_results = getattr(entry, "delivery_results", None)
+        if kind == "me" and isinstance(delivery_results, dict) and delivery_results:
+            self._append_item(
+                ChatItem(
+                    kind="system",
+                    timestamp="",
+                    sender="SYSTEM",
+                    text=render_group_delivery_summary(delivery_results),
+                )
+            )
+
+    def _refresh_group_conversation_display(self, *, force: bool = False) -> None:
+        if self.core is None or not self._active_group_id:
+            self._loaded_group_history_id = None
+            return
+        group_id = self._active_group_id
+        if not force and self._loaded_group_history_id == group_id:
+            return
+        conversation = self.core.load_group(group_id)
+        if conversation is None:
+            self._clear_active_group_selection()
+            self.handle_error(f"Group not found: {group_id}")
+            return
+
+        self._save_history_if_needed()
+        self._history_flush_timer.stop()
+        self._history_loaded_for_peer = None
+        self._history_entries = []
+        self._history_dirty = False
+        self.chat_model.clear_items()
+
+        header_text = self._group_display_name(
+            conversation.state.group_id,
+            title=conversation.state.title,
+        )
+        self._chat_search_sync_suppressed = True
+        try:
+            self._append_item(
+                ChatItem(
+                    kind="system",
+                    timestamp="",
+                    sender="SYSTEM",
+                    text=f'--- Group: {header_text} ---',
+                )
+            )
+            if not conversation.history:
+                self._append_item(
+                    ChatItem(
+                        kind="system",
+                        timestamp="",
+                        sender="SYSTEM",
+                        text="No local group messages yet.",
+                    )
+                )
+            else:
+                for entry in conversation.history:
+                    self._append_group_history_entry_to_chat(entry)
+            self._append_item(
+                ChatItem(
+                    kind="system",
+                    timestamp="",
+                    sender="SYSTEM",
+                    text="--- end of group history ---",
+                )
+            )
+        finally:
+            self._chat_search_sync_suppressed = False
+        self._sync_chat_search_after_model_change()
+        self._loaded_group_history_id = group_id
+        clear_unread_for_peer(
+            self._unread_by_peer,
+            make_group_conversation_key(group_id),
+        )
+        self._update_unread_chrome()
+        self._refresh_groups_list()
+
     def _refresh_offline_history_display(self, _identity_retry: int = 0) -> None:
         """Показать сохранённую историю для выбранного пира до подключения (если SAM уже выдал ключ)."""
+        if self._active_group_id:
+            self._refresh_group_conversation_display(
+                force=self._loaded_group_history_id != self._active_group_id
+            )
+            return
         if not self._history_enabled:
             return
         if self.core is None:
@@ -9400,6 +9886,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._try_load_history()
 
     def _try_load_history(self) -> None:
+        if self._active_group_id:
+            self._refresh_group_conversation_display(
+                force=self._loaded_group_history_id != self._active_group_id
+            )
+            return
         if not self._history_enabled:
             return
         if self.core is None:
@@ -10319,8 +10810,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         try:
             self._load_contacts_book()
             self._ensure_stored_peer_in_contact_book()
+            self._refresh_groups_list()
             self._refresh_contacts_list()
             self._sync_contacts_list_selection()
+            self._sync_groups_list_selection()
             self._update_peer_lock_indicator()
         except Exception:
             logger.exception("deferred saved peers refresh after profile switch")
@@ -10339,6 +10832,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._history_flush_timer.stop()
         await self.core.shutdown()
         self._history_loaded_for_peer = None
+        self._loaded_group_history_id = None
+        self._active_group_id = None
         self._history_entries = []
         self._history_dirty = False
         self.chat_model.clear_items()
@@ -10361,6 +10856,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         # После init — снова с диска (возможны записи книги во время длинной инициализации).
         self._load_contacts_book()
         self._ensure_stored_peer_in_contact_book()
+        self._refresh_groups_list()
         self._apply_peer_address_after_profile_switch()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self._refresh_contacts_list()

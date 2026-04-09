@@ -17,7 +17,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, List, Literal, Optional, Tuple
+from typing import Any, Awaitable, Callable, List, Literal, Mapping, Optional, Tuple
 
 from i2pchat import sam as i2plib
 from PIL import Image
@@ -61,6 +61,10 @@ from i2pchat.storage.profile_blindbox_replicas import (
     load_profile_blindbox_replicas_bundle,
     normalize_replica_endpoints,
     save_profile_blindbox_replicas_bundle,
+)
+from i2pchat.presentation.group_conversations import (
+    render_group_control_text,
+    short_member_label,
 )
 from i2pchat.protocol.chat_text_chunking import split_long_chat_text
 from i2pchat.protocol.message_delivery import (
@@ -263,6 +267,12 @@ class ChatMessage:
     delivery_hint: str = ""
     delivery_reason: str = ""
     retryable: bool = False
+    conversation_kind: str = "direct"
+    conversation_id: Optional[str] = None
+    conversation_title: Optional[str] = None
+    group_sender_id: Optional[str] = None
+    group_content_type: Optional[str] = None
+    group_plain_text: Optional[str] = None
 
 
 @dataclass
@@ -1645,20 +1655,33 @@ class I2PChatCore:
         delivery_hint: str = "",
         delivery_reason: str = "",
         retryable: bool = False,
+        conversation_kind: str = "direct",
+        conversation_id: Optional[str] = None,
+        conversation_title: Optional[str] = None,
+        group_sender_id: Optional[str] = None,
+        group_content_type: Optional[GroupContentType] = None,
+        group_plain_text: Optional[str] = None,
     ) -> None:
         if self.on_message:
-            sp = source_peer if kind == "peer" else None
             msg = ChatMessage(
                 kind=kind,
                 text=text,
                 timestamp=datetime.now(timezone.utc),
-                source_peer=sp,
+                source_peer=source_peer,
                 message_id=message_id,
                 delivery_state=delivery_state,
                 delivery_route=delivery_route,
                 delivery_hint=delivery_hint,
                 delivery_reason=delivery_reason,
                 retryable=retryable,
+                conversation_kind=conversation_kind,
+                conversation_id=conversation_id,
+                conversation_title=conversation_title,
+                group_sender_id=group_sender_id,
+                group_content_type=(
+                    str(group_content_type) if group_content_type is not None else None
+                ),
+                group_plain_text=group_plain_text,
             )
             self.on_message(msg)
 
@@ -1687,7 +1710,17 @@ class I2PChatCore:
             logger.debug("on_outbound_delivery_update callback failed", exc_info=True)
 
     def _emit_notify(
-        self, kind: str, text: str, source_peer: Optional[str] = None
+        self,
+        kind: str,
+        text: str,
+        source_peer: Optional[str] = None,
+        *,
+        conversation_kind: str = "direct",
+        conversation_id: Optional[str] = None,
+        conversation_title: Optional[str] = None,
+        group_sender_id: Optional[str] = None,
+        group_content_type: Optional[GroupContentType] = None,
+        group_plain_text: Optional[str] = None,
     ) -> None:
         """
         Уведомление UI о новом сообщении для системных нотификаций.
@@ -1697,13 +1730,22 @@ class I2PChatCore:
         callback = getattr(self, "on_notify", None)
         if callback is not None:
             try:
-                sp = source_peer if kind == "peer" else None
                 callback(
                     ChatMessage(
                         kind=kind,
                         text=text,
                         timestamp=datetime.now(timezone.utc),
-                        source_peer=sp,
+                        source_peer=source_peer,
+                        conversation_kind=conversation_kind,
+                        conversation_id=conversation_id,
+                        conversation_title=conversation_title,
+                        group_sender_id=group_sender_id,
+                        group_content_type=(
+                            str(group_content_type)
+                            if group_content_type is not None
+                            else None
+                        ),
+                        group_plain_text=group_plain_text,
                     )
                 )
             except Exception:
@@ -4015,6 +4057,25 @@ class I2PChatCore:
             return f"[Group {group_label}] {sender_id}: {text}"
         return f"[Group {group_label}] {text}"
 
+    def _format_group_control_for_ui(
+        self,
+        state: GroupState,
+        *,
+        sender_id: str,
+        payload: Mapping[str, Any] | None,
+    ) -> str:
+        actor_label = "You"
+        try:
+            if normalize_member_id(sender_id) != self._local_group_member_id():
+                actor_label = short_member_label(sender_id)
+        except Exception:
+            actor_label = short_member_label(sender_id)
+        group_label = self._group_display_name(state)
+        return f"[Group {group_label}] " + render_group_control_text(
+            payload,
+            actor_label=actor_label,
+        )
+
     def _group_history_kind(self, sender_id: str) -> str:
         try:
             if normalize_member_id(sender_id) == self._local_group_member_id():
@@ -4346,6 +4407,12 @@ class I2PChatCore:
                 incoming=False,
             ),
             message_id=result.envelope.msg_id,
+            conversation_kind="group",
+            conversation_id=updated_state.group_id,
+            conversation_title=self._group_display_name(updated_state),
+            group_sender_id=sender_id,
+            group_content_type=result.envelope.content_type,
+            group_plain_text=str(result.envelope.payload or ""),
         )
         return result
 
@@ -4388,6 +4455,21 @@ class I2PChatCore:
                 },
             ),
             next_group_seq=result.envelope.group_seq + 1,
+        )
+        self._emit_message(
+            "system",
+            self._format_group_control_for_ui(
+                updated_state,
+                sender_id=sender_id,
+                payload=payload,
+            ),
+            message_id=result.envelope.msg_id,
+            conversation_kind="group",
+            conversation_id=updated_state.group_id,
+            conversation_title=self._group_display_name(updated_state),
+            group_sender_id=sender_id,
+            group_content_type=result.envelope.content_type,
+            group_plain_text=render_group_control_text(payload, actor_label="You"),
         )
         return result
 
@@ -4485,11 +4567,51 @@ class I2PChatCore:
                 rendered_text,
                 source_peer=normalized_source_peer,
                 message_id=decoded.envelope.msg_id,
+                conversation_kind="group",
+                conversation_id=conversation.state.group_id,
+                conversation_title=self._group_display_name(conversation.state),
+                group_sender_id=decoded.envelope.sender_id,
+                group_content_type=decoded.envelope.content_type,
+                group_plain_text=str(decoded.envelope.payload or ""),
             )
-            self._emit_notify("peer", rendered_text, source_peer=normalized_source_peer)
+            self._emit_notify(
+                "peer",
+                rendered_text,
+                source_peer=normalized_source_peer,
+                conversation_kind="group",
+                conversation_id=conversation.state.group_id,
+                conversation_title=self._group_display_name(conversation.state),
+                group_sender_id=decoded.envelope.sender_id,
+                group_content_type=decoded.envelope.content_type,
+                group_plain_text=str(decoded.envelope.payload or ""),
+            )
         else:
-            self._emit_system(
-                f"Group updated: {self._group_display_name(conversation.state)}"
+            self._emit_message(
+                "system",
+                self._format_group_control_for_ui(
+                    conversation.state,
+                    sender_id=decoded.envelope.sender_id,
+                    payload=(
+                        decoded.envelope.payload
+                        if isinstance(decoded.envelope.payload, Mapping)
+                        else None
+                    ),
+                ),
+                source_peer=normalized_source_peer,
+                message_id=decoded.envelope.msg_id,
+                conversation_kind="group",
+                conversation_id=conversation.state.group_id,
+                conversation_title=self._group_display_name(conversation.state),
+                group_sender_id=decoded.envelope.sender_id,
+                group_content_type=decoded.envelope.content_type,
+                group_plain_text=render_group_control_text(
+                    (
+                        decoded.envelope.payload
+                        if isinstance(decoded.envelope.payload, Mapping)
+                        else None
+                    ),
+                    actor_label=short_member_label(decoded.envelope.sender_id),
+                ),
             )
         return GroupImportResult(
             status=GroupImportStatus.IMPORTED,
