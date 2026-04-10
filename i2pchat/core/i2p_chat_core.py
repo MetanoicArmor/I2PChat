@@ -43,6 +43,7 @@ from i2pchat.groups.wire import (
     decode_group_transport_text,
     encode_group_transport_text,
 )
+from i2pchat.storage.contact_book import same_i2p_destination
 from i2pchat.storage.blindbox_state import (
     BlindBoxState,
     atomic_write_json,
@@ -4146,19 +4147,29 @@ class I2PChatCore:
             GroupContentType.GROUP_CONTROL,
         ):
             raise ValueError("Unsupported group transport content type")
-        if sender_id not in state.members:
+        if not any(same_i2p_destination(sender_id, m) for m in state.members if m):
             raise ValueError("Group transport sender is not a group member")
         if not decoded.recipient_id or not decoded.delivery_id:
             raise ValueError("Group transport recipient metadata is required")
-        if decoded.recipient_id not in state.members:
+        if not any(
+            same_i2p_destination(decoded.recipient_id, m) for m in state.members if m
+        ):
             raise ValueError("Group transport recipient is not a group member")
-        local_member_id = ""
-        try:
-            local_member_id = self._local_group_member_id()
-        except Exception:
-            local_member_id = ""
-        if local_member_id and decoded.recipient_id != local_member_id:
-            raise ValueError("Group transport recipient does not match this profile")
+        # Локальный id в группе — base32 без суффикса; в wire recipient_id — часто полный …b32.i2p.
+        # Сравниваем канонические адреса, иначе валидный вход для этого профиля отвергается.
+        local_canon = ""
+        if self.my_dest is not None and getattr(self.my_dest, "base32", ""):
+            try:
+                local_canon = self._normalize_peer_addr(str(self.my_dest.base32))
+            except Exception:
+                local_canon = ""
+        if local_canon:
+            try:
+                recipient_canon = self._normalize_peer_addr(decoded.recipient_id)
+            except Exception:
+                recipient_canon = ""
+            if recipient_canon != local_canon:
+                raise ValueError("Group transport recipient does not match this profile")
         if envelope.content_type == GroupContentType.GROUP_TEXT and not isinstance(
             envelope.payload, str
         ):

@@ -36,6 +36,20 @@ def normalize_peer_address(raw: str) -> Optional[str]:
     return host + ".b32.i2p"
 
 
+def same_i2p_destination(left: str, right: str) -> bool:
+    """
+    True if two strings denote the same I2P destination.
+
+    Group state may mix a bare base32 host with full ``…b32.i2p`` entries; this
+    aligns comparisons for roster checks and fan-out.
+    """
+    nl = normalize_peer_address(left)
+    nr = normalize_peer_address(right)
+    if nl is not None and nr is not None:
+        return nl == nr
+    return (left or "").strip().lower() == (right or "").strip().lower()
+
+
 @dataclass
 class ContactRecord:
     addr: str

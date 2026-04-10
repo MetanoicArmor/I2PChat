@@ -9349,7 +9349,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             draft_key = self._compose_peer_key_from_ui()
             if self._active_group_id:
                 active_group_id = self._active_group_id
-                await self.core.send_group_text(active_group_id, text)
+                try:
+                    await self.core.send_group_text(active_group_id, text)
+                except Exception as exc:
+                    self.handle_error(str(exc).strip() or type(exc).__name__)
+                    return
                 if draft_key:
                     self._compose_drafts.pop(draft_key, None)
                 self.input_edit.clear()

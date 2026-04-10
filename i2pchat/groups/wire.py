@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from i2pchat.storage.contact_book import same_i2p_destination
+
 from .models import (
     GroupContentType,
     GroupEnvelope,
@@ -124,9 +126,9 @@ def decode_group_transport_text(text: str) -> DecodedGroupTransportMessage | Non
     )
     if not state.members:
         raise ValueError("Group transport must include at least one member")
-    if sender_id not in state.members:
+    if not any(same_i2p_destination(sender_id, m) for m in state.members if m):
         raise ValueError("Group transport sender is not a group member")
-    if recipient_id not in state.members:
+    if not any(same_i2p_destination(recipient_id, m) for m in state.members if m):
         raise ValueError("Group transport recipient is not a group member")
     envelope = GroupEnvelope(
         group_id=state.group_id,

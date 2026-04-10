@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, TypeAlias
 
 from i2pchat.core.session_manager import OutboundPolicy, SessionManager
+from i2pchat.storage.contact_book import same_i2p_destination
 
 from .models import (
     GroupContentType,
@@ -63,8 +64,11 @@ class GroupManager:
         return next_seq
 
     def _recipient_ids(self, state: GroupState, sender_id: str) -> tuple[str, ...]:
-        sender = normalize_member_id(sender_id)
-        return tuple(member for member in state.members if member and member != sender)
+        return tuple(
+            member
+            for member in state.members
+            if member and not same_i2p_destination(member, sender_id)
+        )
 
     def _build_envelope(
         self,
