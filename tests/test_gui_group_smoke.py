@@ -16,6 +16,7 @@ pytest.importorskip("PyQt6.QtWidgets", exc_type=ImportError)
 from PyQt6.QtWidgets import QApplication, QDialog, QWidget
 
 from i2pchat.core.i2p_chat_core import ChatMessage
+from i2pchat.core.live_peer_session import LivePeerSession
 from i2pchat.groups.models import (
     GroupContentType,
     GroupDeliveryStatus,
@@ -665,3 +666,152 @@ def test_direct_peer_message_unread_behavior_still_uses_peer_keys_when_group_is_
     )
 
     assert window.windowTitle() == f"{base} (1)"
+
+
+def test_direct_peer_message_does_not_render_into_active_group_chat_and_is_saved_for_peer(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    created_at = datetime.now(timezone.utc)
+    state = GroupState(
+        group_id="group-1",
+        epoch=1,
+        members=(LOCAL_MEMBER, PEER_A),
+        title="Study Group",
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    _install_group_store(
+        window,
+        {
+            state.group_id: StoredGroupConversation(
+                state=state,
+                next_group_seq=1,
+                history=(),
+            )
+        },
+    )
+    window._set_active_group("group-1")
+    before_texts = _conversation_items(window)
+    monkeypatch.setattr(window.core, "get_identity_key_bytes", lambda: b"K" * 32)
+    monkeypatch.setattr("i2pchat.gui.main_qt.load_history", lambda *args, **kwargs: [])
+    saved: dict[str, object] = {}
+
+    def _fake_save_history(
+        profile_data_dir: str,
+        profile: str,
+        peer_addr: str,
+        entries: list[HistoryEntry],
+        identity_key: bytes,
+        *,
+        max_messages: int,
+        app_data_root: str | None = None,
+    ) -> None:
+        saved["profile_data_dir"] = profile_data_dir
+        saved["profile"] = profile
+        saved["peer_addr"] = peer_addr
+        saved["entries"] = entries
+        saved["identity_key"] = identity_key
+        saved["max_messages"] = max_messages
+        saved["app_data_root"] = app_data_root
+
+    monkeypatch.setattr("i2pchat.gui.main_qt.save_history", _fake_save_history)
+
+    window.handle_message(
+        ChatMessage(
+            kind="peer",
+            text="direct hello",
+            timestamp=created_at,
+            source_peer=PEER_B,
+        )
+    )
+
+    assert _conversation_items(window) == before_texts
+    assert window._active_group_id == "group-1"
+    assert saved["peer_addr"] == PEER_B
+    entries = saved["entries"]
+    assert isinstance(entries, list)
+    assert len(entries) == 1
+    assert entries[0].kind == "peer"
+    assert entries[0].text == "direct hello"
+
+
+def test_direct_peer_message_does_not_render_into_other_open_direct_chat_and_is_saved_for_sender(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    created_at = datetime.now(timezone.utc)
+    window.addr_edit.setText(PEER_A)
+    window._on_addr_editing_finished_for_drafts()
+    before_texts = _conversation_items(window)
+    monkeypatch.setattr(window.core, "get_identity_key_bytes", lambda: b"K" * 32)
+    monkeypatch.setattr("i2pchat.gui.main_qt.load_history", lambda *args, **kwargs: [])
+    saved: dict[str, object] = {}
+
+    def _fake_save_history(
+        profile_data_dir: str,
+        profile: str,
+        peer_addr: str,
+        entries: list[HistoryEntry],
+        identity_key: bytes,
+        *,
+        max_messages: int,
+        app_data_root: str | None = None,
+    ) -> None:
+        saved["peer_addr"] = peer_addr
+        saved["entries"] = entries
+
+    monkeypatch.setattr("i2pchat.gui.main_qt.save_history", _fake_save_history)
+
+    window.handle_message(
+        ChatMessage(
+            kind="peer",
+            text="hello from B",
+            timestamp=created_at,
+            source_peer=PEER_B,
+        )
+    )
+
+    assert _conversation_items(window) == before_texts
+    assert window._active_group_id is None
+    assert saved["peer_addr"] == PEER_B
+    entries = saved["entries"]
+    assert isinstance(entries, list)
+    assert len(entries) == 1
+    assert entries[0].kind == "peer"
+    assert entries[0].text == "hello from B"
+
+
+def test_switching_to_sender_peer_loads_offscreen_direct_message_even_with_live_session(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    created_at = datetime.now(timezone.utc)
+    monkeypatch.setattr(window.core, "get_identity_key_bytes", lambda: b"K" * 32)
+    monkeypatch.setattr(window.core, "get_profile_data_dir", lambda create=True: str(tmp_path))
+    monkeypatch.setattr(window.core, "get_profiles_dir", lambda: str(tmp_path))
+
+    norm_b = window.core._normalize_peer_addr(PEER_B)
+    window.core._live_sessions[norm_b] = LivePeerSession(
+        peer_id=norm_b,
+        conn=(object(), object()),
+    )
+
+    window.addr_edit.setText(PEER_A)
+    window._on_contact_row_activated(PEER_A)
+    before_texts = _conversation_items(window)
+
+    window.handle_message(
+        ChatMessage(
+            kind="peer",
+            text="hello from B",
+            timestamp=created_at,
+            source_peer=PEER_B,
+        )
+    )
+
+    assert _conversation_items(window) == before_texts
+
+    window._on_contact_row_activated(PEER_B)
+
+    assert any("hello from B" in text for text in _conversation_items(window))

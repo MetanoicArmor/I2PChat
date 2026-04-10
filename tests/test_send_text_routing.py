@@ -243,6 +243,91 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.delivery_state, "queued")
             self.assertEqual(result.message_id, "41")
 
+    async def test_send_text_offline_explicit_peer_does_not_fallback_to_current_peer_root(
+        self,
+    ) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = I2PChatCore(profile="alice")
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                core._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                    tmpdir, filename
+                )
+                core.my_dest = _DummyDest()
+                core.current_peer_addr = STORED_PEER_1
+                core._blindbox_root_secret = b"a" * 32  # noqa: SLF001
+                core._blindbox_root_epoch = 1  # noqa: SLF001
+                core._blindbox_client = types.SimpleNamespace(  # noqa: SLF001
+                    is_runtime_ready=lambda: True
+                )
+                core._put_blindbox_frame_with_slot_retry = AsyncMock()  # type: ignore[method-assign]
+
+                result = await core.send_text(
+                    "hello-offline-explicit",
+                    route="offline",
+                    peer_address=STORED_PEER_2,
+                )
+
+                self.assertFalse(result.accepted)
+                core._put_blindbox_frame_with_slot_retry.assert_not_awaited()  # type: ignore[attr-defined]
+
+    async def test_send_text_offline_explicit_peer_uses_target_snapshot(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = I2PChatCore(profile="alice")
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                core._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                    tmpdir, filename
+                )
+                core.my_dest = _DummyDest()
+                core.current_peer_addr = STORED_PEER_1
+                core._blindbox_root_secret = b"a" * 32  # noqa: SLF001
+                core._blindbox_root_epoch = 1  # noqa: SLF001
+                core._blindbox_state = BlindBoxState(send_index=7)  # noqa: SLF001
+                core._blindbox_client = types.SimpleNamespace(  # noqa: SLF001
+                    is_runtime_ready=lambda: True
+                )
+                core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
+                core._save_blindbox_peer_snapshot(
+                    _BlindBoxPeerSnapshot(
+                        peer_addr=STORED_PEER_2,
+                        peer_id=STORED_PEER_2,
+                        state=BlindBoxState(send_index=41),
+                        root_secret=b"b" * 32,
+                        root_epoch=2,
+                    )
+                )
+                core._put_blindbox_frame_with_slot_retry = AsyncMock()  # type: ignore[method-assign]
+
+                result = await core.send_text(
+                    "hello-offline-target-snapshot",
+                    route="offline",
+                    peer_address=STORED_PEER_2,
+                )
+
+                self.assertTrue(result.accepted)
+                self.assertEqual(result.route, "offline-queued")
+                kwargs = core._put_blindbox_frame_with_slot_retry.await_args.kwargs  # type: ignore[attr-defined]
+                self.assertEqual(kwargs["root_secret"], b"b" * 32)
+                self.assertEqual(kwargs["root_epoch"], 2)
+                self.assertEqual(kwargs["peer_id"], STORED_PEER_2)
+                self.assertEqual(kwargs["state"].send_index, 41)
+                self.assertIsNot(kwargs["state"], core._blindbox_state)
+
     async def test_send_text_blocked_requires_connect_for_initial_root(self) -> None:
         with patch.dict(
             os.environ,

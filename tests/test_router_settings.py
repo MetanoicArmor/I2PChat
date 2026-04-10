@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from unittest import mock
+import json
 
 from i2pchat.router.settings import (
     RouterSettings,
@@ -65,6 +66,38 @@ class RouterSettingsTests(unittest.TestCase):
                 runtime = router_runtime_dir()
                 self.assertTrue(runtime.startswith(td))
                 self.assertTrue(os.path.isdir(runtime))
+
+    def test_load_coerces_string_and_invalid_values(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch("i2pchat.router.settings.get_profiles_dir", return_value=td):
+                with mock.patch("i2pchat.router.settings.bundled_i2pd_allowed", return_value=True):
+                    with open(router_settings_path(), "w", encoding="utf-8") as f:
+                        json.dump(
+                            {
+                                "backend": "bundled",
+                                "system_sam_host": " router.local ",
+                                "system_sam_port": "70000",
+                                "bundled_sam_host": " 127.0.0.2 ",
+                                "bundled_sam_port": "17657",
+                                "bundled_http_proxy_port": "not-a-port",
+                                "bundled_socks_proxy_port": 14448,
+                                "bundled_control_http_port": "20004",
+                                "bundled_auto_start": "yes",
+                            },
+                            f,
+                        )
+
+                    loaded = load_router_settings()
+
+                self.assertEqual(loaded.backend, "bundled")
+                self.assertEqual(loaded.system_sam_host, "router.local")
+                self.assertEqual(loaded.system_sam_port, 7656)
+                self.assertEqual(loaded.bundled_sam_host, "127.0.0.2")
+                self.assertEqual(loaded.bundled_sam_port, 17657)
+                self.assertEqual(loaded.bundled_http_proxy_port, 14444)
+                self.assertEqual(loaded.bundled_socks_proxy_port, 14448)
+                self.assertEqual(loaded.bundled_control_http_port, 20004)
+                self.assertTrue(loaded.bundled_auto_start)
 
 
 if __name__ == "__main__":

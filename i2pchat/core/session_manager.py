@@ -486,6 +486,9 @@ class SessionManager:
         return True
 
     def invalidate_handshake_watchdog(self) -> int:
+        task = self.handshake_watchdog_task
+        if task is not None and not task.done():
+            task.cancel()
         self.handshake_watchdog_generation += 1
         self.handshake_watchdog_task = None
         self.handshake_watchdog_peer_id = None

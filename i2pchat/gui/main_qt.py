@@ -5515,12 +5515,17 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         self._bundled_socks_proxy_port.setRange(1, 65535)
         self._bundled_socks_proxy_port.setValue(int(settings.bundled_socks_proxy_port))
 
+        self._bundled_control_http_port = QtWidgets.QSpinBox(self)
+        self._bundled_control_http_port.setRange(1, 65535)
+        self._bundled_control_http_port.setValue(int(settings.bundled_control_http_port))
+
         self._system_host.setMinimumWidth(260)
 
         form.addRow(_router_form_section_label("Built-in router (Bundled i2pd)"))
         form.addRow("SAM port", _wrap_history_numeric_row(self._bundled_sam_port))
         form.addRow("HTTP proxy", _wrap_history_numeric_row(self._bundled_http_proxy_port))
         form.addRow("SOCKS proxy", _wrap_history_numeric_row(self._bundled_socks_proxy_port))
+        form.addRow("Control HTTP", _wrap_history_numeric_row(self._bundled_control_http_port))
         form.addRow(
             _router_form_section_label(
                 "External router (System i2pd)", secondary=True
@@ -5644,6 +5649,7 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         self._bundled_sam_port.setEnabled(bundled_enabled)
         self._bundled_http_proxy_port.setEnabled(bundled_enabled)
         self._bundled_socks_proxy_port.setEnabled(bundled_enabled)
+        self._bundled_control_http_port.setEnabled(bundled_enabled)
         self._btn_restart.setEnabled(bundled_enabled)
         if not bundled_i2pd_allowed():
             self._status_label.setText(
@@ -5664,7 +5670,7 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
             bundled_sam_port=int(self._bundled_sam_port.value()),
             bundled_http_proxy_port=int(self._bundled_http_proxy_port.value()),
             bundled_socks_proxy_port=int(self._bundled_socks_proxy_port.value()),
-            bundled_control_http_port=17070,
+            bundled_control_http_port=int(self._bundled_control_http_port.value()),
             bundled_auto_start=(backend == "bundled"),
         ))
 
@@ -8761,6 +8767,27 @@ class ChatWindow(QtWidgets.QMainWindow):
             return
 
         kind = msg.kind
+        incoming_direct_peer_key = (
+            normalize_peer_addr(msg.source_peer)
+            if kind == "peer" and msg.source_peer
+            else None
+        )
+        active_direct_peer_key = (
+            normalize_peer_addr(self._current_history_peer() or "")
+            if not self._active_group_id
+            else None
+        )
+        direct_peer_offscreen = bool(
+            kind == "peer"
+            and incoming_direct_peer_key
+            and (
+                self._active_group_id is not None
+                or (
+                    active_direct_peer_key is not None
+                    and active_direct_peer_key != incoming_direct_peer_key
+                )
+            )
+        )
         ts = msg.timestamp.strftime("%H:%M:%S")
         text = msg.text
         if kind == "peer":
@@ -8780,7 +8807,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         else:
             sender = "SYSTEM"
 
-        if kind in ("me", "peer") and self._history_enabled:
+        if direct_peer_offscreen:
+            self._persist_direct_message_history_for_peer(msg)
+        elif kind in ("me", "peer") and self._history_enabled:
             ts_iso = msg.timestamp.isoformat()
             self._history_entries.append(
                 HistoryEntry(
@@ -8815,21 +8844,22 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._history_dirty = False
             self._history_flush_timer.stop()
 
-        self._append_item(
-            ChatItem(
-                kind=kind,
-                timestamp=ts,
-                sender=sender,
-                text=text,
-                message_id=msg.message_id,
-                delivery_state=msg.delivery_state,
-                delivery_route=msg.delivery_route,
-                delivery_hint=msg.delivery_hint,
-                delivery_reason=msg.delivery_reason,
-                retryable=msg.retryable,
-                retry_kind="text" if kind == "me" and msg.retryable else None,
+        if not direct_peer_offscreen:
+            self._append_item(
+                ChatItem(
+                    kind=kind,
+                    timestamp=ts,
+                    sender=sender,
+                    text=text,
+                    message_id=msg.message_id,
+                    delivery_state=msg.delivery_state,
+                    delivery_route=msg.delivery_route,
+                    delivery_hint=msg.delivery_hint,
+                    delivery_reason=msg.delivery_reason,
+                    retryable=msg.retryable,
+                    retry_kind="text" if kind == "me" and msg.retryable else None,
+                )
             )
-        )
         self.refresh_status_label()
         self._refresh_connection_buttons()
         if kind == "peer" and msg.source_peer:
@@ -8852,6 +8882,57 @@ class ChatWindow(QtWidgets.QMainWindow):
                 chat_is_foreground=self._peer_chat_is_foreground(),
             )
             self._update_unread_chrome()
+
+    def _persist_direct_message_history_for_peer(self, msg: ChatMessage) -> None:
+        if not self._history_enabled or self.core is None or not msg.source_peer:
+            return
+        identity_key = self.core.get_identity_key_bytes()
+        if not identity_key:
+            return
+        peer = normalize_peer_addr(msg.source_peer)
+        if not peer:
+            return
+        try:
+            entries = load_history(
+                self.core.get_profile_data_dir(),
+                self.core.profile,
+                peer,
+                identity_key,
+                app_data_root=self.core.get_profiles_dir(),
+            )
+            entries.append(
+                HistoryEntry(
+                    kind="peer",
+                    text=msg.text,
+                    ts=msg.timestamp.isoformat(),
+                    message_id=msg.message_id,
+                    delivery_state=msg.delivery_state,
+                    delivery_route=msg.delivery_route,
+                    delivery_hint=msg.delivery_hint,
+                    delivery_reason=msg.delivery_reason,
+                    retryable=msg.retryable,
+                )
+            )
+            entries, _ = apply_history_retention(
+                entries,
+                max_messages=load_history_max_messages(),
+                max_age_days=load_history_retention_days(),
+            )
+            save_history(
+                self.core.get_profile_data_dir(),
+                self.core.profile,
+                peer,
+                entries,
+                identity_key,
+                max_messages=load_history_max_messages(),
+                app_data_root=self.core.get_profiles_dir(),
+            )
+            self._history_save_error_reported = False
+        except Exception as e:
+            logger.warning("Failed to save chat history: %s", e, exc_info=True)
+            if not self._history_save_error_reported:
+                self.handle_system(f"Warning: failed to save chat history: {e}")
+                self._history_save_error_reported = True
 
     def _peer_chat_is_foreground(self) -> bool:
         """True when the user is likely looking at the active chat (no unread bump for same peer)."""
@@ -10731,7 +10812,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             if self.core.has_active_live_session(peer_key_chk):
                 if loaded is not None and normalize_peer_addr(loaded) == peer_key_chk:
                     return
-                if loaded is None:
+                if loaded is None and self.chat_model.rowCount() > 0:
                     return
         raw = (self._current_history_peer() or "").strip()
         if not raw:

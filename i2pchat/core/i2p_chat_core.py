@@ -2043,10 +2043,31 @@ class I2PChatCore:
     def _live_stream_count(self) -> int:
         return sum(1 for s in self._live_sessions.values() if s.conn)
 
+    def _has_live_session_slot_for_peer(self, peer_id: str) -> bool:
+        k = self._normalize_peer_addr(peer_id)
+        return k in self._live_sessions
+
     def _has_active_session_for_peer(self, peer_id: str) -> bool:
         k = self._normalize_peer_addr(peer_id)
         s = self._live_sessions.get(k)
         return bool(s and s.conn)
+
+    def _start_receive_loop_task(
+        self,
+        connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
+        *,
+        peer_id: str,
+    ) -> Optional[asyncio.Task[Any]]:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        normalized_peer = self._normalize_peer_addr(peer_id)
+        task = loop.create_task(self.receive_loop(connection, peer_id=normalized_peer))
+        sess = self._live_sessions.get(normalized_peer)
+        if sess is not None and sess.conn == connection:
+            sess.receive_task = task
+        return task
 
     def has_active_live_session(self, peer_address: str) -> bool:
         """True, если с этим пиром уже есть активный SAM-поток (legacy или extra)."""
@@ -2354,7 +2375,7 @@ class I2PChatCore:
                 continue
             if self._handshake_complete_for_peer_route(n):
                 continue
-            if self._has_active_session_for_peer(n):
+            if self._has_live_session_slot_for_peer(n):
                 continue
             out.append(mid)
         return sorted(out, key=lambda x: normalize_member_id(x))
@@ -2445,7 +2466,7 @@ class I2PChatCore:
                 for n in batch:
                     if self._handshake_complete_for_peer_route(n):
                         continue
-                    if self._has_active_session_for_peer(n):
+                    if self._has_live_session_slot_for_peer(n):
                         continue
                     activate = self._live_stream_count() == 0
                     await self.connect_to_peer(n, activate_as_current=activate)
@@ -2732,6 +2753,25 @@ class I2PChatCore:
                 "secret": snapshot.root_secret,
             }
         ]
+
+    def _blindbox_send_snapshot_for_peer(
+        self, peer_addr: str
+    ) -> tuple[_BlindBoxPeerSnapshot, Callable[[], None]] | None:
+        peer_id = self._blindbox_peer_id_for_peer(peer_addr)
+        if not peer_id:
+            return None
+        current_peer = self._blindbox_peer_id()
+        if current_peer and same_i2p_destination(peer_id, current_peer):
+            snapshot = _BlindBoxPeerSnapshot(
+                peer_addr=peer_id,
+                peer_id=peer_id,
+                state=self._blindbox_state,
+                root_secret=self._blindbox_root_secret,
+                root_epoch=int(self._blindbox_root_epoch),
+            )
+            return snapshot, self._save_blindbox_state
+        snapshot = self._load_blindbox_peer_snapshot(peer_id)
+        return snapshot, lambda: self._save_blindbox_peer_snapshot(snapshot)
 
     def _blindbox_recv_candidates_for_state(self, state: BlindBoxState) -> list[int]:
         recv_backtrack = max(
@@ -4832,26 +4872,42 @@ class I2PChatCore:
             save_state()
             return
 
-    async def _send_text_via_blindbox(self, text: str) -> Optional[int]:
+    async def _send_text_via_blindbox(
+        self, text: str, *, peer_address: Optional[str] = None
+    ) -> Optional[int]:
         if not self._blindbox_ready():
-            return None
-        if self._blindbox_root_secret is None:
             return None
         if not self.my_dest or self._blindbox_client is None:
             return None
-        peer_id = self._blindbox_peer_id()
-        if not peer_id:
+        target_peer = self._blindbox_peer_id_for_peer(
+            peer_address or self.current_peer_addr or self._last_active_peer_for_telemetry()
+        )
+        if not target_peer:
             return None
 
         async with self._blindbox_send_lock:
             if not self._blindbox_ready():
                 return None
-            if self._blindbox_root_secret is None:
-                return None
             if not self.my_dest or self._blindbox_client is None:
                 return None
-            peer_id = self._blindbox_peer_id()
-            if not peer_id:
+            if not target_peer:
+                return None
+            try:
+                send_snapshot = self._blindbox_send_snapshot_for_peer(target_peer)
+            except Exception as e:
+                detail = _exception_user_message(e)
+                logger.warning(
+                    "Failed to load BlindBox snapshot for %s: %s",
+                    target_peer[:24],
+                    detail,
+                    exc_info=True,
+                )
+                self._emit_error(f"BlindBox send failed: {detail}")
+                return None
+            if send_snapshot is None:
+                return None
+            snapshot, save_state = send_snapshot
+            if snapshot.root_secret is None:
                 return None
             chunks = split_long_chat_text(text)
             if not chunks:
@@ -4886,11 +4942,11 @@ class I2PChatCore:
                     try:
                         await self._put_blindbox_frame_with_slot_retry(
                             frame=frame,
-                            root_secret=self._blindbox_root_secret,
-                            root_epoch=self._blindbox_root_epoch,
-                            peer_id=peer_id,
-                            state=self._blindbox_state,
-                            save_state=self._save_blindbox_state,
+                            root_secret=snapshot.root_secret,
+                            root_epoch=snapshot.root_epoch,
+                            peer_id=snapshot.peer_id,
+                            state=snapshot.state,
+                            save_state=save_state,
                             put_timeout_sec=put_timeout_sec,
                             log_label="Direct BlindBox send",
                         )
@@ -5588,7 +5644,7 @@ class I2PChatCore:
         except ValueError as e:
             self._emit_error(str(e).strip() or "Invalid peer address")
             return
-        if self._has_active_session_for_peer(normalized_target):
+        if self._has_live_session_slot_for_peer(normalized_target):
             self._emit_system("Already connected to this peer.")
             return
         max_live = max_concurrent_live_sessions()
@@ -5688,9 +5744,7 @@ class I2PChatCore:
                     )
 
                 loop = asyncio.get_running_loop()
-                loop.create_task(
-                    self.receive_loop(connection, peer_id=normalized_target)
-                )
+                self._start_receive_loop_task(connection, peer_id=normalized_target)
                 loop.create_task(
                     self.initiate_secure_handshake(normalized_target)
                 )
@@ -5828,7 +5882,9 @@ class I2PChatCore:
                     delivery_state=lifecycle.state,
                     retryable=lifecycle.retryable,
                 )
-            sent_offline = await self._send_text_via_blindbox(text)
+            sent_offline = await self._send_text_via_blindbox(
+                text, peer_address=peer_for_route
+            )
             if sent_offline is None:
                 reason, hint = self._offline_send_block_feedback()
                 self._emit_error(hint)
@@ -5914,7 +5970,9 @@ class I2PChatCore:
                     delivery_state=lifecycle.state,
                     retryable=lifecycle.retryable,
                 )
-            sent_offline = await self._send_text_via_blindbox(text)
+            sent_offline = await self._send_text_via_blindbox(
+                text, peer_address=peer_for_route
+            )
             if sent_offline is None:
                 reason, hint = self._offline_send_block_feedback()
                 self._emit_error(hint)
@@ -6577,24 +6635,49 @@ class I2PChatCore:
 
     async def _disconnect_extra_session(self, peer_id: str) -> None:
         k = self._normalize_peer_addr(peer_id)
-        ls = self._live_sessions.pop(k, None)
-        if not ls or not ls.conn:
+        ls = self._live_sessions.get(k)
+        if not ls:
             return
-        if ls.receive_task and not ls.receive_task.done():
-            ls.receive_task.cancel()
+        receive_task = ls.receive_task
+        if (
+            receive_task is not None
+            and receive_task is not asyncio.current_task()
+            and not receive_task.done()
+        ):
+            receive_task.cancel()
+        ls.receive_task = None
+        if not ls.conn:
+            self._live_sessions.pop(k, None)
+            self._cancel_handshake_watchdog(k)
+            self.session_manager.reset_peer_lifecycle(k, reason="disconnect-pending")
+            self.session_manager.mark_live_failure(
+                reason="disconnect",
+                mark_peer_stale=False,
+                peer_id=k,
+            )
+            if self.active_live_peer_id == k:
+                self.active_live_peer_id = None
+            return
         _, writer = ls.conn
         ls.conn = None
         had_secure = ls.handshake_complete and ls.use_encryption and bool(ls.shared_key)
         try:
+            quit_frame: Optional[bytes] = None
             if had_secure:
-                writer.write(self.frame_message("S", "__SIGNAL__:QUIT", peer_id=k))
+                quit_frame = self.frame_message("S", "__SIGNAL__:QUIT", peer_id=k)
             else:
-                writer.write(self.frame_message_plain("S", "__SIGNAL__:QUIT", peer_id=k))
-            await writer.drain()
+                quit_frame = self.frame_message_plain("S", "__SIGNAL__:QUIT", peer_id=k)
+            if quit_frame is not None:
+                writer.write(quit_frame)
+                await writer.drain()
+        except Exception:
+            pass
+        try:
             writer.close()
             await writer.wait_closed()
         except Exception:
             pass
+        self._live_sessions.pop(k, None)
         ls.reset_crypto()
         self.session_manager.reset_peer_lifecycle(k, reason="disconnect")
         self.session_manager.mark_live_failure(
@@ -7303,7 +7386,7 @@ class I2PChatCore:
                         writer.close()
                         continue
                     peer_addr_norm = self._normalize_peer_addr(peer_addr)
-                    if self._has_active_session_for_peer(peer_addr_norm):
+                    if self._has_live_session_slot_for_peer(peer_addr_norm):
                         self._emit_system(
                             f"Rejected duplicate incoming connection from {peer_addr[:12]}... "
                             "(session already active)."
@@ -7354,9 +7437,7 @@ class I2PChatCore:
                 )
 
                 loop = asyncio.get_running_loop()
-                loop.create_task(
-                    self.receive_loop(connection, peer_id=peer_addr_norm)
-                )
+                self._start_receive_loop_task(connection, peer_id=peer_addr_norm)
                 self._start_handshake_watchdog(
                     connection, peer_id=peer_addr_norm
                 )
@@ -8139,6 +8220,7 @@ class I2PChatCore:
             if sess.conn == connection:
                 self._emit_error(f"Protocol Error: {e}")
         finally:
+            current_task = asyncio.current_task()
             sess._recv_loop_active = False
             skip_cleanup = False
             if (
@@ -8151,13 +8233,12 @@ class I2PChatCore:
                 and not sess._file_transfer_active
             ):
                 try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(
-                        self.receive_loop(connection, peer_id=peer_id)
-                    )
+                    self._start_receive_loop_task(connection, peer_id=peer_id)
                 except RuntimeError:
                     pass
                 skip_cleanup = True
+            if sess.receive_task is current_task:
+                sess.receive_task = None
             # Не сбрасываем соединение если идёт передача или приём файла / inline-изображения
             if (
                 not skip_cleanup

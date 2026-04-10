@@ -19,6 +19,7 @@ if "PIL" not in sys.modules:
     sys.modules["PIL.Image"] = pil_image_module
 
 from i2pchat.core.i2p_chat_core import I2PChatCore
+from i2pchat.core.live_peer_session import LivePeerSession
 from i2pchat.protocol.protocol_codec import ProtocolCodec
 
 from tests.live_session_helpers import attach_mock_live_session
@@ -289,6 +290,49 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             any("locked to another peer" in msg.lower() for msg in errors),
             errors,
         )
+
+    async def test_connect_rejects_duplicate_pending_session_slot(self) -> None:
+        systems: list[str] = []
+        core = I2PChatCore(profile="alice", on_system=systems.append)
+        normalized_peer = core._normalize_peer_addr(PEER_BARE)
+        core._live_sessions[normalized_peer] = LivePeerSession(peer_id=normalized_peer)
+
+        import i2pchat.core.i2p_chat_core as core_module
+
+        original_nacl_available = core_module.crypto.NACL_AVAILABLE
+        original_stream_connect = core_module.i2plib.stream_connect
+        called = False
+
+        async def _unexpected_stream_connect(*_args, **_kwargs):
+            nonlocal called
+            called = True
+            raise AssertionError("stream_connect should not run for duplicate pending session")
+
+        core_module.crypto.NACL_AVAILABLE = True
+        core_module.i2plib.stream_connect = _unexpected_stream_connect  # type: ignore[assignment]
+        try:
+            await core.connect_to_peer(PEER_BARE)
+        finally:
+            core_module.crypto.NACL_AVAILABLE = original_nacl_available
+            core_module.i2plib.stream_connect = original_stream_connect  # type: ignore[assignment]
+
+        self.assertFalse(called)
+        self.assertIn("Already connected to this peer.", systems)
+
+    async def test_disconnect_peer_cancels_owned_receive_task(self) -> None:
+        core = I2PChatCore(profile="alice")
+        writer = _FakeWriter()
+        conn = (_FakeReader(b""), writer)
+        normalized_peer = attach_mock_live_session(core, PEER_BARE, conn)
+        receive_task = asyncio.create_task(asyncio.sleep(60))
+        core._live_sessions[normalized_peer].receive_task = receive_task
+
+        await core.disconnect_peer(normalized_peer)
+        await asyncio.sleep(0)
+
+        self.assertTrue(receive_task.cancelled())
+        self.assertTrue(writer.closed)
+        self.assertNotIn(normalized_peer, core._live_sessions)
 
     async def test_blindbox_root_not_sent_when_current_peer_not_in_saved_contacts(
         self,

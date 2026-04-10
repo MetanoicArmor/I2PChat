@@ -399,3 +399,17 @@ class SessionManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(sm.outbound_connect_busy)
         self.assertFalse(sm.disconnecting)
         self.assertEqual(sm.peer_state, PeerState.DISCONNECTED)
+
+    async def test_invalidate_handshake_watchdog_cancels_pending_task(self) -> None:
+        sm = SessionManager()
+        watchdog = asyncio.create_task(asyncio.sleep(60))
+        sm.handshake_watchdog_task = watchdog
+        sm.handshake_watchdog_peer_id = "peer-a.b32.i2p"
+
+        generation = sm.invalidate_handshake_watchdog()
+        await asyncio.sleep(0)
+
+        self.assertEqual(generation, 1)
+        self.assertTrue(watchdog.cancelled())
+        self.assertIsNone(sm.handshake_watchdog_task)
+        self.assertIsNone(sm.handshake_watchdog_peer_id)
