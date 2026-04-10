@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import tempfile
@@ -41,8 +42,55 @@ class _DummyWriter:
 
 
 class _DummyDest:
-    def __init__(self) -> None:
-        self.base32 = DUMMY_DEST_B32
+    def __init__(self, base32: str = DUMMY_DEST_B32) -> None:
+        self.base32 = base32
+
+
+class _BlindBoxMemoryPutClient:
+    def __init__(self, storage: dict[str, list[bytes]]) -> None:
+        self.storage = storage
+
+    async def put(self, key: str, blob: bytes) -> list[object]:
+        self.storage.setdefault(key, []).append(blob)
+        return []
+
+    def is_runtime_ready(self) -> bool:
+        return True
+
+
+class _BlindBoxMemoryPollClient:
+    def __init__(self, storage: dict[str, list[bytes]]) -> None:
+        self.storage = storage
+
+    async def start(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    def is_runtime_ready(self) -> bool:
+        return True
+
+    async def get_first_accepted(
+        self,
+        lookup_token: str,
+        *,
+        accept_blob,
+        miss_grace_sec: float,
+        diag: dict[str, object] | None = None,
+    ) -> bytes | None:
+        del miss_grace_sec
+        if diag is not None:
+            diag["first_result_addr"] = "memory-replica"
+        for blob in self.storage.get(lookup_token, []):
+            accepted = accept_blob(blob)
+            if hasattr(accepted, "__await__"):
+                accepted = await accepted
+            if accepted:
+                if diag is not None:
+                    diag["accepted_addr"] = "memory-replica"
+                return blob
+        return None
 
 
 class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
@@ -327,6 +375,86 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(kwargs["peer_id"], STORED_PEER_2)
                 self.assertEqual(kwargs["state"].send_index, 41)
                 self.assertIsNot(kwargs["state"], core._blindbox_state)
+
+    async def test_offline_direct_message_reaches_target_peer_via_blindbox_poll(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as sender_dir, tempfile.TemporaryDirectory() as receiver_dir:
+                storage: dict[str, list[bytes]] = {}
+                root_secret = b"r" * 32
+
+                sender = I2PChatCore(profile="alice")
+                sender.get_profile_data_dir = lambda create=True: sender_dir  # type: ignore[method-assign]
+                sender._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                    sender_dir, filename
+                )
+                sender.my_dest = _DummyDest(DUMMY_DEST_B32)
+                sender.my_signing_seed, sender.my_signing_public = crypto.generate_signing_keypair()
+                sender._blindbox_client = _BlindBoxMemoryPutClient(storage)  # noqa: SLF001
+                sender.current_peer_addr = STORED_PEER_2
+                sender._save_blindbox_peer_snapshot(
+                    _BlindBoxPeerSnapshot(
+                        peer_addr=STORED_PEER_1,
+                        peer_id=STORED_PEER_1,
+                        state=BlindBoxState(send_index=0),
+                        root_secret=root_secret,
+                        root_epoch=3,
+                    )
+                )
+
+                result = await sender.send_text(
+                    "hello-offline-e2e",
+                    route="offline",
+                    peer_address=STORED_PEER_1,
+                )
+
+                self.assertTrue(result.accepted)
+                self.assertEqual(result.route, "offline-queued")
+
+                received: list[object] = []
+                receiver = I2PChatCore(profile="bob", on_message=received.append)
+                receiver.get_profile_data_dir = lambda create=True: receiver_dir  # type: ignore[method-assign]
+                receiver._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                    receiver_dir, filename
+                )
+                receiver.my_dest = _DummyDest(STORED_PEER_1)
+                receiver.my_signing_seed, receiver.my_signing_public = crypto.generate_signing_keypair()
+                receiver.current_peer_addr = STORED_PEER_2
+                receiver._blindbox_client = _BlindBoxMemoryPollClient(storage)  # noqa: SLF001
+                receiver._save_blindbox_peer_snapshot(
+                    _BlindBoxPeerSnapshot(
+                        peer_addr=DUMMY_DEST_B32,
+                        peer_id=DUMMY_DEST_B32,
+                        state=BlindBoxState(recv_base=0),
+                        root_secret=root_secret,
+                        root_epoch=3,
+                    )
+                )
+
+                async def _stop_after_first_sleep() -> None:
+                    raise asyncio.CancelledError()
+
+                receiver._blindbox_poll_sleep = _stop_after_first_sleep  # type: ignore[method-assign]
+
+                with self.assertRaises(asyncio.CancelledError):
+                    await receiver._blindbox_poll_loop()
+
+                self.assertTrue(received)
+                peer_messages = [
+                    item for item in received if getattr(item, "kind", None) == "peer"
+                ]
+                self.assertTrue(peer_messages)
+                first = peer_messages[0]
+                self.assertEqual(getattr(first, "text", None), "hello-offline-e2e")
+                self.assertEqual(getattr(first, "source_peer", None), DUMMY_DEST_B32)
+                snapshot = receiver._load_blindbox_peer_snapshot(DUMMY_DEST_B32)
+                self.assertEqual(snapshot.state.recv_base, 1)
 
     async def test_send_text_blocked_requires_connect_for_initial_root(self) -> None:
         with patch.dict(

@@ -18,7 +18,7 @@ if "PIL" not in sys.modules:
     sys.modules["PIL"] = pil_module
     sys.modules["PIL.Image"] = pil_image_module
 
-from i2pchat.core.i2p_chat_core import I2PChatCore
+from i2pchat.core.i2p_chat_core import I2PChatCore, _BlindBoxPeerSnapshot
 from i2pchat.core.live_peer_session import LivePeerSession
 from i2pchat.protocol.protocol_codec import ProtocolCodec
 
@@ -154,6 +154,12 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         ls.peer_identity_binding_verified = True
         self.assertTrue(core.is_current_peer_verified_for_lock())
 
+    def test_peer_in_saved_contacts_allows_current_selected_peer(self) -> None:
+        core = I2PChatCore(profile="alice")
+        core.current_peer_addr = PEER_BARE
+
+        self.assertTrue(core.peer_in_saved_contacts(PEER_BARE))
+
     async def test_connect_sends_identity_line_before_framed_identity(self) -> None:
         core = I2PChatCore()
         core.my_dest = SimpleNamespace(base64="DEST_B64")
@@ -183,6 +189,178 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         payload = bytes(writer.buffer)
         self.assertTrue(payload.startswith(b"DEST_B64\n"))
+
+    async def test_connect_to_peer_marks_target_as_saved_before_network_attempt(self) -> None:
+        core = I2PChatCore(profile="alice")
+        remembered: list[str] = []
+        core.ensure_peer_in_saved_contacts = lambda peer: remembered.append(peer) or True  # type: ignore[method-assign]
+
+        import i2pchat.core.i2p_chat_core as core_module
+
+        original_nacl_available = core_module.crypto.NACL_AVAILABLE
+        original_stream_connect = core_module.i2plib.stream_connect
+
+        async def _fail_stream_connect(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        core_module.crypto.NACL_AVAILABLE = True
+        core_module.i2plib.stream_connect = _fail_stream_connect  # type: ignore[assignment]
+        try:
+            await core.connect_to_peer(PEER_BARE)
+        finally:
+            core_module.crypto.NACL_AVAILABLE = original_nacl_available
+            core_module.i2plib.stream_connect = original_stream_connect  # type: ignore[assignment]
+
+        self.assertEqual(remembered, [PEER_BARE])
+
+    async def test_accept_loop_allows_first_contact_and_adds_peer_to_saved(self) -> None:
+        core = I2PChatCore(profile="alice")
+        core.my_dest = SimpleNamespace(base64="DEST_B64")
+        remembered: list[str] = []
+        systems: list[str] = []
+        core.on_system = systems.append
+        core.ensure_peer_in_saved_contacts = lambda peer: remembered.append(peer) or True  # type: ignore[method-assign]
+        core._set_verified_peer_identity = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        core._start_receive_loop_task = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+        core._start_handshake_watchdog = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+        core._keepalive_loop = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+        class _AcceptReader(_FakeReader):
+            async def readline(self) -> bytes:
+                if not self._buffer:
+                    return b""
+                newline_idx = self._buffer.find(b"\n")
+                if newline_idx < 0:
+                    data = bytes(self._buffer)
+                    self._buffer.clear()
+                    return data
+                data = bytes(self._buffer[: newline_idx + 1])
+                del self._buffer[: newline_idx + 1]
+                return data
+
+        reader = _AcceptReader(b"dest-b64\n")
+        writer = _FakeWriter()
+
+        import i2pchat.core.i2p_chat_core as core_module
+
+        original_stream_accept = core_module.i2plib.stream_accept
+        original_destination = core_module.i2plib.Destination
+
+        calls = 0
+
+        async def _fake_stream_accept(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return reader, writer
+            raise asyncio.CancelledError()
+
+        class _FakeDest:
+            def __init__(self, raw: str) -> None:
+                self.base32 = PEER_BARE
+
+        core_module.i2plib.stream_accept = _fake_stream_accept  # type: ignore[assignment]
+        core_module.i2plib.Destination = _FakeDest  # type: ignore[assignment]
+        try:
+            with self.assertRaises(asyncio.CancelledError):
+                await core.accept_loop()
+        finally:
+            core_module.i2plib.stream_accept = original_stream_accept  # type: ignore[assignment]
+            core_module.i2plib.Destination = original_destination  # type: ignore[assignment]
+
+        self.assertEqual(remembered, [PEER_BARE])
+        self.assertTrue(any("Accepted first contact" in msg for msg in systems), systems)
+
+    async def test_accept_loop_prefers_incoming_during_simultaneous_connect_when_local_sorts_after_peer(self) -> None:
+        core = I2PChatCore(profile="alice")
+        core.my_dest = SimpleNamespace(base64="DEST_B64", base32=OTHER_BARE)
+        core.ensure_peer_in_saved_contacts = lambda _peer: False  # type: ignore[method-assign]
+        core._set_verified_peer_identity = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        core._start_receive_loop_task = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+        core._start_handshake_watchdog = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+        core._keepalive_loop = AsyncMock(return_value=None)  # type: ignore[method-assign]
+        existing = LivePeerSession(peer_id=PEER_BARE)
+        core._live_sessions[PEER_BARE] = existing
+
+        class _AcceptReader(_FakeReader):
+            async def readline(self) -> bytes:
+                if not self._buffer:
+                    return b""
+                newline_idx = self._buffer.find(b"\n")
+                if newline_idx < 0:
+                    data = bytes(self._buffer)
+                    self._buffer.clear()
+                    return data
+                data = bytes(self._buffer[: newline_idx + 1])
+                del self._buffer[: newline_idx + 1]
+                return data
+
+        reader = _AcceptReader(b"dest-b64\n")
+        writer = _FakeWriter()
+
+        import i2pchat.core.i2p_chat_core as core_module
+
+        original_stream_accept = core_module.i2plib.stream_accept
+        original_destination = core_module.i2plib.Destination
+
+        calls = 0
+
+        async def _fake_stream_accept(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return reader, writer
+            raise asyncio.CancelledError()
+
+        class _FakeDest:
+            def __init__(self, raw: str) -> None:
+                self.base32 = PEER_BARE
+
+        core_module.i2plib.stream_accept = _fake_stream_accept  # type: ignore[assignment]
+        core_module.i2plib.Destination = _FakeDest  # type: ignore[assignment]
+        try:
+            with self.assertRaises(asyncio.CancelledError):
+                await core.accept_loop()
+        finally:
+            core_module.i2plib.stream_accept = original_stream_accept  # type: ignore[assignment]
+            core_module.i2plib.Destination = original_destination  # type: ignore[assignment]
+
+        self.assertIn(PEER_BARE, core._live_sessions)
+        self.assertIsNot(core._live_sessions[PEER_BARE], existing)
+        self.assertIsNotNone(core._live_sessions[PEER_BARE].conn)
+
+    async def test_connect_to_peer_abandons_outbound_when_session_slot_is_replaced(self) -> None:
+        core = I2PChatCore(profile="alice")
+        core.my_dest = SimpleNamespace(base64="DEST_B64", base32=LOCAL_BARE)
+        core._start_handshake_watchdog = lambda *_args, **_kwargs: None  # type: ignore[assignment]
+        core.receive_loop = AsyncMock(return_value=None)  # type: ignore[method-assign]
+        core.initiate_secure_handshake = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        core._keepalive_loop = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+        reader = _FakeReader(b"")
+        writer = _FakeWriter()
+
+        import i2pchat.core.i2p_chat_core as core_module
+
+        original_stream_connect = core_module.i2plib.stream_connect
+        original_nacl_available = core_module.crypto.NACL_AVAILABLE
+
+        async def _fake_stream_connect(session_id: str, target: str, sam_address=None):
+            norm = core._normalize_peer_addr(PEER_BARE)
+            core._live_sessions[norm] = LivePeerSession(peer_id=norm)
+            return reader, writer
+
+        core_module.i2plib.stream_connect = _fake_stream_connect  # type: ignore[assignment]
+        core_module.crypto.NACL_AVAILABLE = True
+        try:
+            await core.connect_to_peer(PEER_BARE)
+        finally:
+            core_module.i2plib.stream_connect = original_stream_connect  # type: ignore[assignment]
+            core_module.crypto.NACL_AVAILABLE = original_nacl_available
+
+        self.assertTrue(writer.closed)
+        core.receive_loop.assert_not_called()  # type: ignore[attr-defined]
+        core.initiate_secure_handshake.assert_not_called()  # type: ignore[attr-defined]
 
     async def test_protocol_downgrade_schedules_disconnect_without_reentrancy(self) -> None:
         errors: list[str] = []
@@ -564,6 +742,107 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(core._blindbox_prev_roots[0]["epoch"], 7)
             self.assertEqual(core._blindbox_prev_roots[0]["secret"], b"\x11" * 32)
             self.assertIsNone(core._blindbox_pending_root_secret)
+
+    async def test_blindbox_root_receiver_for_explicit_peer_updates_that_peer_snapshot(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                receiver = self._make_blindbox_core()
+                receiver.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                receiver._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                    tmpdir, filename
+                )
+                writer = _FakeWriter()
+                root_secret = b"\x55" * 32
+                attach_mock_live_session(
+                    receiver,
+                    PEER_BARE,
+                    (_FakeReader(b""), writer),
+                    handshake_complete=True,
+                    use_encryption=False,
+                )
+                receiver.current_peer_addr = OTHER_BARE
+
+                await receiver._handle_incoming_blindbox_root_signal(
+                    f"__SIGNAL__:BLINDBOX_ROOT|1|{root_secret.hex()}",
+                    writer,
+                    peer_id=PEER_BARE,
+                )
+
+                snapshot = receiver._load_blindbox_peer_snapshot(PEER_BARE)
+                self.assertEqual(snapshot.root_secret, root_secret)
+                self.assertEqual(snapshot.root_epoch, 1)
+                self.assertIsNone(receiver._blindbox_root_secret)
+
+    async def test_blindbox_root_ack_for_explicit_peer_commits_that_peer_snapshot(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = self._make_blindbox_core()
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                core._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                    tmpdir, filename
+                )
+                writer = _FakeWriter()
+                attach_mock_live_session(
+                    core,
+                    PEER_BARE,
+                    (_FakeReader(b""), writer),
+                    handshake_complete=True,
+                    use_encryption=False,
+                )
+                core.current_peer_addr = OTHER_BARE
+
+                await core._send_blindbox_root_if_needed(writer, peer_id=PEER_BARE)
+                pending = core._load_blindbox_peer_snapshot(PEER_BARE)
+                self.assertIsNone(pending.root_secret)
+                self.assertIsNotNone(pending.pending_root_secret)
+                self.assertEqual(pending.pending_root_epoch, 1)
+
+                core._handle_blindbox_root_ack_signal(
+                    "__SIGNAL__:BLINDBOX_ROOT_ACK|1", peer_id=PEER_BARE
+                )
+
+                committed = core._load_blindbox_peer_snapshot(PEER_BARE)
+                self.assertIsNotNone(committed.root_secret)
+                self.assertEqual(committed.root_epoch, 1)
+                self.assertIsNone(committed.pending_root_secret)
+                self.assertIsNone(core._blindbox_root_secret)
+
+    def test_blindbox_root_candidates_for_snapshot_include_previous_roots(self) -> None:
+        core = I2PChatCore(profile="alice")
+        snapshot = _BlindBoxPeerSnapshot(
+            peer_addr=PEER_BARE,
+            peer_id=PEER_BARE,
+            state=core._blindbox_state,
+        )
+        snapshot.root_secret = b"\x77" * 32
+        snapshot.root_epoch = 5
+        snapshot.prev_roots = [
+            {
+                "epoch": 4,
+                "secret": b"\x66" * 32,
+                "expires_at": 2**31,
+            }
+        ]
+
+        candidates = core._blindbox_root_candidates_for_snapshot(snapshot)
+
+        self.assertEqual(len(candidates), 2)
+        self.assertEqual(candidates[0]["epoch"], 5)
+        self.assertEqual(candidates[1]["epoch"], 4)
 
     async def test_tofu_without_callback_requires_explicit_policy(self) -> None:
         errors: list[str] = []

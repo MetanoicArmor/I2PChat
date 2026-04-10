@@ -782,6 +782,29 @@ def test_direct_peer_message_does_not_render_into_other_open_direct_chat_and_is_
     assert entries[0].text == "hello from B"
 
 
+def test_connect_click_activates_peer_context_before_starting_network_connect(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    target = f"{PEER_B}.b32.i2p"
+    window.addr_edit.setText(target)
+    window.core.connect_to_peer = AsyncMock()  # type: ignore[method-assign]
+    created: list[object] = []
+
+    def _fake_create_task(coro):
+        created.append(coro)
+        coro.close()
+        return object()
+
+    monkeypatch.setattr("asyncio.create_task", _fake_create_task)
+    monkeypatch.setattr(window, "_refresh_connection_buttons", lambda: None)
+
+    window.on_connect_clicked()
+
+    assert window.core.current_peer_addr == PEER_B
+    assert len(created) == 1
+
+
 def test_switching_to_sender_peer_loads_offscreen_direct_message_even_with_live_session(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:

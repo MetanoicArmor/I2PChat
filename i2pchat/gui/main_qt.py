@@ -723,6 +723,10 @@ THEMES: dict[str, dict[str, object]] = {
                 border: 1px solid #ffffff;
                 border-radius: 14px;
             }
+            QLineEdit#ChatSearchLineEdit {
+                padding: 5px 10px;
+                min-height: 0px;
+            }
             QLabel#ChatSearchStatusInline {
                 color: rgba(60, 60, 67, 0.55);
                 background: transparent;
@@ -913,10 +917,17 @@ THEMES: dict[str, dict[str, object]] = {
                 font-size: 12px;
                 font-weight: 600;
             }
+            QPushButton#GroupsCreateButton {
+                padding: 2px 18px;
+                font-size: 12px;
+                font-weight: 600;
+            }
             QListWidget#ContactsList {
                 background: transparent;
                 border: none;
                 outline: none;
+                padding: 0px;
+                margin: 0px;
             }
             QListWidget#ContactsList::item {
                 background: transparent;
@@ -1287,6 +1298,10 @@ THEMES: dict[str, dict[str, object]] = {
                 border: 1px solid #2f3541;
                 border-radius: 14px;
             }
+            QLineEdit#ChatSearchLineEdit {
+                padding: 5px 10px;
+                min-height: 0px;
+            }
             QLabel#ChatSearchStatusInline {
                 color: rgba(245, 245, 247, 0.55);
                 background: transparent;
@@ -1468,10 +1483,17 @@ THEMES: dict[str, dict[str, object]] = {
                 font-size: 12px;
                 font-weight: 600;
             }
+            QPushButton#GroupsCreateButton {
+                padding: 2px 18px;
+                font-size: 12px;
+                font-weight: 600;
+            }
             QListWidget#ContactsList {
                 background: transparent;
                 border: none;
                 outline: none;
+                padding: 0px;
+                margin: 0px;
             }
             QListWidget#ContactsList::item {
                 background: transparent;
@@ -6314,6 +6336,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         _wrap_lay.setContentsMargins(0, 0, 0, 0)
         _wrap_lay.setSpacing(0)
         self._chat_search_edit = QtWidgets.QLineEdit(self._chat_search_field_wrap)
+        self._chat_search_edit.setObjectName("ChatSearchLineEdit")
         self._chat_search_edit.setPlaceholderText("Search in this chat…")
         self._chat_search_edit.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -6322,8 +6345,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._chat_search_edit.setMinimumWidth(0)
         _search_fm = self._chat_search_edit.fontMetrics()
         _search_row_h = max(34, _search_fm.height() + 14)
-        self._chat_search_edit.setMinimumHeight(_search_row_h)
-        self._chat_search_field_wrap.setMinimumHeight(_search_row_h)
+        # Только minimum давал QLineEdit разрастаться выше ◀/▶ и кнопки New (глобальный padding QSS).
+        self._chat_search_edit.setFixedHeight(_search_row_h)
+        self._chat_search_field_wrap.setFixedHeight(_search_row_h)
         self._chat_search_edit.setTextMargins(
             self._chat_search_lineedit_left_pad_px(), 0, 0, 0
         )
@@ -6546,9 +6570,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.contacts_sidebar.setMinimumWidth(0)
         sidebar_layout = QtWidgets.QVBoxLayout(self.contacts_sidebar)
         # Справа — как у гриппа ◀↔чат, чтобы зазор слева от кнопки не казался шире правого.
-        # Сверху +4px: иначе у скругления 14px и заголовка «Groups» верх обрезается на ~1–2px.
+        # Сверху тот же g, что и у ChatSurface (строка поиска): иначе «Groups»/«New» на ~2px
+        # ниже поля поиска (раньше было g+2). При обрезке верхней кромки скругления 14px — g+1.
         sidebar_layout.setContentsMargins(
-            g, g + 4, self._CONTACTS_RESIZE_GRIP_WIDTH_PX, g
+            g, g, self._CONTACTS_RESIZE_GRIP_WIDTH_PX, g
         )
         sidebar_layout.setSpacing(self._UI_GRID_PX)
         groups_header = QtWidgets.QWidget(self.contacts_sidebar)
@@ -6557,6 +6582,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         _search_row_pad_right = max(2, self._UI_GRID_PX // 2)
         groups_header_layout.setContentsMargins(0, 0, _search_row_pad_right, 0)
         groups_header_layout.setSpacing(max(4, self._UI_GRID_PX // 2))
+        groups_header_layout.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
         groups_title = QtWidgets.QLabel("Groups", self.contacts_sidebar)
         groups_title.setObjectName("ContactsSidebarTitle")
         groups_title.setAlignment(
@@ -6567,6 +6595,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.groups_create_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.groups_create_btn.setToolTip(
             _tooltip_with_portable_shortcut(menu_tt.TT_NEW_TEXT_GROUP, "Ctrl+G")
+        )
+        # Высота как у ◀/▶ в строке поиска; ширина — по стилю (глобальный min-width кнопки).
+        self.groups_create_btn.setFixedHeight(_search_row_h)
+        self.groups_create_btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Minimum,
+            QtWidgets.QSizePolicy.Policy.Fixed,
         )
         groups_header_layout.addWidget(groups_title, 1)
         groups_header_layout.addWidget(self.groups_create_btn, 0)
@@ -7020,7 +7054,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         QSS: ``padding: 1px 6px 1px 0px`` — справа 6px, слева 0 → ширина контентной области
         строки = viewport − 6. Ширину виджета нужно задавать ровно такой (а не viewport−12):
         иначе виджет уже области содержимого и стиль центрирует его по горизонтали — текст
-        строк и заголовка «Saved peers» смещается вправо относительно «Groups» над списком.
+        строк смещается вправо.
+
+        Заголовок секции «Saved peers» (``_SidebarSectionHeader``) задаём на полную ширину
+        viewport: так подпись совпадает по левому краю с «Groups» над списком (без сдвига
+        от центрирования узкой строки).
         """
         lst = getattr(self, "contacts_list", None)
         if lst is None:
@@ -7032,7 +7070,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             w = lst.itemWidget(it)
             if w is None:
                 continue
-            usable_w = max(1, vp_w - _item_content_pad)
+            if isinstance(w, _SidebarSectionHeader):
+                usable_w = max(1, vp_w)
+            else:
+                usable_w = max(1, vp_w - _item_content_pad)
             h = w.sizeHint().height()
             if h <= 0:
                 h = max(1, int(w.height()))
@@ -10398,6 +10439,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 return
             self.handle_system("Auto-connect started for this message...")
             norm_addr = self.core._normalize_peer_addr(addr)
+            self.core.activate_peer_context(norm_addr)
             if (
                 not self.core.has_active_live_session(norm_addr)
                 and not self.core.is_outbound_connect_busy()
@@ -10457,6 +10499,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 "Enter a peer base32 address or pick a saved contact.",
             )
             return
+        self.core.activate_peer_context(addr)
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         if not self.core.any_live_stream():
             self._refresh_offline_history_display()
