@@ -195,7 +195,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             core = I2PChatCore(profile="alice")
-            core.stored_peer = STORED_PEER_2
+            core.current_peer_addr = STORED_PEER_2
             core.my_dest = _DummyDest()
             core._blindbox_root_secret = None
             core._send_text_via_blindbox = AsyncMock(return_value=None)  # type: ignore[method-assign]
@@ -215,7 +215,7 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             core = I2PChatCore(profile="alice")
-            core.stored_peer = STORED_PEER_3
+            core.current_peer_addr = STORED_PEER_3
             core._send_text_via_blindbox = AsyncMock(return_value=None)  # type: ignore[method-assign]
             result = await core.send_text("hello-disabled")
             self.assertFalse(result.accepted)

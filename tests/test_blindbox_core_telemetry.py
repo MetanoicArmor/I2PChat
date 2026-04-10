@@ -528,7 +528,8 @@ class BlindBoxCoreTelemetryTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             core = I2PChatCore(profile="alice")
-            core.stored_peer = "g" * 52 + ".b32.i2p"
+            peer = "g" * 52 + ".b32.i2p"
+            core.current_peer_addr = peer
             core.my_dest = types.SimpleNamespace(base32="f" * 52)
             core._blindbox_root_secret = b"x" * 32  # noqa: SLF001
             core._blindbox_client = types.SimpleNamespace(put=AsyncMock())

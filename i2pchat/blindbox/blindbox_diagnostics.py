@@ -79,15 +79,7 @@ def _status_block(
         ]
         actions = [
             "Press Connect once and complete one secure live session with this peer.",
-            "Keep this peer locked to the current profile.",
-        ]
-    elif state == "blindbox-needs-locked-peer":
-        status_title = "Offline queue needs a locked peer"
-        details = [
-            "BlindBox only works for the peer locked into this persistent profile.",
-        ]
-        actions = [
-            "Lock this profile to the target peer first.",
+            "Add the peer to Saved peers so BlindBox root exchange is allowed.",
         ]
     elif state == "blindbox-needs-boxes":
         status_title = "No BlindBox replicas are configured"
@@ -176,7 +168,7 @@ def build_blindbox_diagnostics_text(
         [
             "",
             "Security",
-            f"- Locked to peer: {_yes_no(delivery.get('stored_peer'))}",
+            "- Incoming connections require the peer to be in Saved peers.",
             f"- Live secure session: {_yes_no(delivery.get('secure_live'))}",
             f"- Offline key exchange completed: {_yes_no(blindbox.get('has_root_secret'))}",
             f"- Replica transport: {_transport_label(blindbox)}",

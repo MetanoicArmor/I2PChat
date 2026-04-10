@@ -43,7 +43,13 @@ from i2pchat.groups.wire import (
     decode_group_transport_text,
     encode_group_transport_text,
 )
-from i2pchat.storage.contact_book import same_i2p_destination
+from i2pchat.storage.contact_book import (
+    load_book,
+    remember_peer,
+    same_i2p_destination,
+    save_book,
+    trim_book,
+)
 from i2pchat.storage.blindbox_state import (
     BlindBoxState,
     atomic_write_json,
@@ -2098,7 +2104,8 @@ class I2PChatCore:
         return state.title or state.group_id
 
     def _blindbox_peer_id(self) -> Optional[str]:
-        peer = self._normalize_peer_addr(self.stored_peer or self.current_peer_addr or "")
+        lap = self._last_active_peer_for_telemetry()
+        peer = self._normalize_peer_addr(self.current_peer_addr or lap or "")
         if not peer:
             return None
         if peer.endswith(".b32.i2p"):
@@ -2472,18 +2479,9 @@ class I2PChatCore:
     def _blindbox_ready(self) -> bool:
         return (
             self.blindbox_enabled
-            and bool(self.stored_peer)
             and bool(self.blindbox_replicas)
             and self.my_dest is not None
         )
-
-    def _blindbox_current_peer_matches_locked_peer(self) -> bool:
-        try:
-            locked_peer = self._normalize_peer_addr(self.stored_peer or "")
-            current_peer = self._normalize_peer_addr(self.current_peer_addr or "")
-        except ValueError:
-            return False
-        return bool(locked_peer and current_peer and locked_peer == current_peer)
 
     def _load_trust_store(self) -> None:
         """Загружает pinning-таблицу peer_addr -> signing_pub_hex."""
@@ -2628,63 +2626,107 @@ class I2PChatCore:
             raw = raw[:-8]
         return bool(re.fullmatch(r"[a-z2-7]{40,80}", raw))
 
+    def _contacts_json_path(self) -> str:
+        return os.path.join(
+            self.get_profile_data_dir(create=True), f"{self.profile}.contacts.json"
+        )
+
+    def peer_in_saved_contacts(self, peer_addr: str) -> bool:
+        """True if peer is in Saved peers (contacts.json). Transient profile allows any."""
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return True
+        try:
+            norm = self._normalize_peer_addr(peer_addr)
+        except Exception:
+            return False
+        if not norm:
+            return False
+        book = load_book(self._contacts_json_path())
+        for rec in book.contacts:
+            if same_i2p_destination(rec.addr, norm):
+                return True
+        if book.last_active_peer and same_i2p_destination(book.last_active_peer, norm):
+            return True
+        return False
+
+    def ensure_peer_in_saved_contacts(self, peer_addr: str) -> bool:
+        """Add peer to Saved peers if missing. Returns True if the book changed."""
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return False
+        try:
+            norm = self._normalize_peer_addr(peer_addr)
+        except Exception:
+            return False
+        if not norm:
+            return False
+        path = self._contacts_json_path()
+        book = load_book(path)
+        if remember_peer(book, norm):
+            save_book(path, trim_book(book))
+            return True
+        return False
+
+    def _telemetry_has_peer_target(self) -> bool:
+        if self.current_peer_addr:
+            return True
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return False
+        book = load_book(self._contacts_json_path())
+        return bool(book.last_active_peer or book.contacts)
+
+    def _last_active_peer_for_telemetry(self) -> str:
+        if self.current_peer_addr:
+            return self.current_peer_addr
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return ""
+        book = load_book(self._contacts_json_path())
+        return (book.last_active_peer or "").strip()
+
+    def _blindbox_live_peer_ok_for_root_exchange(self) -> bool:
+        """Live session with a Saved peer — replaces legacy lock-to-peer check."""
+        if not self.handshake_complete or not self.current_peer_addr:
+            return False
+        try:
+            cur = self._normalize_peer_addr(self.current_peer_addr)
+        except Exception:
+            return False
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return bool(cur)
+        return bool(cur) and self.peer_in_saved_contacts(cur)
+
     def _write_profile_dat(
         self,
         private_key_base64: Optional[str],
         stored_peer: Optional[str],
     ) -> None:
-        """Сохраняет .dat в каноничном формате: key на 1-й, peer на 2-й строке."""
+        """Persist identity key on line 1 only. Legacy second-line lock peer is never written."""
+        del stored_peer  # kept in signature for callers; multi-peer model uses contacts.json
         if self.profile == TRANSIENT_PROFILE_NAME:
             return
-        lines: list[str] = []
         key = (private_key_base64 or "").strip()
-        peer = self._normalize_peer_addr(stored_peer or "")
-        if key:
-            lines.append(key)
-        if peer:
-            lines.append(peer)
-        if not lines:
+        if not key:
             return
         path = self._profile_path()
-        atomic_write_text(path, "\n".join(lines) + "\n")
+        atomic_write_text(path, key + "\n")
 
     def save_stored_peer(self, peer_addr: str) -> None:
         """
-        Сохраняет lock-пир в профиль без дублирования строк.
-
-        Форматы, которые поддерживаем:
-        - line1=private_key, line2=stored_peer
-        - line1=stored_peer (когда identity хранится в keyring)
+        Legacy API: adds the peer to Saved peers (Lock to peer removed).
         """
         if self.profile == TRANSIENT_PROFILE_NAME:
             raise ValueError("Cannot store peer for transient profile")
         normalized_peer = self._normalize_peer_addr(peer_addr)
         if not normalized_peer:
             raise ValueError("Peer address is empty")
-
-        private_key_base64: Optional[str] = None
-        if self.my_dest is not None:
-            try:
-                private_key_base64 = self.my_dest.private_key.base64
-            except Exception:
-                private_key_base64 = None
-        if not private_key_base64:
-            key_file = self._profile_path()
-            if os.path.exists(key_file):
-                with open(key_file, "r", encoding="utf-8") as f:
-                    lines = [line.strip() for line in f.readlines() if line.strip()]
-                if lines and not self._is_probable_peer_addr(lines[0]):
-                    private_key_base64 = lines[0]
-
-        self._write_profile_dat(private_key_base64, normalized_peer)
-        self.stored_peer = normalized_peer
+        if self.ensure_peer_in_saved_contacts(normalized_peer):
+            self._emit_system(
+                f"Added to Saved peers: {normalized_peer[:24]}..."
+            )
+        self.stored_peer = None
         self._load_blindbox_state()
 
     def clear_locked_peer(self) -> None:
-        """
-        Снять Lock to peer: в .dat остаётся только приватный ключ (или файл с одной строкой
-        пира удаляется при сценарии keyring-only .dat).
-        """
+        """Legacy no-op: lock removed; optionally strip legacy 2nd line from .dat."""
         if self.profile == TRANSIENT_PROFILE_NAME:
             return
         private_key_base64: Optional[str] = None
@@ -2989,6 +3031,7 @@ class I2PChatCore:
                 "Use a named profile for persistent peer-key trust continuity."
             )
         dest: Optional[i2plib.Destination] = None
+        legacy_lock_peer: Optional[str] = None
 
         if is_persistent:
             keyring_key = _try_keyring_get(self.profile)
@@ -3017,11 +3060,13 @@ class I2PChatCore:
                     # keyring-сценарий: в .dat может быть только pinned peer
                     stored_line = lines[0]
                 if stored_line:
-                    self.stored_peer = self._normalize_peer_addr(stored_line)
-                    disp_peer = self.stored_peer
+                    legacy_lock_peer = self._normalize_peer_addr(stored_line)
+                    disp_peer = legacy_lock_peer
                     if not disp_peer.endswith(".b32.i2p"):
                         disp_peer = disp_peer + ".b32.i2p"
-                    self._emit_system(f"Stored Contact: {disp_peer}")
+                    self._emit_system(
+                        f"Legacy Lock to peer line (migrating to Saved peers): {disp_peer}"
+                    )
 
         if dest is None:
             self._emit_system("Generating new Ed25519 identity...")
@@ -3037,7 +3082,13 @@ class I2PChatCore:
 
         self.my_dest = dest
         if is_persistent:
-            self._write_profile_dat(self.my_dest.private_key.base64, self.stored_peer)
+            self.stored_peer = None
+            if legacy_lock_peer:
+                self.ensure_peer_in_saved_contacts(legacy_lock_peer)
+                self._emit_system(
+                    "Former lock peer was added to Saved peers; profile .dat no longer stores a second line."
+                )
+            self._write_profile_dat(self.my_dest.private_key.base64, None)
         self._load_trust_store()
         self._ensure_local_signing_key()
         self._load_blindbox_state()
@@ -3302,8 +3353,9 @@ class I2PChatCore:
 
     def get_delivery_telemetry(self) -> dict[str, Any]:
         """Returns current delivery route hints for UI decisions."""
+        lap = self._last_active_peer_for_telemetry()
         peer_for_route = self._normalize_peer_addr(
-            self.current_peer_addr or self.stored_peer or ""
+            self.current_peer_addr or lap or ""
         )
         connected = self.conn is not None
         live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
@@ -3318,7 +3370,7 @@ class I2PChatCore:
             policy_kwargs["handshake_complete"] = self.handshake_complete
 
         secure_live = self.session_manager.is_live_path_alive(**live_kwargs)
-        has_target = bool(self.current_peer_addr or self.stored_peer)
+        has_target = self._telemetry_has_peer_target()
         ready = bool(self._blindbox_ready())
         has_root_secret = self._blindbox_root_secret is not None
         bb_client = self._blindbox_client
@@ -3351,8 +3403,6 @@ class I2PChatCore:
             state = "offline-ready"
         elif ready and not has_root_secret:
             state = "await-live-root"
-        elif self.blindbox_enabled and not self.stored_peer:
-            state = "blindbox-needs-locked-peer"
         elif self.blindbox_enabled and len(self.blindbox_replicas) <= 0:
             state = "blindbox-needs-boxes"
         elif self.blindbox_enabled and self.my_dest is None:
@@ -3397,7 +3447,7 @@ class I2PChatCore:
         if not delivery.get("has_target"):
             return (
                 "no-target",
-                "No peer selected. Enter or lock a peer address, then send.",
+                "No peer selected. Choose a saved contact or enter a peer address, then send.",
             )
         if state == "blindbox-disabled-transient":
             return (
@@ -3414,11 +3464,6 @@ class I2PChatCore:
             return (
                 "handshake-in-progress",
                 "Secure channel handshake is in progress. Please wait a moment.",
-            )
-        if state == "blindbox-needs-locked-peer":
-            return (
-                "blindbox-needs-locked-peer",
-                "BlindBox requires a locked peer in the current profile.",
             )
         if state == "blindbox-needs-boxes":
             return (
@@ -3916,7 +3961,8 @@ class I2PChatCore:
         if msg_type != "U":
             return False
         text = body.decode("utf-8", errors="strict")
-        sp = (self.stored_peer or self.current_peer_addr or "").strip() or None
+        lap = self._last_active_peer_for_telemetry()
+        sp = (self.current_peer_addr or lap or "").strip() or None
         if self.import_group_transport(text, source_peer=sp) is not None:
             return True
         self._emit_message("peer", text, source_peer=sp)
@@ -4654,16 +4700,6 @@ class I2PChatCore:
         except ValueError as e:
             self._emit_error(str(e).strip() or "Invalid peer address")
             return
-        try:
-            locked_peer = self._normalize_peer_addr(self.stored_peer or "")
-        except ValueError:
-            locked_peer = ""
-        if locked_peer and normalized_target and normalized_target != locked_peer:
-            self._emit_error(
-                "Profile is locked to another peer. "
-                "Connect to the stored peer or unlock/change the profile first."
-            )
-            return
         if self.conn is not None:
             self._emit_system("Already connected. Disconnect first.")
             return
@@ -4811,8 +4847,9 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
         r = route if route in ("auto", "live", "offline") else "auto"
+        lap = self._last_active_peer_for_telemetry()
         peer_for_route = self._normalize_peer_addr(
-            self.current_peer_addr or self.stored_peer or ""
+            self.current_peer_addr or lap or ""
         )
         connected = self.conn is not None
         live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
@@ -5746,12 +5783,12 @@ class I2PChatCore:
             raise ValueError("invalid root secret length")
         if not self._blindbox_ready():
             self._emit_error(
-                "BlindBox root received outside persistent locked-peer mode."
+                "BlindBox root received while BlindBox is not ready."
             )
             return
-        if not self._blindbox_current_peer_matches_locked_peer():
+        if not self._blindbox_live_peer_ok_for_root_exchange():
             self._emit_error(
-                "BlindBox root ignored: connected peer does not match locked peer."
+                "BlindBox root ignored: need a verified live session with a Saved peer."
             )
             return
         if self._blindbox_root_secret is None:
@@ -5798,12 +5835,12 @@ class I2PChatCore:
         ack_epoch = int(ack_raw)
         if not self._blindbox_ready():
             self._emit_error(
-                "BlindBox root ACK received outside persistent locked-peer mode."
+                "BlindBox root ACK received while BlindBox is not ready."
             )
             return
-        if not self._blindbox_current_peer_matches_locked_peer():
+        if not self._blindbox_live_peer_ok_for_root_exchange():
             self._emit_error(
-                "BlindBox root ACK ignored: connected peer does not match locked peer."
+                "BlindBox root ACK ignored: need a verified live session with a Saved peer."
             )
             return
         if not self._commit_pending_blindbox_root(ack_epoch):
@@ -5814,9 +5851,9 @@ class I2PChatCore:
     ) -> None:
         if not self._blindbox_ready():
             return
-        if not self._blindbox_current_peer_matches_locked_peer():
+        if not self._blindbox_live_peer_ok_for_root_exchange():
             self._emit_error(
-                "BlindBox root exchange blocked: connected peer does not match locked peer."
+                "BlindBox root exchange blocked: connect to a Saved peer and complete the handshake."
             )
             return
         if not self._should_initiate_blindbox_root_exchange():
@@ -6111,9 +6148,10 @@ class I2PChatCore:
                     raw_dest = peer_identity_line.decode().strip()
                     peer_addr = i2plib.Destination(raw_dest).base32 + ".b32.i2p"
 
-                    if self.stored_peer and peer_addr != self.stored_peer:
+                    if not self.peer_in_saved_contacts(peer_addr):
                         self._emit_error(
-                            f"Blocked unauthorized call from {peer_addr}..."
+                            f"Blocked incoming connection from {peer_addr[:12]}... "
+                            "(not in Saved peers)."
                         )
                         writer.close()
                         continue
@@ -6819,11 +6857,6 @@ class I2PChatCore:
                             if self.current_peer_addr and new_peer != self.current_peer_addr:
                                 self._emit_error(
                                     f"Blocked identity mismatch: expected {self.current_peer_addr[:16]}..., got {new_peer[:16]}..."
-                                )
-                                break
-                            if self.stored_peer and new_peer != self.stored_peer:
-                                self._emit_error(
-                                    f"Blocked identity spoof: {new_peer[:16]}..."
                                 )
                                 break
                             if not await self._set_verified_peer_identity(

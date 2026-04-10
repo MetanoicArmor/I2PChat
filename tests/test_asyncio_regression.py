@@ -5,7 +5,7 @@ import tempfile
 import types
 import unittest
 from types import SimpleNamespace
-from typing import Optional
+from typing import Callable, Optional
 from unittest.mock import AsyncMock, patch
 
 # CI/agent environment may not have Pillow installed; for these tests
@@ -82,12 +82,17 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         frame = await codec.read_frame(_FakeReader(raw))
         return frame
 
-    def _make_blindbox_core(self) -> I2PChatCore:
-        core = I2PChatCore(profile="alice")
+    def _make_blindbox_core(
+        self, on_error: Optional[Callable[[str], None]] = None
+    ) -> I2PChatCore:
+        core = I2PChatCore(profile="alice", on_error=on_error)
         core.my_signing_seed = b"D" * 32
-        core.stored_peer = PEER_B32
         core.current_peer_addr = PEER_B32
         core.my_dest = SimpleNamespace(base32=LOCAL_B32)
+        core.handshake_complete = True
+        core.peer_identity_binding_verified = True
+        # Multi-peer: root exchange requires Saved peer; tests use a synthetic session.
+        core.peer_in_saved_contacts = lambda _addr: True  # type: ignore[method-assign]
         return core
 
     def test_invalid_profile_name_rejected(self) -> None:
@@ -246,7 +251,8 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(seen)
         self.assertIn(EXAMPLE_B32, core.peer_trusted_signing_keys)
 
-    async def test_connect_rejects_target_that_differs_from_locked_peer(self) -> None:
+    async def test_connect_not_blocked_by_legacy_stored_peer_field(self) -> None:
+        """Lock-to-peer removed; legacy stored_peer must not block outbound connect."""
         errors: list[str] = []
         core = I2PChatCore(profile="alice", on_error=errors.append)
         core.stored_peer = LOCKED_B32
@@ -260,12 +266,14 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             core_module.crypto.NACL_AVAILABLE = original_nacl_available
 
         self.assertIsNone(core.conn)
-        self.assertTrue(
+        self.assertFalse(
             any("locked to another peer" in msg.lower() for msg in errors),
             errors,
         )
 
-    async def test_blindbox_root_not_sent_when_connected_peer_differs_from_lock(self) -> None:
+    async def test_blindbox_root_not_sent_when_current_peer_not_in_saved_contacts(
+        self,
+    ) -> None:
         old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
         old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
         os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
@@ -274,16 +282,20 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             errors: list[str] = []
             core = I2PChatCore(profile="alice", on_error=errors.append)
             core.my_signing_seed = b"D" * 32
-            core.stored_peer = LOCKED_B32
             core.current_peer_addr = OTHER_B32
             core.my_dest = SimpleNamespace(base32=LOCAL_B32)
+            core.handshake_complete = True
+            core.peer_identity_binding_verified = True
             writer = _FakeWriter()
 
             await core._send_blindbox_root_if_needed(writer)
 
             self.assertEqual(writer.buffer, bytearray())
             self.assertTrue(
-                any("does not match locked peer" in msg for msg in errors),
+                any(
+                    "Saved peer" in msg and "BlindBox root exchange blocked" in msg
+                    for msg in errors
+                ),
                 errors,
             )
         finally:
@@ -342,7 +354,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
                 "__SIGNAL__:BLINDBOX_ROOT_ACK|1",
             )
 
-    async def test_blindbox_root_receiver_ignores_root_when_peer_differs_from_lock(self) -> None:
+    async def test_blindbox_root_receiver_ignores_root_when_peer_not_saved(self) -> None:
         with patch.dict(
             os.environ,
             {
@@ -354,9 +366,10 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             errors: list[str] = []
             receiver = I2PChatCore(profile="alice", on_error=errors.append)
             receiver.my_signing_seed = b"D" * 32
-            receiver.stored_peer = LOCKED_B32
             receiver.current_peer_addr = OTHER_B32
             receiver.my_dest = SimpleNamespace(base32=LOCAL_B32)
+            receiver.handshake_complete = True
+            receiver.peer_identity_binding_verified = True
             writer = _FakeWriter()
             root_secret = b"\x44" * 32
 
@@ -369,7 +382,10 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(receiver._blindbox_root_epoch, 0)
             self.assertEqual(writer.buffer, bytearray())
             self.assertTrue(
-                any("does not match locked peer" in msg for msg in errors),
+                any(
+                    "Saved peer" in msg and "BlindBox root ignored" in msg
+                    for msg in errors
+                ),
                 errors,
             )
 
@@ -415,7 +431,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(core._blindbox_pending_root_secret, pending_secret)
             self.assertEqual(core._blindbox_pending_root_epoch, 1)
 
-    async def test_blindbox_root_ack_ignored_when_peer_differs_from_lock(self) -> None:
+    async def test_blindbox_root_ack_ignored_when_session_peer_not_saved(self) -> None:
         with patch.dict(
             os.environ,
             {
@@ -425,11 +441,16 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             errors: list[str] = []
-            core = I2PChatCore(profile="alice", on_error=errors.append)
-            core.my_signing_seed = b"D" * 32
-            core.stored_peer = LOCKED_B32
-            core.current_peer_addr = LOCKED_B32
-            core.my_dest = SimpleNamespace(base32=LOCAL_B32)
+            core = self._make_blindbox_core(on_error=errors.append)
+
+            def _saved_only_primary(addr: str) -> bool:
+                try:
+                    return core._normalize_peer_addr(addr or "") == PEER_B32
+                except Exception:
+                    return False
+
+            core.peer_in_saved_contacts = _saved_only_primary  # type: ignore[method-assign]
+
             writer = _FakeWriter()
 
             await core._send_blindbox_root_if_needed(writer)
@@ -443,7 +464,10 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(core._blindbox_pending_root_secret, pending_secret)
             self.assertEqual(core._blindbox_pending_root_epoch, 1)
             self.assertTrue(
-                any("does not match locked peer" in msg for msg in errors),
+                any(
+                    "Saved peer" in msg and "BlindBox root ACK ignored" in msg
+                    for msg in errors
+                ),
                 errors,
             )
 

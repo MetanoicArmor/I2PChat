@@ -427,11 +427,6 @@ def _delivery_status_bar_and_tooltip(state: str) -> tuple[str, str]:
             "BlindBox is enabled but not initialized for this peer yet. "
             "Run one successful live secure Connect to bootstrap offline delivery.",
         )
-    if state == "blindbox-needs-locked-peer":
-        return (
-            "Send: lock peer first",
-            "BlindBox requires a locked peer in the current profile.",
-        )
     if state == "blindbox-needs-boxes":
         return (
             "Send: configure Blind Boxes",
@@ -5873,6 +5868,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.peer_lock_label = _PeerLockIndicatorLabel(self)
         self.peer_lock_label.setObjectName("PeerLockIndicator")
         self.peer_lock_label.setFixedSize(22, actions_fixed_height)
+        self.peer_lock_label.setVisible(False)
         self.peer_lock_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
@@ -6087,7 +6083,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.addr_edit.textChanged.connect(lambda _t: self._sync_contacts_list_selection())
         self.addr_edit.textChanged.connect(lambda _t: self._update_peer_lock_indicator())
         self.addr_edit.textEdited.connect(self._on_addr_text_edited)
-        self.peer_lock_label.clicked.connect(self.on_lock_peer_clicked)
         self.addr_edit.editingFinished.connect(self._on_addr_editing_finished_for_drafts)
         self.input_edit.composeTextChanged.connect(self._on_compose_text_changed)
         self.more_actions_popup.add_action(
@@ -6179,14 +6174,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         self.more_actions_popup.add_separator()
         self.more_actions_popup.add_action(
-            "Lock to peer",
-            self.on_lock_peer_clicked,
-            tool_tip=_tooltip_with_portable_shortcut(
-                menu_tt.TT_LOCK_TO_PEER, _LOCK_TO_PEER_SHORTCUT_PORTABLE
-            ),
-            shortcut_hint=_native_shortcut_text(_LOCK_TO_PEER_SHORTCUT_PORTABLE),
-        )
-        self.more_actions_popup.add_action(
             "Forget pinned peer key",
             self.on_forget_pinned_peer_key_clicked,
             tool_tip=menu_tt.TT_FORGET_PINNED_PEER_KEY,
@@ -6267,10 +6254,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._contact_book = load_book(_contacts_file_path_for_read(self.profile))
 
     def _ensure_stored_peer_in_contact_book(self) -> None:
-        """Lock-пир из .dat всегда есть в Saved peers, даже если contacts.json пустой."""
-        raw = (self.core.stored_peer or "").strip() or (
-            peek_persisted_stored_peer(self.profile) or ""
-        )
+        """Ensure legacy second line from profile .dat is in Saved peers (pre-init peek)."""
+        raw = (peek_persisted_stored_peer(self.profile) or "").strip()
         sp = normalize_peer_address(raw)
         if not sp:
             return
@@ -6588,8 +6573,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         lay.setContentsMargins(left, m.top(), m.right(), m.bottom())
 
     def _apply_startup_peer_from_book(self) -> None:
-        if self.core.stored_peer:
-            return
         lap = self._contact_book.last_active_peer
         if lap and not self.addr_edit.text().strip():
             self.addr_edit.setText(lap)
@@ -6598,12 +6581,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         """После смены профиля выставить адрес пира из .dat / contact book.
 
         `refresh_status_label` заполняет поле только если addr_edit пустой; при переключении
-        профиля иначе остаётся адрес предыдущего профиля — не обновляются lock UI и Saved peers.
+        профиля иначе остаётся адрес предыдущего профиля — не обновляются Saved peers.
         """
-        sp = (self.core.stored_peer or "").strip()
-        if sp:
-            self.addr_edit.setText(sp)
-            return
         lap = (self._contact_book.last_active_peer or "").strip()
         if lap:
             n = normalize_peer_address(lap)
@@ -6612,14 +6591,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.addr_edit.clear()
 
     def _apply_contacts_sidebar_startup_state(self) -> None:
-        # stored_peer в ядре выставляется только в async init; до этого читаем .dat синхронно.
-        locked = bool(
-            self.core.stored_peer or peek_persisted_stored_peer(self.profile)
-        )
-        if locked:
-            self._set_contacts_sidebar_collapsed(True, animated=False)
-        else:
-            self._set_contacts_sidebar_collapsed(False, animated=False)
+        self._set_contacts_sidebar_collapsed(False, animated=False)
 
     def _set_contacts_sidebar_collapsed(self, collapsed: bool, *, animated: bool) -> None:
         self._stop_contacts_sidebar_animation()
@@ -6729,16 +6701,13 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self.contacts_list.takeItem(self.contacts_list.count() - 1)
         finally:
             self.contacts_list.setUpdatesEnabled(True)
-        locked_peer = normalize_peer_address(self.core.stored_peer or "")
         for rec in self._contact_book.contacts:
             item = QtWidgets.QListWidgetItem()
             row = ContactRowWidget(rec)
             info = self.core.get_peer_trust_info(rec.addr)
             row.set_status_badges(
                 pinned=bool(info and info.pinned),
-                locked=bool(
-                    locked_peer and normalize_peer_address(rec.addr) == locked_peer
-                ),
+                locked=False,
             )
             row.activate.connect(self._on_contact_row_activated)
             self.contacts_list.addItem(item)
@@ -6755,8 +6724,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             raw = self.addr_edit.text().strip()
         else:
             raw = (
-                (self.core.stored_peer or "").strip()
-                or (self.core.current_peer_addr or "").strip()
+                (self.core.current_peer_addr or "").strip()
                 or self.addr_edit.text().strip()
             )
         if not raw:
@@ -6783,20 +6751,6 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _on_contact_row_activated(self, addr: str) -> None:
         norm = normalize_peer_address(addr)
         if not norm:
-            return
-        if self.core is not None:
-            stored = normalize_peer_address(self.core.stored_peer or "")
-        else:
-            stored = normalize_peer_address(
-                peek_persisted_stored_peer(self.profile) or ""
-            )
-        if stored and norm != stored:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Saved peers",
-                "This profile is locked to a different peer. You cannot switch contacts "
-                "from the list while Lock to peer is in effect.",
-            )
             return
         self.addr_edit.setText(norm)
         changed = False
@@ -7000,13 +6954,11 @@ class ChatWindow(QtWidgets.QMainWindow):
                 "Disconnect from this peer first, then remove it from Saved peers.",
             )
             return
-        stored_n = normalize_peer_address(self.core.stored_peer or "")
-        show_lock = self.profile != TRANSIENT_PROFILE_NAME and bool(stored_n) and stored_n == norm_cb
         show_bb = self.profile != TRANSIENT_PROFILE_NAME
         dlg = _RemoveSavedPeerDialog(
             self,
             peer_addr=norm_cb,
-            show_lock_checkbox=show_lock,
+            show_lock_checkbox=False,
             show_blindbox_checkbox=show_bb,
             theme_id=self.theme_id,
         )
@@ -7031,15 +6983,6 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self.core.forget_pinned_peer_key(norm_cb)
             except Exception as e:  # pragma: no cover
                 self.handle_error(f"Failed to remove pin: {e}")
-        if del_lock and show_lock:
-            try:
-                self.core.clear_locked_peer()
-            except Exception as e:  # pragma: no cover
-                self.handle_error(f"Failed to clear lock: {e}")
-            self._update_peer_lock_indicator()
-            self._set_contacts_sidebar_collapsed(False, animated=False)
-            QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
-            self.handle_system("Profile lock cleared.")
         if del_bb and show_bb:
             p = self._blindbox_state_path_for_peer_b32(norm_cb)
             try:
@@ -7074,44 +7017,13 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.handle_system(f"Removed from saved peers: {norm_cb}")
 
     def _update_peer_lock_indicator(self) -> None:
-        # stored_peer в ядре появляется после async init_session; до этого читаем .dat (как сайдбар при старте).
-        if self.core is None:
-            locked = bool(peek_persisted_stored_peer(self.profile))
-            peer_raw = self.addr_edit.text().strip()
-            info = None
-        else:
-            locked = bool(
-                self.core.stored_peer or peek_persisted_stored_peer(self.profile)
-            )
-            peer_raw = self.addr_edit.text().strip() or (self.core.current_peer_addr or "")
-            info = self.core.get_peer_trust_info(peer_raw) if peer_raw else None
-        light = self.theme_id == "ligth"
-        dpr = max(1.0, float(self.devicePixelRatioF()))
-        pm = _peer_lock_indicator_pixmap(locked=locked, light_theme=light, dpr=dpr)
-        self.peer_lock_label.setPixmap(pm)
-        tooltip_lines = [
-            (
-                "Profile is locked to one peer (Lock to peer). Click for status."
-                if locked
-                else "Profile is not locked: you may select any saved contact. "
-                "Click to lock after a verified connection (same as ⋯ → Lock to peer)."
-            )
-        ]
-        if info is not None:
-            tooltip_lines.append(
-                "TOFU pin: present" if info.pinned else "TOFU pin: not stored"
-            )
-        _set_tooltip_if_changed(
-            self.peer_lock_label,
-            _tooltip_with_portable_shortcut(
-                "\n".join(tooltip_lines), _LOCK_TO_PEER_SHORTCUT_PORTABLE
-            ),
-        )
+        """Lock to peer removed; indicator hidden."""
+        return
 
     def _peer_target_available(self) -> bool:
         if self.core is None:
             return bool(self.addr_edit.text().strip())
-        return bool(self.addr_edit.text().strip()) or bool(self.core.stored_peer)
+        return bool(self.addr_edit.text().strip())
 
     def _send_action_allowed(self) -> bool:
         """Разрешить Send: live-сессия или готовый BlindBox (очередь офлайн)."""
@@ -7165,7 +7077,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         elif busy:
             c_tip = "Connecting… please wait."
         elif not has_target:
-            c_tip = "Enter a peer .b32.i2p address (or lock profile to a stored peer)."
+            c_tip = "Enter a peer .b32.i2p address or pick a saved contact."
         elif not network_ready:
             c_tip = (
                 "Wait until status shows Pending or Visible — I2P session is still starting."
@@ -7263,7 +7175,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             if can_send
             else (
                 "Send needs a finished live secure session (Connect + handshake) "
-                "or a started BlindBox runtime (lock peer, I2P up, replicas)."
+                "or a started BlindBox runtime (I2P up, replicas)."
             )
         )
         _set_tooltip_if_changed(
@@ -7641,9 +7553,6 @@ class ChatWindow(QtWidgets.QMainWindow):
             return True
         if _physical_key_matches(event, win_vk=0x49, mac_vk=0x22, linux_evdev=23):
             self._import_profile_backup()
-            return True
-        if _physical_key_matches(event, win_vk=0x4C, mac_vk=0x25, linux_evdev=38):
-            self.on_lock_peer_clicked()
             return True
         if _physical_key_matches(event, win_vk=0x54, mac_vk=0x11, linux_evdev=20):
             self.on_theme_switch_clicked()
@@ -9197,10 +9106,8 @@ class ChatWindow(QtWidgets.QMainWindow):
                 clean = f"{clean[:6]}..{clean[-6:]}"
             return clean + ".b32.i2p"
 
-        stored = self.core.stored_peer
-        if stored and not self.addr_edit.text().strip():
-            # stored уже содержит полный адрес (с суффиксом), используем как есть.
-            self.addr_edit.setText(stored)
+        lap = (self._contact_book.last_active_peer or "").strip()
+        stored = lap or None
 
         link_state = "online" if self.core.conn else "offline"
         secure_state = "on" if self.core.handshake_complete else "off"
@@ -9230,9 +9137,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                         blindbox_hint = "waiting for initial BlindBox root exchange over a secure live session"
                 else:
                     blindbox_state = "on"
-                    if not self.core.stored_peer:
-                        blindbox_hint = "lock profile to a peer to activate BlindBox"
-                    elif int(bb.get("blind_boxes", bb.get("replicas", 0))) <= 0:
+                    if int(bb.get("blind_boxes", bb.get("replicas", 0))) <= 0:
                         blindbox_hint = (
                             "configure Blind Box servers via I2PCHAT_BLINDBOX_REPLICAS "
                             "or I2PCHAT_BLINDBOX_DEFAULT_REPLICAS/"
@@ -9493,54 +9398,41 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_lock_peer_clicked(self) -> None:
+        """Legacy name: add current verified peer to Saved peers (Lock to peer removed)."""
         if self.profile == TRANSIENT_PROFILE_NAME:
             QtWidgets.QMessageBox.warning(
                 self,
-                "Lock to peer",
-                "Cannot lock in TRANSIENT mode. Restart with a profile name.",
+                "Saved peers",
+                "Cannot persist contacts in TRANSIENT mode. Restart with a profile name.",
             )
             return
-
-        if self.core.stored_peer:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Lock to peer",
-                f"Profile already locked to:\n{self.core.stored_peer}",
-            )
-            return
-
         if not self.core.current_peer_addr:
             QtWidgets.QMessageBox.warning(
                 self,
-                "Lock to peer",
+                "Saved peers",
                 "Peer address not yet verified.\nEstablish a connection first.",
             )
             return
         if not self.core.is_current_peer_verified_for_lock():
             QtWidgets.QMessageBox.warning(
                 self,
-                "Lock to peer",
+                "Saved peers",
                 "Identity binding is not cryptographically verified yet.\n"
-                "Complete secure handshake and verify peer fingerprint out-of-band first.",
+                "Complete secure handshake first.",
             )
             return
-
         try:
             self.core.save_stored_peer(self.core.current_peer_addr)
             asyncio.create_task(self.core.ensure_blindbox_runtime_started())
-            self.handle_system(
-                f"Identity {self.profile} is now locked to this peer."
-            )
             n = normalize_peer_address(self.core.current_peer_addr or "")
             if n:
                 remember_peer(self._contact_book, n)
                 set_last_active_peer(self._contact_book, n)
                 self._save_contacts_book()
                 self._refresh_contacts_list()
-            self._set_contacts_sidebar_collapsed(True, animated=False)
-            QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
             self._update_peer_lock_indicator()
             self.refresh_status_label()
+            self.handle_system("Current peer added to Saved peers.")
         except Exception as e:  # pragma: no cover - GUI path
             self.handle_error(f"Failed to save: {e}")
 

@@ -573,7 +573,6 @@ class I2PChat(App):
             "online-live": "Send: live",
             "offline-ready": "Send: offline queue",
             "await-live-root": "Send: need Connect once",
-            "blindbox-needs-locked-peer": "Send: lock peer first",
             "blindbox-needs-boxes": "Send: configure Blind Boxes",
             "blindbox-starting-local-session": "Send: wait local I2P",
             "blindbox-disabled-transient": "Send: live only",
@@ -595,7 +594,7 @@ class I2PChat(App):
         ack = self.core.get_ack_telemetry()
         ack_total = int(sum(int(v) for v in ack.values()))
         blindbox_bar = self._blindbox_bar(blindbox)
-        stored_short = self._short_peer(self.core.stored_peer)
+        stored_short = self._short_peer(self._contact_book.last_active_peer)
         peer_short = self._short_peer(self._current_target_peer())
         send_in_flight = any(
             entry.delivery_state == "sending" for entry in list(self._recent_messages)[-5:]
@@ -667,12 +666,10 @@ class I2PChat(App):
         peer = self._current_target_peer() or "—"
         connected = "yes" if self.core.conn is not None else "no"
         verified = "yes" if self.core.proven else "no"
-        locked = "yes" if self.core.stored_peer else "no"
         return (
             f"Current peer: {peer}\n"
             f"Connected: {connected}\n"
             f"Verified: {verified}\n"
-            f"Locked peer: {locked}\n"
             f"{snap.full}\n"
             f"{snap.blindbox_bar}"
         )
@@ -866,7 +863,7 @@ class I2PChat(App):
         save_book(self._contacts_file_path_for_write(self.profile), self._contact_book)
 
     def _ensure_stored_peer_in_contact_book(self) -> None:
-        stored = self.core.stored_peer or peek_persisted_stored_peer(self.profile) or ""
+        stored = peek_persisted_stored_peer(self.profile) or ""
         if not stored:
             return
         changed = False
@@ -925,7 +922,7 @@ class I2PChat(App):
         self._flush_compose_drafts_to_disk()
 
     def _current_target_peer(self) -> Optional[str]:
-        return self.core.current_peer_addr or self.core.stored_peer or self.selected_peer or None
+        return self.core.current_peer_addr or self.selected_peer or None
 
     def _set_selected_peer(
         self,
@@ -1314,8 +1311,6 @@ class I2PChat(App):
         table.add_column("Last preview")
         for idx, record in enumerate(self._contact_book.contacts, start=1):
             flags: list[str] = []
-            if record.addr == self.core.stored_peer:
-                flags.append("lock")
             trust = self.core.get_peer_trust_info(record.addr)
             if trust and trust.pinned:
                 flags.append("pin")
@@ -1410,7 +1405,6 @@ class I2PChat(App):
             f"Note: {record.note or '—'}",
             f"Last preview: {record.last_preview or '—'}",
             f"Last activity: {record.last_activity_ts or '—'}",
-            f"Locked peer: {'yes' if peer == self.core.stored_peer else 'no'}",
             f"Pinned key: {'yes' if trust and trust.pinned else 'no'}",
         ]
         if trust and trust.fingerprint_short:
@@ -1496,10 +1490,7 @@ class I2PChat(App):
             self._refresh_status_bar()
             return False
         self._ensure_stored_peer_in_contact_book()
-        if self.core.stored_peer and self.core.stored_peer != self.selected_peer:
-            self._set_selected_peer(self.core.stored_peer, remember=True, announce="Stored peer")
-        else:
-            self._try_load_history(force=True)
+        self._try_load_history(force=True)
         self._refresh_status_bar()
         return True
 
@@ -1916,10 +1907,7 @@ class I2PChat(App):
 
         elif cmd == "save":
             if self.profile == TRANSIENT_PROFILE_NAME:
-                self.post("error", "Cannot lock in TRANSIENT mode. Switch to a named profile.")
-                return
-            if self.core.stored_peer:
-                self.post("error", f"Profile already locked to: {self.core.stored_peer}")
+                self.post("error", "Cannot persist peers in TRANSIENT mode. Switch to a named profile.")
                 return
             if not self.core.is_current_peer_verified_for_lock():
                 self.post("error", "Peer address is not yet verified by a secure session.")
@@ -1927,16 +1915,11 @@ class I2PChat(App):
             self.core.save_stored_peer(self.core.current_peer_addr or "")
             await self.core.ensure_blindbox_runtime_started()
             self._ensure_stored_peer_in_contact_book()
-            self.post("success", f"Identity {self.profile} is now locked to this peer.")
+            self.post("success", "Current peer added to Saved peers.")
             self._refresh_status_bar()
 
         elif cmd == "unlock":
-            if not self.core.stored_peer:
-                self.post("system", "Profile is not locked to a peer.")
-                return
-            unlocked = self.core.stored_peer
-            self.core.clear_locked_peer()
-            self.post("success", f"Removed Lock to peer for {unlocked}.")
+            self.post("system", "Lock to peer is removed; use /save to add peers to Saved peers.")
             self._refresh_status_bar()
 
         elif cmd == "status":
@@ -2542,8 +2525,6 @@ class TuiContactsScreen(ModalScreen[None]):
         table.disabled = False
         for idx, record in enumerate(contacts, start=1):
             flags: list[str] = []
-            if record.addr == self.host.core.stored_peer:
-                flags.append("lock")
             trust = self.host.core.get_peer_trust_info(record.addr)
             if trust and trust.pinned:
                 flags.append("pin")
@@ -3183,7 +3164,7 @@ class TuiActionsScreen(ModalScreen[None]):
         ("escape", "close", "Close"),
         ("c", "connect_peer", "Connect"),
         ("x", "disconnect_peer", "Disconnect"),
-        ("l", "lock_peer", "Lock"),
+        ("l", "save_peer", "Save peer"),
         ("y", "copy_address", "Copy address"),
         ("r", "refresh", "Refresh"),
     ]
@@ -3226,13 +3207,13 @@ class TuiActionsScreen(ModalScreen[None]):
             yield Static("Peer", classes="actions_label")
             yield Input("", placeholder="peer.b32.i2p", id="actions_peer")
             yield Static(
-                "C connect · X disconnect · L lock · Y copy my addr · R refresh",
+                "C connect · X disconnect · L save peer · Y copy my addr · R refresh",
                 id="actions_help",
             )
             with Horizontal(classes="actions_buttons_row"):
                 yield Button("Connect", id="actions_connect", variant="primary", classes="actions_button")
                 yield Button("Disconnect", id="actions_disconnect", variant="warning", classes="actions_button")
-                yield Button("Lock peer", id="actions_lock", classes="actions_button")
+                yield Button("Save peer", id="actions_save", classes="actions_button")
                 yield Button("Copy my addr", id="actions_copy", classes="actions_button")
             with Horizontal(classes="actions_buttons_row"):
                 yield Button("Close", id="actions_close", classes="actions_button")
@@ -3255,7 +3236,7 @@ class TuiActionsScreen(ModalScreen[None]):
         summary.update(self.host._actions_summary_text())
         connect_btn = self.query_one("#actions_connect", Button)
         disconnect_btn = self.query_one("#actions_disconnect", Button)
-        lock_btn = self.query_one("#actions_lock", Button)
+        save_btn = self.query_one("#actions_save", Button)
         peer = self._peer_value()
         connect_btn.disabled = (
             peer is None
@@ -3263,7 +3244,7 @@ class TuiActionsScreen(ModalScreen[None]):
             or self.host.core.is_outbound_connect_busy()
         )
         disconnect_btn.disabled = self.host.core.conn is None
-        lock_btn.disabled = not self.host.core.is_current_peer_verified_for_lock()
+        save_btn.disabled = not self.host.core.is_current_peer_verified_for_lock()
 
     def _peer_value(self) -> Optional[str]:
         raw = self.query_one("#actions_peer", Input).value.strip()
@@ -3290,7 +3271,7 @@ class TuiActionsScreen(ModalScreen[None]):
         self.dismiss(None)
         self.host.run_worker(self.host.core.disconnect())
 
-    def action_lock_peer(self) -> None:
+    def action_save_peer(self) -> None:
         self.dismiss(None)
         asyncio.create_task(self.host._execute_command("/save"))
 
@@ -3302,7 +3283,7 @@ class TuiActionsScreen(ModalScreen[None]):
         mapping = {
             "actions_connect": self.action_connect_peer,
             "actions_disconnect": self.action_disconnect_peer,
-            "actions_lock": self.action_lock_peer,
+            "actions_save": self.action_save_peer,
             "actions_copy": self.action_copy_address,
             "actions_close": self.action_close,
         }
