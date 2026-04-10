@@ -58,6 +58,12 @@ class GroupManager:
         current_last_seq = self._group_seq_by_id.get(group_key, 0)
         self._group_seq_by_id[group_key] = max(current_last_seq, seeded_last_seq)
 
+    def forget_group(self, group_id: str) -> None:
+        """Drop in-memory sequence state after the group file was deleted."""
+        key = (group_id or "").strip()
+        if key:
+            self._group_seq_by_id.pop(key, None)
+
     def _next_group_seq(self, group_id: str) -> int:
         next_seq = self._group_seq_by_id.get(group_id, 0) + 1
         self._group_seq_by_id[group_id] = next_seq

@@ -46,6 +46,21 @@ def test_render_group_delivery_summary_counts_each_status() -> None:
     assert summary == "Delivery: 1 live, 1 queued, 1 failed"
 
 
+def test_render_group_delivery_summary_includes_failure_reasons() -> None:
+    failed_peer = "dddddddddddddddddddddddddddddddddddddddd.b32.i2p"
+    summary = render_group_delivery_summary(
+        {
+            PEER_A: "delivered_live",
+            failed_peer: "failed",
+        },
+        delivery_reasons={failed_peer: "blindbox-await-root"},
+    )
+
+    assert summary.startswith("Delivery: 1 live, 1 failed")
+    assert "Details:" in summary
+    assert "blindbox-await-root" in summary
+
+
 def test_render_group_control_text_uses_known_fields() -> None:
     text = render_group_control_text(
         {

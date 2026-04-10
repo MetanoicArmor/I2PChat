@@ -24,6 +24,7 @@ PREVIEW_MAX_LEN = 80
 
 
 def normalize_peer_address(raw: str) -> Optional[str]:
+    """Canonical peer id: lowercase base32 host only (no ``.b32.i2p`` suffix)."""
     value = (raw or "").strip().lower()
     if not value:
         return None
@@ -33,15 +34,14 @@ def normalize_peer_address(raw: str) -> Optional[str]:
         host = value
     if not _CONTACT_HOST_RE.fullmatch(host):
         return None
-    return host + ".b32.i2p"
+    return host
 
 
 def same_i2p_destination(left: str, right: str) -> bool:
     """
     True if two strings denote the same I2P destination.
 
-    Group state may mix a bare base32 host with full ``…b32.i2p`` entries; this
-    aligns comparisons for roster checks and fan-out.
+    Accepts either bare base32 or legacy ``…b32.i2p``; compares canonical bare ids.
     """
     nl = normalize_peer_address(left)
     nr = normalize_peer_address(right)

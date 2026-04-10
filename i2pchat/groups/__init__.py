@@ -1,4 +1,5 @@
 from .manager import GroupManager
+from .mesh import GroupMeshManager, GroupMeshPeerSnapshot
 from .models import (
     GroupContentType,
     GroupDeliveryStatus,
@@ -11,6 +12,15 @@ from .models import (
     GroupState,
     GroupTransportOutcome,
 )
+from .topology import (
+    GroupTopologyEdge,
+    GroupTopologyLinkState,
+    GroupTopologyNode,
+    GroupTopologySnapshot,
+    build_observed_group_topology,
+    render_group_topology_ascii,
+    render_group_topology_mermaid,
+)
 
 __all__ = [
     "GroupContentType",
@@ -19,9 +29,18 @@ __all__ = [
     "GroupImportResult",
     "GroupImportStatus",
     "GroupManager",
+    "GroupMeshManager",
+    "GroupMeshPeerSnapshot",
     "GroupMemberDeliveryResult",
     "GroupRecipientDeliveryMetadata",
     "GroupSendResult",
     "GroupState",
+    "GroupTopologyEdge",
+    "GroupTopologyLinkState",
+    "GroupTopologyNode",
+    "GroupTopologySnapshot",
     "GroupTransportOutcome",
+    "build_observed_group_topology",
+    "render_group_topology_ascii",
+    "render_group_topology_mermaid",
 ]

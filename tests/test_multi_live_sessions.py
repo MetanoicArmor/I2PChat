@@ -43,25 +43,33 @@ class LivePeerSessionDataclassTests(unittest.TestCase):
 class LiveStreamCountTests(unittest.TestCase):
     def test_live_stream_count_legacy_plus_extra(self) -> None:
         core = I2PChatCore(profile="alice")
-        core.conn = (_FakeReader(b""), _FakeWriter())
+        peer1 = "cccccccccccccccccccccccccccccccccccccccc.b32.i2p"
         peer2 = "dddddddddddddddddddddddddddddddddddddddd.b32.i2p"
-        k = core._normalize_peer_addr(peer2)
-        ls = LivePeerSession(peer_id=k)
-        ls.conn = (_FakeReader(b""), _FakeWriter())
-        core._live_sessions[k] = ls
+        k1 = core._normalize_peer_addr(peer1)
+        k2 = core._normalize_peer_addr(peer2)
+        ls1 = LivePeerSession(peer_id=k1)
+        ls1.conn = (_FakeReader(b""), _FakeWriter())
+        ls2 = LivePeerSession(peer_id=k2)
+        ls2.conn = (_FakeReader(b""), _FakeWriter())
+        core._live_sessions[k1] = ls1
+        core._live_sessions[k2] = ls2
         self.assertEqual(core.live_stream_count(), 2)
 
     def test_legacy_peer_stays_routable_when_current_peer_is_another(self) -> None:
-        """Поле current_peer_addr (UI) не должно скрывать активный legacy-поток."""
+        """Поле current_peer_addr (UI) не должно скрывать активный поток другого пира."""
         core = I2PChatCore(profile="alice")
         peer_a = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
         peer_b = "dddddddddddddddddddddddddddddddddddddddd.b32.i2p"
         norm_a = core._normalize_peer_addr(peer_a)
         norm_b = core._normalize_peer_addr(peer_b)
-        core.conn = (_FakeReader(b""), _FakeWriter())
-        core._legacy_stream_peer_id = norm_a
+        ls_a = LivePeerSession(peer_id=norm_a)
+        ls_a.conn = (_FakeReader(b""), _FakeWriter())
+        core._live_sessions[norm_a] = ls_a
+        ls_b = LivePeerSession(peer_id=norm_b)
+        ls_b.conn = (_FakeReader(b""), _FakeWriter())
+        core._live_sessions[norm_b] = ls_b
         core.current_peer_addr = norm_b
         self.assertTrue(core._has_active_session_for_peer(norm_a))
         w, fpid, _ = core._writer_frame_peer_and_text_acks(norm_a)
         self.assertIsNotNone(w)
-        self.assertIsNone(fpid)
+        self.assertEqual(fpid, norm_a)

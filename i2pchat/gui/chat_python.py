@@ -610,7 +610,7 @@ class I2PChat(App):
             "secure" if self.core.is_current_peer_secure() else "none"
         )
         my_short = self._short_peer(
-            (self.core.my_dest.base32 + ".b32.i2p")
+            str(self.core.my_dest.base32).strip().lower()
             if self.core.my_dest is not None
             else None
         )
@@ -862,6 +862,24 @@ class I2PChat(App):
 
     def _load_contacts_book(self) -> None:
         self._contact_book = load_book(self._contacts_file_path_for_read(self.profile))
+
+    def _reload_contacts_book_after_core_write(self) -> None:
+        """Ядро записало ``contacts.json`` (например синхронизация участников группы); обновить MRU и UI."""
+
+        def _apply() -> None:
+            self._load_contacts_book()
+            try:
+                for screen in self.screen_stack:
+                    if type(screen).__name__ == "TuiContactsScreen":
+                        screen._refresh_table()  # type: ignore[attr-defined]
+                        break
+            except Exception:
+                pass
+
+        try:
+            self.call_later(_apply)
+        except Exception:
+            _apply()
 
     def _save_contacts_book(self) -> None:
         save_book(self._contacts_file_path_for_write(self.profile), self._contact_book)
@@ -2209,7 +2227,7 @@ class I2PChat(App):
             if not self.core.my_dest:
                 self.post("error", "Local address is not ready yet.")
                 return
-            addr = self.core.my_dest.base32 + ".b32.i2p"
+            addr = str(self.core.my_dest.base32).strip().lower()
             if pyperclip is not None:
                 try:
                     pyperclip.copy(addr)
@@ -2668,7 +2686,7 @@ class TuiContactEditorScreen(ModalScreen[None]):
             yield Static("Address", classes="contact_editor_label")
             yield Input(
                 self._peer or "",
-                placeholder="peer.b32.i2p",
+                placeholder="Peer base32 address",
                 id="contact_editor_addr",
                 classes="contact_editor_input",
                 disabled=editing,
@@ -3210,7 +3228,7 @@ class TuiActionsScreen(ModalScreen[None]):
             yield Static("Actions")
             yield Static("", id="actions_summary")
             yield Static("Peer", classes="actions_label")
-            yield Input("", placeholder="peer.b32.i2p", id="actions_peer")
+            yield Input("", placeholder="Peer base32 address", id="actions_peer")
             yield Static(
                 "C connect · X disconnect · L save peer · Y copy my addr · R refresh",
                 id="actions_help",
@@ -3273,7 +3291,7 @@ class TuiActionsScreen(ModalScreen[None]):
     def action_connect_peer(self) -> None:
         peer = self._peer_value()
         if not peer:
-            self.host.post("error", "Enter a peer .b32.i2p address first.")
+            self.host.post("error", "Enter a peer base32 address first.")
             return
         self.host._set_selected_peer(peer, remember=True, announce="Connecting to")
         self.dismiss(None)

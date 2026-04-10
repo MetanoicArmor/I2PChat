@@ -29,14 +29,21 @@ from i2pchat.blindbox.blindbox_key_schedule import derive_blindbox_message_keys
 from i2pchat.blindbox.blindbox_local_replica import ensure_local_blindbox_replica
 from i2pchat.groups import (
     GroupContentType,
+    GroupDeliveryStatus,
     GroupEnvelope,
     GroupImportResult,
     GroupImportStatus,
+    GroupMeshManager,
+    GroupMeshPeerSnapshot,
     GroupManager,
     GroupRecipientDeliveryMetadata,
     GroupSendResult,
     GroupState,
+    GroupTopologySnapshot,
     GroupTransportOutcome,
+    build_observed_group_topology,
+    render_group_topology_ascii,
+    render_group_topology_mermaid,
 )
 from i2pchat.groups.models import normalize_member_id, utc_now
 from i2pchat.groups.wire import (
@@ -59,6 +66,7 @@ from i2pchat.storage.group_store import (
     GroupHistoryEntry,
     StoredGroupConversation,
     append_group_history_entry,
+    delete_group_record,
     load_group_conversation,
     load_group_state as load_persisted_group_state,
     list_group_states as list_persisted_group_states,
@@ -100,11 +108,7 @@ from i2pchat.core.session_manager import (
     SessionManager,
     TransportState,
 )
-from i2pchat.core.live_peer_session import (
-    LegacyCoreSessionView,
-    LivePeerSession,
-    max_concurrent_live_sessions,
-)
+from i2pchat.core.live_peer_session import LivePeerSession, max_concurrent_live_sessions
 
 logger = logging.getLogger("i2pchat")
 PROTOCOL_VERSION = 4
@@ -338,6 +342,14 @@ class _BlindBoxPeerSnapshot:
     state: BlindBoxState
     root_secret: Optional[bytes] = None
     root_epoch: int = 0
+
+
+@dataclass
+class _BlindBoxPollPeerContext:
+    peer_id: str
+    state: BlindBoxState
+    root_candidates: list[dict[str, Any]]
+    save_state: Callable[[], None]
 
 
 def _is_host_port_replica(value: str) -> bool:
@@ -914,7 +926,7 @@ def peek_persisted_stored_peer(profile: str) -> Optional[str]:
         host = raw
     if not re.fullmatch(r"[a-z2-7]{40,80}", host):
         return None
-    return host + ".b32.i2p"
+    return host
 
 
 def _resolve_blindbox_privacy_profile(raw: str) -> str:
@@ -1216,6 +1228,7 @@ class I2PChatCore:
         on_file_delivered: Optional[Callable[[str], Any]] = None,
         on_trust_decision: Optional[TrustDecisionCallback] = None,
         on_trust_mismatch_decision: Optional[TrustMismatchDecisionCallback] = None,
+        on_saved_contacts_changed: Optional[Callable[[], None]] = None,
     ) -> None:
         self.sam_address = sam_address
         self._sam_session_create_timeout = max(
@@ -1243,6 +1256,7 @@ class I2PChatCore:
         self.on_file_delivered = on_file_delivered
         self.on_trust_decision = on_trust_decision
         self.on_trust_mismatch_decision = on_trust_mismatch_decision
+        self.on_saved_contacts_changed = on_saved_contacts_changed
         self._trust_auto = (
             os.environ.get("I2PCHAT_TRUST_AUTO", "").strip().lower() in TRUTHY_ENV_VALUES
         )
@@ -1257,10 +1271,10 @@ class I2PChatCore:
 
         self.my_dest: Optional[i2plib.Destination] = None
         self.stored_peer: Optional[str] = None
+        # UI/chat selection (normalized bare id); not authoritative for routing or ACK tables.
         self.current_peer_addr: Optional[str] = None
         self.current_peer_dest_b64: Optional[str] = None
         self.peer_identity_binding_verified: bool = False
-        self.conn: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
         self.proven: bool = False
 
         # файловый приём
@@ -1320,10 +1334,18 @@ class I2PChatCore:
             send_live=self._send_group_envelope_live,
             send_offline=self._send_group_envelope_via_blindbox,
         )
+        self.group_mesh_manager = GroupMeshManager(
+            list_group_states=self.list_group_states,
+            get_local_member_id=self._local_group_member_id,
+            build_peer_snapshot=self._build_group_mesh_peer_snapshot,
+            schedule_peer_intros=self._schedule_group_peer_intros,
+        )
         self._live_sessions: dict[str, LivePeerSession] = {}
         self.active_live_peer_id: Optional[str] = None
-        # Пир первого (legacy) SAM-потока self.conn — не путать с current_peer_addr при мульти-live.
-        self._legacy_stream_peer_id: Optional[str] = None
+        # Очередь фоновых connect_to_peer для полного mesh группы (нормализованные peer id).
+        self._group_intro_backlog: set[str] = set()
+        self._group_intro_task: Optional[asyncio.Task[None]] = None
+        self._group_mesh_task: Optional[asyncio.Task[None]] = None
 
         # Флаг активной передачи файла (для защиты от timeout в receive_loop)
         self._file_transfer_active: bool = False
@@ -1830,7 +1852,7 @@ class I2PChatCore:
                 return False
             live_kwargs = {
                 "connected": True,
-                "handshake_complete": self.handshake_complete,
+                "handshake_complete": self._handshake_complete_for_peer_route(""),
             }
         if not self.session_manager.is_live_path_alive(**live_kwargs):
             self._emit_error("Secure channel not ready yet. Wait for 'Ready'.")
@@ -1870,12 +1892,20 @@ class I2PChatCore:
     def _schedule_disconnect(self, peer_id: Optional[str] = None) -> None:
         if self.session_manager.disconnecting:
             return
-        if peer_id is not None:
-            ls = self._live_sessions.get(peer_id)
+        target_pid: Optional[str] = peer_id
+        if target_pid is None:
+            k = self._normalize_peer_addr(self.current_peer_addr or "")
+            if not k or k not in self._live_sessions:
+                return
+            if self._live_sessions[k].conn is None:
+                return
+            target_pid = k
+        else:
+            k = self._normalize_peer_addr(target_pid)
+            ls = self._live_sessions.get(k)
             if ls is None or ls.conn is None:
                 return
-        elif self.conn is None:
-            return
+            target_pid = k
         if (
             self.session_manager.disconnect_task is not None
             and not self.session_manager.disconnect_task.done()
@@ -1885,7 +1915,9 @@ class I2PChatCore:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self.session_manager.disconnect_task = loop.create_task(self.disconnect_peer(peer_id))
+        self.session_manager.disconnect_task = loop.create_task(
+            self.disconnect_peer(target_pid)
+        )
         self.session_manager.transition_transport(
             TransportState.RECONNECTING, reason="scheduled-disconnect"
         )
@@ -1901,7 +1933,8 @@ class I2PChatCore:
         if generation != self.session_manager.handshake_watchdog_generation:
             return
         if peer_id is not None:
-            ls = self._live_sessions.get(peer_id)
+            k = self._normalize_peer_addr(peer_id)
+            ls = self._live_sessions.get(k)
             if (
                 ls is None
                 or ls.conn is not connection
@@ -1909,20 +1942,11 @@ class I2PChatCore:
             ):
                 return
             self._emit_error("Secure handshake timed out")
-            if peer_id:
-                self.session_manager.mark_peer_failed(
-                    peer_id, reason="handshake-timeout"
-                )
-            self._schedule_disconnect(peer_id)
+            self.session_manager.mark_peer_failed(
+                k, reason="handshake-timeout"
+            )
+            self._schedule_disconnect(k)
             return
-        if self.conn == connection and not self.handshake_complete:
-            self._emit_error("Secure handshake timed out")
-            peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-            if peer_addr_norm:
-                self.session_manager.mark_peer_failed(
-                    peer_addr_norm, reason="handshake-timeout"
-                )
-            self._schedule_disconnect()
 
     # ---------- протокол ----------
 
@@ -1934,13 +1958,17 @@ class I2PChatCore:
         return msg_id
 
     def _session_for_frame(self, peer_id: Optional[str]) -> Any:
-        """Crypto/frame state: legacy core fields or LivePeerSession for extra peers."""
+        """Crypto/frame state: LivePeerSession для подключённого пира; иначе поля ядра (до connect)."""
         if peer_id:
-            s = self._live_sessions.get(peer_id)
+            k = self._normalize_peer_addr(peer_id)
+            s = self._live_sessions.get(k)
             if s is None:
                 raise ValueError(f"No live session for peer_id={peer_id!r}")
             return s
-        return LegacyCoreSessionView(self)
+        k = self._normalize_peer_addr(self.current_peer_addr or "")
+        if k in self._live_sessions:
+            return self._live_sessions[k]
+        return self
 
     def _peer_id_for_frame(self) -> Optional[str]:
         """When sending on the active chat, use extra session crypto if this peer lives there."""
@@ -1950,22 +1978,6 @@ class I2PChatCore:
         if k in self._live_sessions:
             return k
         return None
-
-    def _legacy_stream_peer_key(self) -> str:
-        """Нормализованный адрес пира, которому принадлежит legacy-поток self.conn."""
-        if not self.conn:
-            return ""
-        if self._legacy_stream_peer_id:
-            try:
-                return self._normalize_peer_addr(self._legacy_stream_peer_id)
-            except ValueError:
-                return ""
-        if self.current_peer_addr:
-            try:
-                return self._normalize_peer_addr(self.current_peer_addr)
-            except ValueError:
-                return ""
-        return ""
 
     def _writer_frame_peer_and_text_acks(
         self, peer_for_route: str
@@ -1979,9 +1991,6 @@ class I2PChatCore:
             ls = self._live_sessions[k]
             if ls.conn:
                 return ls.conn[1], k, ls._pending_text_acks
-        legacy_k = self._legacy_stream_peer_key()
-        if self.conn and (not k or (legacy_k and k == legacy_k)):
-            return self.conn[1], None, self._pending_text_acks
         return None, None, self._pending_text_acks
 
     def _writer_frame_peer_and_file_acks(
@@ -1995,9 +2004,6 @@ class I2PChatCore:
             ls = self._live_sessions[k]
             if ls.conn:
                 return ls.conn[1], k, ls._pending_file_acks
-        legacy_k = self._legacy_stream_peer_key()
-        if self.conn and (not k or (legacy_k and k == legacy_k)):
-            return self.conn[1], None, self._pending_file_acks
         return None, None, self._pending_file_acks
 
     def _writer_frame_peer_and_image_acks(
@@ -2011,17 +2017,14 @@ class I2PChatCore:
             ls = self._live_sessions[k]
             if ls.conn:
                 return ls.conn[1], k, ls._pending_image_acks
-        legacy_k = self._legacy_stream_peer_key()
-        if self.conn and (not k or (legacy_k and k == legacy_k)):
-            return self.conn[1], None, self._pending_image_acks
         return None, None, self._pending_image_acks
 
     def _session_view_for_peer_route(self, peer_for_route: str) -> Any:
-        """LivePeerSession для extra-пира или LegacyCoreSessionView для основного потока."""
+        """LivePeerSession для выбранного маршрута (единственный источник live-состояния)."""
         k = self._normalize_peer_addr(peer_for_route)
         if k in self._live_sessions:
             return self._live_sessions[k]
-        return LegacyCoreSessionView(self)
+        raise ValueError(f"No live session for peer route {peer_for_route!r}")
 
     def _handshake_complete_for_peer_route(self, peer_for_route: str) -> bool:
         try:
@@ -2029,28 +2032,21 @@ class I2PChatCore:
         except ValueError:
             k = ""
         if not k:
-            return self.handshake_complete
+            cur = self._normalize_peer_addr(self.current_peer_addr or "")
+            if cur in self._live_sessions:
+                return bool(self._live_sessions[cur].handshake_complete)
+            return False
         if k in self._live_sessions:
             return bool(self._live_sessions[k].handshake_complete)
-        legacy_k = self._legacy_stream_peer_key()
-        if self.conn and legacy_k and k == legacy_k:
-            return self.handshake_complete
         return False
 
     def _live_stream_count(self) -> int:
-        n = 1 if self.conn else 0
-        n += sum(1 for s in self._live_sessions.values() if s.conn)
-        return n
+        return sum(1 for s in self._live_sessions.values() if s.conn)
 
     def _has_active_session_for_peer(self, peer_id: str) -> bool:
         k = self._normalize_peer_addr(peer_id)
         s = self._live_sessions.get(k)
-        if s and s.conn:
-            return True
-        legacy_k = self._legacy_stream_peer_key()
-        if self.conn and legacy_k and k == legacy_k:
-            return True
-        return False
+        return bool(s and s.conn)
 
     def has_active_live_session(self, peer_address: str) -> bool:
         """True, если с этим пиром уже есть активный SAM-поток (legacy или extra)."""
@@ -2254,6 +2250,215 @@ class I2PChatCore:
             self.profile,
         )
 
+    def delete_group(self, group_id: str) -> bool:
+        """Remove local group record and history file; does not notify remote members."""
+        gid = (group_id or "").strip()
+        if not gid:
+            return False
+        ok = delete_group_record(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            gid,
+        )
+        if ok:
+            self.group_manager.forget_group(gid)
+            self._notify_group_mesh_manager()
+        return ok
+
+    def _group_auto_intro_enabled(self) -> bool:
+        v = os.environ.get("I2PCHAT_GROUP_AUTO_INTRO", "1").strip().lower()
+        return v not in ("0", "false", "no", "off")
+
+    def _notify_group_mesh_manager(self) -> None:
+        if self._group_mesh_task is None or self._group_mesh_task.done():
+            return
+        self.group_mesh_manager.request_scan()
+
+    def _build_group_mesh_peer_snapshot(self, peer_id: str) -> GroupMeshPeerSnapshot:
+        normalized_peer = self._normalize_peer_addr(peer_id or "")
+        peer_transport = self.session_manager.get_peer_transport(normalized_peer)
+        peer_state = (
+            peer_transport.peer_state.value
+            if peer_transport is not None
+            else "disconnected"
+        )
+        blindbox_ready = False
+        if self.blindbox_enabled:
+            try:
+                peer_snapshot = self._load_blindbox_peer_snapshot(normalized_peer)
+            except Exception:
+                blindbox_ready = False
+            else:
+                blindbox_ready = peer_snapshot.root_secret is not None
+        reconnect = self.session_manager.get_reconnect_metadata(peer_id=normalized_peer)
+        return GroupMeshPeerSnapshot(
+            peer_id=normalized_peer,
+            peer_state=peer_state,
+            live_ready=self.session_manager.is_live_path_alive(peer_id=normalized_peer),
+            active_session=self._has_active_session_for_peer(normalized_peer),
+            blindbox_ready=blindbox_ready,
+            next_retry_mono=float(reconnect.next_retry_mono),
+        )
+
+    def _ensure_group_mesh_runner(self, loop: asyncio.AbstractEventLoop) -> None:
+        if not self.group_mesh_manager.enabled():
+            return
+        if self._group_mesh_task is not None and not self._group_mesh_task.done():
+            return
+        self.group_mesh_manager.request_scan()
+        self._group_mesh_task = loop.create_task(self.group_mesh_manager.run())
+
+    def _repair_group_delivery_failures(self, result: GroupSendResult) -> None:
+        repair_peers: list[str] = []
+        for peer_id, delivery in result.delivery_results.items():
+            reason = str(delivery.reason or "").strip()
+            if delivery.status == GroupDeliveryStatus.FAILED and reason in {
+                "blindbox-await-root",
+                "needs-live-session",
+            }:
+                repair_peers.append(peer_id)
+        if repair_peers:
+            self._schedule_group_peer_intros(repair_peers)
+        self._notify_group_mesh_manager()
+
+    def _sync_group_members_to_saved_contacts(self, state: GroupState, local_member: str) -> bool:
+        """Add all remote group members to Saved peers. Returns True if contacts file changed."""
+        changed = False
+        for m in state.members:
+            if not m or same_i2p_destination(m, local_member):
+                continue
+            if self.ensure_peer_in_saved_contacts(m):
+                changed = True
+        return changed
+
+    def _collect_group_peers_needing_secure_intro(
+        self,
+        new_state: GroupState,
+        local_member: str,
+    ) -> list[str]:
+        """
+        Все удалённые участники группы, с которыми ещё нет завершённого secure handshake.
+
+        В отличие от выборки только «новых» member (added), это даёт полный mesh:
+        при каждом событии членства/импорте можно повторно попытаться достроить live-сессии.
+        """
+        out: list[str] = []
+        for mid in new_state.members:
+            if not mid or same_i2p_destination(mid, local_member):
+                continue
+            try:
+                n = self._normalize_peer_addr(mid)
+            except Exception:
+                continue
+            if not n:
+                continue
+            if self._handshake_complete_for_peer_route(n):
+                continue
+            if self._has_active_session_for_peer(n):
+                continue
+            out.append(mid)
+        return sorted(out, key=lambda x: normalize_member_id(x))
+
+    def _on_group_membership_changed(
+        self,
+        previous_members: frozenset[str],
+        new_state: GroupState,
+        *,
+        group_label: str = "",
+    ) -> None:
+        """
+        При изменении состава или импорте группы: сохранить пиров в контакты,
+        затем по возможности достроить live-сессии ко всем участникам (mesh).
+        """
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            return
+        if self._sync_group_members_to_saved_contacts(new_state, local_member):
+            if self.on_saved_contacts_changed is not None:
+                try:
+                    self.on_saved_contacts_changed()
+                except Exception:
+                    logger.debug("on_saved_contacts_changed failed", exc_info=True)
+        intro = self._collect_group_peers_needing_secure_intro(
+            new_state, local_member
+        )
+        self._notify_group_mesh_manager()
+        if not intro:
+            return
+        prev = {normalize_member_id(x) for x in previous_members if x}
+        cur = {normalize_member_id(x) for x in new_state.members if x}
+        added = cur - prev
+        intro_norm = {normalize_member_id(x) for x in intro}
+        new_member_intros = sorted(intro_norm & added)
+        label = (group_label or new_state.title or new_state.group_id or "group").strip()
+        if new_member_intros:
+            short = ", ".join(
+                f"{p[:10]}…" if len(p) > 12 else p for p in new_member_intros[:4]
+            )
+            if len(new_member_intros) > 4:
+                short += ", …"
+            self._emit_system(
+                f'Group "{label}": secure introduction starting for new peer(s): {short}'
+            )
+        else:
+            logger.info(
+                'Group "%s": mesh top-up, scheduling live session(s) to %d peer(s)',
+                label,
+                len(intro),
+            )
+        self._schedule_group_peer_intros(intro)
+
+    def _schedule_group_peer_intros(self, peer_addrs: list[str]) -> None:
+        if not peer_addrs or not self._group_auto_intro_enabled():
+            return
+        if not crypto.NACL_AVAILABLE:
+            return
+        # Unit tests often have a running asyncio loop; never open real SAM connects there.
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        for raw in peer_addrs:
+            try:
+                n = self._normalize_peer_addr(raw)
+            except Exception:
+                continue
+            if n:
+                self._group_intro_backlog.add(n)
+        self._ensure_group_intro_runner(loop)
+
+    def _ensure_group_intro_runner(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self._group_intro_task is not None and not self._group_intro_task.done():
+            return
+        self._group_intro_task = loop.create_task(self._run_group_intro_backlog())
+
+    async def _run_group_intro_backlog(self) -> None:
+        try:
+            while self._group_intro_backlog:
+                batch = sorted(self._group_intro_backlog)
+                self._group_intro_backlog.clear()
+                for n in batch:
+                    if self._handshake_complete_for_peer_route(n):
+                        continue
+                    if self._has_active_session_for_peer(n):
+                        continue
+                    activate = self._live_stream_count() == 0
+                    await self.connect_to_peer(n, activate_as_current=activate)
+        finally:
+            self._group_intro_task = None
+            if self._group_intro_backlog:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    pass
+                else:
+                    self._ensure_group_intro_runner(loop)
+
     def load_group_history(self, group_id: str) -> list[GroupHistoryEntry]:
         conversation = self.load_group(group_id)
         if conversation is None:
@@ -2286,7 +2491,51 @@ class I2PChatCore:
         self._emit_system(
             f"Group ready: {state.title or state.group_id} ({max(0, len(state.members) - 1)} peers)."
         )
+        self._on_group_membership_changed(
+            frozenset(),
+            state,
+            group_label=state.title or state.group_id,
+        )
         return state
+
+    def update_group(
+        self,
+        group_id: str,
+        *,
+        title: str,
+        members: list[str] | tuple[str, ...],
+    ) -> GroupState:
+        """
+        Локально обновить заголовок и список участников (как display name у saved peer).
+        Увеличивает epoch; next_group_seq и история сохраняются.
+        """
+        existing = self.load_group_state(group_id)
+        if existing is None:
+            raise ValueError(f"Unknown group: {group_id}")
+        prev_members = frozenset(existing.members)
+        local_member_id = self._local_group_member_id()
+        normalized_members = [local_member_id]
+        normalized_members.extend(normalize_member_id(member) for member in members)
+        clean_title = (title or "").strip()
+        new_state = GroupState(
+            group_id=existing.group_id,
+            epoch=int(existing.epoch) + 1,
+            members=tuple(normalized_members),
+            title=clean_title or None,
+            created_at=existing.created_at,
+            updated_at=utc_now(),
+        )
+        saved = self.save_group(new_state, next_group_seq=None)
+        self._emit_system(
+            f"Group updated: {saved.state.title or saved.state.group_id} "
+            f"({max(0, len(saved.state.members) - 1)} peers)."
+        )
+        self._on_group_membership_changed(
+            prev_members,
+            saved.state,
+            group_label=saved.state.title or saved.state.group_id,
+        )
+        return saved.state
 
     def _group_display_name(self, state: GroupState) -> str:
         return state.title or state.group_id
@@ -2296,16 +2545,12 @@ class I2PChatCore:
         peer = self._normalize_peer_addr(self.current_peer_addr or lap or "")
         if not peer:
             return None
-        if peer.endswith(".b32.i2p"):
-            return peer[: -len(".b32.i2p")]
         return peer
 
     def _blindbox_peer_id_for_peer(self, peer_addr: str) -> Optional[str]:
         peer = self._normalize_peer_addr(peer_addr or "")
         if not peer:
             return None
-        if peer.endswith(".b32.i2p"):
-            return peer[: -len(".b32.i2p")]
         return peer
 
     def _blindbox_state_path_for_peer(self, peer_id: str) -> str:
@@ -2474,6 +2719,150 @@ class I2PChatCore:
                     }
                 )
         return candidates
+
+    def _blindbox_root_candidates_for_snapshot(
+        self,
+        snapshot: _BlindBoxPeerSnapshot,
+    ) -> list[dict[str, Any]]:
+        if snapshot.root_secret is None:
+            return []
+        return [
+            {
+                "epoch": int(snapshot.root_epoch),
+                "secret": snapshot.root_secret,
+            }
+        ]
+
+    def _blindbox_recv_candidates_for_state(self, state: BlindBoxState) -> list[int]:
+        recv_backtrack = max(
+            0, int(os.environ.get("I2PCHAT_BLINDBOX_RECV_BACKTRACK", "0"))
+        )
+        recv_lookahead = max(
+            0, int(os.environ.get("I2PCHAT_BLINDBOX_RECV_LOOKAHEAD", "64"))
+        )
+        recv_max_per_poll = max(
+            1, int(os.environ.get("I2PCHAT_BLINDBOX_RECV_MAX_PER_POLL", "64"))
+        )
+        recv_start = max(0, state.recv_base - recv_backtrack)
+        recv_span = max(state.recv_window, recv_lookahead)
+        recv_end = state.recv_base + recv_span
+        forward = (
+            idx
+            for idx in range(state.recv_base, recv_end)
+            if idx not in state.consumed_recv
+        )
+        backtrack = (
+            idx
+            for idx in range(recv_start, state.recv_base)
+            if idx not in state.consumed_recv
+        )
+        ordered = [*forward, *backtrack]
+        if len(ordered) > recv_max_per_poll:
+            return ordered[:recv_max_per_poll]
+        return ordered
+
+    def _blindbox_state_file_peer_ids(self) -> list[str]:
+        profile_dir = self.get_profile_data_dir(create=True)
+        prefix = f"{self.profile}.blindbox."
+        suffix = ".json"
+        peers: list[str] = []
+        try:
+            names = sorted(os.listdir(profile_dir))
+        except OSError:
+            return peers
+        for name in names:
+            if not (name.startswith(prefix) and name.endswith(suffix)):
+                continue
+            token = name[len(prefix) : -len(suffix)].strip().lower()
+            if not token:
+                continue
+            peers.append(token)
+        return peers
+
+    def _blindbox_poll_peer_ids(self) -> list[str]:
+        peers: set[str] = set()
+        current_peer = self._blindbox_peer_id()
+        if current_peer:
+            peers.add(current_peer)
+        if self.profile != TRANSIENT_PROFILE_NAME:
+            try:
+                book = load_book(self._contacts_json_path())
+            except Exception:
+                book = None
+            contacts_iter = getattr(book, "contacts", ()) if book is not None else ()
+            for rec in contacts_iter:
+                try:
+                    normalized = self._normalize_peer_addr(getattr(rec, "addr", ""))
+                except Exception:
+                    normalized = ""
+                if normalized:
+                    peers.add(normalized)
+            lap = str(getattr(book, "last_active_peer", "") or "").strip() if book is not None else ""
+            if lap:
+                try:
+                    peers.add(self._normalize_peer_addr(lap))
+                except Exception:
+                    pass
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            local_member = ""
+        for state in self.list_group_states():
+            for member_id in state.members:
+                normalized = normalize_member_id(member_id)
+                if not normalized or same_i2p_destination(normalized, local_member):
+                    continue
+                try:
+                    peers.add(self._normalize_peer_addr(normalized))
+                except Exception:
+                    continue
+        peers.update(self._blindbox_state_file_peer_ids())
+        return sorted(peers)
+
+    def _blindbox_poll_contexts(self) -> list[_BlindBoxPollPeerContext]:
+        contexts: list[_BlindBoxPollPeerContext] = []
+        current_peer = self._blindbox_peer_id()
+        for peer_id in self._blindbox_poll_peer_ids():
+            if current_peer and same_i2p_destination(peer_id, current_peer):
+                root_candidates = self._blindbox_root_candidates()
+                if not root_candidates:
+                    try:
+                        snapshot = self._load_blindbox_peer_snapshot(peer_id)
+                    except Exception:
+                        snapshot = None
+                    if snapshot is not None:
+                        root_candidates = self._blindbox_root_candidates_for_snapshot(
+                            snapshot
+                        )
+                if not root_candidates:
+                    continue
+                contexts.append(
+                    _BlindBoxPollPeerContext(
+                        peer_id=peer_id,
+                        state=self._blindbox_state,
+                        root_candidates=root_candidates,
+                        save_state=self._save_blindbox_state,
+                    )
+                )
+                continue
+            try:
+                snapshot = self._load_blindbox_peer_snapshot(peer_id)
+            except Exception:
+                continue
+            root_candidates = self._blindbox_root_candidates_for_snapshot(snapshot)
+            if not root_candidates:
+                continue
+            contexts.append(
+                _BlindBoxPollPeerContext(
+                    peer_id=peer_id,
+                    state=snapshot.state,
+                    root_candidates=root_candidates,
+                    save_state=lambda snap=snapshot: self._save_blindbox_peer_snapshot(
+                        snap
+                    ),
+                )
+            )
+        return contexts
 
     def _load_blindbox_state(self) -> None:
         if not self.blindbox_enabled:
@@ -2739,8 +3128,8 @@ class I2PChatCore:
 
     def _normalize_peer_addr(self, addr: str) -> str:
         """
-        Канонический peer id: host из base32 + '.b32.i2p'.
-        Допускает типичный ввод из UI/чата: пробелы, префиксты («My Addr: …»), вставку строки целиком.
+        Канонический peer id: только lowercase base32 host (без суффикса ``.b32.i2p``).
+        Допускает типичный ввод из UI/чата: пробелы, префиксы («My Addr: …»), вставку с суффиксом или без.
         """
         raw = (addr or "").strip()
         if not raw:
@@ -2749,19 +3138,30 @@ class I2PChatCore:
         # Первая подходящая подстрока … .b32.i2p (игнорирует префикс/мусор вокруг).
         m = re.search(r"([a-z2-7]{40,80})\.b32\.i2p", lower)
         if m:
-            return m.group(1) + ".b32.i2p"
+            return m.group(1)
+        # «My Addr: <base32>» без суффикса (как в бабле Online / peer_b32).
+        m_my = re.search(r"my\s*addr\s*:\s*([a-z2-7]{40,80})(?:\s|$)", lower)
+        if m_my:
+            return m_my.group(1)
         compact = re.sub(r"\s+", "", lower)
         if any(ch in compact for ch in ("\r", "\n", "\x00", "\t", "=")):
             raise ValueError("Peer address contains forbidden characters")
         if compact.endswith(".b32.i2p"):
             host = compact[: -len(".b32.i2p")]
         elif "." in compact:
-            raise ValueError("Peer address must use .b32.i2p format")
+            raise ValueError("Peer address must be base32 host or *.b32.i2p")
         else:
             host = compact
         if not re.fullmatch(r"[a-z2-7]{40,80}", host):
             raise ValueError("Peer address format is invalid")
-        return host + ".b32.i2p"
+        return host
+
+    def _peer_sam_hostname(self, addr: str) -> str:
+        """SAM NAMING LOOKUP / STREAM CONNECT ожидают строку вида ``<base32>.b32.i2p``."""
+        bare = self._normalize_peer_addr(addr)
+        if not bare:
+            return ""
+        return f"{bare}.b32.i2p"
 
     def _canonical_dest_base64(self, raw_dest: str) -> str:
         dest = i2plib.Destination((raw_dest or "").strip())
@@ -2776,7 +3176,10 @@ class I2PChatCore:
             return False
         try:
             looked_up = await asyncio.wait_for(
-                i2plib.dest_lookup(normalized_addr, sam_address=self.sam_address),
+                i2plib.dest_lookup(
+                    self._peer_sam_hostname(normalized_addr),
+                    sam_address=self.sam_address,
+                ),
                 timeout=12.0,
             )
             looked_up_base64: str
@@ -2786,7 +3189,11 @@ class I2PChatCore:
                 looked_up_base64 = i2plib.Destination(str(looked_up)).base64
             return looked_up_base64 == dest_base64
         except Exception as e:
-            logger.warning("SAM binding verification failed for %s: %s", normalized_addr, e)
+            logger.warning(
+                "SAM binding verification failed for %s: %s",
+                self._peer_sam_hostname(normalized_addr),
+                e,
+            )
             return False
 
     async def _set_verified_peer_identity(
@@ -2946,11 +3353,11 @@ class I2PChatCore:
         self._load_blindbox_state()
 
     def is_current_peer_verified_for_lock(self) -> bool:
-        return bool(
-            self.current_peer_addr
-            and self.handshake_complete
-            and self.peer_identity_binding_verified
-        )
+        k = self._normalize_peer_addr(self.current_peer_addr or "")
+        ls = self._live_sessions.get(k) if k else None
+        if not ls:
+            return False
+        return bool(ls.handshake_complete and ls.peer_identity_binding_verified)
 
     async def _request_trust_decision(
         self, peer_addr: str, fingerprint: str, signing_key_hex: str
@@ -3037,8 +3444,13 @@ class I2PChatCore:
         if pinned_hex is None:
             if self.on_trust_decision is not None:
                 # Продлеваем окно handshake перед блокирующим UI-диалогом TOFU.
-                if self.conn is not None and not self.handshake_complete:
-                    self._start_handshake_watchdog(self.conn)
+                ls_tofu = self._live_sessions.get(peer_addr)
+                if (
+                    ls_tofu
+                    and ls_tofu.conn is not None
+                    and not ls_tofu.handshake_complete
+                ):
+                    self._start_handshake_watchdog(ls_tofu.conn, peer_id=peer_addr)
                 self._emit_system("Waiting for TOFU trust confirmation...")
                 approved = await self._request_trust_decision(peer_addr, fp, current_hex)
                 if not approved:
@@ -3073,8 +3485,13 @@ class I2PChatCore:
             except Exception:
                 old_fp = pinned_hex[:16]
             if self.on_trust_mismatch_decision is not None:
-                if self.conn is not None and not self.handshake_complete:
-                    self._start_handshake_watchdog(self.conn)
+                ls_mm = self._live_sessions.get(peer_addr)
+                if (
+                    ls_mm
+                    and ls_mm.conn is not None
+                    and not ls_mm.handshake_complete
+                ):
+                    self._start_handshake_watchdog(ls_mm.conn, peer_id=peer_addr)
                 self._emit_system("Trusted key changed. Waiting for user decision...")
                 approved = await self._request_trust_mismatch_decision(
                     peer_addr,
@@ -3251,9 +3668,7 @@ class I2PChatCore:
                     stored_line = lines[0]
                 if stored_line:
                     legacy_lock_peer = self._normalize_peer_addr(stored_line)
-                    disp_peer = legacy_lock_peer
-                    if not disp_peer.endswith(".b32.i2p"):
-                        disp_peer = disp_peer + ".b32.i2p"
+                    disp_peer = self._peer_sam_hostname(legacy_lock_peer)
                     self._emit_system(
                         f"Legacy Lock to peer line (migrating to Saved peers): {disp_peer}"
                     )
@@ -3322,6 +3737,7 @@ class I2PChatCore:
             asyncio.create_task(self._ensure_blindbox_runtime_started())
 
         my_address = self.my_dest.base32 + ".b32.i2p"
+        my_addr_display = self.my_dest.base32
         self._emit_system("Building I2P tunnels (may take 1–2 min)...")
         self.session_manager.transition_transport(
             TransportState.WARMING_TUNNELS, reason="tunnel-warmup"
@@ -3344,14 +3760,14 @@ class I2PChatCore:
 
         if tunnels_ready:
             self._emit_status("visible")
-            self._emit_message("success", f"Online! My Address: {my_address}")
+            self._emit_message("success", f"Online! My Address: {my_addr_display}")
             self._emit_system("Tunnels ready. Waiting for incoming connections...")
             self.session_manager.transition_transport(
                 TransportState.READY, reason="tunnels-ready"
             )
         else:
             self._emit_status("local_ok")
-            self._emit_message("success", f"Online! My Address: {my_address}")
+            self._emit_message("success", f"Online! My Address: {my_addr_display}")
             self._emit_system(
                 "Tunnels may still be building. Wait 1–2 min before connecting."
             )
@@ -3359,12 +3775,13 @@ class I2PChatCore:
                 TransportState.DEGRADED, reason="tunnels-pending"
             )
 
-        self.peer_b32 = f"My Addr: {my_address}"
+        self.peer_b32 = f"My Addr: {my_addr_display}"
 
         # запуск фоновых задач
         loop = asyncio.get_running_loop()
         self.session_manager.accept_task = loop.create_task(self.accept_loop())
         self.session_manager.tunnel_task = loop.create_task(self.tunnel_watcher())
+        self._ensure_group_mesh_runner(loop)
         if self._blindbox_ready():
             # Sync with early parallel boot (or run once if that task has not won yet).
             await self._ensure_blindbox_runtime_started()
@@ -3463,9 +3880,15 @@ class I2PChatCore:
         *,
         token: str,
         ack_kind: str,
+        routing_peer_id: str = "",
     ) -> None:
         self._prune_pending_acks(force=False)
-        cap = self._current_ack_peer()
+        try:
+            cap = self._normalize_peer_addr(routing_peer_id) if routing_peer_id else ""
+        except ValueError:
+            cap = ""
+        if not cap:
+            cap = self._current_ack_peer()
         table[msg_id] = PendingAckEntry(
             token=token,
             ack_kind=ack_kind,
@@ -3476,7 +3899,7 @@ class I2PChatCore:
         )
         self.session_manager.register_inflight_message(
             msg_id,
-            peer_id=self._current_ack_peer(),
+            peer_id=cap,
         )
         self._prune_pending_acks(force=False)
 
@@ -3563,7 +3986,7 @@ class I2PChatCore:
         peer_for_route = self._normalize_peer_addr(
             self.current_peer_addr or lap or ""
         )
-        connected = self.conn is not None
+        connected = self._any_live_stream()
         live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
         policy_kwargs: dict[str, Any] = {
             "requested_route": "auto",
@@ -3571,9 +3994,13 @@ class I2PChatCore:
         }
         if not peer_for_route:
             live_kwargs["connected"] = connected
-            live_kwargs["handshake_complete"] = self.handshake_complete
+            live_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
+                ""
+            )
             policy_kwargs["connected"] = connected
-            policy_kwargs["handshake_complete"] = self.handshake_complete
+            policy_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
+                ""
+            )
 
         secure_live = self.session_manager.is_live_path_alive(**live_kwargs)
         has_target = self._telemetry_has_peer_target()
@@ -3601,7 +4028,12 @@ class I2PChatCore:
             else len(self.session_manager.outbound_streams)
         )
 
-        if connected and not self.handshake_complete:
+        route_hc = (
+            self._handshake_complete_for_peer_route(peer_for_route)
+            if peer_for_route
+            else self._handshake_complete_for_peer_route("")
+        )
+        if connected and not route_hc:
             state = "connecting-handshake"
         elif secure_live:
             state = "online-live"
@@ -3646,6 +4078,138 @@ class I2PChatCore:
             "reconnect_next_retry_mono": float(reconnect_meta.next_retry_mono),
             "reconnect_last_failure_reason": str(reconnect_meta.last_failure_reason),
         }
+
+    def get_group_send_ui_hints(self, group_id: str) -> dict[str, Any]:
+        """Aggregate route hints for the group Send button (mirrors 1:1 live vs offline-ready)."""
+        state = self.load_group_state(group_id)
+        if state is None:
+            return {
+                "can_send": False,
+                "show_offline_button": False,
+                "any_live_to_member": False,
+                "reason": "missing",
+                "live_by_recipient": {},
+            }
+        try:
+            local = self._local_group_member_id()
+        except RuntimeError:
+            return {
+                "can_send": False,
+                "show_offline_button": False,
+                "any_live_to_member": False,
+                "reason": "no-local-dest",
+                "live_by_recipient": {},
+            }
+        recipients = [
+            m
+            for m in state.members
+            if normalize_member_id(m) != normalize_member_id(local)
+        ]
+        if not recipients:
+            return {
+                "can_send": False,
+                "show_offline_button": False,
+                "any_live_to_member": False,
+                "reason": "no-recipients",
+                "live_by_recipient": {},
+            }
+        any_live = False
+        live_by_recipient: dict[str, bool] = {}
+        for raw in recipients:
+            target = self._normalize_peer_addr(raw)
+            if not target:
+                continue
+            alive = self.session_manager.is_live_path_alive(peer_id=target)
+            live_by_recipient[target] = alive
+            if alive:
+                any_live = True
+        d = self.get_delivery_telemetry()
+        bb_ok = bool(
+            d.get("blindbox_enabled")
+            and d.get("blindbox_ready")
+            and d.get("blindbox_runtime_ready")
+        )
+        can_send = bool(any_live or bb_ok)
+        show_offline = bool(can_send and (not any_live) and bb_ok)
+        return {
+            "can_send": can_send,
+            "show_offline_button": show_offline,
+            "any_live_to_member": any_live,
+            "reason": "ok",
+            "live_by_recipient": live_by_recipient,
+        }
+
+    def get_group_topology_snapshot(
+        self, group_id: str
+    ) -> Optional[GroupTopologySnapshot]:
+        """Observed group mesh from the local node's point of view."""
+        state = self.load_group_state(group_id)
+        if state is None:
+            return None
+        try:
+            local_member_id = self._local_group_member_id()
+        except RuntimeError:
+            local_member_id = ""
+
+        live_by_member: dict[str, bool] = {}
+        peer_state_by_member: dict[str, str] = {}
+        blindbox_ready_by_member: dict[str, bool] = {}
+        for member_id in state.members:
+            normalized_member = normalize_member_id(member_id)
+            if not normalized_member:
+                continue
+            if local_member_id and normalized_member == normalize_member_id(local_member_id):
+                continue
+            live_by_member[normalized_member] = self.session_manager.is_live_path_alive(
+                peer_id=normalized_member
+            )
+            peer_transport = self.session_manager.get_peer_transport(normalized_member)
+            peer_state_by_member[normalized_member] = (
+                peer_transport.peer_state.value
+                if peer_transport is not None
+                else "disconnected"
+            )
+            try:
+                snapshot = self._load_blindbox_peer_snapshot(normalized_member)
+            except Exception:
+                blindbox_ready_by_member[normalized_member] = False
+            else:
+                blindbox_ready_by_member[normalized_member] = (
+                    snapshot.root_secret is not None
+                )
+
+        delivery_status_by_member: dict[str, str] = {}
+        delivery_reason_by_member: dict[str, str] = {}
+        conversation = self.load_group(group_id)
+        if conversation is not None:
+            for entry in reversed(conversation.history):
+                if entry.kind != "me" or not entry.delivery_results:
+                    continue
+                delivery_status_by_member = dict(entry.delivery_results)
+                delivery_reason_by_member = dict(entry.delivery_reasons)
+                break
+
+        return build_observed_group_topology(
+            state,
+            local_member_id=local_member_id,
+            live_by_member=live_by_member,
+            peer_state_by_member=peer_state_by_member,
+            blindbox_ready_by_member=blindbox_ready_by_member,
+            delivery_status_by_member=delivery_status_by_member,
+            delivery_reason_by_member=delivery_reason_by_member,
+        )
+
+    def get_group_topology_ascii(self, group_id: str) -> str:
+        snapshot = self.get_group_topology_snapshot(group_id)
+        if snapshot is None:
+            return ""
+        return render_group_topology_ascii(snapshot)
+
+    def get_group_topology_mermaid(self, group_id: str) -> str:
+        snapshot = self.get_group_topology_snapshot(group_id)
+        if snapshot is None:
+            return ""
+        return render_group_topology_mermaid(snapshot)
 
     def _offline_send_block_feedback(self) -> tuple[str, str]:
         delivery = self.get_delivery_telemetry()
@@ -3986,16 +4550,12 @@ class I2PChatCore:
                     continue
                 # Poll even when a live TCP session exists: offline sends only hit Blind Box;
                 # the peer must GET+decrypt while connected too, otherwise messages never arrive.
-                if self._blindbox_root_secret is None:
-                    await self._blindbox_poll_sleep()
-                    continue
-                peer_id = self._blindbox_peer_id()
-                if not peer_id or not self.my_dest:
+                if not self.my_dest:
                     await self._blindbox_poll_sleep()
                     continue
                 local_id = self.my_dest.base32
-                root_candidates = self._blindbox_root_candidates()
-                if not root_candidates:
+                poll_contexts = self._blindbox_poll_contexts()
+                if not poll_contexts:
                     await self._blindbox_poll_sleep()
                     continue
                 cycle_started_mono = time.monotonic()
@@ -4004,101 +4564,105 @@ class I2PChatCore:
                 cycle_miss = 0
                 cycle_timeout = 0
                 slow_samples: list[str] = []
-                recv_cands = self._blindbox_recv_candidates()
-                if len(recv_cands) > self._blindbox_recv_scan_budget:
-                    recv_cands = recv_cands[: self._blindbox_recv_scan_budget]
-                for recv_index in recv_cands:
-                    cycle_checked += 1
-                    got_valid = False
-                    for root_item in root_candidates:
-                        keys = derive_blindbox_message_keys(
-                            bytes(root_item["secret"]),
-                            local_id,
-                            peer_id,
-                            "recv",
-                            recv_index,
-                            epoch=int(root_item["epoch"]),
-                        )
-                        async def _accept_blob(blob: bytes) -> bool:
-                            digest = hashlib.sha256(blob).hexdigest()
-                            if digest in self._blindbox_seen_hashes:
-                                return False
-                            try:
-                                frame = decrypt_blindbox_blob(
-                                    blob,
-                                    keys.blob_key,
-                                    # Blob direction is encoded by sender perspective.
-                                    # Receiver must expect "send" for inbound offline envelopes.
-                                    expected_direction="send",
-                                    expected_index=recv_index,
-                                    expected_state_tag=keys.state_tag,
-                                )
-                            except Exception:
-                                return False
-                            accepted = await self._process_blindbox_frame(frame)
-                            if accepted:
-                                self._remember_blindbox_seen_hash(digest)
-                                return True
-                            return False
-
-                        get_diag: dict[str, Any] = {}
-                        get_started_mono = time.monotonic()
-                        timed_out = False
-                        try:
-                            accepted_blob = await asyncio.wait_for(
-                                client.get_first_accepted(
-                                    keys.lookup_token,
-                                    accept_blob=_accept_blob,
-                                    miss_grace_sec=self._blindbox_get_first_miss_grace_sec,
-                                    diag=get_diag,
-                                ),
-                                timeout=self._blindbox_get_first_timeout_sec,
-                            )
-                        except asyncio.TimeoutError:
-                            timed_out = True
-                            accepted_blob = None
-                            cycle_timeout += 1
-                        except Exception as exc:
-                            logger.debug(
-                                "BlindBox get_first_accepted failed recv_index=%s epoch=%s: %s",
+                for context in poll_contexts:
+                    peer_id = context.peer_id
+                    recv_cands = self._blindbox_recv_candidates_for_state(context.state)
+                    if len(recv_cands) > self._blindbox_recv_scan_budget:
+                        recv_cands = recv_cands[: self._blindbox_recv_scan_budget]
+                    for recv_index in recv_cands:
+                        cycle_checked += 1
+                        got_valid = False
+                        for root_item in context.root_candidates:
+                            keys = derive_blindbox_message_keys(
+                                bytes(root_item["secret"]),
+                                local_id,
+                                peer_id,
+                                "recv",
                                 recv_index,
-                                int(root_item["epoch"]),
-                                exc,
-                                exc_info=True,
+                                epoch=int(root_item["epoch"]),
                             )
-                            continue
-                        get_elapsed = max(
-                            0.0, time.monotonic() - get_started_mono
-                        )
-                        if get_elapsed >= self._blindbox_debug_ui_slow_sec:
-                            accepted_addr = str(get_diag.get("accepted_addr", "")).strip()
-                            first_addr = str(get_diag.get("first_result_addr", "")).strip()
-                            canceled = [
-                                str(x).strip()
-                                for x in (get_diag.get("canceled_pending_addrs") or [])
-                                if str(x).strip()
-                            ]
-                            if accepted_addr:
-                                slow_addr = accepted_addr
-                            elif canceled:
-                                slow_addr = canceled[0]
-                            else:
-                                slow_addr = first_addr or "unknown"
-                            if timed_out:
-                                slow_addr = f"{slow_addr} (timeout)"
-                            slow_samples.append(
-                                f"idx={recv_index} t={get_elapsed:.2f}s box={slow_addr}"
+
+                            async def _accept_blob(blob: bytes) -> bool:
+                                digest = hashlib.sha256(blob).hexdigest()
+                                if digest in self._blindbox_seen_hashes:
+                                    return False
+                                try:
+                                    frame = decrypt_blindbox_blob(
+                                        blob,
+                                        keys.blob_key,
+                                        expected_direction="send",
+                                        expected_index=recv_index,
+                                        expected_state_tag=keys.state_tag,
+                                    )
+                                except Exception:
+                                    return False
+                                accepted = await self._process_blindbox_frame(
+                                    frame, source_peer=peer_id
+                                )
+                                if accepted:
+                                    self._remember_blindbox_seen_hash(digest)
+                                    return True
+                                return False
+
+                            get_diag: dict[str, Any] = {}
+                            get_started_mono = time.monotonic()
+                            timed_out = False
+                            try:
+                                accepted_blob = await asyncio.wait_for(
+                                    client.get_first_accepted(
+                                        keys.lookup_token,
+                                        accept_blob=_accept_blob,
+                                        miss_grace_sec=self._blindbox_get_first_miss_grace_sec,
+                                        diag=get_diag,
+                                    ),
+                                    timeout=self._blindbox_get_first_timeout_sec,
+                                )
+                            except asyncio.TimeoutError:
+                                timed_out = True
+                                accepted_blob = None
+                                cycle_timeout += 1
+                            except Exception as exc:
+                                logger.debug(
+                                    "BlindBox get_first_accepted failed peer=%s recv_index=%s epoch=%s: %s",
+                                    peer_id,
+                                    recv_index,
+                                    int(root_item["epoch"]),
+                                    exc,
+                                    exc_info=True,
+                                )
+                                continue
+                            get_elapsed = max(
+                                0.0, time.monotonic() - get_started_mono
                             )
-                        if accepted_blob is not None:
-                            got_valid = True
-                            break
-                    if got_valid:
-                        self._blindbox_state.mark_consumed(recv_index)
-                        self._save_blindbox_state()
-                        self._trigger_blindbox_hot_poll("received-offline-message")
-                        cycle_hit += 1
-                    else:
-                        cycle_miss += 1
+                            if get_elapsed >= self._blindbox_debug_ui_slow_sec:
+                                accepted_addr = str(get_diag.get("accepted_addr", "")).strip()
+                                first_addr = str(get_diag.get("first_result_addr", "")).strip()
+                                canceled = [
+                                    str(x).strip()
+                                    for x in (get_diag.get("canceled_pending_addrs") or [])
+                                    if str(x).strip()
+                                ]
+                                if accepted_addr:
+                                    slow_addr = accepted_addr
+                                elif canceled:
+                                    slow_addr = canceled[0]
+                                else:
+                                    slow_addr = first_addr or "unknown"
+                                if timed_out:
+                                    slow_addr = f"{slow_addr} (timeout)"
+                                slow_samples.append(
+                                    f"peer={peer_id[:10]} idx={recv_index} t={get_elapsed:.2f}s box={slow_addr}"
+                                )
+                            if accepted_blob is not None:
+                                got_valid = True
+                                break
+                        if got_valid:
+                            context.state.mark_consumed(recv_index)
+                            context.save_state()
+                            self._trigger_blindbox_hot_poll("received-offline-message")
+                            cycle_hit += 1
+                        else:
+                            cycle_miss += 1
                 cycle_elapsed = max(0.0, time.monotonic() - cycle_started_mono)
                 if self._blindbox_debug_ui and cycle_checked > 0:
                     slow_note = slow_samples[0] if slow_samples else ""
@@ -4148,7 +4712,9 @@ class I2PChatCore:
             logger.exception("BlindBox poller stopped: %s", detail)
             self._emit_error(f"BlindBox poller stopped: {detail}")
 
-    async def _process_blindbox_frame(self, frame: bytes) -> bool:
+    async def _process_blindbox_frame(
+        self, frame: bytes, *, source_peer: Optional[str] = None
+    ) -> bool:
         if len(frame) < HEADER_STRUCT.size:
             return False
         magic, version, msg_type_raw, flags, msg_id, msg_len = HEADER_STRUCT.unpack(
@@ -4168,12 +4734,88 @@ class I2PChatCore:
             return False
         text = body.decode("utf-8", errors="strict")
         lap = self._last_active_peer_for_telemetry()
-        sp = (self.current_peer_addr or lap or "").strip() or None
+        sp = (source_peer or self.current_peer_addr or lap or "").strip() or None
         if self.import_group_transport(text, source_peer=sp) is not None:
             return True
         self._emit_message("peer", text, source_peer=sp)
         self._emit_notify("peer", text, source_peer=sp)
         return True
+
+    @staticmethod
+    def _is_blindbox_slot_conflict(exc: Exception) -> bool:
+        text = str(exc or "").strip().lower()
+        return (
+            "verification mismatch" in text
+            or "put exists verification failed" in text
+            or "put exists" in text
+        )
+
+    def _blindbox_send_slot_retry_limit(self) -> int:
+        raw = os.environ.get("I2PCHAT_BLINDBOX_SEND_SLOT_RETRIES", "4").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 4
+        return max(0, min(value, 32))
+
+    async def _put_blindbox_frame_with_slot_retry(
+        self,
+        *,
+        frame: bytes,
+        root_secret: bytes,
+        root_epoch: int,
+        peer_id: str,
+        state: BlindBoxState,
+        save_state: Callable[[], None],
+        put_timeout_sec: float,
+        log_label: str,
+    ) -> None:
+        if self._blindbox_client is None or self.my_dest is None:
+            raise RuntimeError("BlindBox runtime is not ready")
+        retry_limit = self._blindbox_send_slot_retry_limit()
+        attempt = 0
+        while True:
+            keys = derive_blindbox_message_keys(
+                root_secret,
+                self.my_dest.base32,
+                peer_id,
+                "send",
+                state.send_index,
+                epoch=root_epoch,
+            )
+            blob = encrypt_blindbox_blob(
+                frame,
+                keys.blob_key,
+                "send",
+                state.send_index,
+                keys.state_tag,
+                padding_bucket=self._blindbox_padding_bucket,
+            )
+            try:
+                await asyncio.wait_for(
+                    self._blindbox_client.put(keys.lookup_token, blob),
+                    timeout=put_timeout_sec,
+                )
+            except asyncio.TimeoutError:
+                raise
+            except Exception as exc:
+                if attempt < retry_limit and self._is_blindbox_slot_conflict(exc):
+                    state.send_index += 1
+                    state.updated_at = int(time.time())
+                    save_state()
+                    attempt += 1
+                    logger.info(
+                        "%s: BlindBox slot conflict for %s, retrying with send_index=%s",
+                        log_label,
+                        peer_id[:24],
+                        state.send_index,
+                    )
+                    continue
+                raise
+            state.send_index += 1
+            state.updated_at = int(time.time())
+            save_state()
+            return
 
     async def _send_text_via_blindbox(self, text: str) -> Optional[int]:
         if not self._blindbox_ready():
@@ -4206,22 +4848,6 @@ class I2PChatCore:
                     frame = self._codec.encode(
                         "U", chunk.encode("utf-8"), msg_id=msg_id, flags=0
                     )
-                    keys = derive_blindbox_message_keys(
-                        self._blindbox_root_secret,
-                        self.my_dest.base32,
-                        peer_id,
-                        "send",
-                        self._blindbox_state.send_index,
-                        epoch=self._blindbox_root_epoch,
-                    )
-                    blob = encrypt_blindbox_blob(
-                        frame,
-                        keys.blob_key,
-                        "send",
-                        self._blindbox_state.send_index,
-                        keys.state_tag,
-                        padding_bucket=self._blindbox_padding_bucket,
-                    )
                     # Optimistic UI: show the bubble immediately; PUT over I2P can take many seconds.
                     self._emit_message(
                         "me",
@@ -4243,9 +4869,15 @@ class I2PChatCore:
                         ),
                     )
                     try:
-                        await asyncio.wait_for(
-                            self._blindbox_client.put(keys.lookup_token, blob),
-                            timeout=put_timeout_sec,
+                        await self._put_blindbox_frame_with_slot_retry(
+                            frame=frame,
+                            root_secret=self._blindbox_root_secret,
+                            root_epoch=self._blindbox_root_epoch,
+                            peer_id=peer_id,
+                            state=self._blindbox_state,
+                            save_state=self._save_blindbox_state,
+                            put_timeout_sec=put_timeout_sec,
+                            log_label="Direct BlindBox send",
                         )
                     except asyncio.TimeoutError:
                         self._emit_outbound_delivery_update(
@@ -4270,9 +4902,6 @@ class I2PChatCore:
                             retryable=False,
                         )
                         raise
-                    self._blindbox_state.send_index += 1
-                    self._blindbox_state.updated_at = int(time.time())
-                    self._save_blindbox_state()
                     self._emit_outbound_delivery_update(
                         str(msg_id),
                         delivery_state=DELIVERY_STATE_QUEUED,
@@ -4343,6 +4972,7 @@ class I2PChatCore:
         *,
         source_peer: Optional[str] = None,
         delivery_results: Optional[dict[str, str]] = None,
+        delivery_reasons: Optional[dict[str, str]] = None,
     ) -> GroupHistoryEntry:
         payload = envelope.payload
         text = ""
@@ -4364,6 +4994,7 @@ class I2PChatCore:
             created_at=envelope.created_at,
             source_peer=self._normalize_peer_addr(source_peer or "") or None,
             delivery_results=dict(delivery_results or {}),
+            delivery_reasons=dict(delivery_reasons or {}),
         )
 
     def _validate_imported_group_transport(self, decoded: Any) -> None:
@@ -4506,7 +5137,7 @@ class I2PChatCore:
             return GroupTransportOutcome(accepted=False, reason="unknown-group")
         frame_peer_id: Optional[str] = None
         try:
-            writer, frame_peer_id, _ = self._writer_frame_peer_and_text_acks(
+            writer, frame_peer_id, text_ack_table = self._writer_frame_peer_and_text_acks(
                 target_peer
             )
             if writer is None:
@@ -4521,6 +5152,14 @@ class I2PChatCore:
             )
             writer.write(frame)
             await writer.drain()
+            routing_pid = frame_peer_id or self._normalize_peer_addr(target_peer)
+            self._register_pending_ack(
+                text_ack_table,
+                msg_id,
+                token=body[:128],
+                ack_kind="msg",
+                routing_peer_id=routing_pid,
+            )
             return GroupTransportOutcome(
                 accepted=True,
                 reason="live-session",
@@ -4581,33 +5220,20 @@ class I2PChatCore:
                     msg_id=msg_id,
                     flags=0,
                 )
-                keys = derive_blindbox_message_keys(
-                    snapshot.root_secret,
-                    self.my_dest.base32,
-                    snapshot.peer_id,
-                    "send",
-                    snapshot.state.send_index,
-                    epoch=snapshot.root_epoch,
-                )
-                blob = encrypt_blindbox_blob(
-                    frame,
-                    keys.blob_key,
-                    "send",
-                    snapshot.state.send_index,
-                    keys.state_tag,
-                    padding_bucket=self._blindbox_padding_bucket,
-                )
                 put_timeout_sec = max(
                     5.0,
                     float(os.environ.get("I2PCHAT_BLINDBOX_PUT_TIMEOUT_SEC", "30")),
                 )
-                await asyncio.wait_for(
-                    self._blindbox_client.put(keys.lookup_token, blob),
-                    timeout=put_timeout_sec,
+                await self._put_blindbox_frame_with_slot_retry(
+                    frame=frame,
+                    root_secret=snapshot.root_secret,
+                    root_epoch=snapshot.root_epoch,
+                    peer_id=snapshot.peer_id,
+                    state=snapshot.state,
+                    save_state=lambda: self._save_blindbox_peer_snapshot(snapshot),
+                    put_timeout_sec=put_timeout_sec,
+                    log_label="Group BlindBox send",
                 )
-                snapshot.state.send_index += 1
-                snapshot.state.updated_at = int(time.time())
-                self._save_blindbox_peer_snapshot(snapshot)
                 self._trigger_blindbox_hot_poll("group-offline-send")
                 return GroupTransportOutcome(
                     accepted=True,
@@ -4648,6 +5274,7 @@ class I2PChatCore:
             text=text,
             requested_route=route,
         )
+        self._repair_group_delivery_failures(result)
         updated_state = GroupState(
             group_id=conversation.state.group_id,
             title=conversation.state.title,
@@ -4665,6 +5292,12 @@ class I2PChatCore:
                 delivery_results={
                     peer_id: delivery.status.value
                     for peer_id, delivery in result.delivery_results.items()
+                },
+                delivery_reasons={
+                    peer_id: (delivery.reason or "").strip()
+                    for peer_id, delivery in result.delivery_results.items()
+                    if delivery.status == GroupDeliveryStatus.FAILED
+                    and (delivery.reason or "").strip()
                 },
             ),
             next_group_seq=result.envelope.group_seq + 1,
@@ -4708,6 +5341,8 @@ class I2PChatCore:
             payload=payload,
             requested_route=route,
         )
+        self._repair_group_delivery_failures(result)
+        prev_members = frozenset(conversation.state.members)
         updated_state = self._apply_group_control_payload(
             conversation.state,
             payload,
@@ -4723,6 +5358,12 @@ class I2PChatCore:
                 delivery_results={
                     peer_id: delivery.status.value
                     for peer_id, delivery in result.delivery_results.items()
+                },
+                delivery_reasons={
+                    peer_id: (delivery.reason or "").strip()
+                    for peer_id, delivery in result.delivery_results.items()
+                    if delivery.status == GroupDeliveryStatus.FAILED
+                    and (delivery.reason or "").strip()
                 },
             ),
             next_group_seq=result.envelope.group_seq + 1,
@@ -4741,6 +5382,11 @@ class I2PChatCore:
             group_sender_id=sender_id,
             group_content_type=result.envelope.content_type,
             group_plain_text=render_group_control_text(payload, actor_label="You"),
+        )
+        self._on_group_membership_changed(
+            prev_members,
+            updated_state,
+            group_label=updated_state.title or updated_state.group_id,
         )
         return result
 
@@ -4792,6 +5438,12 @@ class I2PChatCore:
                 source_peer=normalized_source_peer,
             )
         existing_state = self.load_group_state(decoded.state.group_id)
+        if existing_conversation is not None:
+            prev_members_for_sync = frozenset(existing_conversation.state.members)
+        elif existing_state is not None:
+            prev_members_for_sync = frozenset(existing_state.members)
+        else:
+            prev_members_for_sync = frozenset()
         merged_state = self._merge_group_state_snapshot(
             existing_state,
             decoded.state,
@@ -4884,6 +5536,11 @@ class I2PChatCore:
                     actor_label=short_member_label(decoded.envelope.sender_id),
                 ),
             )
+        self._on_group_membership_changed(
+            prev_members_for_sync,
+            conversation.state,
+            group_label=conversation.state.title or conversation.state.group_id,
+        )
         return GroupImportResult(
             status=GroupImportStatus.IMPORTED,
             envelope=decoded.envelope,
@@ -4904,7 +5561,9 @@ class I2PChatCore:
         """True, пока выполняется исходящий connect_to_peer (ожидание stream_connect)."""
         return self.session_manager.outbound_connect_busy
 
-    async def connect_to_peer(self, target_address: str) -> None:
+    async def connect_to_peer(
+        self, target_address: str, *, activate_as_current: bool = True
+    ) -> None:
         if not crypto.NACL_AVAILABLE:
             detail = getattr(crypto, "NACL_IMPORT_ERROR", "") or "pynacl not installed"
             self._emit_error(f"Secure protocol requires PyNaCl. Install: pip install pynacl. ({detail})")
@@ -4927,12 +5586,13 @@ class I2PChatCore:
         if self.session_manager.outbound_connect_busy:
             self._emit_system("Connection attempt already in progress.")
             return
-        use_legacy = self.conn is None
-        extra_ls: Optional[LivePeerSession] = None
-        if not use_legacy:
-            extra_ls = LivePeerSession(peer_id=normalized_target)
-            self._live_sessions[normalized_target] = extra_ls
-        self.session_manager.set_active_peer(normalized_target)
+        extra_ls = LivePeerSession(
+            peer_id=normalized_target,
+            announce_lifecycle=bool(activate_as_current),
+        )
+        self._live_sessions[normalized_target] = extra_ls
+        if activate_as_current:
+            self.session_manager.set_active_peer(normalized_target)
         self.session_manager.set_outbound_connect_busy(True, peer_id=normalized_target)
         self.session_manager.set_peer_connected(
             normalized_target, state=PeerState.CONNECTING, reason="outbound-connect"
@@ -4944,14 +5604,18 @@ class I2PChatCore:
         deferred_system: Optional[str] = None
         try:
             try:
-                if use_legacy:
-                    self._reset_crypto_state()
-                self.current_peer_addr = normalized_target
-                self.active_live_peer_id = normalized_target
-                self._emit_system(
-                    f"Connecting to {normalized_target[:24]}... "
-                    "(may take 1–2 min while I2P builds tunnels)"
-                )
+                if activate_as_current:
+                    self.current_peer_addr = normalized_target
+                    self.active_live_peer_id = normalized_target
+                    self._emit_system(
+                        f"Connecting to {normalized_target[:24]}... "
+                        "(may take 1–2 min while I2P builds tunnels)"
+                    )
+                else:
+                    logger.info(
+                        "Group intro: background connect to %s...",
+                        normalized_target[:24],
+                    )
                 reader: asyncio.StreamReader
                 writer: asyncio.StreamWriter
                 last_connect_exc: Optional[Exception] = None
@@ -4960,7 +5624,7 @@ class I2PChatCore:
                         reader, writer = await asyncio.wait_for(
                             i2plib.stream_connect(
                                 self.session_id,
-                                normalized_target,
+                                self._peer_sam_hostname(normalized_target),
                                 sam_address=self.sam_address,
                             ),
                             timeout=self.CONNECT_TIMEOUT,
@@ -4986,56 +5650,39 @@ class I2PChatCore:
                 if self.my_dest is not None:
                     # Backward-safe identity preface для accept_loop(reader.readline()).
                     writer.write(self.my_dest.base64.encode("utf-8") + b"\n")
-                    if use_legacy:
-                        writer.write(self.frame_message("S", self.my_dest.base64))
-                    else:
-                        writer.write(
-                            self.frame_message_plain(
-                                "S", self.my_dest.base64, peer_id=normalized_target
-                            )
+                    writer.write(
+                        self.frame_message_plain(
+                            "S", self.my_dest.base64, peer_id=normalized_target
                         )
+                    )
                     await writer.drain()
 
-                    if use_legacy:
-                        self.proven = True
-                    elif extra_ls is not None:
-                        extra_ls.proven = True
+                    extra_ls.proven = True
                     self._emit_status("visible")
 
                 connection = (reader, writer)
-                if use_legacy:
-                    self.conn = connection
-                    self._legacy_stream_peer_id = normalized_target
-                elif extra_ls is not None:
-                    extra_ls.conn = connection
+                extra_ls.conn = connection
                 self.session_manager.register_stream(
                     normalized_target,
                     state=PeerState.HANDSHAKING,
                     peer_id=normalized_target,
                 )
-                if use_legacy:
-                    self._activate_ack_session()
-                else:
-                    self._activate_ack_session(normalized_target)
-                self._emit_message(
-                    "info", "Handshake sent. Establishing secure channel... Wait"
-                )
+                self._activate_ack_session(normalized_target)
+                if extra_ls.announce_lifecycle:
+                    self._emit_message(
+                        "info", "Handshake sent. Establishing secure channel... Wait"
+                    )
 
                 loop = asyncio.get_running_loop()
-                if use_legacy:
-                    loop.create_task(self.receive_loop(self.conn))
-                    loop.create_task(self.initiate_secure_handshake())
-                    self._start_handshake_watchdog(self.conn)
-                else:
-                    loop.create_task(
-                        self.receive_loop(connection, peer_id=normalized_target)
-                    )
-                    loop.create_task(
-                        self.initiate_secure_handshake(normalized_target)
-                    )
-                    self._start_handshake_watchdog(
-                        connection, peer_id=normalized_target
-                    )
+                loop.create_task(
+                    self.receive_loop(connection, peer_id=normalized_target)
+                )
+                loop.create_task(
+                    self.initiate_secure_handshake(normalized_target)
+                )
+                self._start_handshake_watchdog(
+                    connection, peer_id=normalized_target
+                )
                 if (
                     self.session_manager.keepalive_task is None
                     or self.session_manager.keepalive_task.done()
@@ -5044,10 +5691,7 @@ class I2PChatCore:
                         self._keepalive_loop()
                     )
             except asyncio.TimeoutError:
-                if use_legacy:
-                    self.conn = None
-                else:
-                    self._live_sessions.pop(normalized_target, None)
+                self._live_sessions.pop(normalized_target, None)
                 self.session_manager.mark_peer_failed(
                     normalized_target, reason="connect-timeout"
                 )
@@ -5061,10 +5705,7 @@ class I2PChatCore:
                 )
                 deferred_system = "Waiting for incoming connections..."
             except Exception as e:
-                if use_legacy:
-                    self.conn = None
-                else:
-                    self._live_sessions.pop(normalized_target, None)
+                self._live_sessions.pop(normalized_target, None)
                 self.session_manager.mark_peer_failed(
                     normalized_target, reason="connect-failed"
                 )
@@ -5087,10 +5728,17 @@ class I2PChatCore:
             )
 
         # После сброса busy — иначе UI обновится с is_outbound_connect_busy()==True и Connect останется серым.
-        if deferred_error:
-            self._emit_error(deferred_error)
-        if deferred_system:
-            self._emit_system(deferred_system)
+        if activate_as_current:
+            if deferred_error:
+                self._emit_error(deferred_error)
+            if deferred_system:
+                self._emit_system(deferred_system)
+        elif deferred_error:
+            logger.info(
+                "Background mesh connect to %s failed silently: %s",
+                normalized_target[:24],
+                deferred_error,
+            )
 
     async def send_text(
         self,
@@ -5129,7 +5777,7 @@ class I2PChatCore:
         connected = (
             bool(peer_for_route and self._has_active_session_for_peer(peer_for_route))
             if peer_for_route
-            else self.conn is not None
+            else self._any_live_stream()
         )
         live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
         policy_kwargs: dict[str, Any] = {
@@ -5138,9 +5786,13 @@ class I2PChatCore:
         }
         if not peer_for_route:
             live_kwargs["connected"] = connected
-            live_kwargs["handshake_complete"] = self.handshake_complete
+            live_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
+                ""
+            )
             policy_kwargs["connected"] = connected
-            policy_kwargs["handshake_complete"] = self.handshake_complete
+            policy_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
+                ""
+            )
 
         policy = self.session_manager.select_outbound_policy(**policy_kwargs)
 
@@ -5322,11 +5974,13 @@ class I2PChatCore:
                 )
                 writer.write(frame)
                 await writer.drain()
+                routing_pid = frame_peer_id or self._normalize_peer_addr(peer_for_route)
                 self._register_pending_ack(
                     text_ack_table,
                     msg_id,
                     token=chunk[:128],
                     ack_kind="msg",
+                    routing_peer_id=routing_pid,
                 )
                 self._emit_message(
                     "me",
@@ -5502,11 +6156,13 @@ class I2PChatCore:
             )
             writer.write(header_frame)
             await writer.drain()
+            routing_pid = fpid or self._normalize_peer_addr(peer_for_route)
             self._register_pending_ack(
                 file_acks,
                 file_msg_id,
                 token=os.path.basename(filename),
                 ack_kind="file",
+                routing_peer_id=routing_pid,
             )
 
             info = FileTransferInfo(
@@ -5748,11 +6404,13 @@ class I2PChatCore:
             )
             writer.write(header_frame)
             await writer.drain()
+            routing_pid = fpid or self._normalize_peer_addr(peer_for_route)
             self._register_pending_ack(
                 image_acks,
                 image_msg_id,
                 token=os.path.basename(filename),
                 ack_kind="image",
+                routing_peer_id=routing_pid,
             )
 
             chunk_size = _file_read_chunk_bytes()
@@ -5865,10 +6523,9 @@ class I2PChatCore:
     async def send_control(self, signal: str) -> None:
         lap = self._last_active_peer_for_telemetry()
         pr = self._normalize_peer_addr(self.current_peer_addr or lap or "")
-        if pr:
-            writer, fpid, _ = self._writer_frame_peer_and_text_acks(pr)
-        else:
-            writer, fpid = (self.conn[1], None) if self.conn else (None, None)
+        if not pr:
+            return
+        writer, fpid, _ = self._writer_frame_peer_and_text_acks(pr)
         if writer is None:
             return
         try:
@@ -5880,8 +6537,6 @@ class I2PChatCore:
             pass
 
     def _any_live_stream(self) -> bool:
-        if self.conn:
-            return True
         return any(s.conn for s in self._live_sessions.values())
 
     def any_live_stream(self) -> bool:
@@ -5889,11 +6544,11 @@ class I2PChatCore:
         return self._any_live_stream()
 
     def live_stream_count(self) -> int:
-        """Число активных SAM live-потоков (legacy + дополнительные сессии)."""
+        """Число активных SAM live-потоков."""
         return self._live_stream_count()
 
     def is_current_peer_secure(self) -> bool:
-        """Handshake завершён для текущего выбранного пира (legacy или extra-сессия)."""
+        """Handshake завершён для текущего выбранного пира."""
         p = self._normalize_peer_addr(self.current_peer_addr or "")
         return self._handshake_complete_for_peer_route(p)
 
@@ -5905,68 +6560,6 @@ class I2PChatCore:
                 self.session_manager.keepalive_task.cancel
             )
             self.session_manager.keepalive_task = None
-
-    async def _disconnect_legacy_session(self) -> None:
-        if self.session_manager.disconnecting or not self.conn:
-            return
-        self.session_manager.disconnecting = True
-        try:
-            self._cancel_handshake_watchdog()
-            if self.session_manager.keepalive_task:
-                asyncio.get_running_loop().call_soon(
-                    self.session_manager.keepalive_task.cancel
-                )
-                self.session_manager.keepalive_task = None
-            _, writer = self.conn
-            peer_before_disconnect = self._normalize_peer_addr(
-                self._legacy_stream_peer_id or self.current_peer_addr or ""
-            )
-            self.conn = None
-            self._legacy_stream_peer_id = None
-            self.peer_b32 = "Waiting for incoming connections..."
-            had_secure_channel = (
-                self.handshake_complete and self.use_encryption and bool(self.shared_key)
-            )
-            try:
-                if had_secure_channel:
-                    writer.write(self.frame_message("S", "__SIGNAL__:QUIT"))
-                else:
-                    writer.write(self.frame_message_plain("S", "__SIGNAL__:QUIT"))
-                await writer.drain()
-                writer.close()
-                await writer.wait_closed()
-            except Exception:
-                pass
-            self._reset_crypto_state()
-            if peer_before_disconnect:
-                self.session_manager.reset_peer_lifecycle(
-                    peer_before_disconnect, reason="disconnect"
-                )
-            self.session_manager.mark_live_failure(
-                reason="disconnect",
-                mark_peer_stale=False,
-                peer_id=peer_before_disconnect,
-            )
-            if self.active_live_peer_id == peer_before_disconnect:
-                self.active_live_peer_id = None
-            self._emit_message("info", "You disconnected.")
-            self._emit_system("Waiting for incoming connections...")
-        finally:
-            self.session_manager.disconnecting = False
-            if self.session_manager.disconnect_task is asyncio.current_task():
-                self.session_manager.disconnect_task = None
-        await self._maybe_stop_keepalive_if_idle()
-        if self._any_live_stream() and (
-            self.session_manager.keepalive_task is None
-            or self.session_manager.keepalive_task.done()
-        ):
-            try:
-                loop = asyncio.get_running_loop()
-                self.session_manager.keepalive_task = loop.create_task(
-                    self._keepalive_loop()
-                )
-            except RuntimeError:
-                pass
 
     async def _disconnect_extra_session(self, peer_id: str) -> None:
         k = self._normalize_peer_addr(peer_id)
@@ -5997,7 +6590,9 @@ class I2PChatCore:
         )
         if self.active_live_peer_id == k:
             self.active_live_peer_id = None
-        self._emit_message("info", f"You disconnected from {k[:16]}...")
+        if ls.announce_lifecycle:
+            self._emit_message("info", f"You disconnected from {k[:16]}...")
+        self._notify_group_mesh_manager()
         await self._maybe_stop_keepalive_if_idle()
         if self._any_live_stream() and (
             self.session_manager.keepalive_task is None
@@ -6013,18 +6608,18 @@ class I2PChatCore:
 
     async def disconnect_peer(self, peer_id: Optional[str] = None) -> None:
         """
-        Закрыть одну live-сессию: peer_id=None — основной поток (self.conn);
-        иначе — дополнительный пир в _live_sessions или legacy, если совпадает адрес.
+        Закрыть одну live-сессию в ``_live_sessions``.
+        ``peer_id=None`` — сессия для ``active_live_peer_id`` или ``current_peer_addr``.
         """
         if peer_id is None:
-            await self._disconnect_legacy_session()
+            k = self._normalize_peer_addr(
+                self.active_live_peer_id or self.current_peer_addr or ""
+            )
+            if not k:
+                return
+            await self._disconnect_extra_session(k)
             return
-        k = self._normalize_peer_addr(peer_id)
-        legacy_k = self._legacy_stream_peer_key()
-        if self.conn and legacy_k and legacy_k == k:
-            await self._disconnect_legacy_session()
-            return
-        await self._disconnect_extra_session(k)
+        await self._disconnect_extra_session(self._normalize_peer_addr(peer_id))
 
     async def disconnect(self) -> None:
         """Отключить выбранную live-сессию: сначала active_live_peer_id, иначе current_peer_addr при наличии потока."""
@@ -6042,18 +6637,6 @@ class I2PChatCore:
         """Отправляет Ping каждые 15 секунд для всех live-потоков."""
         while self._any_live_stream():
             await asyncio.sleep(15)
-            if self.conn and not self._file_transfer_active:
-                if self.handshake_complete and self.use_encryption and self.shared_key:
-                    try:
-                        _, writer = self.conn
-                        writer.write(self.frame_message("P", ""))
-                        await writer.drain()
-                    except Exception:
-                        lk = self._legacy_stream_peer_key()
-                        self.session_manager.mark_live_failure(
-                            reason="keepalive-failed",
-                            peer_id=lk or None,
-                        )
             for pid, ls in list(self._live_sessions.items()):
                 if not ls.conn or ls._file_transfer_active:
                     continue
@@ -6105,17 +6688,13 @@ class I2PChatCore:
         Returns:
             True если handshake успешен
         """
-        if peer_id:
-            ls = self._live_sessions.get(peer_id)
-            if not ls or not ls.conn:
-                return False
-            _, writer = ls.conn
-            sess = ls
-        else:
-            if not self.conn:
-                return False
-            _, writer = self.conn
-            sess = LegacyCoreSessionView(self)
+        if not peer_id:
+            return False
+        ls = self._live_sessions.get(self._normalize_peer_addr(peer_id))
+        if not ls or not ls.conn:
+            return False
+        _, writer = ls.conn
+        sess = ls
         if not crypto.NACL_AVAILABLE:
             self._emit_error("PyNaCl is required for secure protocol")
             self._schedule_disconnect(peer_id)
@@ -6151,7 +6730,8 @@ class I2PChatCore:
                 f"INIT:{init_nonce_hex}:{init_eph_hex}:{init_sign_pub_hex}:{init_sig_hex}"
             )
             sess._handshake_initiated = True
-            self._emit_system("Initiating secure handshake with PFS...")
+            if sess.announce_lifecycle:
+                self._emit_system("Initiating secure handshake with PFS...")
             writer.write(self.frame_message_plain("H", handshake_data, peer_id=peer_id))
             await writer.drain()
             return True
@@ -6534,9 +7114,11 @@ class I2PChatCore:
                         peer_id=peer_addr_norm,
                     )
                 self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
-                self._emit_message("info", "Secure channel with PFS established")
-                self._emit_system("✔ Ready! You can now send messages.")
+                if sess.announce_lifecycle:
+                    self._emit_message("info", "Secure channel with PFS established")
+                    self._emit_system("✔ Ready! You can now send messages.")
                 self._trigger_blindbox_hot_poll("peer-online")
+                self._notify_group_mesh_manager()
                 await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
                 logger.info("Handshake completed (responder)")
 
@@ -6605,9 +7187,11 @@ class I2PChatCore:
                         peer_id=peer_addr_norm,
                     )
                 self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
-                self._emit_message("info", "Secure channel with PFS established")
-                self._emit_system("✔ Ready! You can now send messages.")
+                if sess.announce_lifecycle:
+                    self._emit_message("info", "Secure channel with PFS established")
+                    self._emit_system("✔ Ready! You can now send messages.")
                 self._trigger_blindbox_hot_poll("peer-online")
+                self._notify_group_mesh_manager()
                 await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
                 logger.info("Handshake completed (initiator)")
 
@@ -6633,6 +7217,11 @@ class I2PChatCore:
         self.session_manager.transition_transport(
             TransportState.SHUTTING_DOWN, reason="shutdown"
         )
+        if self._group_mesh_task is not None and not self._group_mesh_task.done():
+            self.group_mesh_manager.stop()
+            self._group_mesh_task.cancel()
+            await asyncio.gather(self._group_mesh_task, return_exceptions=True)
+        self._group_mesh_task = None
         self.session_manager.invalidate_handshake_watchdog()
         self.session_manager.set_outbound_connect_busy(
             False,
@@ -6640,8 +7229,6 @@ class I2PChatCore:
         )
         for pid in list(self._live_sessions.keys()):
             await self.disconnect_peer(pid)
-        if self.conn:
-            await self.disconnect_peer(None)
 
         await self.session_manager.cancel_tasks_and_close_session()
         if self._blindbox_task is not None and not self._blindbox_task.done():
@@ -6685,7 +7272,7 @@ class I2PChatCore:
 
                 try:
                     raw_dest = peer_identity_line.decode().strip()
-                    peer_addr = i2plib.Destination(raw_dest).base32 + ".b32.i2p"
+                    peer_addr = i2plib.Destination(raw_dest).base32
 
                     if not self.peer_in_saved_contacts(peer_addr):
                         self._emit_error(
@@ -6717,46 +7304,29 @@ class I2PChatCore:
                         writer.close()
                         continue
 
-                    use_legacy = self.conn is None
-                    extra_ls: Optional[LivePeerSession] = None
-                    if not use_legacy:
-                        extra_ls = LivePeerSession(peer_id=peer_addr_norm)
-                        self._live_sessions[peer_addr_norm] = extra_ls
+                    extra_ls = LivePeerSession(peer_id=peer_addr_norm)
+                    self._live_sessions[peer_addr_norm] = extra_ls
 
-                    self.peer_b32 = peer_addr
-                    self.current_peer_addr = peer_addr_norm
-                    self.active_live_peer_id = peer_addr_norm
                     self._emit_message(
                         "info", f"Connection accepted from {peer_addr[:12]}..."
                     )
                     # Отдельное событие для системного уведомления о входящем подключении.
                     self._emit_notify("connect", peer_addr)
-                    self._emit_peer_changed(peer_addr)
                 except Exception as e:
                     self._emit_error(f"Rejected incoming connection: invalid identity preface ({e})")
                     writer.close()
                     continue
 
                 if self.my_dest is not None:
-                    if use_legacy:
-                        writer.write(self.frame_message("S", self.my_dest.base64))
-                    else:
-                        writer.write(
-                            self.frame_message_plain(
-                                "S", self.my_dest.base64, peer_id=peer_addr_norm
-                            )
+                    writer.write(
+                        self.frame_message_plain(
+                            "S", self.my_dest.base64, peer_id=peer_addr_norm
                         )
+                    )
                     await writer.drain()
 
                 connection = (reader, writer)
-                if use_legacy:
-                    self.conn = connection
-                    self._legacy_stream_peer_id = peer_addr_norm
-                elif extra_ls is not None:
-                    extra_ls.conn = connection
-                else:
-                    writer.close()
-                    continue
+                extra_ls.conn = connection
 
                 if peer_addr_norm:
                     self.session_manager.register_stream(
@@ -6764,25 +7334,18 @@ class I2PChatCore:
                         state=PeerState.HANDSHAKING,
                         peer_id=peer_addr_norm,
                     )
-                if use_legacy:
-                    self._activate_ack_session()
-                else:
-                    self._activate_ack_session(peer_addr_norm)
+                self._activate_ack_session(peer_addr_norm)
                 self.session_manager.transition_transport(
                     TransportState.RECONNECTING, reason="incoming-connection"
                 )
 
                 loop = asyncio.get_running_loop()
-                if use_legacy:
-                    loop.create_task(self.receive_loop(self.conn))
-                    self._start_handshake_watchdog(self.conn)
-                else:
-                    loop.create_task(
-                        self.receive_loop(connection, peer_id=peer_addr_norm)
-                    )
-                    self._start_handshake_watchdog(
-                        connection, peer_id=peer_addr_norm
-                    )
+                loop.create_task(
+                    self.receive_loop(connection, peer_id=peer_addr_norm)
+                )
+                self._start_handshake_watchdog(
+                    connection, peer_id=peer_addr_norm
+                )
                 if (
                     self.session_manager.keepalive_task is None
                     or self.session_manager.keepalive_task.done()
@@ -6793,23 +7356,33 @@ class I2PChatCore:
             except Exception:
                 await asyncio.sleep(1)
 
+    @staticmethod
+    def _peer_protocol_err_suffix(peer_id: Optional[str]) -> str:
+        """Short peer label for user-facing protocol errors (canonical bare id)."""
+        if not peer_id:
+            return ""
+        p = str(peer_id).strip()
+        if len(p) <= 20:
+            return f" (peer {p})"
+        return f" (peer {p[:12]}…)"
+
     async def receive_loop(
         self,
         connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
         initial_type: Optional[str] = None,
         peer_id: Optional[str] = None,
     ) -> None:
-        if peer_id:
-            sess = self._live_sessions.get(peer_id)
-            if sess is None or sess.conn != connection:
-                return
-        else:
-            sess = LegacyCoreSessionView(self)
-            if self.conn != connection:
-                return
+        if not peer_id:
+            return
+        peer_id = self._normalize_peer_addr(peer_id)
+        sess = self._live_sessions.get(peer_id)
+        if sess is None or sess.conn != connection:
+            return
         if sess._recv_loop_active:
             return
         sess._recv_loop_active = True
+        err_peer = peer_id or getattr(sess, "peer_id", None) or ""
+        _ps = self._peer_protocol_err_suffix
 
         reader, writer = connection
         current_type = initial_type
@@ -6832,10 +7405,14 @@ class I2PChatCore:
                     except ValueError as e:
                         if sess.handshake_complete:
                             logger.warning(
-                                "Protocol framing violation after handshake: %s",
+                                "Protocol framing violation after handshake: %s (peer=%s)",
                                 e,
+                                (err_peer or "?")[:24],
                             )
-                            self._emit_error("Protocol downgrade detected")
+                            self._emit_error(
+                                "Protocol downgrade detected"
+                                + _ps(err_peer)
+                            )
                             self._schedule_disconnect(peer_id)
                             break
                         raise
@@ -6852,37 +7429,62 @@ class I2PChatCore:
                             restart_after_timeout = True
                             return
                         if sess.conn == connection:
-                            self._emit_error("Connection timed out (no data received)")
+                            self._emit_error(
+                                "Connection timed out (no data received)" + _ps(err_peer)
+                            )
                         return
                     msg_type = frame.msg_type
                     msg_id = frame.msg_id
                     body_data = frame.payload
                     is_encrypted = bool(frame.flags & FLAG_ENCRYPTED)
 
+                # disconnect() делает pop до отмены receive_loop: не разбирать хвост кадра на «осиротевшей» сессии.
+                if self._live_sessions.get(peer_id) is not sess:
+                    break
+
                 if sess.handshake_complete and msg_type == "H":
-                    logger.warning("Unexpected handshake frame after secure channel established")
-                    self._emit_error("Protocol violation: unexpected handshake frame")
+                    logger.warning(
+                        "Unexpected handshake frame after secure channel (peer=%s)",
+                        (err_peer or "?")[:24],
+                    )
+                    self._emit_error(
+                        "Protocol violation: unexpected handshake frame" + _ps(err_peer)
+                    )
                     self._schedule_disconnect(peer_id)
                     break
                 if not sess.handshake_complete and msg_type not in ["S", "H", "P", "O"]:
                     logger.warning(
                         "Protocol violation: non-handshake frame before secure channel "
-                        "(msg_type=%r)",
+                        "(msg_type=%r peer=%s)",
                         msg_type,
+                        (err_peer or "?")[:24],
                     )
-                    self._emit_error("Protocol violation: data before secure handshake")
+                    self._emit_error(
+                        "Protocol violation: data before secure handshake" + _ps(err_peer)
+                    )
                     self._schedule_disconnect(peer_id)
                     break
                 seq_num: Optional[int] = None
                 if is_encrypted:
                     if not sess.shared_key or not sess.use_encryption:
-                        logger.warning("Encrypted frame received before key setup")
-                        self._emit_error("Protocol error: encrypted frame before handshake")
+                        logger.warning(
+                            "Encrypted frame received before key setup (peer=%s)",
+                            (err_peer or "?")[:24],
+                        )
+                        self._emit_error(
+                            "Protocol error: encrypted frame before handshake"
+                            + _ps(err_peer)
+                        )
                         self._schedule_disconnect(peer_id)
                         break
                     if len(body_data) < ENCRYPTED_TRAILER_SIZE:
-                        logger.warning("Encrypted payload is too short")
-                        self._emit_error("Protocol error: encrypted payload too short")
+                        logger.warning(
+                            "Encrypted payload is too short (peer=%s)",
+                            (err_peer or "?")[:24],
+                        )
+                        self._emit_error(
+                            "Protocol error: encrypted payload too short" + _ps(err_peer)
+                        )
                         self._schedule_disconnect(peer_id)
                         break
                     seq_num = int.from_bytes(body_data[:8], "big", signed=False)
@@ -6903,19 +7505,30 @@ class I2PChatCore:
                     ):
                         logger.warning(
                             "HMAC verification failed - message integrity compromised "
-                            "(msg_type=%r body_len=%d)", msg_type, len(body_data)
+                            "(msg_type=%r body_len=%d peer=%s recv_seq=%s)",
+                            msg_type,
+                            len(body_data),
+                            (err_peer or "?")[:24],
+                            getattr(sess, "_recv_seq", "?"),
                         )
-                        self._emit_error("Message integrity check failed")
+                        self._emit_error(
+                            "Message integrity check failed" + _ps(err_peer)
+                        )
                         self._schedule_disconnect(peer_id)
                         break
                     expected_seq = sess._recv_seq + 1
                     if seq_num != expected_seq:
                         logger.warning(
-                            "Replay/out-of-order frame detected: got=%d expected=%d",
+                            "Replay/out-of-order frame detected: got=%d expected=%d peer=%s",
                             seq_num,
                             expected_seq,
+                            (err_peer or "?")[:24],
                         )
-                        self._emit_error("Replay protection triggered")
+                        self._emit_error(
+                            "Replay protection triggered"
+                            + _ps(err_peer)
+                            + f" (seq got {seq_num}, expected {expected_seq})"
+                        )
                         self._schedule_disconnect(peer_id)
                         break
 
@@ -6935,10 +7548,16 @@ class I2PChatCore:
                 elif sess.handshake_complete:
                     logger.warning(
                         "Protocol downgrade detected: plaintext frame after handshake "
-                        "(msg_type=%r)",
+                        "(msg_type=%r peer=%s encrypted=%s)",
                         msg_type,
+                        (err_peer or "?")[:24],
+                        is_encrypted,
                     )
-                    self._emit_error("Protocol downgrade detected")
+                    self._emit_error(
+                        "Protocol downgrade detected"
+                        + _ps(err_peer)
+                        + f" (msg_type={msg_type!r}, encrypted={is_encrypted})"
+                    )
                     self._schedule_disconnect(peer_id)
                     break
 
@@ -7344,7 +7963,9 @@ class I2PChatCore:
                                     sess._pending_text_acks.pop(ack_id, None)
                                     self.session_manager.acknowledge_inflight_message(
                                         ack_id,
-                                        peer_id=self._current_ack_peer(),
+                                        peer_id=self._normalize_peer_addr(
+                                            sess.peer_id or ""
+                                        ),
                                     )
                             except Exception:
                                 self._record_ack_drop("invalid_format", "MSG_ACK parse failed")
@@ -7372,13 +7993,17 @@ class I2PChatCore:
                                         elif (
                                             entry.ack_kind == "image"
                                             and os.path.basename(entry.token) == ack_name
-                                            and entry.peer_addr == self._current_ack_peer()
-                                            and entry.ack_session_epoch == self._ack_session_epoch
+                                            and entry.peer_addr
+                                            == self._normalize_peer_addr(sess.peer_id or "")
+                                            and entry.ack_session_epoch
+                                            == sess._ack_session_epoch
                                         ):
                                             sess._pending_image_acks.pop(ack_id, None)
                                             self.session_manager.acknowledge_inflight_message(
                                                 ack_id,
-                                                peer_id=self._current_ack_peer(),
+                                                peer_id=self._normalize_peer_addr(
+                                                    sess.peer_id or ""
+                                                ),
                                             )
                                             ack_valid = True
                                         else:
@@ -7418,13 +8043,17 @@ class I2PChatCore:
                                         elif (
                                             entry.ack_kind == "file"
                                             and os.path.basename(entry.token) == ack_name
-                                            and entry.peer_addr == self._current_ack_peer()
-                                            and entry.ack_session_epoch == self._ack_session_epoch
+                                            and entry.peer_addr
+                                            == self._normalize_peer_addr(sess.peer_id or "")
+                                            and entry.ack_session_epoch
+                                            == sess._ack_session_epoch
                                         ):
                                             sess._pending_file_acks.pop(ack_id, None)
                                             self.session_manager.acknowledge_inflight_message(
                                                 ack_id,
-                                                peer_id=self._current_ack_peer(),
+                                                peer_id=self._normalize_peer_addr(
+                                                    sess.peer_id or ""
+                                                ),
                                             )
                                             ack_valid = True
                                         else:
@@ -7465,7 +8094,7 @@ class I2PChatCore:
                     else:
                         try:
                             dest_obj = i2plib.Destination(body)
-                            new_peer = dest_obj.base32 + ".b32.i2p"
+                            new_peer = dest_obj.base32
                             if sess.peer_id and new_peer != sess.peer_id:
                                 self._emit_error(
                                     f"Blocked identity mismatch: expected {sess.peer_id[:16]}..., got {new_peer[:16]}..."
@@ -7524,22 +8153,9 @@ class I2PChatCore:
                 and sess.inline_image_info is None
             ):
                 self._cancel_handshake_watchdog(peer_id)
-                if peer_id is None:
-                    peer_before_cleanup = self._normalize_peer_addr(
-                        self._legacy_stream_peer_id or self.current_peer_addr or ""
-                    )
-                else:
-                    peer_before_cleanup = self._normalize_peer_addr(sess.peer_id or "")
-                if peer_id is None:
-                    if self.session_manager.keepalive_task:
-                        self.session_manager.keepalive_task.cancel()
-                        self.session_manager.keepalive_task = None
-                    self.conn = None
-                    self._legacy_stream_peer_id = None
-                    self._reset_crypto_state()
-                else:
-                    self._live_sessions.pop(peer_id, None)
-                    sess.reset_crypto()
+                peer_before_cleanup = self._normalize_peer_addr(sess.peer_id or "")
+                self._live_sessions.pop(peer_id, None)
+                sess.reset_crypto()
                 if peer_before_cleanup:
                     self.session_manager.reset_peer_lifecycle(
                         peer_before_cleanup, reason="receive-loop-cleanup"
@@ -7549,9 +8165,12 @@ class I2PChatCore:
                     mark_peer_stale=False,
                     peer_id=peer_before_cleanup,
                 )
-                self._emit_message("info", "Peer disconnected.")
+                if sess.announce_lifecycle:
+                    self._emit_message("info", "Peer disconnected.")
                 self.peer_b32 = "Waiting for incoming connections..."
-                self._emit_system("Waiting for incoming connections...")
+                if sess.announce_lifecycle:
+                    self._emit_system("Waiting for incoming connections...")
+                self._notify_group_mesh_manager()
                 try:
                     writer.close()
                     await writer.wait_closed()

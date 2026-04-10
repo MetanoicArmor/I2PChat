@@ -5,13 +5,21 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
 
+from i2pchat.storage.contact_book import normalize_peer_address
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def normalize_member_id(value: str) -> str:
-    return (value or "").strip().lower()
+    raw = (value or "").strip().lower()
+    if not raw:
+        return ""
+    canonical = normalize_peer_address(raw)
+    if canonical is not None:
+        return canonical
+    return raw
 
 
 class GroupContentType(StrEnum):

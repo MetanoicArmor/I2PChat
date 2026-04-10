@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Callable, Optional, Tuple
 
+from i2pchat.storage.contact_book import normalize_peer_address
+
 logger = logging.getLogger("i2pchat")
 
 
@@ -138,7 +140,14 @@ class SessionManager:
 
     @staticmethod
     def _normalize_peer_id(peer_id: str) -> str:
-        return (peer_id or "").strip().lower()
+        raw = (peer_id or "").strip()
+        if not raw:
+            return ""
+        lower = raw.lower()
+        canon = normalize_peer_address(lower)
+        if canon is not None:
+            return canon
+        return lower
 
     def _resolve_peer_id(self, peer_id: Optional[str] = None) -> str:
         normalized = self._normalize_peer_id(peer_id or "")

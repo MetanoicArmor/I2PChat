@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from types import SimpleNamespace
 from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
@@ -12,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PyQt6.QtWidgets", exc_type=ImportError)
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QDialog, QWidget
 
 from i2pchat.core.i2p_chat_core import ChatMessage
 from i2pchat.groups.models import (
@@ -23,14 +24,14 @@ from i2pchat.groups.models import (
     GroupSendResult,
     GroupState,
 )
-from i2pchat.gui.main_qt import ChatWindow, THEME_DEFAULT
+from i2pchat.gui.main_qt import ChatWindow, THEME_DEFAULT, _SIDEBAR_LIST_ROLE
 from i2pchat.storage.contact_book import ContactBook, ContactRecord
 from i2pchat.storage.group_store import GroupHistoryEntry, StoredGroupConversation
 
 
-LOCAL_MEMBER = "llllllllllllllllllllllllllllllllllllllll.b32.i2p"
-PEER_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
-PEER_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
+LOCAL_MEMBER = "llllllllllllllllllllllllllllllllllllllll"
+PEER_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+PEER_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 
 @pytest.fixture
@@ -52,9 +53,12 @@ def _conversation_items(window: ChatWindow) -> list[str]:
 
 def _group_list_titles(window: ChatWindow) -> list[str]:
     titles: list[str] = []
-    for row in range(window.groups_list.count()):
-        item = window.groups_list.item(row)
-        widget = window.groups_list.itemWidget(item)
+    lst = window.contacts_list
+    for row in range(lst.count()):
+        item = lst.item(row)
+        if item.data(_SIDEBAR_LIST_ROLE) != "group":
+            continue
+        widget = lst.itemWidget(item)
         title = getattr(widget, "_full_title", "") if widget is not None else ""
         if title:
             titles.append(title)
@@ -115,9 +119,113 @@ def test_create_group_from_values_creates_entry_and_opens_conversation(
 
     assert group_id == "group-1"
     assert window._active_group_id == "group-1"
-    assert window.groups_list.count() == 1
+    assert sum(
+        1
+        for i in range(window.contacts_list.count())
+        if window.contacts_list.item(i).data(_SIDEBAR_LIST_ROLE) == "group"
+    ) == 1
     assert "--- Group: Study Group ---" in _conversation_items(window)
     assert "No local group messages yet." in _conversation_items(window)
+
+
+def test_group_map_dialog_opens_with_overview_and_mermaid_tabs(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    window._contact_book = ContactBook(
+        contacts=[
+            ContactRecord(addr=PEER_A, display_name="Alice"),
+            ContactRecord(addr=PEER_B, display_name="Bob"),
+        ]
+    )
+    created_at = datetime(2026, 4, 9, 12, 0, tzinfo=timezone.utc)
+    state = GroupState(
+        group_id="group-map-1",
+        epoch=1,
+        members=(LOCAL_MEMBER, PEER_A, PEER_B),
+        title="Mapped Group",
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    store = {
+        state.group_id: StoredGroupConversation(state=state, next_group_seq=1, history=())
+    }
+    _install_group_store(window, store)
+
+    window.core.get_group_topology_snapshot = lambda group_id: SimpleNamespace(  # type: ignore[method-assign]
+        nodes=[
+            SimpleNamespace(
+                member_id=LOCAL_MEMBER,
+                label="You",
+                is_local=True,
+                peer_state="secure",
+                live_ready=True,
+                blindbox_ready=False,
+                last_delivery_status="",
+            ),
+            SimpleNamespace(
+                member_id=PEER_A,
+                label="Alice",
+                is_local=False,
+                peer_state="secure",
+                live_ready=True,
+                blindbox_ready=False,
+                last_delivery_status="",
+            ),
+            SimpleNamespace(
+                member_id=PEER_B,
+                label="Bob",
+                is_local=False,
+                peer_state="disconnected",
+                live_ready=False,
+                blindbox_ready=True,
+                last_delivery_status="failed",
+            ),
+        ],
+        edges=[
+            SimpleNamespace(
+                target_id=PEER_A,
+                label="live",
+                state="live",
+                live_ready=True,
+                blindbox_ready=False,
+                last_delivery_status="",
+            ),
+            SimpleNamespace(
+                target_id=PEER_B,
+                label="blindbox, last=failed",
+                state="blindbox",
+                live_ready=False,
+                blindbox_ready=True,
+                last_delivery_status="failed",
+            ),
+        ],
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_exec(dialog: QDialog) -> int:
+        captured["title"] = dialog.windowTitle()
+        visual_widget = dialog.findChild(QWidget, "GroupTopologyMapWidget")
+        captured["has_visual_widget"] = bool(visual_widget)
+        if visual_widget is not None:
+            captured["labels"] = [
+                getattr(node, "label", "")
+                for node in getattr(visual_widget, "_snapshot").nodes  # type: ignore[attr-defined]
+            ]
+        if visual_widget is not None and hasattr(visual_widget, "peerActivated"):
+            visual_widget.peerActivated.emit(PEER_A)  # type: ignore[attr-defined]
+        return int(QDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(QDialog, "exec", _fake_exec, raising=False)
+
+    window._show_group_topology_dialog("group-map-1")
+
+    assert captured["title"] == "Group map: Mapped Group"
+    assert captured["has_visual_widget"] is True
+    assert "Alice" in captured["labels"]
+    assert "Bob" in captured["labels"]
+    assert window.addr_edit.text() == PEER_A
+    assert window._active_group_id is None
 
 
 def test_open_group_loads_local_history_and_control_entries(
@@ -182,12 +290,12 @@ def test_open_group_loads_local_history_and_control_entries(
     texts = _conversation_items(window)
     assert "--- Group: Study Group ---" in texts
     assert "hello team" in texts
-    assert "Delivery: 1 live, 1 queued" in texts
+    assert "Delivery:" not in texts
     assert "Alice: hi back" in texts
     assert 'Alice updated group settings: title "Renamed Study Group"' in texts
 
 
-def test_group_send_flow_routes_via_core_and_appends_delivery_summary(
+def test_group_send_flow_routes_via_core_and_refreshes_without_delivery_banner(
     qapp: QApplication,
 ) -> None:
     window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
@@ -274,7 +382,7 @@ def test_group_send_flow_routes_via_core_and_appends_delivery_summary(
     assert window.input_edit.plainTextForSend() == ""
     texts = _conversation_items(window)
     assert "hello group" in texts
-    assert "Delivery: 1 live, 1 queued" in texts
+    assert "Delivery:" not in texts
     assert "No local group messages yet." not in texts
     assert texts[-1] == "--- end of group history ---"
 
@@ -485,7 +593,6 @@ def test_switch_profile_resets_active_group_state_and_reloads_group_list(
         lambda: setattr(window, "_contact_book", ContactBook()),
     )
     monkeypatch.setattr(window, "_ensure_stored_peer_in_contact_book", lambda: None)
-    monkeypatch.setattr(window, "_refresh_contacts_list", lambda: None)
     monkeypatch.setattr(window, "_apply_contacts_sidebar_startup_state", lambda: None)
     monkeypatch.setattr(window, "_sync_contacts_list_selection", lambda: None)
     monkeypatch.setattr(window, "_update_peer_lock_indicator", lambda: None)
@@ -502,7 +609,7 @@ def test_switch_profile_resets_active_group_state_and_reloads_group_list(
     assert window._loaded_group_history_id is None
     assert _conversation_items(window) == []
     assert _group_list_titles(window) == ["Fresh Group"]
-    assert window.groups_list.selectedItems() == []
+    assert window.contacts_list.selectedItems() == []
 
 
 def test_direct_peer_message_rendering_stays_on_the_direct_chat_path(

@@ -10,6 +10,7 @@ from i2pchat.groups import GroupContentType, GroupState
 from i2pchat.storage.group_store import (
     GroupHistoryEntry,
     append_group_history_entry,
+    delete_group_record,
     load_group_conversation,
     load_group_state,
     upsert_group_state,
@@ -302,6 +303,57 @@ class GroupStoreTests(unittest.TestCase):
             self.assertEqual(entry.created_at.tzinfo, timezone.utc)
             self.assertEqual(conversation.seen_msg_ids, ("msg-normalized",))
             self.assertEqual(conversation.next_group_seq, 4)
+
+    def test_group_history_persists_delivery_reasons(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="group-store-reasons",
+                epoch=1,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="Reasons",
+            )
+            upsert_group_state(tmpdir, "alice", state, next_group_seq=1)
+            append_group_history_entry(
+                tmpdir,
+                "alice",
+                state,
+                GroupHistoryEntry(
+                    kind="me",
+                    sender_id="alice.b32.i2p",
+                    content_type=GroupContentType.GROUP_TEXT,
+                    text="hi",
+                    msg_id="msg-r1",
+                    group_seq=1,
+                    epoch=1,
+                    created_at=datetime(2026, 4, 9, 10, 0, 0, tzinfo=timezone.utc),
+                    delivery_results={"bob.b32.i2p": "failed"},
+                    delivery_reasons={"bob.b32.i2p": "blindbox-await-root"},
+                ),
+                next_group_seq=2,
+            )
+            conversation = load_group_conversation(tmpdir, "alice", "group-store-reasons")
+            assert conversation is not None
+            entry = conversation.history[0]
+            self.assertEqual(entry.delivery_results, {"bob.b32.i2p": "failed"})
+            self.assertEqual(
+                entry.delivery_reasons,
+                {"bob.b32.i2p": "blindbox-await-root"},
+            )
+
+    def test_delete_group_record_removes_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="group-to-delete",
+                epoch=1,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="Del",
+            )
+            upsert_group_state(tmpdir, "alice", state, next_group_seq=1)
+            self.assertIsNotNone(load_group_state(tmpdir, "alice", "group-to-delete"))
+            self.assertTrue(delete_group_record(tmpdir, "alice", "group-to-delete"))
+            self.assertIsNone(load_group_state(tmpdir, "alice", "group-to-delete"))
+            self.assertFalse(delete_group_record(tmpdir, "alice", "group-to-delete"))
+            self.assertFalse(delete_group_record(tmpdir, "alice", ""))
 
 
 if __name__ == "__main__":

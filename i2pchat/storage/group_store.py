@@ -66,6 +66,8 @@ class GroupHistoryEntry:
     created_at: datetime = field(default_factory=utc_now)
     source_peer: str | None = None
     delivery_results: dict[str, str] = field(default_factory=dict)
+    # Per-recipient failure/detail reasons (e.g. blindbox-await-root); optional, backward compatible.
+    delivery_reasons: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         content_type = (
@@ -106,6 +108,16 @@ class GroupHistoryEntry:
                 recipient_id: str(status or "").strip()
                 for raw_recipient_id, status in dict(self.delivery_results or {}).items()
                 if (recipient_id := normalize_member_id(str(raw_recipient_id)))
+            },
+        )
+        object.__setattr__(
+            self,
+            "delivery_reasons",
+            {
+                recipient_id: str(reason or "").strip()
+                for raw_recipient_id, reason in dict(self.delivery_reasons or {}).items()
+                if (recipient_id := normalize_member_id(str(raw_recipient_id)))
+                and str(reason or "").strip()
             },
         )
 
@@ -172,6 +184,7 @@ def _serialize_entry(entry: GroupHistoryEntry) -> dict[str, Any]:
         "created_at": _to_iso8601(entry.created_at),
         "source_peer": entry.source_peer,
         "delivery_results": dict(entry.delivery_results),
+        "delivery_reasons": dict(entry.delivery_reasons),
     }
 
 
@@ -190,6 +203,10 @@ def _deserialize_entry(data: dict[str, Any]) -> GroupHistoryEntry:
         delivery_results={
             str(key): str(value)
             for key, value in dict(data.get("delivery_results", {})).items()
+        },
+        delivery_reasons={
+            str(key): str(value)
+            for key, value in dict(data.get("delivery_reasons", {})).items()
         },
     )
 
@@ -353,3 +370,21 @@ def list_group_states(profile_data_dir: str, profile: str) -> list[GroupState]:
         states.append(_deserialize_state(dict(payload["state"])))
     states.sort(key=lambda item: item.updated_at, reverse=True)
     return states
+
+
+def delete_group_record(profile_data_dir: str, profile: str, group_id: str) -> bool:
+    """
+    Remove the persisted group conversation file for this profile.
+    Returns True if a file was removed, False if group_id is empty or no file existed.
+    """
+    gid = (group_id or "").strip()
+    if not gid:
+        return False
+    path = _group_record_path(profile_data_dir, profile, gid)
+    if not os.path.isfile(path):
+        return False
+    try:
+        os.remove(path)
+    except OSError:
+        return False
+    return True

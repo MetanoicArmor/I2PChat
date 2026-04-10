@@ -6,7 +6,8 @@ import pytest
 
 from i2pchat.core.i2p_chat_core import I2PChatCore
 
-VALID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
+VALID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+VALID_LEGACY = f"{VALID}.b32.i2p"
 
 
 def test_get_peer_trust_info_invalid_returns_none() -> None:
@@ -28,8 +29,9 @@ def test_get_peer_trust_info_pinned() -> None:
     core = I2PChatCore(on_error=lambda _m: None)
     hx = "ab" * 32
     core.peer_trusted_signing_keys[VALID] = hx
-    info = core.get_peer_trust_info(VALID)
+    info = core.get_peer_trust_info(VALID_LEGACY)
     assert info is not None
+    assert info.peer_normalized == VALID
     assert info.pinned is True
     assert info.signing_key_hex == hx
     assert info.fingerprint_short is not None

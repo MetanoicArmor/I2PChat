@@ -57,6 +57,8 @@ def short_member_label(member_id: str, *, fallback: str = "Peer") -> str:
 
 def render_group_delivery_summary(
     delivery_results: Mapping[str, GroupMemberDeliveryResult | str],
+    *,
+    delivery_reasons: Mapping[str, str] | None = None,
 ) -> str:
     if not delivery_results:
         return "Only you are in this group."
@@ -85,7 +87,19 @@ def render_group_delivery_summary(
         parts.append(f"{counts[GroupDeliveryStatus.FAILED]} failed")
     if not parts:
         return "No member delivery results were recorded."
-    return "Delivery: " + ", ".join(parts)
+    line = "Delivery: " + ", ".join(parts)
+    reasons = dict(delivery_reasons or {})
+    if not reasons:
+        return line
+    detail_bits: list[str] = []
+    for peer_id, reason in sorted(reasons.items(), key=lambda kv: kv[0]):
+        r = (reason or "").strip()
+        if not r:
+            continue
+        detail_bits.append(f"{short_member_label(peer_id)}: {r}")
+    if not detail_bits:
+        return line
+    return line + "\n" + "Details: " + "; ".join(detail_bits)
 
 
 def render_group_control_text(

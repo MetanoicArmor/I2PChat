@@ -35,6 +35,10 @@ from i2pchat.protocol.protocol_codec import (
 )
 from i2pchat.core.i2p_chat_core import I2PChatCore
 
+from tests.live_session_helpers import attach_mock_live_session
+
+TEST_PEER_B32 = "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk.b32.i2p"
+
 
 class _Reader:
     def __init__(self, payload: bytes) -> None:
@@ -236,11 +240,19 @@ class TestFileTransferHardening(unittest.IsolatedAsyncioTestCase):
             + core.frame_message("D", "!!!not-base64!!!")
         )
         conn = (_Reader(payload), _Writer())
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        ls = core._live_sessions[k]
+        await core.receive_loop(conn, peer_id=k)
 
         self.assertTrue(any("File chunk error" in e for e in errors), errors)
-        self.assertIsNone(core.incoming_file)
+        self.assertIsNone(ls.incoming_file)
         self.assertEqual(os.listdir(self._tmp), [])
 
     async def test_connection_drop_after_offer_does_not_deliver(self) -> None:
@@ -253,8 +265,15 @@ class TestFileTransferHardening(unittest.IsolatedAsyncioTestCase):
         )
         payload = core.frame_message("F", "test.bin|100")
         conn = (_Reader(payload), writer)
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        await core.receive_loop(conn, peer_id=k)
 
         self.assertEqual(delivered, [])
         self.assertNotIn(b"FILE_ACK", bytes(writer.buf))
@@ -274,8 +293,15 @@ class TestFileTransferHardening(unittest.IsolatedAsyncioTestCase):
             # No end frame — simulates mid-transfer drop
         )
         conn = (_Reader(payload), writer)
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        await core.receive_loop(conn, peer_id=k)
 
         self.assertEqual(delivered, [])
         self.assertNotIn(b"FILE_ACK", bytes(writer.buf))
@@ -290,8 +316,15 @@ class TestFileTransferHardening(unittest.IsolatedAsyncioTestCase):
             + core.frame_message("D", oversize)
         )
         conn = (_Reader(payload), _Writer())
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        await core.receive_loop(conn, peer_id=k)
 
         self.assertTrue(any("File chunk error" in e for e in errors), errors)
 
@@ -307,11 +340,19 @@ class TestFileTransferHardening(unittest.IsolatedAsyncioTestCase):
             + core.frame_message("E", "done")
         )
         conn = (_Reader(payload), writer)
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        ls = core._live_sessions[k]
+        await core.receive_loop(conn, peer_id=k)
 
         self.assertTrue(any("File transfer incomplete" in e for e in errors), errors)
-        self.assertIsNone(core.incoming_file)
+        self.assertIsNone(ls.incoming_file)
         self.assertNotIn(b"FILE_ACK", bytes(writer.buf))
 
     async def test_duplicate_file_end_marker_is_ignored(self) -> None:
@@ -326,8 +367,15 @@ class TestFileTransferHardening(unittest.IsolatedAsyncioTestCase):
             + core.frame_message("E", "done")  # duplicate
         )
         conn = (_Reader(payload), _Writer())
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        await core.receive_loop(conn, peer_id=k)
 
         # No crash; the duplicate E is a no-op (incoming_file already cleared)
         # The test passes if receive_loop returns without exception
@@ -364,12 +412,20 @@ class TestImageTransferHardening(unittest.IsolatedAsyncioTestCase):
             + core.frame_message("G", "!!!not-base64!!!")
         )
         conn = (_Reader(payload), _Writer())
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        ls = core._live_sessions[k]
+        await core.receive_loop(conn, peer_id=k)
 
         self.assertTrue(any("Image data error" in e for e in errors), errors)
-        self.assertIsNone(core.inline_image_info)
-        self.assertEqual(core.inline_image_buffer, bytearray())
+        self.assertIsNone(ls.inline_image_info)
+        self.assertEqual(ls.inline_image_buffer, bytearray())
 
     async def test_connection_drop_mid_image_receive_cleans_up(self) -> None:
         """Drop mid-stream — image must not be delivered."""
@@ -382,8 +438,15 @@ class TestImageTransferHardening(unittest.IsolatedAsyncioTestCase):
             # No __IMG_END__
         )
         conn = (_Reader(payload), _Writer())
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        await core.receive_loop(conn, peer_id=k)
 
         # on_image must not have been called with incomplete data
         self.assertEqual(images, [])
@@ -399,11 +462,19 @@ class TestImageTransferHardening(unittest.IsolatedAsyncioTestCase):
             + core.frame_message("G", "__IMG_END__")
         )
         conn = (_Reader(payload), writer)
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        ls = core._live_sessions[k]
+        await core.receive_loop(conn, peer_id=k)
 
         self.assertTrue(any("Image transfer incomplete" in e for e in errors), errors)
-        self.assertIsNone(core.inline_image_info)
+        self.assertIsNone(ls.inline_image_info)
         self.assertNotIn(b"IMG_ACK", bytes(writer.buf))
 
     async def test_duplicate_image_end_marker_is_ignored(self) -> None:
@@ -418,8 +489,15 @@ class TestImageTransferHardening(unittest.IsolatedAsyncioTestCase):
             + core.frame_message("G", "__IMG_END__")  # duplicate
         )
         conn = (_Reader(payload), _Writer())
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        await core.receive_loop(conn, peer_id=k)
 
         critical = [e for e in errors if "crash" in e.lower() or "exception" in e.lower()]
         self.assertEqual(critical, [])
@@ -433,8 +511,15 @@ class TestImageTransferHardening(unittest.IsolatedAsyncioTestCase):
             + core.frame_message("G", oversize)
         )
         conn = (_Reader(payload), _Writer())
-        core.conn = conn
-        await core.receive_loop(conn)
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        await core.receive_loop(conn, peer_id=k)
 
         self.assertTrue(any("Image data error" in e for e in errors), errors)
 
@@ -444,7 +529,15 @@ class TestImageTransferHardening(unittest.IsolatedAsyncioTestCase):
         core = self._make_core(on_error=errors.append)
         payload = core.frame_message("G", "photo.png|10")
         conn = (_Reader(payload), _Writer())
-        core.conn = conn
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        ls = core._live_sessions[k]
 
         _real_wait_for = asyncio.wait_for
         wf_n = [0]
@@ -459,11 +552,11 @@ class TestImageTransferHardening(unittest.IsolatedAsyncioTestCase):
             return await _real_wait_for(awaitable, timeout=timeout)
 
         with mock.patch("i2pchat.core.i2p_chat_core.asyncio.wait_for", wf_wrapper):
-            await core.receive_loop(conn)
+            await core.receive_loop(conn, peer_id=k)
 
-        self.assertIsNotNone(core.conn, "conn cleared after timeout during inline image")
-        self.assertIs(core.conn, conn)
-        self.assertIsNotNone(core.inline_image_info)
+        self.assertIsNotNone(ls.conn, "conn cleared after timeout during inline image")
+        self.assertIs(ls.conn, conn)
+        self.assertIsNotNone(ls.inline_image_info)
         self.assertFalse(
             any("connection timed out" in e.lower() for e in errors),
             errors,

@@ -23,6 +23,11 @@ TT_SEND_FILE = (
     "progress and completion appear in the chat."
 )
 
+TT_NEW_TEXT_GROUP = (
+    "Create a text-only group with a local title and member addresses; "
+    "opens the same dialog as the New button in the Groups header."
+)
+
 TT_BLINDBOX_DIAGNOSTICS = (
     "Textual summary of BlindBox / offline routing and replica health; "
     "complements the status row."
@@ -148,6 +153,21 @@ TT_CONTACT_DETAILS = "Show address, TOFU fingerprint, and optional Remove pin fo
 TT_REMOVE_SAVED_PEER = (
     "Remove this peer from Saved peers; "
     "you can also delete encrypted history, TOFU pin, profile lock, and BlindBox state where applicable."
+)
+
+TT_EDIT_GROUP = (
+    "Edit local title and member list for this text group; "
+    "does not change the group id or history; other clients may not see this until you coordinate."
+)
+
+TT_GROUP_MAP = (
+    "Show the observed group map from this device: which members are currently live, "
+    "which rely on BlindBox, and the latest per-member delivery status."
+)
+
+TT_DELETE_GROUP = (
+    "Remove this group from this device only (local file and history); "
+    "other members are not notified."
 )
 
 # --- Chat message / bubble context ---

@@ -8,7 +8,6 @@ must not mix between simultaneous peers.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
@@ -22,6 +21,7 @@ class LivePeerSession:
 
     peer_id: str
     conn: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
+    announce_lifecycle: bool = True
     current_peer_dest_b64: Optional[str] = None
     peer_identity_binding_verified: bool = False
     proven: bool = False
@@ -95,43 +95,3 @@ def max_concurrent_live_sessions() -> int:
     except ValueError:
         n = 8
     return max(1, min(n, 64))
-
-
-# Populated after LivePeerSession class definition
-_SESSION_FIELD_NAMES: frozenset[str] = frozenset()
-
-
-def _init_session_field_names() -> None:
-    global _SESSION_FIELD_NAMES
-    _SESSION_FIELD_NAMES = frozenset(f.name for f in dataclasses.fields(LivePeerSession))
-
-
-class LegacyCoreSessionView:
-    """
-    Presents the same attributes as LivePeerSession but reads/writes the legacy
-    single-peer fields on I2PChatCore (first / default live stream).
-    """
-
-    def __init__(self, core: Any) -> None:
-        object.__setattr__(self, "_core", core)
-
-    def reset_crypto(self) -> None:
-        self._core._reset_crypto_state()
-
-    def __getattr__(self, name: str) -> Any:
-        if name == "peer_id":
-            return self._core.current_peer_addr
-        if name in _SESSION_FIELD_NAMES:
-            return getattr(self._core, name)
-        raise AttributeError(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "_core":
-            object.__setattr__(self, name, value)
-        elif name in _SESSION_FIELD_NAMES:
-            setattr(self._core, name, value)
-        else:
-            object.__setattr__(self, name, value)
-
-
-_init_session_field_names()

@@ -76,7 +76,7 @@ Use **Connect** for live chat and the first BlindBox bootstrap session. If Blind
 
 The **Saved peers** strip on the **left** is your local **contact book** for the current profile. It is stored as `profiles/<profile>/<profile>.contacts.json` (alongside `<profile>.dat`).
 
-- **Rows** — each contact shows a display name (or shortened `.b32.i2p`), a subtitle (last message preview or your note), and unread styling when that peer is not the active chat.
+- **Rows** — each contact shows a display name (or shortened base32 id without the `.b32.i2p` suffix), a subtitle (last message preview or your note), and unread styling when that peer is not the active chat.
 - **Click** a row — sets the peer address field to that contact (same as typing the address) and syncs compose drafts; if the profile is **locked** to another peer, switching may be blocked (see status messages).
 - **◀ / ▶** — collapse or expand the sidebar; when the profile is **locked to a peer**, the strip may start **collapsed** to give more space to the chat.
 - **Drag** the narrow grip between the list and the chat to resize the strip (within min/max limits).
@@ -140,11 +140,11 @@ Example **I2P router** dialog (**⋯ → I2P router…** / **Ctrl/Cmd+R**):
 
 #### 4.2. Peer address field
 
-The `Peer .b32.i2p address` field is for the full destination of your peer:
+The peer address field uses the **canonical peer id**: a **base32** string (typically 40 characters) **without** the `.b32.i2p` suffix. The app stores and shows peers in this form (contacts, sessions, groups).
 
-```text
-<base32>.b32.i2p
-```
+Pasting a full **`<base32>.b32.i2p`** string is still accepted; it is normalized to the bare host.
+
+**Copy my address** copies your destination as **canonical base32** (no `.b32.i2p` suffix), matching contacts and the peer field.
 
 - You can type or paste the address manually.
 - If the current profile is already locked to a peer and the field is empty, the address is filled from the stored value automatically.
@@ -219,7 +219,7 @@ Logic:
    ```
 
 2. If the destination is available:
-   - a string of the form `<base32>.b32.i2p` is placed into the system clipboard;
+   - the **bare base32** host id is placed into the system clipboard;
    - a system message appears in the chat:
 
    ```text
@@ -352,6 +352,7 @@ Using this button you can:
 - BlindBox queue/receive debug lines are not shown in the chat feed; delivery details remain in status/tooltips.
 - Runtime state appears in the **status row** (`Send:*` and BlindBox fields); hover for hints if something is misconfigured.
 - **Compatibility:** peers on older builds may not support BlindBox traffic; live chat and file/image transfer work as before.
+- **Text groups:** offline delivery to a group does **not** use a separate “group-wide” BlindBox key. Each copy is sent to **every** other member over the **same bilateral** BlindBox channel as direct chat with that peer: you need a **BlindBox root** with each such member (typically after at least one successful secure live 1:1 session). Peers currently connected may receive via live; others are queued via BlindBox when the pairwise material exists. After you send, the group feed shows a delivery summary; per-member failures add a **Details** line with the reason (for example `blindbox-await-root`).
 
 Example **BlindBox diagnostics** window (**⋯ → BlindBox diagnostics**): telemetry summary, editable replica endpoints (when allowed), per-replica auth, and **Example server…** / **Save and restart**.
 
@@ -617,6 +618,8 @@ Override via environment variable:
 ```bash
 I2PCHAT_PADDING_PROFILE=off python -m i2pchat.gui
 ```
+
+**Diagnostics:** set `I2PCHAT_LOG_LEVEL` to `DEBUG` or `INFO` to print `i2pchat` package logs to stderr (framing, HMAC verification, transport). Example: `I2PCHAT_LOG_LEVEL=DEBUG python -m i2pchat.gui`.
 
 Canonical entrypoints when running from source (repository root): Qt GUI —
 `python -m i2pchat.gui` or `python -m i2pchat.run_gui` (same as the PyInstaller

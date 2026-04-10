@@ -21,12 +21,14 @@ if "PIL" not in sys.modules:
 from i2pchat.core.i2p_chat_core import I2PChatCore
 from i2pchat.protocol.protocol_codec import ProtocolCodec
 
-LOCAL_B32 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
-PEER_B32 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.b32.i2p"
-LOCKED_B32 = "cccccccccccccccccccccccccccccccccccccccc.b32.i2p"
-OTHER_B32 = "dddddddddddddddddddddddddddddddddddddddd.b32.i2p"
+from tests.live_session_helpers import attach_mock_live_session
+
+LOCAL_BARE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+PEER_BARE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+LOCKED_BARE = "cccccccccccccccccccccccccccccccccccccccc"
+OTHER_BARE = "dddddddddddddddddddddddddddddddddddddddd"
 EXAMPLE_HOST = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-EXAMPLE_B32 = EXAMPLE_HOST + ".b32.i2p"
+EXAMPLE_BARE = EXAMPLE_HOST
 
 
 class _FakeReader:
@@ -87,14 +89,19 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
     ) -> I2PChatCore:
         core = I2PChatCore(profile="alice", on_error=on_error)
         core.my_signing_seed = b"D" * 32
-        core.current_peer_addr = PEER_B32
-        core.my_dest = SimpleNamespace(base32=LOCAL_B32)
+        core.current_peer_addr = PEER_BARE
+        core.my_dest = SimpleNamespace(base32=LOCAL_BARE)
         core.handshake_complete = True
         core.peer_identity_binding_verified = True
         # Multi-peer: root exchange requires Saved peer; tests use a synthetic session.
         core.peer_in_saved_contacts = lambda _addr: True  # type: ignore[method-assign]
-        # Legacy route: _handshake_complete_for_peer_route needs conn when peer is not in _live_sessions.
-        core.conn = (_FakeReader(b""), _FakeWriter())
+        attach_mock_live_session(
+            core,
+            PEER_BARE,
+            (_FakeReader(b""), _FakeWriter()),
+            handshake_complete=True,
+            use_encryption=False,
+        )
         return core
 
     def test_invalid_profile_name_rejected(self) -> None:
@@ -137,11 +144,13 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_lock_requires_verified_identity_binding(self) -> None:
         core = I2PChatCore(profile="alice")
-        core.current_peer_addr = PEER_B32
-        core.handshake_complete = True
-        core.peer_identity_binding_verified = False
+        k = attach_mock_live_session(
+            core, PEER_BARE, (_FakeReader(b""), _FakeWriter()), handshake_complete=True
+        )
+        ls = core._live_sessions[k]
+        ls.peer_identity_binding_verified = False
         self.assertFalse(core.is_current_peer_verified_for_lock())
-        core.peer_identity_binding_verified = True
+        ls.peer_identity_binding_verified = True
         self.assertTrue(core.is_current_peer_verified_for_lock())
 
     async def test_connect_sends_identity_line_before_framed_identity(self) -> None:
@@ -166,7 +175,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         core_module.i2plib.stream_connect = _fake_stream_connect  # type: ignore[assignment]
         core_module.crypto.NACL_AVAILABLE = True
         try:
-            await core.connect_to_peer(PEER_B32)
+            await core.connect_to_peer(PEER_BARE)
         finally:
             core_module.i2plib.stream_connect = original_stream_connect  # type: ignore[assignment]
             core_module.crypto.NACL_AVAILABLE = original_nacl_available
@@ -188,19 +197,26 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         # Plaintext user data after handshake must be treated as downgrade.
         reader = _FakeReader(codec.encode("U", b"x", msg_id=1, flags=0))
         writer = _FakeWriter()
-        core.conn = (reader, writer)
+        conn = (reader, writer)
+        k = attach_mock_live_session(
+            core,
+            PEER_BARE,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
 
-        await core.receive_loop(core.conn)
+        await core.receive_loop(conn, peer_id=k)
         await asyncio.sleep(0)
 
         self.assertTrue(any("Protocol downgrade detected" in e for e in errors))
-        self.assertIsNone(core.conn)
+        self.assertNotIn(k, core._live_sessions)
         self.assertTrue(writer.closed)
-        self.assertFalse(core._recv_loop_active)
 
     async def test_schedule_disconnect_is_idempotent_while_task_running(self) -> None:
         core = I2PChatCore()
-        core.conn = (_FakeReader(b""), _FakeWriter())
+        attach_mock_live_session(core, PEER_BARE, (_FakeReader(b""), _FakeWriter()))
         disconnect_mock: AsyncMock = AsyncMock()
         core.disconnect_peer = disconnect_mock  # type: ignore[method-assign]
 
@@ -246,29 +262,29 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         core = I2PChatCore(on_trust_decision=trust_cb)
         ok = await core._pin_or_verify_peer_signing_key(
-            EXAMPLE_B32,
+            EXAMPLE_BARE,
             b"\x11" * 32,
         )
 
         self.assertTrue(ok)
         self.assertIsNotNone(seen)
-        self.assertIn(EXAMPLE_B32, core.peer_trusted_signing_keys)
+        self.assertIn(EXAMPLE_BARE, core.peer_trusted_signing_keys)
 
     async def test_connect_not_blocked_by_legacy_stored_peer_field(self) -> None:
         """Lock-to-peer removed; legacy stored_peer must not block outbound connect."""
         errors: list[str] = []
         core = I2PChatCore(profile="alice", on_error=errors.append)
-        core.stored_peer = LOCKED_B32
+        core.stored_peer = LOCKED_BARE
         import i2pchat.core.i2p_chat_core as core_module
 
         original_nacl_available = core_module.crypto.NACL_AVAILABLE
         core_module.crypto.NACL_AVAILABLE = True
         try:
-            await core.connect_to_peer(OTHER_B32)
+            await core.connect_to_peer(OTHER_BARE)
         finally:
             core_module.crypto.NACL_AVAILABLE = original_nacl_available
 
-        self.assertIsNone(core.conn)
+        self.assertFalse(core._has_active_session_for_peer(OTHER_BARE))
         self.assertFalse(
             any("locked to another peer" in msg.lower() for msg in errors),
             errors,
@@ -285,8 +301,8 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             errors: list[str] = []
             core = I2PChatCore(profile="alice", on_error=errors.append)
             core.my_signing_seed = b"D" * 32
-            core.current_peer_addr = OTHER_B32
-            core.my_dest = SimpleNamespace(base32=LOCAL_B32)
+            core.current_peer_addr = OTHER_BARE
+            core.my_dest = SimpleNamespace(base32=LOCAL_BARE)
             core.handshake_complete = True
             core.peer_identity_binding_verified = True
             writer = _FakeWriter()
@@ -369,8 +385,8 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             errors: list[str] = []
             receiver = I2PChatCore(profile="alice", on_error=errors.append)
             receiver.my_signing_seed = b"D" * 32
-            receiver.current_peer_addr = OTHER_B32
-            receiver.my_dest = SimpleNamespace(base32=LOCAL_B32)
+            receiver.current_peer_addr = OTHER_BARE
+            receiver.my_dest = SimpleNamespace(base32=LOCAL_BARE)
             receiver.handshake_complete = True
             receiver.peer_identity_binding_verified = True
             writer = _FakeWriter()
@@ -448,7 +464,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
 
             def _saved_only_primary(addr: str) -> bool:
                 try:
-                    return core._normalize_peer_addr(addr or "") == PEER_B32
+                    return core._normalize_peer_addr(addr or "") == PEER_BARE
                 except Exception:
                     return False
 
@@ -460,7 +476,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(core._blindbox_pending_root_epoch, 1)
             pending_secret = core._blindbox_pending_root_secret
 
-            core.current_peer_addr = OTHER_B32
+            core.current_peer_addr = OTHER_BARE
             core._handle_blindbox_root_ack_signal("__SIGNAL__:BLINDBOX_ROOT_ACK|1")
 
             self.assertIsNone(core._blindbox_root_secret)
@@ -510,35 +526,35 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         core = I2PChatCore(profile="default", on_error=errors.append)
 
         ok = await core._pin_or_verify_peer_signing_key(
-            EXAMPLE_B32,
+            EXAMPLE_BARE,
             b"\x22" * 32,
         )
 
         self.assertFalse(ok)
-        self.assertNotIn(EXAMPLE_B32, core.peer_trusted_signing_keys)
+        self.assertNotIn(EXAMPLE_BARE, core.peer_trusted_signing_keys)
         self.assertTrue(any("I2PCHAT_TRUST_AUTO=1" in msg for msg in errors), errors)
 
     async def test_tofu_auto_pin_requires_explicit_opt_in(self) -> None:
         with patch.dict(os.environ, {"I2PCHAT_TRUST_AUTO": "1"}, clear=False):
             core = I2PChatCore(profile="default")
             ok = await core._pin_or_verify_peer_signing_key(
-                EXAMPLE_B32,
+                EXAMPLE_BARE,
                 b"\x33" * 32,
             )
 
         self.assertTrue(ok)
-        self.assertIn(EXAMPLE_B32, core.peer_trusted_signing_keys)
+        self.assertIn(EXAMPLE_BARE, core.peer_trusted_signing_keys)
 
     def test_forget_pinned_peer_key_removes_normalized_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("i2pchat.core.i2p_chat_core.get_profiles_dir", return_value=tmpdir):
                 core = I2PChatCore(profile="alice")
-                core.peer_trusted_signing_keys[EXAMPLE_B32] = "ab" * 32
+                core.peer_trusted_signing_keys[EXAMPLE_BARE] = "ab" * 32
 
                 removed = core.forget_pinned_peer_key(EXAMPLE_HOST)
 
                 self.assertTrue(removed)
-                self.assertNotIn(EXAMPLE_B32, core.peer_trusted_signing_keys)
+                self.assertNotIn(EXAMPLE_BARE, core.peer_trusted_signing_keys)
                 with open(core._trust_store_path(), "r", encoding="utf-8") as f:
                     self.assertEqual(f.read().strip(), "{}")
 
@@ -546,10 +562,10 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         errors: list[str] = []
         systems: list[str] = []
         core = I2PChatCore(profile="alice", on_error=errors.append, on_system=systems.append)
-        core.peer_trusted_signing_keys[EXAMPLE_B32] = "11" * 32
+        core.peer_trusted_signing_keys[EXAMPLE_BARE] = "11" * 32
 
         ok = await core._pin_or_verify_peer_signing_key(
-            EXAMPLE_B32,
+            EXAMPLE_BARE,
             b"\x22" * 32,
         )
 
@@ -579,15 +595,15 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             on_system=systems.append,
             on_trust_mismatch_decision=trust_mismatch_cb,
         )
-        core.peer_trusted_signing_keys[EXAMPLE_B32] = "11" * 32
+        core.peer_trusted_signing_keys[EXAMPLE_BARE] = "11" * 32
 
         ok = await core._pin_or_verify_peer_signing_key(
-            EXAMPLE_B32,
+            EXAMPLE_BARE,
             b"\x22" * 32,
         )
 
         self.assertTrue(ok)
-        self.assertEqual(core.peer_trusted_signing_keys[EXAMPLE_B32], "22" * 32)
+        self.assertEqual(core.peer_trusted_signing_keys[EXAMPLE_BARE], "22" * 32)
         self.assertEqual(len(decisions), 1)
         self.assertTrue(any("Updated trusted signing key" in msg for msg in systems))
 

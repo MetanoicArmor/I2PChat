@@ -17,11 +17,13 @@ from i2pchat.core.i2p_chat_core import I2PChatCore
 from i2pchat.core.session_manager import PeerState
 from i2pchat.core.send_retry_policy import should_start_auto_connect_retry
 
-DUMMY_DEST_B32 = "ffffffffffffffffffffffffffffffffffffffff.b32.i2p"
-STORED_PEER_1 = "gggggggggggggggggggggggggggggggggggggggg.b32.i2p"
-STORED_PEER_2 = "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh.b32.i2p"
-STORED_PEER_3 = "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii.b32.i2p"
-STORED_PEER_4 = "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj.b32.i2p"
+from tests.live_session_helpers import attach_mock_live_session
+
+DUMMY_DEST_B32 = "ffffffffffffffffffffffffffffffffffffffff"
+STORED_PEER_1 = "gggggggggggggggggggggggggggggggggggggggg"
+STORED_PEER_2 = "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh"
+STORED_PEER_3 = "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii"
+STORED_PEER_4 = "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj"
 
 
 class _DummyWriter:
@@ -49,8 +51,9 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_text_live_route_blocks_during_handshake(self) -> None:
         core = I2PChatCore(profile="alice")
-        core.conn = (object(), _DummyWriter())
-        core.handshake_complete = False
+        attach_mock_live_session(
+            core, STORED_PEER_1, (object(), _DummyWriter()), handshake_complete=False
+        )
         core._send_text_via_blindbox = AsyncMock(return_value=99)  # type: ignore[method-assign]
         result = await core.send_text("x", route="live")
         self.assertFalse(result.accepted)
@@ -69,8 +72,10 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             core = I2PChatCore(profile="alice")
             core.stored_peer = STORED_PEER_1
             core.my_dest = _DummyDest()
-            core.conn = (object(), _DummyWriter())
-            core.handshake_complete = True
+            attach_mock_live_session(core, STORED_PEER_1, (object(), _DummyWriter()))
+            core.session_manager.set_peer_handshake_complete(
+                core._normalize_peer_addr(STORED_PEER_1)
+            )
             core._send_text_via_blindbox = AsyncMock(return_value=99)  # type: ignore[method-assign]
             result = await core.send_text("q-offline-while-live", route="offline")
             self.assertTrue(result.accepted)
@@ -80,8 +85,10 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_text_uses_live_route_when_secure_connected(self) -> None:
         core = I2PChatCore(profile="alice")
-        core.conn = (object(), _DummyWriter())
-        core.handshake_complete = True
+        attach_mock_live_session(core, STORED_PEER_1, (object(), _DummyWriter()))
+        core.session_manager.set_peer_handshake_complete(
+            core._normalize_peer_addr(STORED_PEER_1)
+        )
         result = await core.send_text("hello-live")
         self.assertTrue(result.accepted)
         self.assertEqual(result.route, "online-live")
@@ -93,8 +100,10 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_send_text_splits_long_live_into_multiple_frames(self) -> None:
         core = I2PChatCore(profile="alice")
         writer = _DummyWriter()
-        core.conn = (object(), writer)
-        core.handshake_complete = True
+        attach_mock_live_session(core, STORED_PEER_1, (object(), writer))
+        core.session_manager.set_peer_handshake_complete(
+            core._normalize_peer_addr(STORED_PEER_1)
+        )
         long_text = "L" * 5000
         result = await core.send_text(long_text)
         self.assertTrue(result.accepted)
@@ -104,8 +113,10 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_send_text_auto_keeps_live_route_even_when_peer_marked_stale(self) -> None:
         core = I2PChatCore(profile="alice")
         writer = _DummyWriter()
-        core.conn = (object(), writer)
-        core.handshake_complete = True
+        attach_mock_live_session(core, STORED_PEER_1, (object(), writer))
+        core.session_manager.set_peer_handshake_complete(
+            core._normalize_peer_addr(STORED_PEER_1)
+        )
         core.session_manager.transition_peer(PeerState.STALE, reason="test")
         result = await core.send_text("hello-after-stale")
         self.assertTrue(result.accepted)
@@ -122,10 +133,8 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
         ):
             core = I2PChatCore(profile="alice")
             core.stored_peer = STORED_PEER_1
-            core.current_peer_addr = STORED_PEER_1
             writer = _DummyWriter()
-            core.conn = (object(), writer)
-            core.handshake_complete = True
+            attach_mock_live_session(core, STORED_PEER_1, (object(), writer))
             core.session_manager.set_peer_connected(
                 STORED_PEER_1, state=PeerState.HANDSHAKING
             )
@@ -151,10 +160,10 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
         ):
             core = I2PChatCore(profile="alice")
             core.stored_peer = STORED_PEER_2
-            core.current_peer_addr = STORED_PEER_2
             core.my_dest = _DummyDest()
-            core.conn = (object(), _DummyWriter())
-            core.handshake_complete = False
+            attach_mock_live_session(
+                core, STORED_PEER_2, (object(), _DummyWriter()), handshake_complete=False
+            )
             core.session_manager.set_peer_connected(
                 STORED_PEER_2, state=PeerState.HANDSHAKING
             )
@@ -280,8 +289,9 @@ class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(core.get_delivery_telemetry()["state"], "offline-ready")
             core._blindbox_root_secret = None
             self.assertEqual(core.get_delivery_telemetry()["state"], "await-live-root")
-            core.conn = (object(), _DummyWriter())
-            core.handshake_complete = False
+            attach_mock_live_session(
+                core, STORED_PEER_1, (object(), _DummyWriter()), handshake_complete=False
+            )
             self.assertEqual(
                 core.get_delivery_telemetry()["state"], "connecting-handshake"
             )
