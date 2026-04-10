@@ -3207,11 +3207,26 @@ class I2PChatCore:
                 f"Rejected {source} identity: SAM lookup does not confirm {normalized_addr[:24]}..."
             )
             return False
-        self.current_peer_addr = normalized_addr
-        self.session_manager.set_active_peer(normalized_addr)
+        self.activate_peer_context(normalized_addr)
         self.current_peer_dest_b64 = canonical_dest
         self.peer_identity_binding_verified = True
         return True
+
+    def activate_peer_context(self, peer_addr: str) -> str:
+        normalized_addr = self._normalize_peer_addr(peer_addr)
+        try:
+            previous_peer = self._normalize_peer_addr(self.current_peer_addr or "")
+        except Exception:
+            previous_peer = ""
+        self.current_peer_addr = normalized_addr
+        self.active_live_peer_id = normalized_addr
+        self.session_manager.set_active_peer(normalized_addr)
+        if self.blindbox_enabled and (
+            normalized_addr != previous_peer or self._blindbox_root_secret is None
+        ):
+            self._load_blindbox_state()
+            self._trigger_blindbox_hot_poll("peer-switch")
+        return normalized_addr
 
     def _is_probable_peer_addr(self, value: str) -> bool:
         raw = (value or "").strip().lower()
@@ -5605,8 +5620,7 @@ class I2PChatCore:
         try:
             try:
                 if activate_as_current:
-                    self.current_peer_addr = normalized_target
-                    self.active_live_peer_id = normalized_target
+                    self.activate_peer_context(normalized_target)
                     self._emit_system(
                         f"Connecting to {normalized_target[:24]}... "
                         "(may take 1–2 min while I2P builds tunnels)"

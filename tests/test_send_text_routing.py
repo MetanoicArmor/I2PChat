@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -13,9 +14,11 @@ if "PIL" not in sys.modules:
     sys.modules["PIL"] = pil_module
     sys.modules["PIL.Image"] = pil_image_module
 
-from i2pchat.core.i2p_chat_core import I2PChatCore
+from i2pchat import crypto
+from i2pchat.core.i2p_chat_core import I2PChatCore, _BlindBoxPeerSnapshot
 from i2pchat.core.session_manager import PeerState
 from i2pchat.core.send_retry_policy import should_start_auto_connect_retry
+from i2pchat.storage.blindbox_state import BlindBoxState
 
 from tests.live_session_helpers import attach_mock_live_session
 
@@ -43,6 +46,52 @@ class _DummyDest:
 
 
 class SendTextRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_activate_peer_context_reloads_blindbox_state_for_selected_peer(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = I2PChatCore(profile="alice")
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                core._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                    tmpdir, filename
+                )
+                core.my_dest = _DummyDest()
+                core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
+                core._trigger_blindbox_hot_poll = lambda reason="": None  # type: ignore[method-assign]
+
+                core._save_blindbox_peer_snapshot(
+                    _BlindBoxPeerSnapshot(
+                        peer_addr=STORED_PEER_1,
+                        peer_id=STORED_PEER_1,
+                        state=BlindBoxState(),
+                        root_secret=b"a" * 32,
+                        root_epoch=1,
+                    )
+                )
+                core._save_blindbox_peer_snapshot(
+                    _BlindBoxPeerSnapshot(
+                        peer_addr=STORED_PEER_2,
+                        peer_id=STORED_PEER_2,
+                        state=BlindBoxState(),
+                        root_secret=b"b" * 32,
+                        root_epoch=2,
+                    )
+                )
+
+                core.activate_peer_context(STORED_PEER_1)
+                self.assertEqual(core._blindbox_root_secret, b"a" * 32)
+                self.assertEqual(core._blindbox_root_epoch, 1)
+
+                core.activate_peer_context(STORED_PEER_2)
+                self.assertEqual(core._blindbox_root_secret, b"b" * 32)
+                self.assertEqual(core._blindbox_root_epoch, 2)
+
     async def test_send_text_live_route_blocks_without_session(self) -> None:
         core = I2PChatCore(profile="alice")
         result = await core.send_text("x", route="live")

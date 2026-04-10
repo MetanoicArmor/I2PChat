@@ -7674,9 +7674,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 canon = self.core._normalize_peer_addr(norm)
             except Exception:
                 canon = norm
-            self.core.current_peer_addr = canon
-            self.core.active_live_peer_id = canon
-            self.core.session_manager.set_active_peer(canon)
+            self.core.activate_peer_context(canon)
         changed = False
         if remember_peer(self._contact_book, norm):
             changed = True
