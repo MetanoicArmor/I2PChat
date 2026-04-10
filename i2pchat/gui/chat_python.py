@@ -32,6 +32,7 @@ from i2pchat.router.settings import (
     save_router_settings,
 )
 
+from i2pchat.core.live_peer_session import max_concurrent_live_sessions
 from i2pchat.core.i2p_chat_core import (
     ChatMessage,
     FileTransferInfo,
@@ -319,7 +320,10 @@ class I2PChat(App):
         if "\n" not in stripped and stripped.startswith("/"):
             await self._execute_command(stripped)
             return
-        result = await self.core.send_text(text)
+        result = await self.core.send_text(
+            text,
+            peer_address=self._current_target_peer(),
+        )
         if result.accepted:
             self._set_compose_text("")
             if self._compose_draft_active_key is not None:
@@ -599,11 +603,11 @@ class I2PChat(App):
         send_in_flight = any(
             entry.delivery_state == "sending" for entry in list(self._recent_messages)[-5:]
         )
-        link_state = "connected" if self.core.conn is not None else "disconnected"
-        if self.core.conn is not None and not self.core.handshake_complete:
+        link_state = "connected" if self.core.any_live_stream() else "disconnected"
+        if self.core.any_live_stream() and not self.core.is_current_peer_secure():
             link_state = "handshake"
         secure_state = "verified" if self.core.proven else (
-            "secure" if self.core.handshake_complete else "none"
+            "secure" if self.core.is_current_peer_secure() else "none"
         )
         my_short = self._short_peer(
             (self.core.my_dest.base32 + ".b32.i2p")
@@ -612,8 +616,8 @@ class I2PChat(App):
         )
         presentation = build_status_presentation(
             network_status_raw=self.network_status,
-            connected=self.core.conn is not None,
-            handshake_complete=self.core.handshake_complete,
+            connected=self.core.any_live_stream(),
+            handshake_complete=self.core.is_current_peer_secure(),
             outbound_connect_busy=self.core.is_outbound_connect_busy(),
             delivery_state=str(delivery.get("state", "unknown")),
             send_in_flight=send_in_flight,
@@ -664,7 +668,7 @@ class I2PChat(App):
     def _actions_summary_text(self) -> str:
         snap = self._build_status_snapshot()
         peer = self._current_target_peer() or "—"
-        connected = "yes" if self.core.conn is not None else "no"
+        connected = "yes" if self.core.any_live_stream() else "no"
         verified = "yes" if self.core.proven else "no"
         return (
             f"Current peer: {peer}\n"
@@ -922,7 +926,8 @@ class I2PChat(App):
         self._flush_compose_drafts_to_disk()
 
     def _current_target_peer(self) -> Optional[str]:
-        return self.core.current_peer_addr or self.selected_peer or None
+        """Выбранный в TUI пир важнее last transport session (мульти-live)."""
+        return self.selected_peer or self.core.current_peer_addr or None
 
     def _set_selected_peer(
         self,
@@ -3238,12 +3243,19 @@ class TuiActionsScreen(ModalScreen[None]):
         disconnect_btn = self.query_one("#actions_disconnect", Button)
         save_btn = self.query_one("#actions_save", Button)
         peer = self._peer_value()
+        already = (
+            bool(peer and self.host.core.has_active_live_session(peer))
+        )
+        at_cap = (
+            self.host.core._live_stream_count() >= max_concurrent_live_sessions()
+        )
         connect_btn.disabled = (
             peer is None
-            or self.host.core.conn is not None
+            or already
             or self.host.core.is_outbound_connect_busy()
+            or at_cap
         )
-        disconnect_btn.disabled = self.host.core.conn is None
+        disconnect_btn.disabled = not self.host.core.any_live_stream()
         save_btn.disabled = not self.host.core.is_current_peer_verified_for_lock()
 
     def _peer_value(self) -> Optional[str]:

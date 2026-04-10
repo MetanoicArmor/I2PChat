@@ -57,6 +57,7 @@ from i2pchat.protocol.message_delivery import (
     normalize_loaded_delivery_state,
 )
 from i2pchat.presentation.reply_format import format_reply_quote
+from i2pchat.core.live_peer_session import max_concurrent_live_sessions
 from i2pchat.core.send_retry_policy import should_start_auto_connect_retry as _should_start_auto_connect_retry
 from i2pchat.presentation.status_presentation import build_status_presentation
 from i2pchat.presentation.notification_prefs import (
@@ -6270,6 +6271,27 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _save_contacts_book(self) -> None:
         save_book(_contacts_file_path_for_write(self.profile), self._contact_book)
 
+    def _resolved_peer_addr_for_actions(self) -> str:
+        """Address for Connect / retries when the field is empty: session, last active, first saved."""
+        raw = (self.addr_edit.text() or "").strip()
+        if raw:
+            return normalize_peer_address(raw) or raw
+        if self.core is not None:
+            cur = (self.core.current_peer_addr or "").strip()
+            if cur:
+                return cur
+        lap = (self._contact_book.last_active_peer or "").strip()
+        if lap:
+            return lap
+        if self._contact_book.contacts:
+            return self._contact_book.contacts[0].addr
+        return ""
+
+    def _outbound_peer_arg(self) -> Optional[str]:
+        """Куда слать live-текст/файлы: поле адреса / контакт важнее, чем last SAM session."""
+        r = self._resolved_peer_addr_for_actions()
+        return r if r else None
+
     def _group_display_name(
         self, group_id: str, *, title: Optional[str] = None
     ) -> str:
@@ -6753,6 +6775,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         if not norm:
             return
         self.addr_edit.setText(norm)
+        if self.core is not None:
+            try:
+                self.core.active_live_peer_id = self.core._normalize_peer_addr(norm)
+            except Exception:
+                self.core.active_live_peer_id = norm
         changed = False
         if remember_peer(self._contact_book, norm):
             changed = True
@@ -6919,13 +6946,13 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _peer_matches_active_connection(self, norm_cb: str) -> bool:
         if self.core is None:
             return False
-        if self.core.conn is None:
-            return False
         cur = (self.core.current_peer_addr or "").strip()
         if not cur:
             return False
         try:
-            return normalize_peer_address(norm_cb) == normalize_peer_address(cur)
+            if normalize_peer_address(norm_cb) != normalize_peer_address(cur):
+                return False
+            return self.core.has_active_live_session(norm_cb)
         except Exception:
             return False
 
@@ -7023,7 +7050,7 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _peer_target_available(self) -> bool:
         if self.core is None:
             return bool(self.addr_edit.text().strip())
-        return bool(self.addr_edit.text().strip())
+        return bool(self._resolved_peer_addr_for_actions())
 
     def _send_action_allowed(self) -> bool:
         """Разрешить Send: live-сессия или готовый BlindBox (очередь офлайн)."""
@@ -7062,18 +7089,38 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._refresh_send_controls()
             return
 
-        connected = self.core.conn is not None
+        connected = self.core.any_live_stream()
         busy = self.core.is_outbound_connect_busy()
         has_target = self._peer_target_available()
+        resolved = self._resolved_peer_addr_for_actions()
+        try:
+            norm_target = (
+                self.core._normalize_peer_addr(resolved) if resolved else ""
+            )
+        except Exception:
+            norm_target = ""
+        already_for_target = (
+            bool(norm_target and self.core.has_active_live_session(norm_target))
+        )
+        at_cap = self.core._live_stream_count() >= max_concurrent_live_sessions()
         # Исходящий I2P-connect имеет смысл только после local_ok (в UI — pending) или visible.
         network_ready = self.core.network_status in ("local_ok", "visible")
         can_connect = (
-            (not connected) and (not busy) and has_target and network_ready
+            (not busy)
+            and has_target
+            and network_ready
+            and (not already_for_target)
+            and (not at_cap)
         )
         if self.connect_button.isEnabled() != can_connect:
             self.connect_button.setEnabled(can_connect)
         if connected:
-            c_tip = "Already connected — use Disconnect to end the session."
+            n = self.core._live_stream_count()
+            cap = max_concurrent_live_sessions()
+            c_tip = (
+                f"Live sessions: {n}/{cap}. Connect another Saved peer if below the limit "
+                "and this address is not already connected."
+            )
         elif busy:
             c_tip = "Connecting… please wait."
         elif not has_target:
@@ -9109,8 +9156,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         lap = (self._contact_book.last_active_peer or "").strip()
         stored = lap or None
 
-        link_state = "online" if self.core.conn else "offline"
-        secure_state = "on" if self.core.handshake_complete else "off"
+        link_state = "online" if self.core.any_live_stream() else "offline"
+        secure_state = "on" if self.core.is_current_peer_secure() else "off"
         blindbox_state = "off"
         blindbox_sync = "idle"
         blindbox_queue = "0"
@@ -9201,8 +9248,8 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         pres = build_status_presentation(
             network_status_raw=self._last_status,
-            connected=bool(self.core.conn),
-            handshake_complete=bool(self.core.handshake_complete),
+            connected=bool(self.core.any_live_stream()),
+            handshake_complete=bool(self.core.is_current_peer_secure()),
             outbound_connect_busy=bool(self.core.is_outbound_connect_busy()),
             delivery_state=delivery_state,
             send_in_flight=bool(self._status_send_in_flight),
@@ -9221,6 +9268,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         primary_full = pres.primary_full
         if ack_drop_total > 0:
             primary_full = f"{primary_full} | {ack_part}"
+        try:
+            live_n = int(self.core.live_stream_count())
+        except Exception:
+            live_n = 1
+        if live_n > 1:
+            primary_full = f"{primary_full} | Live×{live_n}"
         self._set_status_text(primary_full, pres.primary_short)
         current_signature = (status, link_state, secure_state, delivery_state)
         if (
@@ -9268,7 +9321,10 @@ class ChatWindow(QtWidgets.QMainWindow):
                 else:
                     self._refresh_groups_list()
                 return
-            result = await self.core.send_text(text)
+            result = await self.core.send_text(
+                text,
+                peer_address=self._outbound_peer_arg(),
+            )
             if result.accepted:
                 if draft_key:
                     self._compose_drafts.pop(draft_key, None)
@@ -9303,26 +9359,37 @@ class ChatWindow(QtWidgets.QMainWindow):
     async def _auto_connect_and_retry_send(self, text: str) -> None:
         """Single-click flow: try live connect, then retry send once."""
         try:
-            addr = self.addr_edit.text().strip() or (self.core.stored_peer or "")
+            addr = self.addr_edit.text().strip() or self._resolved_peer_addr_for_actions()
             if not addr:
                 self.handle_system("Auto-connect failed, message kept in input.")
                 return
             self.handle_system("Auto-connect started for this message...")
-            if not self.core.conn and not self.core.is_outbound_connect_busy():
+            norm_addr = self.core._normalize_peer_addr(addr)
+            if (
+                not self.core.has_active_live_session(norm_addr)
+                and not self.core.is_outbound_connect_busy()
+            ):
                 await self.core.connect_to_peer(addr)
             deadline = time.monotonic() + 75.0
             while time.monotonic() < deadline:
-                if self.core.conn is not None and self.core.handshake_complete:
+                if self.core.has_active_live_session(
+                    norm_addr
+                ) and self.core._handshake_complete_for_peer_route(norm_addr):
                     break
                 if (
-                    self.core.conn is None
+                    not self.core.any_live_stream()
                     and not self.core.is_outbound_connect_busy()
                 ):
                     self.handle_system("Auto-connect failed, message kept in input.")
                     return
                 await asyncio.sleep(0.25)
-            if self.core.conn is not None and self.core.handshake_complete:
-                retry = await self.core.send_text(text)
+            if self.core.has_active_live_session(
+                norm_addr
+            ) and self.core._handshake_complete_for_peer_route(norm_addr):
+                retry = await self.core.send_text(
+                    text,
+                    peer_address=norm_addr,
+                )
                 if retry.accepted:
                     dk = self._compose_peer_key_from_ui()
                     if dk:
@@ -9343,19 +9410,22 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_connect_clicked(self) -> None:
-        addr = self.addr_edit.text().strip()
+        addr = (self.addr_edit.text() or "").strip()
         if not addr:
-            # Если адрес не введён, но есть сохранённый контакт, используем его.
-            if self.core.stored_peer:
-                addr = self.core.stored_peer
+            addr = self._resolved_peer_addr_for_actions()
+            if addr:
                 self.addr_edit.setText(addr)
-            else:
-                QtWidgets.QMessageBox.warning(
-                    self, "Connect", "Please enter peer address"
-                )
-                return
+        else:
+            addr = normalize_peer_address(addr) or addr
+        if not addr:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Connect",
+                "Enter a peer .b32.i2p address or pick a saved contact.",
+            )
+            return
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
-        if self.core.conn is None:
+        if not self.core.any_live_stream():
             self._refresh_offline_history_display()
         asyncio.create_task(self.core.connect_to_peer(addr))
         QtCore.QTimer.singleShot(0, self._refresh_connection_buttons)
@@ -9477,15 +9547,8 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _current_history_peer(self) -> Optional[str]:
         if self._active_group_id:
             return None
-        if self.core is None:
-            text = self.addr_edit.text().strip()
-            return text or None
-        return (
-            self.core.current_peer_addr
-            or self.core.stored_peer
-            or self.addr_edit.text().strip()
-            or None
-        )
+        r = self._resolved_peer_addr_for_actions()
+        return r or None
 
     def _compose_peer_key_from_ui(self) -> Optional[str]:
         if self._active_group_id:
@@ -9714,7 +9777,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             return
         if self.core is None:
             return
-        if self.core.conn is not None:
+        if self.core.any_live_stream():
             return
         raw = (self._current_history_peer() or "").strip()
         if not raw:
@@ -9983,9 +10046,13 @@ class ChatWindow(QtWidgets.QMainWindow):
             if not ok:
                 self.handle_error(err or "Invalid image file")
                 return
-            asyncio.create_task(self.core.send_image(path))
+            asyncio.create_task(
+                self.core.send_image(path, peer_address=self._outbound_peer_arg())
+            )
             return
-        asyncio.create_task(self.core.send_file(path))
+        asyncio.create_task(
+            self.core.send_file(path, peer_address=self._outbound_peer_arg())
+        )
 
     @QtCore.pyqtSlot()
     def _export_profile_backup(self) -> None:
@@ -10131,9 +10198,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         save_history_enabled(self._history_enabled)
         self._history_toggle_btn.setText(self._history_toggle_label())
         if self._history_enabled:
-            if self.core.conn is None:
+            if not self.core.any_live_stream():
                 self._refresh_offline_history_display()
-            elif self.core.handshake_complete:
+            elif self.core.is_current_peer_secure():
                 self._try_load_history()
             self.handle_system("Chat history saving enabled.")
         else:
@@ -10148,7 +10215,7 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _on_clear_history_clicked(self) -> None:
         peer = (
             self.core.current_peer_addr
-            or self.core.stored_peer
+            or (self._contact_book.last_active_peer or "").strip()
             or self.addr_edit.text().strip()
         )
         if not peer:
@@ -10204,7 +10271,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             selected_peer = (
                 self.addr_edit.text().strip()
                 or self.core.current_peer_addr
-                or self.core.stored_peer
+                or (self._contact_book.last_active_peer or "").strip()
                 or ""
             )
             summary.setPlainText(
@@ -10591,7 +10658,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         peer_addr = (
             self.addr_edit.text().strip()
             or (self.core.current_peer_addr or "").strip()
-            or (self.core.stored_peer or "").strip()
+            or (self._contact_book.last_active_peer or "").strip()
         )
         if not peer_addr:
             QtWidgets.QMessageBox.warning(
@@ -10744,7 +10811,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         if not path:
             return
-        asyncio.create_task(self.core.send_file(path))
+        asyncio.create_task(
+            self.core.send_file(path, peer_address=self._outbound_peer_arg())
+        )
 
     @QtCore.pyqtSlot()
     def on_send_pic_clicked(self) -> None:
@@ -10756,7 +10825,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         if not path:
             return
-        asyncio.create_task(self.core.send_image(path))
+        asyncio.create_task(
+            self.core.send_image(path, peer_address=self._outbound_peer_arg())
+        )
 
     @QtCore.pyqtSlot(str)
     def on_clipboard_image_ready(self, path: str) -> None:
@@ -10772,7 +10843,9 @@ class ChatWindow(QtWidgets.QMainWindow):
                     pass
             self.handle_error(err or "Invalid image from clipboard")
             return
-        asyncio.create_task(self.core.send_image(path))
+        asyncio.create_task(
+            self.core.send_image(path, peer_address=self._outbound_peer_arg())
+        )
 
     @QtCore.pyqtSlot(str)
     def _on_reply_requested(self, block: str) -> None:
@@ -10794,11 +10867,21 @@ class ChatWindow(QtWidgets.QMainWindow):
             return
         if item.retry_kind == "file" and item.retry_source_path:
             self._remove_item(row)
-            asyncio.create_task(self.core.send_file(item.retry_source_path))
+            asyncio.create_task(
+                self.core.send_file(
+                    item.retry_source_path,
+                    peer_address=self._outbound_peer_arg(),
+                )
+            )
             return
         if item.retry_kind == "image" and item.retry_source_path:
             self._remove_item(row)
-            asyncio.create_task(self.core.send_image(item.retry_source_path))
+            asyncio.create_task(
+                self.core.send_image(
+                    item.retry_source_path,
+                    peer_address=self._outbound_peer_arg(),
+                )
+            )
 
     @QtCore.pyqtSlot(str)
     def on_image_open_requested(self, path: str) -> None:
@@ -10832,7 +10915,11 @@ class ChatWindow(QtWidgets.QMainWindow):
                 text=art,
             )
         )
-        asyncio.create_task(self.core.send_image_lines(lines))
+        asyncio.create_task(
+            self.core.send_image_lines(
+                lines, peer_address=self._outbound_peer_arg()
+            )
+        )
 
     @QtCore.pyqtSlot()
     def on_send_img_bw_clicked(self) -> None:
@@ -10851,7 +10938,11 @@ class ChatWindow(QtWidgets.QMainWindow):
                 text=art,
             )
         )
-        asyncio.create_task(self.core.send_image_lines(lines))
+        asyncio.create_task(
+            self.core.send_image_lines(
+                lines, peer_address=self._outbound_peer_arg()
+            )
+        )
 
     async def start_core(self) -> None:
         try:

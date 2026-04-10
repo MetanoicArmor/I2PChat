@@ -93,6 +93,8 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         core.peer_identity_binding_verified = True
         # Multi-peer: root exchange requires Saved peer; tests use a synthetic session.
         core.peer_in_saved_contacts = lambda _addr: True  # type: ignore[method-assign]
+        # Legacy route: _handshake_complete_for_peer_route needs conn when peer is not in _live_sessions.
+        core.conn = (_FakeReader(b""), _FakeWriter())
         return core
 
     def test_invalid_profile_name_rejected(self) -> None:
@@ -200,7 +202,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         core = I2PChatCore()
         core.conn = (_FakeReader(b""), _FakeWriter())
         disconnect_mock: AsyncMock = AsyncMock()
-        core.disconnect = disconnect_mock  # type: ignore[method-assign]
+        core.disconnect_peer = disconnect_mock  # type: ignore[method-assign]
 
         core._schedule_disconnect()
         core._schedule_disconnect()
@@ -215,7 +217,8 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
         writer = _FakeWriter()
         core._disconnect_scheduled_for_test = False  # type: ignore[attr-defined]
 
-        def _mark_disconnect() -> None:
+        def _mark_disconnect(peer_id: Optional[str] = None) -> None:
+            del peer_id
             core._disconnect_scheduled_for_test = True  # type: ignore[attr-defined]
 
         core._schedule_disconnect = _mark_disconnect  # type: ignore[method-assign]

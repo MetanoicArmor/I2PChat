@@ -100,6 +100,11 @@ from i2pchat.core.session_manager import (
     SessionManager,
     TransportState,
 )
+from i2pchat.core.live_peer_session import (
+    LegacyCoreSessionView,
+    LivePeerSession,
+    max_concurrent_live_sessions,
+)
 
 logger = logging.getLogger("i2pchat")
 PROTOCOL_VERSION = 4
@@ -1268,6 +1273,7 @@ class I2PChatCore:
         # буфер для inline-изображений (бинарные данные)
         self.inline_image_buffer: bytearray = bytearray()
         self.inline_image_info: Optional[Tuple[str, int]] = None  # (filename, size)
+        self._inline_image_last_emit: int = 0
 
         # криптография (устанавливается при handshake v2)
         self.shared_key: Optional[bytes] = None
@@ -1314,6 +1320,10 @@ class I2PChatCore:
             send_live=self._send_group_envelope_live,
             send_offline=self._send_group_envelope_via_blindbox,
         )
+        self._live_sessions: dict[str, LivePeerSession] = {}
+        self.active_live_peer_id: Optional[str] = None
+        # Пир первого (legacy) SAM-потока self.conn — не путать с current_peer_addr при мульти-live.
+        self._legacy_stream_peer_id: Optional[str] = None
 
         # Флаг активной передачи файла (для защиты от timeout в receive_loop)
         self._file_transfer_active: bool = False
@@ -1799,41 +1809,72 @@ class I2PChatCore:
             else:
                 self.on_inline_image_received(path, is_from_me)
 
-    def _require_secure_channel(self) -> bool:
+    def _require_secure_channel(self, *, outbound_peer: Optional[str] = None) -> bool:
         """Проверяет, что можно отправлять пользовательские данные."""
-        if not self.conn:
-            self._emit_error("No active connection.")
-            return False
-        peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-        live_kwargs: dict[str, Any] = {"peer_id": peer_addr_norm}
-        if not peer_addr_norm:
-            live_kwargs["connected"] = True
-            live_kwargs["handshake_complete"] = self.handshake_complete
+        if outbound_peer and str(outbound_peer).strip():
+            try:
+                peer_addr_norm = self._normalize_peer_addr(outbound_peer)
+            except ValueError:
+                self._emit_error("Invalid peer address.")
+                return False
+        else:
+            peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+        if peer_addr_norm:
+            if not self._has_active_session_for_peer(peer_addr_norm):
+                self._emit_error("No active connection.")
+                return False
+            live_kwargs: dict[str, Any] = {"peer_id": peer_addr_norm}
+        else:
+            if not self.any_live_stream():
+                self._emit_error("No active connection.")
+                return False
+            live_kwargs = {
+                "connected": True,
+                "handshake_complete": self.handshake_complete,
+            }
         if not self.session_manager.is_live_path_alive(**live_kwargs):
             self._emit_error("Secure channel not ready yet. Wait for 'Ready'.")
             return False
         return True
 
-    def _cancel_handshake_watchdog(self) -> None:
+    def _cancel_handshake_watchdog(self, peer_id: Optional[str] = None) -> None:
         # Не отменяем задачу напрямую внутри активной корутины: в некоторых
         # loop-интеграциях (Qt/qasync) это может вызвать re-entrant step Task.
+        if peer_id is not None:
+            k = self._normalize_peer_addr(peer_id)
+            w = self.session_manager.handshake_watchdog_peer_id
+            if w != k:
+                return
         self.session_manager.invalidate_handshake_watchdog()
 
     def _start_handshake_watchdog(
-        self, connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        self,
+        connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
+        peer_id: Optional[str] = None,
     ) -> None:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._cancel_handshake_watchdog()
+        self.session_manager.invalidate_handshake_watchdog()
+        self.session_manager.handshake_watchdog_peer_id = (
+            self._normalize_peer_addr(peer_id)
+            if peer_id
+            else self._normalize_peer_addr(self.current_peer_addr or "")
+        )
         generation = self.session_manager.handshake_watchdog_generation
         self.session_manager.handshake_watchdog_task = loop.create_task(
-            self._handshake_watchdog(connection, generation)
+            self._handshake_watchdog(connection, generation, peer_id)
         )
 
-    def _schedule_disconnect(self) -> None:
-        if self.session_manager.disconnecting or self.conn is None:
+    def _schedule_disconnect(self, peer_id: Optional[str] = None) -> None:
+        if self.session_manager.disconnecting:
+            return
+        if peer_id is not None:
+            ls = self._live_sessions.get(peer_id)
+            if ls is None or ls.conn is None:
+                return
+        elif self.conn is None:
             return
         if (
             self.session_manager.disconnect_task is not None
@@ -1844,7 +1885,7 @@ class I2PChatCore:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self.session_manager.disconnect_task = loop.create_task(self.disconnect())
+        self.session_manager.disconnect_task = loop.create_task(self.disconnect_peer(peer_id))
         self.session_manager.transition_transport(
             TransportState.RECONNECTING, reason="scheduled-disconnect"
         )
@@ -1853,10 +1894,26 @@ class I2PChatCore:
         self,
         connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
         generation: int,
+        peer_id: Optional[str] = None,
     ) -> None:
         """Закрывает соединение, если handshake не завершился вовремя."""
         await asyncio.sleep(self.HANDSHAKE_TIMEOUT)
         if generation != self.session_manager.handshake_watchdog_generation:
+            return
+        if peer_id is not None:
+            ls = self._live_sessions.get(peer_id)
+            if (
+                ls is None
+                or ls.conn is not connection
+                or ls.handshake_complete
+            ):
+                return
+            self._emit_error("Secure handshake timed out")
+            if peer_id:
+                self.session_manager.mark_peer_failed(
+                    peer_id, reason="handshake-timeout"
+                )
+            self._schedule_disconnect(peer_id)
             return
         if self.conn == connection and not self.handshake_complete:
             self._emit_error("Secure handshake timed out")
@@ -1876,8 +1933,136 @@ class I2PChatCore:
             self._next_msg_id = 1
         return msg_id
 
+    def _session_for_frame(self, peer_id: Optional[str]) -> Any:
+        """Crypto/frame state: legacy core fields or LivePeerSession for extra peers."""
+        if peer_id:
+            s = self._live_sessions.get(peer_id)
+            if s is None:
+                raise ValueError(f"No live session for peer_id={peer_id!r}")
+            return s
+        return LegacyCoreSessionView(self)
+
+    def _peer_id_for_frame(self) -> Optional[str]:
+        """When sending on the active chat, use extra session crypto if this peer lives there."""
+        if not self.current_peer_addr:
+            return None
+        k = self._normalize_peer_addr(self.current_peer_addr)
+        if k in self._live_sessions:
+            return k
+        return None
+
+    def _legacy_stream_peer_key(self) -> str:
+        """Нормализованный адрес пира, которому принадлежит legacy-поток self.conn."""
+        if not self.conn:
+            return ""
+        if self._legacy_stream_peer_id:
+            try:
+                return self._normalize_peer_addr(self._legacy_stream_peer_id)
+            except ValueError:
+                return ""
+        if self.current_peer_addr:
+            try:
+                return self._normalize_peer_addr(self.current_peer_addr)
+            except ValueError:
+                return ""
+        return ""
+
+    def _writer_frame_peer_and_text_acks(
+        self, peer_for_route: str
+    ) -> Tuple[Optional[asyncio.StreamWriter], Optional[str], Any]:
+        """Writer, peer_id для frame_message*, и таблица pending MSG_ACK для маршрута."""
+        try:
+            k = self._normalize_peer_addr(peer_for_route) if peer_for_route else ""
+        except ValueError:
+            k = self._normalize_peer_addr("")
+        if k in self._live_sessions:
+            ls = self._live_sessions[k]
+            if ls.conn:
+                return ls.conn[1], k, ls._pending_text_acks
+        legacy_k = self._legacy_stream_peer_key()
+        if self.conn and (not k or (legacy_k and k == legacy_k)):
+            return self.conn[1], None, self._pending_text_acks
+        return None, None, self._pending_text_acks
+
+    def _writer_frame_peer_and_file_acks(
+        self, peer_for_route: str
+    ) -> Tuple[Optional[asyncio.StreamWriter], Optional[str], Any]:
+        try:
+            k = self._normalize_peer_addr(peer_for_route) if peer_for_route else ""
+        except ValueError:
+            k = self._normalize_peer_addr("")
+        if k in self._live_sessions:
+            ls = self._live_sessions[k]
+            if ls.conn:
+                return ls.conn[1], k, ls._pending_file_acks
+        legacy_k = self._legacy_stream_peer_key()
+        if self.conn and (not k or (legacy_k and k == legacy_k)):
+            return self.conn[1], None, self._pending_file_acks
+        return None, None, self._pending_file_acks
+
+    def _writer_frame_peer_and_image_acks(
+        self, peer_for_route: str
+    ) -> Tuple[Optional[asyncio.StreamWriter], Optional[str], Any]:
+        try:
+            k = self._normalize_peer_addr(peer_for_route) if peer_for_route else ""
+        except ValueError:
+            k = self._normalize_peer_addr("")
+        if k in self._live_sessions:
+            ls = self._live_sessions[k]
+            if ls.conn:
+                return ls.conn[1], k, ls._pending_image_acks
+        legacy_k = self._legacy_stream_peer_key()
+        if self.conn and (not k or (legacy_k and k == legacy_k)):
+            return self.conn[1], None, self._pending_image_acks
+        return None, None, self._pending_image_acks
+
+    def _session_view_for_peer_route(self, peer_for_route: str) -> Any:
+        """LivePeerSession для extra-пира или LegacyCoreSessionView для основного потока."""
+        k = self._normalize_peer_addr(peer_for_route)
+        if k in self._live_sessions:
+            return self._live_sessions[k]
+        return LegacyCoreSessionView(self)
+
+    def _handshake_complete_for_peer_route(self, peer_for_route: str) -> bool:
+        try:
+            k = self._normalize_peer_addr(peer_for_route) if peer_for_route else ""
+        except ValueError:
+            k = ""
+        if not k:
+            return self.handshake_complete
+        if k in self._live_sessions:
+            return bool(self._live_sessions[k].handshake_complete)
+        legacy_k = self._legacy_stream_peer_key()
+        if self.conn and legacy_k and k == legacy_k:
+            return self.handshake_complete
+        return False
+
+    def _live_stream_count(self) -> int:
+        n = 1 if self.conn else 0
+        n += sum(1 for s in self._live_sessions.values() if s.conn)
+        return n
+
+    def _has_active_session_for_peer(self, peer_id: str) -> bool:
+        k = self._normalize_peer_addr(peer_id)
+        s = self._live_sessions.get(k)
+        if s and s.conn:
+            return True
+        legacy_k = self._legacy_stream_peer_key()
+        if self.conn and legacy_k and k == legacy_k:
+            return True
+        return False
+
+    def has_active_live_session(self, peer_address: str) -> bool:
+        """True, если с этим пиром уже есть активный SAM-поток (legacy или extra)."""
+        return self._has_active_session_for_peer(peer_address)
+
     def frame_message_with_id(
-        self, msg_type: str, content: str, *, force_plain: bool = False
+        self,
+        msg_type: str,
+        content: str,
+        *,
+        force_plain: bool = False,
+        peer_id: Optional[str] = None,
     ) -> tuple[bytes, int]:
         """
         Формирует vNext-фрейм:
@@ -1885,19 +2070,16 @@ class I2PChatCore:
         """
         body = content.encode("utf-8")
         msg_id = self._allocate_msg_id()
+        sess = self._session_for_frame(peer_id)
 
-        if (
-            self.shared_key
-            and self.use_encryption
-            and not force_plain
-        ):
+        if sess.shared_key and sess.use_encryption and not force_plain:
             if not crypto.NACL_AVAILABLE:
                 raise RuntimeError("NaCl is required for secure protocol mode")
-            self._send_seq += 1
-            seq = self._send_seq
-            mac_key = self.shared_mac_key or self.shared_key
+            sess._send_seq += 1
+            seq = sess._send_seq
+            mac_key = sess.shared_mac_key or sess.shared_key
             padded_body = self._apply_padding_profile(body)
-            encrypted_body = crypto.encrypt_message(self.shared_key, padded_body)
+            encrypted_body = crypto.encrypt_message(sess.shared_key, padded_body)
             mac = crypto.compute_mac(
                 mac_key,
                 msg_type,
@@ -1942,13 +2124,19 @@ class I2PChatCore:
             raise ValueError("Malformed padded payload length")
         return payload[:original_len]
 
-    def frame_message(self, msg_type: str, content: str) -> bytes:
-        frame, _ = self.frame_message_with_id(msg_type, content)
+    def frame_message(
+        self, msg_type: str, content: str, *, peer_id: Optional[str] = None
+    ) -> bytes:
+        frame, _ = self.frame_message_with_id(msg_type, content, peer_id=peer_id)
         return frame
 
-    def frame_message_plain(self, msg_type: str, content: str) -> bytes:
+    def frame_message_plain(
+        self, msg_type: str, content: str, *, peer_id: Optional[str] = None
+    ) -> bytes:
         """Формирует незашифрованный фрейм (handshake/control)."""
-        frame, _ = self.frame_message_with_id(msg_type, content, force_plain=True)
+        frame, _ = self.frame_message_with_id(
+            msg_type, content, force_plain=True, peer_id=peer_id
+        )
         return frame
 
     # ---------- инициализация сессии ----------
@@ -2684,11 +2872,13 @@ class I2PChatCore:
 
     def _blindbox_live_peer_ok_for_root_exchange(self) -> bool:
         """Live session with a Saved peer — replaces legacy lock-to-peer check."""
-        if not self.handshake_complete or not self.current_peer_addr:
+        if not self.current_peer_addr:
             return False
         try:
             cur = self._normalize_peer_addr(self.current_peer_addr)
         except Exception:
+            return False
+        if not self._handshake_complete_for_peer_route(cur):
             return False
         if self.profile == TRANSIENT_PROFILE_NAME:
             return bool(cur)
@@ -3200,13 +3390,28 @@ class I2PChatCore:
     ACK_MAX_PENDING = 4096
     ACK_PRUNE_INTERVAL = 15.0
 
-    def _activate_ack_session(self) -> None:
-        self._ack_session_epoch += 1
-        if self._ack_session_epoch > 0x7FFFFFFF:
-            self._ack_session_epoch = 1
+    def _activate_ack_session(self, peer_id: Optional[str] = None) -> None:
+        """Сброс inflight и новый epoch ACK для legacy-потока или указанного live-пира."""
+        if peer_id:
+            k = self._normalize_peer_addr(peer_id)
+            ls = self._live_sessions.get(k)
+            if ls:
+                ls._ack_session_epoch += 1
+                if ls._ack_session_epoch > 0x7FFFFFFF:
+                    ls._ack_session_epoch = 1
+        else:
+            self._ack_session_epoch += 1
+            if self._ack_session_epoch > 0x7FFFFFFF:
+                self._ack_session_epoch = 1
         self.session_manager.clear_inflight_messages(
-            peer_id=self._current_ack_peer()
+            peer_id=self._normalize_peer_addr(peer_id or self.current_peer_addr or "")
         )
+
+    def _ack_epoch_for_peer_addr(self, peer_addr: str) -> int:
+        k = self._normalize_peer_addr(peer_addr)
+        if k and k in self._live_sessions:
+            return self._live_sessions[k]._ack_session_epoch
+        return self._ack_session_epoch
 
     def _current_ack_peer(self) -> str:
         return self._normalize_peer_addr(self.current_peer_addr or "")
@@ -3260,12 +3465,13 @@ class I2PChatCore:
         ack_kind: str,
     ) -> None:
         self._prune_pending_acks(force=False)
+        cap = self._current_ack_peer()
         table[msg_id] = PendingAckEntry(
             token=token,
             ack_kind=ack_kind,
             created_at=time.monotonic(),
-            peer_addr=self._current_ack_peer(),
-            ack_session_epoch=self._ack_session_epoch,
+            peer_addr=cap,
+            ack_session_epoch=self._ack_epoch_for_peer_addr(cap),
             state="awaiting_ack",
         )
         self.session_manager.register_inflight_message(
@@ -4291,20 +4497,28 @@ class I2PChatCore:
         metadata: GroupRecipientDeliveryMetadata,
     ) -> GroupTransportOutcome:
         target_peer = self._normalize_peer_addr(recipient_id)
-        current_peer = self._normalize_peer_addr(self.current_peer_addr or "")
-        if not target_peer or self.conn is None or current_peer != target_peer:
+        if not target_peer or not self._has_active_session_for_peer(target_peer):
             return GroupTransportOutcome(accepted=False, reason="needs-live-session")
         if not self.session_manager.is_live_path_alive(peer_id=target_peer):
             return GroupTransportOutcome(accepted=False, reason="needs-live-session")
         state = self.load_group_state(envelope.group_id)
         if state is None:
             return GroupTransportOutcome(accepted=False, reason="unknown-group")
+        frame_peer_id: Optional[str] = None
         try:
-            _, writer = self.conn
+            writer, frame_peer_id, _ = self._writer_frame_peer_and_text_acks(
+                target_peer
+            )
+            if writer is None:
+                return GroupTransportOutcome(accepted=False, reason="needs-live-session")
             if self._blindbox_ready():
-                await self._send_blindbox_root_if_needed(writer)
+                await self._send_blindbox_root_if_needed(
+                    writer, peer_id=frame_peer_id
+                )
             body = self._encode_group_transport_body(state, envelope, metadata)
-            frame, msg_id = self.frame_message_with_id("U", body)
+            frame, msg_id = self.frame_message_with_id(
+                "U", body, peer_id=frame_peer_id
+            )
             writer.write(frame)
             await writer.drain()
             return GroupTransportOutcome(
@@ -4317,7 +4531,7 @@ class I2PChatCore:
                 reason="group-send-failed",
                 peer_id=target_peer,
             )
-            self._schedule_disconnect()
+            self._schedule_disconnect(frame_peer_id)
             return GroupTransportOutcome(
                 accepted=False,
                 reason=_exception_user_message(e),
@@ -4700,12 +4914,24 @@ class I2PChatCore:
         except ValueError as e:
             self._emit_error(str(e).strip() or "Invalid peer address")
             return
-        if self.conn is not None:
-            self._emit_system("Already connected. Disconnect first.")
+        if self._has_active_session_for_peer(normalized_target):
+            self._emit_system("Already connected to this peer.")
+            return
+        max_live = max_concurrent_live_sessions()
+        if self._live_stream_count() >= max_live:
+            self._emit_system(
+                f"Maximum concurrent live sessions ({max_live}) reached. "
+                "Disconnect a peer first."
+            )
             return
         if self.session_manager.outbound_connect_busy:
             self._emit_system("Connection attempt already in progress.")
             return
+        use_legacy = self.conn is None
+        extra_ls: Optional[LivePeerSession] = None
+        if not use_legacy:
+            extra_ls = LivePeerSession(peer_id=normalized_target)
+            self._live_sessions[normalized_target] = extra_ls
         self.session_manager.set_active_peer(normalized_target)
         self.session_manager.set_outbound_connect_busy(True, peer_id=normalized_target)
         self.session_manager.set_peer_connected(
@@ -4718,8 +4944,10 @@ class I2PChatCore:
         deferred_system: Optional[str] = None
         try:
             try:
-                self._reset_crypto_state()
+                if use_legacy:
+                    self._reset_crypto_state()
                 self.current_peer_addr = normalized_target
+                self.active_live_peer_id = normalized_target
                 self._emit_system(
                     f"Connecting to {normalized_target[:24]}... "
                     "(may take 1–2 min while I2P builds tunnels)"
@@ -4758,32 +4986,68 @@ class I2PChatCore:
                 if self.my_dest is not None:
                     # Backward-safe identity preface для accept_loop(reader.readline()).
                     writer.write(self.my_dest.base64.encode("utf-8") + b"\n")
-                    writer.write(self.frame_message("S", self.my_dest.base64))
+                    if use_legacy:
+                        writer.write(self.frame_message("S", self.my_dest.base64))
+                    else:
+                        writer.write(
+                            self.frame_message_plain(
+                                "S", self.my_dest.base64, peer_id=normalized_target
+                            )
+                        )
                     await writer.drain()
 
-                    self.proven = True
+                    if use_legacy:
+                        self.proven = True
+                    elif extra_ls is not None:
+                        extra_ls.proven = True
                     self._emit_status("visible")
 
-                self.conn = (reader, writer)
+                connection = (reader, writer)
+                if use_legacy:
+                    self.conn = connection
+                    self._legacy_stream_peer_id = normalized_target
+                elif extra_ls is not None:
+                    extra_ls.conn = connection
                 self.session_manager.register_stream(
                     normalized_target,
                     state=PeerState.HANDSHAKING,
                     peer_id=normalized_target,
                 )
-                self._activate_ack_session()
+                if use_legacy:
+                    self._activate_ack_session()
+                else:
+                    self._activate_ack_session(normalized_target)
                 self._emit_message(
                     "info", "Handshake sent. Establishing secure channel... Wait"
                 )
 
                 loop = asyncio.get_running_loop()
-                loop.create_task(self.receive_loop(self.conn))
-                loop.create_task(self.initiate_secure_handshake())
-                self._start_handshake_watchdog(self.conn)
-                self.session_manager.keepalive_task = loop.create_task(
-                    self._keepalive_loop()
-                )
+                if use_legacy:
+                    loop.create_task(self.receive_loop(self.conn))
+                    loop.create_task(self.initiate_secure_handshake())
+                    self._start_handshake_watchdog(self.conn)
+                else:
+                    loop.create_task(
+                        self.receive_loop(connection, peer_id=normalized_target)
+                    )
+                    loop.create_task(
+                        self.initiate_secure_handshake(normalized_target)
+                    )
+                    self._start_handshake_watchdog(
+                        connection, peer_id=normalized_target
+                    )
+                if (
+                    self.session_manager.keepalive_task is None
+                    or self.session_manager.keepalive_task.done()
+                ):
+                    self.session_manager.keepalive_task = loop.create_task(
+                        self._keepalive_loop()
+                    )
             except asyncio.TimeoutError:
-                self.conn = None
+                if use_legacy:
+                    self.conn = None
+                else:
+                    self._live_sessions.pop(normalized_target, None)
                 self.session_manager.mark_peer_failed(
                     normalized_target, reason="connect-timeout"
                 )
@@ -4797,7 +5061,10 @@ class I2PChatCore:
                 )
                 deferred_system = "Waiting for incoming connections..."
             except Exception as e:
-                self.conn = None
+                if use_legacy:
+                    self.conn = None
+                else:
+                    self._live_sessions.pop(normalized_target, None)
                 self.session_manager.mark_peer_failed(
                     normalized_target, reason="connect-failed"
                 )
@@ -4830,6 +5097,7 @@ class I2PChatCore:
         text: str,
         *,
         route: Literal["auto", "live", "offline"] = "auto",
+        peer_address: Optional[str] = None,
     ) -> SendTextResult:
         if not text:
             lifecycle = delivery_lifecycle_from_send_result(
@@ -4847,11 +5115,22 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
         r = route if route in ("auto", "live", "offline") else "auto"
-        lap = self._last_active_peer_for_telemetry()
-        peer_for_route = self._normalize_peer_addr(
-            self.current_peer_addr or lap or ""
+        peer_for_route = ""
+        if peer_address and str(peer_address).strip():
+            try:
+                peer_for_route = self._normalize_peer_addr(peer_address)
+            except ValueError:
+                peer_for_route = ""
+        if not peer_for_route:
+            lap = self._last_active_peer_for_telemetry()
+            peer_for_route = self._normalize_peer_addr(
+                self.current_peer_addr or lap or ""
+            )
+        connected = (
+            bool(peer_for_route and self._has_active_session_for_peer(peer_for_route))
+            if peer_for_route
+            else self.conn is not None
         )
-        connected = self.conn is not None
         live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
         policy_kwargs: dict[str, Any] = {
             "requested_route": r,
@@ -4921,7 +5200,9 @@ class I2PChatCore:
 
         if policy == OutboundPolicy.LIVE_ONLY:
             if not secure_live:
-                if self.conn is not None and not self.handshake_complete:
+                if connected and not self._handshake_complete_for_peer_route(
+                    peer_for_route
+                ):
                     hint = (
                         "Secure channel handshake is in progress. "
                         "Please wait before sending live."
@@ -5000,7 +5281,9 @@ class I2PChatCore:
                 delivery_state=lifecycle.state,
                 retryable=lifecycle.retryable,
             )
-        if not self._require_secure_channel():
+        if not self._require_secure_channel(
+            outbound_peer=peer_for_route or None
+        ):
             lifecycle = delivery_lifecycle_from_send_result(
                 route="blocked",
                 accepted=False,
@@ -5016,9 +5299,15 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
         try:
-            _, writer = self.conn
+            writer, frame_peer_id, text_ack_table = self._writer_frame_peer_and_text_acks(
+                peer_for_route
+            )
+            if writer is None:
+                raise ConnectionError("No live connection for the selected peer")
             if self._blindbox_ready():
-                await self._send_blindbox_root_if_needed(writer)
+                await self._send_blindbox_root_if_needed(
+                    writer, peer_id=frame_peer_id
+                )
             chunks = split_long_chat_text(text)
             last_msg_id: Optional[int] = None
             lifecycle = delivery_lifecycle_from_send_result(
@@ -5028,11 +5317,13 @@ class I2PChatCore:
                 hint="Message sent over live secure session.",
             )
             for chunk in chunks:
-                frame, msg_id = self.frame_message_with_id("U", chunk)
+                frame, msg_id = self.frame_message_with_id(
+                    "U", chunk, peer_id=frame_peer_id
+                )
                 writer.write(frame)
                 await writer.drain()
                 self._register_pending_ack(
-                    self._pending_text_acks,
+                    text_ack_table,
                     msg_id,
                     token=chunk[:128],
                     ack_kind="msg",
@@ -5063,7 +5354,7 @@ class I2PChatCore:
                 reason="send-failed",
                 peer_id=peer_for_route,
             )
-            self._schedule_disconnect()
+            self._schedule_disconnect(self._peer_id_for_frame())
             lifecycle = delivery_lifecycle_from_send_result(
                 route="blocked",
                 accepted=False,
@@ -5080,89 +5371,139 @@ class I2PChatCore:
             )
 
     async def _write_signal_frame_maybe_soft_drain(
-        self, writer: asyncio.StreamWriter, frame: bytes
+        self,
+        writer: asyncio.StreamWriter,
+        frame: bytes,
+        *,
+        sess: Any,
     ) -> None:
         """S-фрейм (MSG_ACK, IMG_ACK): при исходящей передаче файла реже await drain()."""
         writer.write(frame)
-        if not self._file_transfer_active:
+        if not sess._file_transfer_active:
             await writer.drain()
-            self._soft_signal_ack_since_drain = 0
+            sess._soft_signal_ack_since_drain = 0
             return
-        self._soft_signal_ack_since_drain += 1
-        if self._soft_signal_ack_since_drain >= _msg_ack_soft_drain_every():
+        sess._soft_signal_ack_since_drain += 1
+        if sess._soft_signal_ack_since_drain >= _msg_ack_soft_drain_every():
             await writer.drain()
-            self._soft_signal_ack_since_drain = 0
+            sess._soft_signal_ack_since_drain = 0
 
-    async def _send_abort_file(self) -> None:
+    async def _send_abort_file(self, peer_for_route: Optional[str] = None) -> None:
         """Отправить пиру сигнал отмены передачи файла (получатель отменил или отправитель)."""
-        if not self.conn:
+        lap = self._last_active_peer_for_telemetry()
+        pr = self._normalize_peer_addr(
+            peer_for_route or self.current_peer_addr or lap or ""
+        )
+        writer, fpid, _ = self._writer_frame_peer_and_file_acks(pr)
+        if writer is None:
             return
         try:
-            _, writer = self.conn
-            writer.write(self.frame_message("S", "__SIGNAL__:ABORT_FILE"))
+            writer.write(
+                self.frame_message("S", "__SIGNAL__:ABORT_FILE", peer_id=fpid)
+            )
             await writer.drain()
         except Exception:
             pass
 
-    async def reject_incoming_file(self, filename: str) -> None:
+    async def reject_incoming_file(
+        self, filename: str, *, peer_for_route: Optional[str] = None
+    ) -> None:
         """Уведомить отправителя, что получатель отклонил входящий файл."""
-        if not self.conn:
+        lap = self._last_active_peer_for_telemetry()
+        pr = self._normalize_peer_addr(
+            peer_for_route or self.current_peer_addr or lap or ""
+        )
+        writer, fpid, _ = self._writer_frame_peer_and_file_acks(pr)
+        if writer is None:
             return
         try:
-            _, writer = self.conn
-            writer.write(self.frame_message("S", f"__SIGNAL__:REJECT_FILE|{filename}"))
+            writer.write(
+                self.frame_message(
+                    "S",
+                    f"__SIGNAL__:REJECT_FILE|{filename}",
+                    peer_id=fpid,
+                )
+            )
             await writer.drain()
         except Exception:
             pass
 
     def cancel_file_transfer(self) -> None:
         """Отменить текущую передачу файла (на получателе — также уведомить отправителя)."""
+        lap = self._last_active_peer_for_telemetry()
+        pr = self._normalize_peer_addr(self.current_peer_addr or lap or "")
+        sess = self._session_view_for_peer_route(pr)
+        sess._cancel_transfer = True
         self._cancel_transfer = True
-        if self.incoming_file:
+        if sess.incoming_file:
             try:
-                self.incoming_file.close()
+                sess.incoming_file.close()
             except Exception:
                 pass
-            self.incoming_file = None
-        if self.incoming_info:
-            self._emit_file_event(FileTransferInfo(
-                filename=self.incoming_info.filename,
-                size=self.incoming_info.size,
-                received=-1,
-                is_sending=False,
-            ))
-            self.incoming_info = None
-        # Уведомить отправителя, чтобы он прекратил слать чанки
-        if self.conn:
+            sess.incoming_file = None
+        if sess.incoming_info:
+            self._emit_file_event(
+                FileTransferInfo(
+                    filename=sess.incoming_info.filename,
+                    size=sess.incoming_info.size,
+                    received=-1,
+                    is_sending=False,
+                )
+            )
+            sess.incoming_info = None
+        if sess.conn:
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._send_abort_file())
+                loop.create_task(self._send_abort_file(pr))
             except RuntimeError:
                 pass
 
-    async def send_file(self, path: str) -> None:
-        if not self._require_secure_channel():
+    async def send_file(
+        self, path: str, *, peer_address: Optional[str] = None
+    ) -> None:
+        peer_for_route = ""
+        if peer_address and str(peer_address).strip():
+            try:
+                peer_for_route = self._normalize_peer_addr(peer_address)
+            except ValueError:
+                peer_for_route = ""
+        if not peer_for_route:
+            lap = self._last_active_peer_for_telemetry()
+            peer_for_route = self._normalize_peer_addr(
+                self.current_peer_addr or lap or ""
+            )
+        if not peer_for_route:
+            self._emit_error("No peer selected for file transfer.")
             return
-        
+        if not self._require_secure_channel(outbound_peer=peer_for_route):
+            return
+
+        writer, fpid, file_acks = self._writer_frame_peer_and_file_acks(peer_for_route)
+        if writer is None:
+            self._emit_error("No live connection for the selected peer.")
+            return
+
+        sess = self._session_view_for_peer_route(peer_for_route)
         filename = os.path.basename(path)
         filesize = os.path.getsize(path)
-        
-        self._file_transfer_active = True
-        self._soft_signal_ack_since_drain = 0
-        self._cancel_transfer = False
-        self._transfer_aborted_by_peer = False
-        self._transfer_rejected_by_peer = False
-        
+
+        sess._file_transfer_active = True
+        sess._soft_signal_ack_since_drain = 0
+        sess._cancel_transfer = False
+        sess._transfer_aborted_by_peer = False
+        sess._transfer_rejected_by_peer = False
+
         try:
-            reader, writer = self.conn
             self._emit_system(f"Sending file: {filename} ({filesize} bytes)")
 
             header = f"{filename}|{filesize}"
-            header_frame, file_msg_id = self.frame_message_with_id("F", header)
+            header_frame, file_msg_id = self.frame_message_with_id(
+                "F", header, peer_id=fpid
+            )
             writer.write(header_frame)
             await writer.drain()
             self._register_pending_ack(
-                self._pending_file_acks,
+                file_acks,
                 file_msg_id,
                 token=os.path.basename(filename),
                 ack_kind="file",
@@ -5183,15 +5524,15 @@ class I2PChatCore:
             pending_drains = 0
             with open(path, "rb") as f:
                 while True:
-                    if self._cancel_transfer:
+                    if sess._cancel_transfer:
                         if pending_drains:
                             try:
                                 await writer.drain()
                             except Exception:
                                 pass
-                        await self._send_abort_file()
+                        await self._send_abort_file(peer_for_route)
                         raise Exception("Transfer cancelled by user")
-                    if self._transfer_aborted_by_peer:
+                    if sess._transfer_aborted_by_peer:
                         if pending_drains:
                             try:
                                 await writer.drain()
@@ -5199,14 +5540,14 @@ class I2PChatCore:
                                 pass
                         self._emit_system("Receiver cancelled the transfer")
                         raise Exception("Transfer cancelled by receiver")
-                    if self._transfer_rejected_by_peer:
+                    if sess._transfer_rejected_by_peer:
                         if pending_drains:
                             try:
                                 await writer.drain()
                             except Exception:
                                 pass
                         raise Exception("Receiver rejected the file")
-                    if not self.conn:
+                    if not sess.conn:
                         raise ConnectionError("Connection lost during transfer")
 
                     chunk = await asyncio.to_thread(f.read, chunk_size)
@@ -5214,7 +5555,7 @@ class I2PChatCore:
                         break
 
                     encoded = base64.b64encode(chunk).decode()
-                    writer.write(self.frame_message("D", encoded))
+                    writer.write(self.frame_message("D", encoded, peer_id=fpid))
                     pending_drains += 1
                     if pending_drains >= drain_batch:
                         t0 = time.monotonic()
@@ -5244,7 +5585,7 @@ class I2PChatCore:
             if pending_drains:
                 await writer.drain()
 
-            writer.write(self.frame_message("E", ""))
+            writer.write(self.frame_message("E", "", peer_id=fpid))
             await writer.drain()
 
             info = FileTransferInfo(
@@ -5255,15 +5596,14 @@ class I2PChatCore:
                 source_path=path,
             )
             self._emit_file_event(info)
-            
-            # Перезапуск receive_loop если он был прерван timeout'ом во время передачи
-            if self.conn:
+
+            if sess.conn:
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(self.receive_loop(self.conn))
+                    loop.create_task(self.receive_loop(sess.conn, peer_id=fpid))
                 except RuntimeError:
                     pass
-            
+
         except (ConnectionError, ConnectionResetError, BrokenPipeError, OSError) as e:
             info = FileTransferInfo(
                 filename=filename,
@@ -5274,7 +5614,7 @@ class I2PChatCore:
             )
             self._emit_file_event(info)
             self._emit_error(f"File transfer interrupted: connection lost")
-            
+
         except Exception as e:
             rejected = "rejected" in str(e).lower()
             info = FileTransferInfo(
@@ -5291,21 +5631,39 @@ class I2PChatCore:
             else:
                 self._emit_error(f"File transfer failed: {e}")
         finally:
-            self._file_transfer_active = False
-            self._soft_signal_ack_since_drain = 0
+            sess._file_transfer_active = False
+            sess._soft_signal_ack_since_drain = 0
 
-    async def send_image_lines(self, lines: list[str]) -> None:
+    async def send_image_lines(
+        self, lines: list[str], *, peer_address: Optional[str] = None
+    ) -> None:
         """Отправить уже отрендеренное изображение построчно."""
-        if not self._require_secure_channel():
+        peer_for_route = ""
+        if peer_address and str(peer_address).strip():
+            try:
+                peer_for_route = self._normalize_peer_addr(peer_address)
+            except ValueError:
+                peer_for_route = ""
+        if not peer_for_route:
+            lap = self._last_active_peer_for_telemetry()
+            peer_for_route = self._normalize_peer_addr(
+                self.current_peer_addr or lap or ""
+            )
+        if not self._require_secure_channel(outbound_peer=peer_for_route):
             return
-        reader, writer = self.conn
+        writer, fpid, _ = self._writer_frame_peer_and_text_acks(peer_for_route)
+        if writer is None:
+            self._emit_error("No live connection for the selected peer.")
+            return
 
         for line in lines:
-            writer.write(self.frame_message("I", line))
-        writer.write(self.frame_message("I", "__END__"))
+            writer.write(self.frame_message("I", line, peer_id=fpid))
+        writer.write(self.frame_message("I", "__END__", peer_id=fpid))
         await writer.drain()
 
-    async def send_image(self, path: str) -> Optional[str]:
+    async def send_image(
+        self, path: str, *, peer_address: Optional[str] = None
+    ) -> Optional[str]:
         """
         Отправить изображение (PNG/JPEG/WebP) с валидацией.
         
@@ -5315,9 +5673,6 @@ class I2PChatCore:
         Returns:
             путь к копии изображения в images/ или None при ошибке
         """
-        if not self._require_secure_channel():
-            return None
-        
         # Валидация изображения
         is_valid, error_msg, detected_ext = validate_image(path)
         if not is_valid:
@@ -5341,15 +5696,39 @@ class I2PChatCore:
         except Exception as e:
             self._emit_error(f"Failed to copy image: {e}")
             return None
-        
-        self._file_transfer_active = True
-        self._soft_signal_ack_since_drain = 0
-        self._cancel_transfer = False
-        
+
+        peer_for_route = ""
+        if peer_address and str(peer_address).strip():
+            try:
+                peer_for_route = self._normalize_peer_addr(peer_address)
+            except ValueError:
+                peer_for_route = ""
+        if not peer_for_route:
+            lap = self._last_active_peer_for_telemetry()
+            peer_for_route = self._normalize_peer_addr(
+                self.current_peer_addr or lap or ""
+            )
+        if not peer_for_route:
+            self._emit_error("No peer selected for image transfer.")
+            return None
+        if not self._require_secure_channel(outbound_peer=peer_for_route):
+            return None
+
+        writer, fpid, image_acks = self._writer_frame_peer_and_image_acks(
+            peer_for_route
+        )
+        if writer is None:
+            self._emit_error("No live connection for the selected peer.")
+            return None
+
+        sess = self._session_view_for_peer_route(peer_for_route)
+        sess._file_transfer_active = True
+        sess._soft_signal_ack_since_drain = 0
+        sess._cancel_transfer = False
+
         try:
-            reader, writer = self.conn
             self._emit_system(f"Sending image: {filename} ({filesize} bytes)")
-            
+
             # Прогресс загрузки в UI (is_inline_image — чтобы GUI заменил виджет на превью, не «File sent»)
             self._emit_file_event(
                 FileTransferInfo(
@@ -5361,14 +5740,16 @@ class I2PChatCore:
                     source_path=path,
                 )
             )
-            
+
             # Отправляем заголовок: G + filename|size
             header = f"{filename}|{filesize}"
-            header_frame, image_msg_id = self.frame_message_with_id("G", header)
+            header_frame, image_msg_id = self.frame_message_with_id(
+                "G", header, peer_id=fpid
+            )
             writer.write(header_frame)
             await writer.drain()
             self._register_pending_ack(
-                self._pending_image_acks,
+                image_acks,
                 image_msg_id,
                 token=os.path.basename(filename),
                 ack_kind="image",
@@ -5380,14 +5761,14 @@ class I2PChatCore:
             pending_drains = 0
             with open(path, "rb") as f:
                 while True:
-                    if self._cancel_transfer:
+                    if sess._cancel_transfer:
                         if pending_drains:
                             try:
                                 await writer.drain()
                             except Exception:
                                 pass
                         raise Exception("Transfer cancelled by user")
-                    if not self.conn:
+                    if not sess.conn:
                         raise ConnectionError("Connection lost during transfer")
 
                     chunk = await asyncio.to_thread(f.read, chunk_size)
@@ -5395,7 +5776,7 @@ class I2PChatCore:
                         break
 
                     encoded = base64.b64encode(chunk).decode()
-                    writer.write(self.frame_message("G", encoded))
+                    writer.write(self.frame_message("G", encoded, peer_id=fpid))
                     pending_drains += 1
                     if pending_drains >= drain_batch:
                         t0 = time.monotonic()
@@ -5428,7 +5809,7 @@ class I2PChatCore:
                 await writer.drain()
 
             # Отправляем маркер завершения
-            writer.write(self.frame_message("G", "__IMG_END__"))
+            writer.write(self.frame_message("G", "__IMG_END__", peer_id=fpid))
             await writer.drain()
             
             self._emit_file_event(
@@ -5478,34 +5859,74 @@ class I2PChatCore:
             self._emit_error(f"Image transfer failed: {e}")
             return None
         finally:
-            self._file_transfer_active = False
-            self._soft_signal_ack_since_drain = 0
+            sess._file_transfer_active = False
+            sess._soft_signal_ack_since_drain = 0
 
     async def send_control(self, signal: str) -> None:
-        if not self.conn:
+        lap = self._last_active_peer_for_telemetry()
+        pr = self._normalize_peer_addr(self.current_peer_addr or lap or "")
+        if pr:
+            writer, fpid, _ = self._writer_frame_peer_and_text_acks(pr)
+        else:
+            writer, fpid = (self.conn[1], None) if self.conn else (None, None)
+        if writer is None:
             return
         try:
-            _, writer = self.conn
-            writer.write(self.frame_message("S", f"__SIGNAL__:{signal}"))
+            writer.write(
+                self.frame_message("S", f"__SIGNAL__:{signal}", peer_id=fpid)
+            )
             await writer.drain()
         except Exception:
             pass
 
-    async def disconnect(self) -> None:
+    def _any_live_stream(self) -> bool:
+        if self.conn:
+            return True
+        return any(s.conn for s in self._live_sessions.values())
+
+    def any_live_stream(self) -> bool:
+        """Публичная проверка: есть ли хотя бы один активный SAM live-поток."""
+        return self._any_live_stream()
+
+    def live_stream_count(self) -> int:
+        """Число активных SAM live-потоков (legacy + дополнительные сессии)."""
+        return self._live_stream_count()
+
+    def is_current_peer_secure(self) -> bool:
+        """Handshake завершён для текущего выбранного пира (legacy или extra-сессия)."""
+        p = self._normalize_peer_addr(self.current_peer_addr or "")
+        return self._handshake_complete_for_peer_route(p)
+
+    async def _maybe_stop_keepalive_if_idle(self) -> None:
+        if self._any_live_stream():
+            return
+        if self.session_manager.keepalive_task:
+            asyncio.get_running_loop().call_soon(
+                self.session_manager.keepalive_task.cancel
+            )
+            self.session_manager.keepalive_task = None
+
+    async def _disconnect_legacy_session(self) -> None:
         if self.session_manager.disconnecting or not self.conn:
             return
         self.session_manager.disconnecting = True
         try:
             self._cancel_handshake_watchdog()
-            # Останавливаем keepalive
             if self.session_manager.keepalive_task:
-                asyncio.get_running_loop().call_soon(self.session_manager.keepalive_task.cancel)
+                asyncio.get_running_loop().call_soon(
+                    self.session_manager.keepalive_task.cancel
+                )
                 self.session_manager.keepalive_task = None
             _, writer = self.conn
-            peer_before_disconnect = self._normalize_peer_addr(self.current_peer_addr or "")
+            peer_before_disconnect = self._normalize_peer_addr(
+                self._legacy_stream_peer_id or self.current_peer_addr or ""
+            )
             self.conn = None
+            self._legacy_stream_peer_id = None
             self.peer_b32 = "Waiting for incoming connections..."
-            had_secure_channel = self.handshake_complete and self.use_encryption and bool(self.shared_key)
+            had_secure_channel = (
+                self.handshake_complete and self.use_encryption and bool(self.shared_key)
+            )
             try:
                 if had_secure_channel:
                     writer.write(self.frame_message("S", "__SIGNAL__:QUIT"))
@@ -5526,30 +5947,129 @@ class I2PChatCore:
                 mark_peer_stale=False,
                 peer_id=peer_before_disconnect,
             )
+            if self.active_live_peer_id == peer_before_disconnect:
+                self.active_live_peer_id = None
             self._emit_message("info", "You disconnected.")
             self._emit_system("Waiting for incoming connections...")
         finally:
             self.session_manager.disconnecting = False
             if self.session_manager.disconnect_task is asyncio.current_task():
                 self.session_manager.disconnect_task = None
-    
+        await self._maybe_stop_keepalive_if_idle()
+        if self._any_live_stream() and (
+            self.session_manager.keepalive_task is None
+            or self.session_manager.keepalive_task.done()
+        ):
+            try:
+                loop = asyncio.get_running_loop()
+                self.session_manager.keepalive_task = loop.create_task(
+                    self._keepalive_loop()
+                )
+            except RuntimeError:
+                pass
+
+    async def _disconnect_extra_session(self, peer_id: str) -> None:
+        k = self._normalize_peer_addr(peer_id)
+        ls = self._live_sessions.pop(k, None)
+        if not ls or not ls.conn:
+            return
+        if ls.receive_task and not ls.receive_task.done():
+            ls.receive_task.cancel()
+        _, writer = ls.conn
+        ls.conn = None
+        had_secure = ls.handshake_complete and ls.use_encryption and bool(ls.shared_key)
+        try:
+            if had_secure:
+                writer.write(self.frame_message("S", "__SIGNAL__:QUIT", peer_id=k))
+            else:
+                writer.write(self.frame_message_plain("S", "__SIGNAL__:QUIT", peer_id=k))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+        ls.reset_crypto()
+        self.session_manager.reset_peer_lifecycle(k, reason="disconnect")
+        self.session_manager.mark_live_failure(
+            reason="disconnect",
+            mark_peer_stale=False,
+            peer_id=k,
+        )
+        if self.active_live_peer_id == k:
+            self.active_live_peer_id = None
+        self._emit_message("info", f"You disconnected from {k[:16]}...")
+        await self._maybe_stop_keepalive_if_idle()
+        if self._any_live_stream() and (
+            self.session_manager.keepalive_task is None
+            or self.session_manager.keepalive_task.done()
+        ):
+            try:
+                loop = asyncio.get_running_loop()
+                self.session_manager.keepalive_task = loop.create_task(
+                    self._keepalive_loop()
+                )
+            except RuntimeError:
+                pass
+
+    async def disconnect_peer(self, peer_id: Optional[str] = None) -> None:
+        """
+        Закрыть одну live-сессию: peer_id=None — основной поток (self.conn);
+        иначе — дополнительный пир в _live_sessions или legacy, если совпадает адрес.
+        """
+        if peer_id is None:
+            await self._disconnect_legacy_session()
+            return
+        k = self._normalize_peer_addr(peer_id)
+        legacy_k = self._legacy_stream_peer_key()
+        if self.conn and legacy_k and legacy_k == k:
+            await self._disconnect_legacy_session()
+            return
+        await self._disconnect_extra_session(k)
+
+    async def disconnect(self) -> None:
+        """Отключить выбранную live-сессию: сначала active_live_peer_id, иначе current_peer_addr при наличии потока."""
+        ap = self.active_live_peer_id
+        if not ap:
+            cur = self._normalize_peer_addr(self.current_peer_addr or "")
+            if cur and self._has_active_session_for_peer(cur):
+                ap = cur
+        if ap and self._has_active_session_for_peer(ap):
+            await self.disconnect_peer(ap)
+            return
+        await self.disconnect_peer(None)
+
     async def _keepalive_loop(self) -> None:
-        """Отправляет Ping каждые 15 секунд для поддержания соединения при простое."""
-        while self.conn:
+        """Отправляет Ping каждые 15 секунд для всех live-потоков."""
+        while self._any_live_stream():
             await asyncio.sleep(15)
             if self.conn and not self._file_transfer_active:
-                if not (self.handshake_complete and self.use_encryption and self.shared_key):
+                if self.handshake_complete and self.use_encryption and self.shared_key:
+                    try:
+                        _, writer = self.conn
+                        writer.write(self.frame_message("P", ""))
+                        await writer.drain()
+                    except Exception:
+                        lk = self._legacy_stream_peer_key()
+                        self.session_manager.mark_live_failure(
+                            reason="keepalive-failed",
+                            peer_id=lk or None,
+                        )
+            for pid, ls in list(self._live_sessions.items()):
+                if not ls.conn or ls._file_transfer_active:
+                    continue
+                if not (
+                    ls.handshake_complete and ls.use_encryption and ls.shared_key
+                ):
                     continue
                 try:
-                    _, writer = self.conn
-                    writer.write(self.frame_message("P", ""))
-                    await writer.drain()
+                    _, w = ls.conn
+                    w.write(self.frame_message("P", "", peer_id=pid))
+                    await w.drain()
                 except Exception:
                     self.session_manager.mark_live_failure(
                         reason="keepalive-failed",
-                        peer_id=self._normalize_peer_addr(self.current_peer_addr or ""),
+                        peer_id=pid,
                     )
-                    break
     
     def _reset_crypto_state(self) -> None:
         """Сбрасывает криптографическое состояние при отключении."""
@@ -5575,7 +6095,7 @@ class I2PChatCore:
         self.peer_identity_binding_verified = False
         self.current_peer_dest_b64 = None
 
-    async def initiate_secure_handshake(self) -> bool:
+    async def initiate_secure_handshake(self, peer_id: Optional[str] = None) -> bool:
         """
         Инициирует защищённый handshake (v2 протокол с PFS).
         
@@ -5585,30 +6105,40 @@ class I2PChatCore:
         Returns:
             True если handshake успешен
         """
-        if not self.conn:
-            return False
+        if peer_id:
+            ls = self._live_sessions.get(peer_id)
+            if not ls or not ls.conn:
+                return False
+            _, writer = ls.conn
+            sess = ls
+        else:
+            if not self.conn:
+                return False
+            _, writer = self.conn
+            sess = LegacyCoreSessionView(self)
         if not crypto.NACL_AVAILABLE:
             self._emit_error("PyNaCl is required for secure protocol")
-            self._schedule_disconnect()
+            self._schedule_disconnect(peer_id)
             return False
-        
+
         try:
-            _, writer = self.conn
-            self.my_nonce = crypto.generate_nonce()
-            self.my_ephemeral_private, self.my_ephemeral_public = \
+            sess.my_nonce = crypto.generate_nonce()
+            sess.my_ephemeral_private, sess.my_ephemeral_public = (
                 crypto.generate_ephemeral_keypair()
+            )
             if not self.my_signing_seed or not self.my_signing_public:
                 raise ValueError("Local handshake signing key is missing")
-            if not self.current_peer_addr:
+            peer_addr = self._normalize_peer_addr(peer_id or self.current_peer_addr or "")
+            if not peer_addr:
                 raise ValueError("Peer address is unknown")
-            init_nonce_hex = self.my_nonce.hex()
-            init_eph_hex = self.my_ephemeral_public.hex()
+            init_nonce_hex = sess.my_nonce.hex()
+            init_eph_hex = sess.my_ephemeral_public.hex()
             init_sign_pub_hex = self.my_signing_public.hex()
             if not self.my_dest:
                 raise ValueError("Local destination is not initialized")
             init_sig_payload = self._build_init_sig_payload(
                 self.my_dest.base32,
-                self.current_peer_addr,
+                peer_addr,
                 init_nonce_hex,
                 init_eph_hex,
                 init_sign_pub_hex,
@@ -5620,16 +6150,17 @@ class I2PChatCore:
             handshake_data = (
                 f"INIT:{init_nonce_hex}:{init_eph_hex}:{init_sign_pub_hex}:{init_sig_hex}"
             )
-            self._handshake_initiated = True
+            sess._handshake_initiated = True
             self._emit_system("Initiating secure handshake with PFS...")
-            writer.write(self.frame_message_plain("H", handshake_data))
+            writer.write(self.frame_message_plain("H", handshake_data, peer_id=peer_id))
             await writer.drain()
             return True
         except Exception as e:
             logger.error(f"Handshake initiation failed: {e}")
+            self._schedule_disconnect(peer_id)
             return False
 
-    def _compute_session_subkeys(self, is_initiator: bool) -> Tuple[bytes, bytes]:
+    def _compute_session_subkeys(self, is_initiator: bool, sess: Any) -> Tuple[bytes, bytes]:
         """
         Вычисляет финальные subkeys для сессии.
 
@@ -5638,20 +6169,20 @@ class I2PChatCore:
         """
         if not crypto.NACL_AVAILABLE:
             raise RuntimeError("PyNaCl is required for secure protocol")
-        if not self.my_ephemeral_private or not self.peer_ephemeral_public:
+        if not sess.my_ephemeral_private or not sess.peer_ephemeral_public:
             raise ValueError("Missing ephemeral keys")
-        if not self.my_nonce or not self.peer_nonce:
+        if not sess.my_nonce or not sess.peer_nonce:
             raise ValueError("Missing handshake nonces")
 
         dh_shared = crypto.compute_dh_shared_secret(
-            self.my_ephemeral_private, self.peer_ephemeral_public
+            sess.my_ephemeral_private, sess.peer_ephemeral_public
         )
         if is_initiator:
-            nonce_init = self.my_nonce
-            nonce_resp = self.peer_nonce
+            nonce_init = sess.my_nonce
+            nonce_resp = sess.peer_nonce
         else:
-            nonce_init = self.peer_nonce
-            nonce_resp = self.my_nonce
+            nonce_init = sess.peer_nonce
+            nonce_resp = sess.my_nonce
         return crypto.derive_handshake_subkeys(dh_shared, nonce_init, nonce_resp)
 
     def _should_initiate_blindbox_root_exchange(self) -> bool:
@@ -5847,7 +6378,11 @@ class I2PChatCore:
             self._emit_system("Ignoring stale BlindBox root ACK.")
 
     async def _send_blindbox_root_if_needed(
-        self, writer: asyncio.StreamWriter, *, force_rotate: bool = False
+        self,
+        writer: asyncio.StreamWriter,
+        *,
+        force_rotate: bool = False,
+        peer_id: Optional[str] = None,
     ) -> None:
         if not self._blindbox_ready():
             return
@@ -5869,6 +6404,7 @@ class I2PChatCore:
                 + str(next_epoch)
                 + "|"
                 + root_secret.hex(),
+                peer_id=peer_id,
             )
         )
         await writer.drain()
@@ -5876,9 +6412,14 @@ class I2PChatCore:
             self._emit_system(f"BlindBox root secret {reason}; awaiting ACK")
 
     async def _handle_handshake_message(
-        self, body: str, writer: asyncio.StreamWriter
+        self,
+        body: str,
+        writer: asyncio.StreamWriter,
+        peer_id: Optional[str] = None,
     ) -> None:
         """Обрабатывает входящее signed-handshake сообщение с поддержкой PFS."""
+        sess = self._session_for_frame(peer_id)
+        peer_addr = self._normalize_peer_addr(peer_id or self.current_peer_addr or "")
         try:
             if not crypto.NACL_AVAILABLE:
                 raise RuntimeError("PyNaCl is required for secure protocol")
@@ -5907,27 +6448,26 @@ class I2PChatCore:
                 return nonce, eph_pub, sign_pub, signature, nonce_hex, eph_hex, sign_pub_hex
 
             if body.startswith("INIT:"):
-                if self._handshake_initiated:
+                if sess._handshake_initiated:
                     logger.warning(
                         "Received INIT while local INIT is pending; closing to avoid handshake role conflict."
                     )
                     self._emit_error(
                         "Handshake role conflict detected; reconnecting."
                     )
-                    peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-                    if peer_addr_norm:
+                    if peer_addr:
                         self.session_manager.mark_peer_failed(
-                            peer_addr_norm, reason="handshake-role-conflict"
+                            peer_addr, reason="handshake-role-conflict"
                         )
-                    self._schedule_disconnect()
+                    self._schedule_disconnect(peer_id)
                     return
-                if not self.current_peer_addr or not self.my_dest:
+                if not peer_addr or not self.my_dest:
                     raise ValueError("Missing peer/local address for INIT verification")
                 if not self.my_signing_seed or not self.my_signing_public:
                     raise ValueError("Missing local handshake signing key")
                 (
-                    self.peer_nonce,
-                    self.peer_ephemeral_public,
+                    sess.peer_nonce,
+                    sess.peer_ephemeral_public,
                     peer_sign_pub,
                     peer_signature,
                     init_nonce_hex,
@@ -5935,7 +6475,7 @@ class I2PChatCore:
                     init_sign_pub_hex,
                 ) = _parse_signed_payload(body[5:])
                 init_sig_payload = self._build_init_sig_payload(
-                    self.current_peer_addr,
+                    peer_addr,
                     self.my_dest.base32,
                     init_nonce_hex,
                     init_eph_hex,
@@ -5943,20 +6483,21 @@ class I2PChatCore:
                 )
                 if not crypto.verify_signature(peer_sign_pub, init_sig_payload, peer_signature):
                     raise ValueError("INIT signature verification failed")
-                if not await self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
+                if not await self._pin_or_verify_peer_signing_key(peer_addr, peer_sign_pub):
                     raise ValueError("Peer signing key does not match pinned key")
-                self.peer_signing_public = peer_sign_pub
+                sess.peer_signing_public = peer_sign_pub
 
-                self.my_ephemeral_private, self.my_ephemeral_public = \
+                sess.my_ephemeral_private, sess.my_ephemeral_public = (
                     crypto.generate_ephemeral_keypair()
-                self.my_nonce = crypto.generate_nonce()
+                )
+                sess.my_nonce = crypto.generate_nonce()
 
-                resp_nonce_hex = self.my_nonce.hex()
-                resp_eph_hex = self.my_ephemeral_public.hex()
+                resp_nonce_hex = sess.my_nonce.hex()
+                resp_eph_hex = sess.my_ephemeral_public.hex()
                 resp_sign_pub_hex = self.my_signing_public.hex()
                 resp_sig_payload = self._build_resp_sig_payload(
                     self.my_dest.base32,
-                    self.current_peer_addr,
+                    peer_addr,
                     init_nonce_hex,
                     init_eph_hex,
                     init_sign_pub_hex,
@@ -5970,19 +6511,19 @@ class I2PChatCore:
                 response = (
                     f"RESP:{resp_nonce_hex}:{resp_eph_hex}:{resp_sign_pub_hex}:{resp_signature_hex}"
                 )
-                writer.write(self.frame_message_plain("H", response))
+                writer.write(self.frame_message_plain("H", response, peer_id=peer_id))
                 await writer.drain()
 
-                self.shared_key, self.shared_mac_key = self._compute_session_subkeys(
-                    is_initiator=False
+                sess.shared_key, sess.shared_mac_key = self._compute_session_subkeys(
+                    is_initiator=False, sess=sess
                 )
-                self.use_encryption = True
-                self.handshake_complete = True
-                self._handshake_initiated = False
-                self._recv_seq = 0
-                self._send_seq = 0
+                sess.use_encryption = True
+                sess.handshake_complete = True
+                sess._handshake_initiated = False
+                sess._recv_seq = 0
+                sess._send_seq = 0
                 self._cancel_handshake_watchdog()
-                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                peer_addr_norm = peer_addr
                 if peer_addr_norm:
                     self.session_manager.set_peer_handshake_complete(
                         peer_addr_norm, reason="handshake-ok"
@@ -5996,42 +6537,41 @@ class I2PChatCore:
                 self._emit_message("info", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
                 self._trigger_blindbox_hot_poll("peer-online")
-                await self._send_blindbox_root_if_needed(writer)
+                await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
                 logger.info("Handshake completed (responder)")
 
             elif body.startswith("RESP:"):
                 if (
-                    not self._handshake_initiated
-                    or self.my_nonce is None
-                    or self.my_ephemeral_public is None
+                    not sess._handshake_initiated
+                    or sess.my_nonce is None
+                    or sess.my_ephemeral_public is None
                 ):
                     logger.warning("Received RESP without prior INIT")
-                    peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-                    if peer_addr_norm:
+                    if peer_addr:
                         self.session_manager.mark_peer_failed(
-                            peer_addr_norm, reason="handshake-resp-without-init"
+                            peer_addr, reason="handshake-resp-without-init"
                         )
-                    self._schedule_disconnect()
+                    self._schedule_disconnect(peer_id)
                     return
-                if not self.current_peer_addr or not self.my_dest:
+                if not peer_addr or not self.my_dest:
                     raise ValueError("Missing peer/local address for RESP verification")
                 if not self.my_signing_public:
                     raise ValueError("Missing local handshake signing public key")
 
                 (
-                    self.peer_nonce,
-                    self.peer_ephemeral_public,
+                    sess.peer_nonce,
+                    sess.peer_ephemeral_public,
                     peer_sign_pub,
                     peer_signature,
                     resp_nonce_hex,
                     resp_eph_hex,
                     resp_sign_pub_hex,
                 ) = _parse_signed_payload(body[5:])
-                init_nonce_hex = self.my_nonce.hex()
-                init_eph_hex = self.my_ephemeral_public.hex()
+                init_nonce_hex = sess.my_nonce.hex()
+                init_eph_hex = sess.my_ephemeral_public.hex()
                 init_sign_pub_hex = self.my_signing_public.hex()
                 resp_sig_payload = self._build_resp_sig_payload(
-                    self.current_peer_addr,
+                    peer_addr,
                     self.my_dest.base32,
                     init_nonce_hex,
                     init_eph_hex,
@@ -6042,19 +6582,19 @@ class I2PChatCore:
                 )
                 if not crypto.verify_signature(peer_sign_pub, resp_sig_payload, peer_signature):
                     raise ValueError("RESP signature verification failed")
-                if not await self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
+                if not await self._pin_or_verify_peer_signing_key(peer_addr, peer_sign_pub):
                     raise ValueError("Peer signing key does not match pinned key")
-                self.peer_signing_public = peer_sign_pub
-                self.shared_key, self.shared_mac_key = self._compute_session_subkeys(
-                    is_initiator=True
+                sess.peer_signing_public = peer_sign_pub
+                sess.shared_key, sess.shared_mac_key = self._compute_session_subkeys(
+                    is_initiator=True, sess=sess
                 )
-                self.use_encryption = True
-                self.handshake_complete = True
-                self._handshake_initiated = False
-                self._recv_seq = 0
-                self._send_seq = 0
+                sess.use_encryption = True
+                sess.handshake_complete = True
+                sess._handshake_initiated = False
+                sess._recv_seq = 0
+                sess._send_seq = 0
                 self._cancel_handshake_watchdog()
-                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                peer_addr_norm = peer_addr
                 if peer_addr_norm:
                     self.session_manager.set_peer_handshake_complete(
                         peer_addr_norm, reason="handshake-ok"
@@ -6068,7 +6608,7 @@ class I2PChatCore:
                 self._emit_message("info", "Secure channel with PFS established")
                 self._emit_system("✔ Ready! You can now send messages.")
                 self._trigger_blindbox_hot_poll("peer-online")
-                await self._send_blindbox_root_if_needed(writer)
+                await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
                 logger.info("Handshake completed (initiator)")
 
             else:
@@ -6077,7 +6617,7 @@ class I2PChatCore:
         except Exception as e:
             logger.error(f"Handshake error: {e}")
             self._emit_error(f"Secure handshake failed: {e}")
-            peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+            peer_addr_norm = peer_addr
             if peer_addr_norm:
                 self.session_manager.mark_peer_failed(
                     peer_addr_norm, reason="handshake-error"
@@ -6086,7 +6626,7 @@ class I2PChatCore:
                 reason="handshake-error",
                 peer_id=peer_addr_norm,
             )
-            self._schedule_disconnect()
+            self._schedule_disconnect(peer_id)
 
     async def shutdown(self) -> None:
         """Аккуратно остановить фоновые задачи и закрыть соединения."""
@@ -6098,8 +6638,10 @@ class I2PChatCore:
             False,
             peer_id=self._normalize_peer_addr(self.current_peer_addr or ""),
         )
+        for pid in list(self._live_sessions.keys()):
+            await self.disconnect_peer(pid)
         if self.conn:
-            await self.disconnect()
+            await self.disconnect_peer(None)
 
         await self.session_manager.cancel_tasks_and_close_session()
         if self._blindbox_task is not None and not self._blindbox_task.done():
@@ -6123,9 +6665,6 @@ class I2PChatCore:
             if not crypto.NACL_AVAILABLE:
                 self._emit_error("PyNaCl is required for secure protocol")
                 await asyncio.sleep(5)
-                continue
-            if self.conn:
-                await asyncio.sleep(1)
                 continue
             try:
                 reader, writer = await i2plib.stream_accept(
@@ -6162,7 +6701,31 @@ class I2PChatCore:
                     if not verified:
                         writer.close()
                         continue
+                    peer_addr_norm = self._normalize_peer_addr(peer_addr)
+                    if self._has_active_session_for_peer(peer_addr_norm):
+                        self._emit_system(
+                            f"Rejected duplicate incoming connection from {peer_addr[:12]}... "
+                            "(session already active)."
+                        )
+                        writer.close()
+                        continue
+                    max_live = max_concurrent_live_sessions()
+                    if self._live_stream_count() >= max_live:
+                        self._emit_error(
+                            f"Incoming connection rejected: maximum live sessions ({max_live}) reached."
+                        )
+                        writer.close()
+                        continue
+
+                    use_legacy = self.conn is None
+                    extra_ls: Optional[LivePeerSession] = None
+                    if not use_legacy:
+                        extra_ls = LivePeerSession(peer_id=peer_addr_norm)
+                        self._live_sessions[peer_addr_norm] = extra_ls
+
                     self.peer_b32 = peer_addr
+                    self.current_peer_addr = peer_addr_norm
+                    self.active_live_peer_id = peer_addr_norm
                     self._emit_message(
                         "info", f"Connection accepted from {peer_addr[:12]}..."
                     )
@@ -6175,28 +6738,58 @@ class I2PChatCore:
                     continue
 
                 if self.my_dest is not None:
-                    writer.write(self.frame_message("S", self.my_dest.base64))
+                    if use_legacy:
+                        writer.write(self.frame_message("S", self.my_dest.base64))
+                    else:
+                        writer.write(
+                            self.frame_message_plain(
+                                "S", self.my_dest.base64, peer_id=peer_addr_norm
+                            )
+                        )
                     await writer.drain()
 
-                self.conn = (reader, writer)
-                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                connection = (reader, writer)
+                if use_legacy:
+                    self.conn = connection
+                    self._legacy_stream_peer_id = peer_addr_norm
+                elif extra_ls is not None:
+                    extra_ls.conn = connection
+                else:
+                    writer.close()
+                    continue
+
                 if peer_addr_norm:
                     self.session_manager.register_stream(
                         peer_addr_norm,
                         state=PeerState.HANDSHAKING,
                         peer_id=peer_addr_norm,
                     )
-                self._activate_ack_session()
+                if use_legacy:
+                    self._activate_ack_session()
+                else:
+                    self._activate_ack_session(peer_addr_norm)
                 self.session_manager.transition_transport(
                     TransportState.RECONNECTING, reason="incoming-connection"
                 )
 
                 loop = asyncio.get_running_loop()
-                loop.create_task(self.receive_loop(self.conn))
-                self._start_handshake_watchdog(self.conn)
-                self.session_manager.keepalive_task = loop.create_task(
-                    self._keepalive_loop()
-                )
+                if use_legacy:
+                    loop.create_task(self.receive_loop(self.conn))
+                    self._start_handshake_watchdog(self.conn)
+                else:
+                    loop.create_task(
+                        self.receive_loop(connection, peer_id=peer_addr_norm)
+                    )
+                    self._start_handshake_watchdog(
+                        connection, peer_id=peer_addr_norm
+                    )
+                if (
+                    self.session_manager.keepalive_task is None
+                    or self.session_manager.keepalive_task.done()
+                ):
+                    self.session_manager.keepalive_task = loop.create_task(
+                        self._keepalive_loop()
+                    )
             except Exception:
                 await asyncio.sleep(1)
 
@@ -6204,12 +6797,20 @@ class I2PChatCore:
         self,
         connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
         initial_type: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> None:
-        # Предотвращаем запуск дублирующего receive_loop
-        if self._recv_loop_active:
+        if peer_id:
+            sess = self._live_sessions.get(peer_id)
+            if sess is None or sess.conn != connection:
+                return
+        else:
+            sess = LegacyCoreSessionView(self)
+            if self.conn != connection:
+                return
+        if sess._recv_loop_active:
             return
-        self._recv_loop_active = True
-        
+        sess._recv_loop_active = True
+
         reader, writer = connection
         current_type = initial_type
         restart_after_timeout = False
@@ -6229,28 +6830,28 @@ class I2PChatCore:
                             self._codec.read_frame(reader), timeout=self.READ_TIMEOUT
                         )
                     except ValueError as e:
-                        if self.handshake_complete:
+                        if sess.handshake_complete:
                             logger.warning(
                                 "Protocol framing violation after handshake: %s",
                                 e,
                             )
                             self._emit_error("Protocol downgrade detected")
-                            self._schedule_disconnect()
+                            self._schedule_disconnect(peer_id)
                             break
                         raise
                     except asyncio.TimeoutError:
-                        if self._file_transfer_active:
+                        if sess._file_transfer_active:
                             # Исходящая передача файла/картинки: цикл приёма не глушим — иначе до конца
                             # отправки не обрабатываются входящие U/P/сигналы собеседника.
                             continue
-                        if self.incoming_info is not None:
+                        if sess.incoming_info is not None:
                             restart_after_timeout = True
                             return
                         # Приём inline-картинки (G): как для F/D — не рвём сессию из-за долгой паузы I2P
-                        if self.inline_image_info is not None:
+                        if sess.inline_image_info is not None:
                             restart_after_timeout = True
                             return
-                        if self.conn == connection:
+                        if sess.conn == connection:
                             self._emit_error("Connection timed out (no data received)")
                         return
                     msg_type = frame.msg_type
@@ -6258,31 +6859,31 @@ class I2PChatCore:
                     body_data = frame.payload
                     is_encrypted = bool(frame.flags & FLAG_ENCRYPTED)
 
-                if self.handshake_complete and msg_type == "H":
+                if sess.handshake_complete and msg_type == "H":
                     logger.warning("Unexpected handshake frame after secure channel established")
                     self._emit_error("Protocol violation: unexpected handshake frame")
-                    self._schedule_disconnect()
+                    self._schedule_disconnect(peer_id)
                     break
-                if not self.handshake_complete and msg_type not in ["S", "H", "P", "O"]:
+                if not sess.handshake_complete and msg_type not in ["S", "H", "P", "O"]:
                     logger.warning(
                         "Protocol violation: non-handshake frame before secure channel "
                         "(msg_type=%r)",
                         msg_type,
                     )
                     self._emit_error("Protocol violation: data before secure handshake")
-                    self._schedule_disconnect()
+                    self._schedule_disconnect(peer_id)
                     break
                 seq_num: Optional[int] = None
                 if is_encrypted:
-                    if not self.shared_key or not self.use_encryption:
+                    if not sess.shared_key or not sess.use_encryption:
                         logger.warning("Encrypted frame received before key setup")
                         self._emit_error("Protocol error: encrypted frame before handshake")
-                        self._schedule_disconnect()
+                        self._schedule_disconnect(peer_id)
                         break
                     if len(body_data) < ENCRYPTED_TRAILER_SIZE:
                         logger.warning("Encrypted payload is too short")
                         self._emit_error("Protocol error: encrypted payload too short")
-                        self._schedule_disconnect()
+                        self._schedule_disconnect(peer_id)
                         break
                     seq_num = int.from_bytes(body_data[:8], "big", signed=False)
                     encrypted_body = body_data[8:-crypto.HMAC_SIZE]
@@ -6290,7 +6891,7 @@ class I2PChatCore:
                     if len(encrypted_body) == 0:
                         logger.warning("Encrypted body is empty")
                         break
-                    mac_key = self.shared_mac_key or self.shared_key
+                    mac_key = sess.shared_mac_key or sess.shared_key
                     if not crypto.verify_mac(
                         mac_key,
                         msg_type,
@@ -6305,9 +6906,9 @@ class I2PChatCore:
                             "(msg_type=%r body_len=%d)", msg_type, len(body_data)
                         )
                         self._emit_error("Message integrity check failed")
-                        self._schedule_disconnect()
+                        self._schedule_disconnect(peer_id)
                         break
-                    expected_seq = self._recv_seq + 1
+                    expected_seq = sess._recv_seq + 1
                     if seq_num != expected_seq:
                         logger.warning(
                             "Replay/out-of-order frame detected: got=%d expected=%d",
@@ -6315,10 +6916,10 @@ class I2PChatCore:
                             expected_seq,
                         )
                         self._emit_error("Replay protection triggered")
-                        self._schedule_disconnect()
+                        self._schedule_disconnect(peer_id)
                         break
 
-                    decrypted = crypto.decrypt_message(self.shared_key, encrypted_body)
+                    decrypted = crypto.decrypt_message(sess.shared_key, encrypted_body)
                     if decrypted is None:
                         logger.warning("Decryption failed")
                         self._emit_error("Failed to decrypt message")
@@ -6328,26 +6929,26 @@ class I2PChatCore:
                     except ValueError as e:
                         logger.warning("Padded payload parse failed: %s", e)
                         self._emit_error("Protocol error: malformed padded payload")
-                        self._schedule_disconnect()
+                        self._schedule_disconnect(peer_id)
                         break
-                    self._recv_seq = seq_num
-                elif self.handshake_complete:
+                    sess._recv_seq = seq_num
+                elif sess.handshake_complete:
                     logger.warning(
                         "Protocol downgrade detected: plaintext frame after handshake "
                         "(msg_type=%r)",
                         msg_type,
                     )
                     self._emit_error("Protocol downgrade detected")
-                    self._schedule_disconnect()
+                    self._schedule_disconnect(peer_id)
                     break
 
                 body = body_data.decode("utf-8")
-                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                peer_addr_norm = self._normalize_peer_addr(sess.peer_id or "")
                 if peer_addr_norm:
                     self.session_manager.touch_stream(peer_addr_norm)
 
                 if msg_type == "U":
-                    sp = self.current_peer_addr
+                    sp = sess.peer_id
                     if self.import_group_transport(body, source_peer=sp) is None:
                         self._emit_message("peer", body, source_peer=sp)
                         self._emit_notify("peer", body, source_peer=sp)
@@ -6357,44 +6958,47 @@ class I2PChatCore:
                             await self._write_signal_frame_maybe_soft_drain(
                                 writer,
                                 self.frame_message(
-                                    "S", f"__SIGNAL__:MSG_ACK|{msg_id}"
+                                    "S",
+                                    f"__SIGNAL__:MSG_ACK|{msg_id}",
+                                    peer_id=peer_id,
                                 ),
+                                sess=sess,
                             )
                         except Exception:
                             pass
 
                 elif msg_type == "I":
                     if body == "__END__":
-                        img_text = "\n".join(self.image_buffer)
-                        self.image_buffer = []
+                        img_text = "\n".join(sess.image_buffer)
+                        sess.image_buffer = []
                         if self.on_image_received:
                             self.on_image_received(img_text)
                         else:
                             self._emit_message(
-                                "peer", img_text, source_peer=self.current_peer_addr
+                                "peer", img_text, source_peer=sess.peer_id
                             )
                     else:
-                        if len(self.image_buffer) < self.MAX_IMAGE_LINES:
-                            self.image_buffer.append(body)
-                        elif len(self.image_buffer) == self.MAX_IMAGE_LINES:
-                            self.image_buffer.append("[Image truncated - too large]")
+                        if len(sess.image_buffer) < self.MAX_IMAGE_LINES:
+                            sess.image_buffer.append(body)
+                        elif len(sess.image_buffer) == self.MAX_IMAGE_LINES:
+                            sess.image_buffer.append("[Image truncated - too large]")
                             self._emit_error("Image too large, truncating")
 
                 elif msg_type == "G":
                     # Inline image (binary PNG / JPEG / WebP)
                     if body == "__IMG_END__":
                         # Завершение приёма изображения
-                        if self.inline_image_info and self.inline_image_buffer:
-                            filename, expected_size = self.inline_image_info
-                            actual_size = len(self.inline_image_buffer)
+                        if sess.inline_image_info and sess.inline_image_buffer:
+                            filename, expected_size = sess.inline_image_info
+                            actual_size = len(sess.inline_image_buffer)
                             
                             # Проверяем размер
                             if actual_size > MAX_IMAGE_SIZE:
                                 self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                 self._emit_error("Received image too large, discarding")
-                                self.inline_image_buffer = bytearray()
-                                self.inline_image_info = None
-                                self._incoming_image_msg_id = None
+                                sess.inline_image_buffer = bytearray()
+                                sess.inline_image_info = None
+                                sess._incoming_image_msg_id = None
                                 continue
 
                             if actual_size != expected_size:
@@ -6410,25 +7014,25 @@ class I2PChatCore:
                                 self._emit_error(
                                     f"Image transfer incomplete: received {actual_size} of {expected_size} bytes"
                                 )
-                                self.inline_image_buffer = bytearray()
-                                self.inline_image_info = None
-                                self._incoming_image_msg_id = None
+                                sess.inline_image_buffer = bytearray()
+                                sess.inline_image_info = None
+                                sess._incoming_image_msg_id = None
                                 continue
                             
                             # Проверяем magic bytes
-                            header = bytes(self.inline_image_buffer[:12])
+                            header = bytes(sess.inline_image_buffer[:12])
                             detected_ext = detect_inline_image_format(header)
                             if detected_ext is None:
                                 self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                 self._emit_error("Received image has invalid format")
-                                self.inline_image_buffer = bytearray()
-                                self.inline_image_info = None
-                                self._incoming_image_msg_id = None
+                                sess.inline_image_buffer = bytearray()
+                                sess.inline_image_info = None
+                                sess._incoming_image_msg_id = None
                                 continue
                             
                             # Сохраняем и валидируем в thread pool (hash/PIL не блокируют qasync/Qt)
                             images_dir = get_images_dir()
-                            payload = bytes(self.inline_image_buffer)
+                            payload = bytes(sess.inline_image_buffer)
                             safe_path, disk_err = await asyncio.to_thread(
                                 _finalize_inline_image_worker,
                                 payload,
@@ -6463,13 +7067,15 @@ class I2PChatCore:
                                     )
                                     self._emit_inline_image(safe_path, is_from_me=False)
                                     try:
-                                        ack_id = self._incoming_image_msg_id or 0
+                                        ack_id = sess._incoming_image_msg_id or 0
                                         await self._write_signal_frame_maybe_soft_drain(
                                             writer,
                                             self.frame_message(
                                                 "S",
                                                 f"__SIGNAL__:IMG_ACK|{filename}|{ack_id}",
+                                                peer_id=peer_id,
                                             ),
+                                            sess=sess,
                                         )
                                     except Exception:
                                         pass
@@ -6486,10 +7092,10 @@ class I2PChatCore:
                                 )
                                 self._emit_error(f"Failed to save image: {e}")
                             
-                            self.inline_image_buffer = bytearray()
-                            self.inline_image_info = None
-                            self._incoming_image_msg_id = None
-                    elif self.inline_image_info is None:
+                            sess.inline_image_buffer = bytearray()
+                            sess.inline_image_info = None
+                            sess._incoming_image_msg_id = None
+                    elif sess.inline_image_info is None:
                         # Заголовок: filename|size
                         try:
                             parts = body.split("|")
@@ -6502,10 +7108,10 @@ class I2PChatCore:
                                         f"(max {MAX_IMAGE_SIZE // (1024*1024)} MB)"
                                     )
                                 else:
-                                    self.inline_image_info = (filename, size)
-                                    self._incoming_image_msg_id = msg_id or None
-                                    self.inline_image_buffer = bytearray()
-                                    self._inline_image_last_emit = 0
+                                    sess.inline_image_info = (filename, size)
+                                    sess._incoming_image_msg_id = msg_id or None
+                                    sess.inline_image_buffer = bytearray()
+                                    sess._inline_image_last_emit = 0
                                     self._emit_system(f"Receiving image: {filename} ({size} bytes)")
                                     self._emit_file_event(FileTransferInfo(filename=filename, size=size, received=0, is_sending=False, is_inline_image=True))
                         except Exception as e:
@@ -6513,8 +7119,8 @@ class I2PChatCore:
                     else:
                         # Данные изображения (base64)
                         try:
-                            fn, total = self.inline_image_info
-                            remaining = total - len(self.inline_image_buffer)
+                            fn, total = sess.inline_image_info
+                            remaining = total - len(sess.inline_image_buffer)
                             if remaining <= 0:
                                 raise ValueError("Image chunk exceeds declared size")
                             if len(body) > max_base64_chars_for_bytes(remaining):
@@ -6522,20 +7128,20 @@ class I2PChatCore:
                             chunk = base64.b64decode(body, validate=True)
                             if len(chunk) > remaining:
                                 raise ValueError("Decoded image chunk exceeds remaining size")
-                            self.inline_image_buffer.extend(chunk)
-                            if self.inline_image_info:
-                                received = len(self.inline_image_buffer)
+                            sess.inline_image_buffer.extend(chunk)
+                            if sess.inline_image_info:
+                                received = len(sess.inline_image_buffer)
                                 if received - getattr(self, "_inline_image_last_emit", 0) >= 65536 or received == total:
-                                    self._inline_image_last_emit = received
+                                    sess._inline_image_last_emit = received
                                     self._emit_file_event(FileTransferInfo(filename=fn, size=total, received=received, is_sending=False, is_inline_image=True))
                         except Exception as e:
                             self._emit_error(f"Image data error: {e}")
-                            if self.inline_image_info:
-                                fn, sz = self.inline_image_info
+                            if sess.inline_image_info:
+                                fn, sz = sess.inline_image_info
                                 self._emit_file_event(FileTransferInfo(filename=fn, size=sz, received=-1, is_sending=False, is_inline_image=True))
-                            self.inline_image_buffer = bytearray()
-                            self.inline_image_info = None
-                            self._incoming_image_msg_id = None
+                            sess.inline_image_buffer = bytearray()
+                            sess.inline_image_info = None
+                            sess._incoming_image_msg_id = None
 
                 elif msg_type == "F":
                     try:
@@ -6547,8 +7153,8 @@ class I2PChatCore:
                                 f"File too large: {size} bytes "
                                 f"(max {self.MAX_FILE_SIZE // (1024*1024)} MB)"
                             )
-                            self.incoming_file = None
-                            self.incoming_info = None
+                            sess.incoming_file = None
+                            sess.incoming_info = None
                             continue
                         safe_name = os.path.basename(filename)
                         safe_path = allocate_unique_filename(get_downloads_dir(), safe_name)
@@ -6557,34 +7163,39 @@ class I2PChatCore:
                             final_name, size
                         )
                         if not accepted:
-                            await self.reject_incoming_file(final_name)
+                            prj = peer_id or self._normalize_peer_addr(
+                                self.current_peer_addr or ""
+                            )
+                            await self.reject_incoming_file(
+                                final_name, peer_for_route=prj
+                            )
                             self._emit_system(
                                 f"Incoming file rejected by user: {final_name}"
                             )
-                            self.incoming_file = None
-                            self.incoming_info = None
+                            sess.incoming_file = None
+                            sess.incoming_info = None
                             continue
                         if final_name != safe_name:
                             self._emit_system(
                                 f"Filename collision detected: saved as {final_name}"
                             )
-                        self.incoming_file = open(safe_path, "xb")
-                        self._incoming_file_msg_id = msg_id or None
-                        self.incoming_info = FileTransferInfo(
+                        sess.incoming_file = open(safe_path, "xb")
+                        sess._incoming_file_msg_id = msg_id or None
+                        sess.incoming_info = FileTransferInfo(
                             filename=safe_path, size=size, received=0
                         )
                         self._file_xfer_debug_last_recv_emit_mono = None
                         self._emit_system(
                             f"Receiving file: {final_name} ({size} bytes)"
                         )
-                        self._emit_file_event(self.incoming_info)
+                        self._emit_file_event(sess.incoming_info)
                     except Exception as e:
                         self._emit_error(f"Invalid file header: {e}")
 
                 elif msg_type == "D":
                     try:
-                        if self.incoming_file and self.incoming_info:
-                            remaining = self.incoming_info.size - self.incoming_info.received
+                        if sess.incoming_file and sess.incoming_info:
+                            remaining = sess.incoming_info.size - sess.incoming_info.received
                             if remaining <= 0:
                                 raise ValueError("File chunk exceeds declared size")
                             if len(body) > max_base64_chars_for_bytes(remaining):
@@ -6592,10 +7203,10 @@ class I2PChatCore:
                             chunk = base64.b64decode(body, validate=True)
                             if len(chunk) > remaining:
                                 raise ValueError("Decoded file chunk exceeds remaining size")
-                            self.incoming_file.write(chunk)
-                            self.incoming_info.received += len(chunk)
-                            rcv = self.incoming_info.received
-                            tot = self.incoming_info.size
+                            sess.incoming_file.write(chunk)
+                            sess.incoming_info.received += len(chunk)
+                            rcv = sess.incoming_info.received
+                            tot = sess.incoming_info.size
                             clen = len(chunk)
                             if should_emit_file_progress(rcv, clen, tot):
                                 if self._file_xfer_debug:
@@ -6611,38 +7222,38 @@ class I2PChatCore:
                                                 tot,
                                             )
                                     self._file_xfer_debug_last_recv_emit_mono = now
-                                self._emit_file_event(self.incoming_info)
+                                self._emit_file_event(sess.incoming_info)
                     except Exception as e:
                         self._emit_error(f"File chunk error: {e}")
-                        if self.incoming_file:
+                        if sess.incoming_file:
                             try:
-                                self.incoming_file.close()
+                                sess.incoming_file.close()
                             except Exception:
                                 pass
-                        if self.incoming_info:
+                        if sess.incoming_info:
                             self._emit_file_event(
                                 FileTransferInfo(
-                                    filename=self.incoming_info.filename,
-                                    size=self.incoming_info.size,
+                                    filename=sess.incoming_info.filename,
+                                    size=sess.incoming_info.size,
                                     received=-1,
                                     is_sending=False,
                                 )
                             )
                             try:
-                                os.remove(self.incoming_info.filename)
+                                os.remove(sess.incoming_info.filename)
                             except OSError:
                                 pass
-                        self.incoming_file = None
-                        self.incoming_info = None
-                        self._incoming_file_msg_id = None
+                        sess.incoming_file = None
+                        sess.incoming_info = None
+                        sess._incoming_file_msg_id = None
 
                 elif msg_type == "E":
-                    if self.incoming_file and self.incoming_info:
-                        ack_filename = self.incoming_info.filename
-                        expected_size = self.incoming_info.size
-                        received_size = self.incoming_info.received
+                    if sess.incoming_file and sess.incoming_info:
+                        ack_filename = sess.incoming_info.filename
+                        expected_size = sess.incoming_info.size
+                        received_size = sess.incoming_info.received
                         try:
-                            self.incoming_file.close()
+                            sess.incoming_file.close()
                         except Exception:
                             pass
                         if received_size != expected_size:
@@ -6661,11 +7272,11 @@ class I2PChatCore:
                                 os.remove(ack_filename)
                             except OSError:
                                 pass
-                            self.incoming_file = None
-                            self.incoming_info = None
-                            self._incoming_file_msg_id = None
+                            sess.incoming_file = None
+                            sess.incoming_info = None
+                            sess._incoming_file_msg_id = None
                             continue
-                        ack_msg_id = self._incoming_file_msg_id or 0
+                        ack_msg_id = sess._incoming_file_msg_id or 0
                         self._emit_file_event(
                             FileTransferInfo(
                                 filename=ack_filename,
@@ -6674,20 +7285,21 @@ class I2PChatCore:
                                 is_sending=False,
                             )
                         )
-                        self.incoming_file = None
-                        self.incoming_info = None
+                        sess.incoming_file = None
+                        sess.incoming_info = None
                         # Подтверждение получения файла (галочки у отправителя); отправляем basename, чтобы совпало с file_name у отправителя
                         try:
                             writer.write(
                                 self.frame_message(
                                     "S",
                                     f"__SIGNAL__:FILE_ACK|{os.path.basename(ack_filename)}|{ack_msg_id}",
+                                    peer_id=peer_id,
                                 )
                             )
                             await writer.drain()
                         except Exception:
                             pass
-                        self._incoming_file_msg_id = None
+                        sess._incoming_file_msg_id = None
 
                 elif msg_type == "S":
                     if "__SIGNAL__:" in body:
@@ -6709,7 +7321,7 @@ class I2PChatCore:
                             try:
                                 ack_id_raw = body.split("MSG_ACK|", 1)[1].strip().split("|", 1)[0]
                                 ack_id = int(ack_id_raw)
-                                entry = self._pending_text_acks.get(ack_id)
+                                entry = sess._pending_text_acks.get(ack_id)
                                 if entry is None:
                                     self._record_ack_drop("unknown_id", f"MSG_ACK id={ack_id}")
                                 elif entry.state != "awaiting_ack":
@@ -6719,8 +7331,8 @@ class I2PChatCore:
                                     )
                                 elif (
                                     entry.ack_kind != "msg"
-                                    or entry.peer_addr != self._current_ack_peer()
-                                    or entry.ack_session_epoch != self._ack_session_epoch
+                                    or entry.peer_addr != self._normalize_peer_addr(sess.peer_id or "")
+                                    or entry.ack_session_epoch != sess._ack_session_epoch
                                 ):
                                     self._record_ack_drop(
                                         "context_mismatch",
@@ -6729,7 +7341,7 @@ class I2PChatCore:
                                 else:
                                     if self.on_text_delivered:
                                         self.on_text_delivered(str(ack_id))
-                                    self._pending_text_acks.pop(ack_id, None)
+                                    sess._pending_text_acks.pop(ack_id, None)
                                     self.session_manager.acknowledge_inflight_message(
                                         ack_id,
                                         peer_id=self._current_ack_peer(),
@@ -6745,7 +7357,7 @@ class I2PChatCore:
                                 if len(parts) > 1:
                                     try:
                                         ack_id = int(parts[1].strip())
-                                        entry = self._pending_image_acks.get(ack_id)
+                                        entry = sess._pending_image_acks.get(ack_id)
                                         ack_name = os.path.basename(ack_filename)
                                         if entry is None:
                                             self._record_ack_drop(
@@ -6763,7 +7375,7 @@ class I2PChatCore:
                                             and entry.peer_addr == self._current_ack_peer()
                                             and entry.ack_session_epoch == self._ack_session_epoch
                                         ):
-                                            self._pending_image_acks.pop(ack_id, None)
+                                            sess._pending_image_acks.pop(ack_id, None)
                                             self.session_manager.acknowledge_inflight_message(
                                                 ack_id,
                                                 peer_id=self._current_ack_peer(),
@@ -6791,7 +7403,7 @@ class I2PChatCore:
                                 if len(parts) > 1:
                                     try:
                                         ack_id = int(parts[1].strip())
-                                        entry = self._pending_file_acks.get(ack_id)
+                                        entry = sess._pending_file_acks.get(ack_id)
                                         ack_name = os.path.basename(ack_filename)
                                         if entry is None:
                                             self._record_ack_drop(
@@ -6809,7 +7421,7 @@ class I2PChatCore:
                                             and entry.peer_addr == self._current_ack_peer()
                                             and entry.ack_session_epoch == self._ack_session_epoch
                                         ):
-                                            self._pending_file_acks.pop(ack_id, None)
+                                            sess._pending_file_acks.pop(ack_id, None)
                                             self.session_manager.acknowledge_inflight_message(
                                                 ack_id,
                                                 peer_id=self._current_ack_peer(),
@@ -6829,34 +7441,34 @@ class I2PChatCore:
                             except Exception:
                                 self._record_ack_drop("invalid_format", "FILE_ACK parse failed")
                         elif "REJECT_FILE|" in body:
-                            self._transfer_rejected_by_peer = True
+                            sess._transfer_rejected_by_peer = True
                         elif "QUIT" in body:
                             self._emit_system("Peer requested disconnect.")
                             break
                         elif "ABORT_FILE" in body:
-                            self._transfer_aborted_by_peer = True
-                            if self.incoming_file and self.incoming_info:
+                            sess._transfer_aborted_by_peer = True
+                            if sess.incoming_file and sess.incoming_info:
                                 try:
-                                    self.incoming_file.close()
+                                    sess.incoming_file.close()
                                 except Exception:
                                     pass
-                                self.incoming_file = None
+                                sess.incoming_file = None
                                 self._emit_file_event(FileTransferInfo(
-                                    filename=self.incoming_info.filename,
-                                    size=self.incoming_info.size,
+                                    filename=sess.incoming_info.filename,
+                                    size=sess.incoming_info.size,
                                     received=-1,
                                     is_sending=False,
                                 ))
-                                self.incoming_info = None
+                                sess.incoming_info = None
                                 self._emit_system("Sender cancelled the transfer")
                             continue
                     else:
                         try:
                             dest_obj = i2plib.Destination(body)
                             new_peer = dest_obj.base32 + ".b32.i2p"
-                            if self.current_peer_addr and new_peer != self.current_peer_addr:
+                            if sess.peer_id and new_peer != sess.peer_id:
                                 self._emit_error(
-                                    f"Blocked identity mismatch: expected {self.current_peer_addr[:16]}..., got {new_peer[:16]}..."
+                                    f"Blocked identity mismatch: expected {sess.peer_id[:16]}..., got {new_peer[:16]}..."
                                 )
                                 break
                             if not await self._set_verified_peer_identity(
@@ -6872,50 +7484,62 @@ class I2PChatCore:
                             pass
 
                 elif msg_type == "H":
-                    await self._handle_handshake_message(body, writer)
+                    await self._handle_handshake_message(body, writer, peer_id=peer_id)
 
                 elif msg_type == "P":
-                    writer.write(self.frame_message("O", ""))
+                    writer.write(self.frame_message("O", "", peer_id=peer_id))
                     await writer.drain()
 
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         except Exception as e:
-            if self.conn == connection:
+            if sess.conn == connection:
                 self._emit_error(f"Protocol Error: {e}")
         finally:
-            self._recv_loop_active = False
+            sess._recv_loop_active = False
             skip_cleanup = False
             if (
                 restart_after_timeout
-                and self.conn == connection
+                and sess.conn == connection
                 and (
-                    self.incoming_info is not None
-                    or self.inline_image_info is not None
+                    sess.incoming_info is not None
+                    or sess.inline_image_info is not None
                 )
-                and not self._file_transfer_active
+                and not sess._file_transfer_active
             ):
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(self.receive_loop(connection))
+                    loop.create_task(
+                        self.receive_loop(connection, peer_id=peer_id)
+                    )
                 except RuntimeError:
                     pass
                 skip_cleanup = True
             # Не сбрасываем соединение если идёт передача или приём файла / inline-изображения
             if (
                 not skip_cleanup
-                and self.conn == connection
-                and not self._file_transfer_active
-                and self.incoming_info is None
-                and self.inline_image_info is None
+                and sess.conn == connection
+                and not sess._file_transfer_active
+                and sess.incoming_info is None
+                and sess.inline_image_info is None
             ):
-                self._cancel_handshake_watchdog()
-                if self.session_manager.keepalive_task:
-                    self.session_manager.keepalive_task.cancel()
-                    self.session_manager.keepalive_task = None
-                peer_before_cleanup = self._normalize_peer_addr(self.current_peer_addr or "")
-                self.conn = None
-                self._reset_crypto_state()
+                self._cancel_handshake_watchdog(peer_id)
+                if peer_id is None:
+                    peer_before_cleanup = self._normalize_peer_addr(
+                        self._legacy_stream_peer_id or self.current_peer_addr or ""
+                    )
+                else:
+                    peer_before_cleanup = self._normalize_peer_addr(sess.peer_id or "")
+                if peer_id is None:
+                    if self.session_manager.keepalive_task:
+                        self.session_manager.keepalive_task.cancel()
+                        self.session_manager.keepalive_task = None
+                    self.conn = None
+                    self._legacy_stream_peer_id = None
+                    self._reset_crypto_state()
+                else:
+                    self._live_sessions.pop(peer_id, None)
+                    sess.reset_crypto()
                 if peer_before_cleanup:
                     self.session_manager.reset_peer_lifecycle(
                         peer_before_cleanup, reason="receive-loop-cleanup"
@@ -6933,6 +7557,18 @@ class I2PChatCore:
                     await writer.wait_closed()
                 except Exception:
                     pass
+                await self._maybe_stop_keepalive_if_idle()
+                if self._any_live_stream() and (
+                    self.session_manager.keepalive_task is None
+                    or self.session_manager.keepalive_task.done()
+                ):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        self.session_manager.keepalive_task = loop.create_task(
+                            self._keepalive_loop()
+                        )
+                    except RuntimeError:
+                        pass
 
     async def tunnel_watcher(self) -> None:
         while True:

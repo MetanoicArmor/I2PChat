@@ -104,6 +104,7 @@ class SessionManager:
         self.keepalive_task: Optional[asyncio.Task[Any]] = None
         self.handshake_watchdog_task: Optional[asyncio.Task[Any]] = None
         self.handshake_watchdog_generation: int = 0
+        self.handshake_watchdog_peer_id: Optional[str] = None
         self.disconnect_task: Optional[asyncio.Task[Any]] = None
         self.disconnecting: bool = False
         self.outbound_connect_busy: bool = False
@@ -478,6 +479,7 @@ class SessionManager:
     def invalidate_handshake_watchdog(self) -> int:
         self.handshake_watchdog_generation += 1
         self.handshake_watchdog_task = None
+        self.handshake_watchdog_peer_id = None
         return self.handshake_watchdog_generation
 
     def mark_live_healthy(self, *, peer_id: Optional[str] = None) -> None:
