@@ -7842,41 +7842,16 @@ class ChatWindow(QtWidgets.QMainWindow):
                     chat_is_foreground=self._peer_chat_is_foreground(),
                 )
                 self._update_unread_chrome()
-            self._refresh_groups_list()
             if self._active_group_id != msg.conversation_id:
+                self._refresh_groups_list()
                 self.refresh_status_label()
                 self._refresh_connection_buttons()
                 return
 
-            ts = msg.timestamp.strftime("%H:%M:%S")
-            if msg.kind == "system":
-                self._append_item(
-                    ChatItem(
-                        kind="system",
-                        timestamp=ts,
-                        sender="SYSTEM",
-                        text=msg.group_plain_text or msg.text,
-                        message_id=msg.message_id,
-                    )
-                )
-            else:
-                sender = "Me" if msg.kind == "me" else self._group_member_label(
-                    msg.group_sender_id or msg.source_peer
-                )
-                plain_text = msg.group_plain_text or msg.text
-                visible_text = plain_text if msg.kind == "me" else f"{sender}: {plain_text}"
-                self._append_item(
-                    ChatItem(
-                        kind=msg.kind,
-                        timestamp=ts,
-                        sender=sender,
-                        text=visible_text,
-                        message_id=msg.message_id,
-                    )
-                )
-            if msg.kind != "peer" or self._peer_chat_is_foreground():
-                clear_unread_for_peer(self._unread_by_peer, group_key)
-            self._update_unread_chrome()
+            self._refresh_group_conversation_display(
+                force=True,
+                clear_unread=(msg.kind != "peer" or self._peer_chat_is_foreground()),
+            )
             self.refresh_status_label()
             self._refresh_connection_buttons()
             return
@@ -9373,25 +9348,16 @@ class ChatWindow(QtWidgets.QMainWindow):
         try:
             draft_key = self._compose_peer_key_from_ui()
             if self._active_group_id:
-                result = await self.core.send_group_text(self._active_group_id, text)
+                active_group_id = self._active_group_id
+                await self.core.send_group_text(active_group_id, text)
                 if draft_key:
                     self._compose_drafts.pop(draft_key, None)
                 self.input_edit.clear()
                 self._schedule_compose_drafts_persist()
-                self._append_item(
-                    ChatItem(
-                        kind="system",
-                        timestamp="",
-                        sender="SYSTEM",
-                        text=render_group_delivery_summary(
-                            {
-                                peer_id: delivery.status.value
-                                for peer_id, delivery in result.delivery_results.items()
-                            }
-                        ),
-                    )
-                )
-                self._refresh_groups_list()
+                if self._active_group_id == active_group_id:
+                    self._refresh_group_conversation_display(force=True)
+                else:
+                    self._refresh_groups_list()
                 return
             result = await self.core.send_text(text)
             if result.accepted:
@@ -9770,7 +9736,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                 )
             )
 
-    def _refresh_group_conversation_display(self, *, force: bool = False) -> None:
+    def _refresh_group_conversation_display(
+        self,
+        *,
+        force: bool = False,
+        clear_unread: bool = True,
+    ) -> None:
         if self.core is None or not self._active_group_id:
             self._loaded_group_history_id = None
             return
@@ -9828,10 +9799,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._chat_search_sync_suppressed = False
         self._sync_chat_search_after_model_change()
         self._loaded_group_history_id = group_id
-        clear_unread_for_peer(
-            self._unread_by_peer,
-            make_group_conversation_key(group_id),
-        )
+        if clear_unread:
+            clear_unread_for_peer(
+                self._unread_by_peer,
+                make_group_conversation_key(group_id),
+            )
         self._update_unread_chrome()
         self._refresh_groups_list()
 
