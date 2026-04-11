@@ -1,7 +1,6 @@
 cask "i2pchat" do
   version "1.3.0"
-  # After publishing GitHub release assets: ./packaging/refresh-checksums.sh 1.3.0 — paste sha256 below (replace :no_check)
-  sha256 :no_check
+  sha256 "166094273128ac215f31ec24aa4f8775e14b6c83c11a65aa5cd2e4122dee62ff"
 
   url "https://github.com/MetanoicArmor/I2PChat/releases/download/v#{version}/I2PChat-macOS-arm64-v#{version}.zip"
   name "I2PChat"

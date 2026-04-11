@@ -1,7 +1,6 @@
 cask "i2pchat-tui" do
   version "1.3.0"
-  # After publishing GitHub release assets: ./packaging/refresh-checksums.sh 1.3.0 — use macOS TUI zip line (replace :no_check)
-  sha256 :no_check
+  sha256 "74c44023700790ad7e3158f9aa4d2b32d15e3a68d75375b88df7fe116e065bdf"
 
   url "https://github.com/MetanoicArmor/I2PChat/releases/download/v#{version}/I2PChat-macOS-arm64-tui-v#{version}.zip"
   name "I2PChat TUI"
