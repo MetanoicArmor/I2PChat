@@ -2,6 +2,8 @@
 
 **Supported binaries** are published on **[GitHub Releases](https://github.com/MetanoicArmor/I2PChat/releases)**. File names include the version (for example `v1.3.0`); use **Latest** on that page for the current build.
 
+<img src="icons/icons8-windows-48.png" alt="Windows" width="28" height="28" align="middle" />
+
 ## Windows (x64)
 
 1. Download **`I2PChat-windows-x64-v<version>.zip`**.
@@ -21,6 +23,8 @@ If **`winget show`** does not list the latest version yet, the catalog may still
 
 **TUI-only zip:** **`I2PChat-windows-tui-x64-v<version>.zip`** contains the `I2PChat` folder with **`I2PChat-tui.exe`**, `_internal`, and `vendor` only (no GUI exe). Use this with **`MetanoicArmor.I2PChat.TUI`** on winget and similar `-tui` packages.
 
+<img src="icons/icons8-macos-48.png" alt="macOS" width="28" height="28" align="middle" />
+
 ## macOS (Apple Silicon / arm64)
 
 1. Download **`I2PChat-macOS-arm64-v<version>.zip`**.
@@ -28,6 +32,8 @@ If **`winget show`** does not list the latest version yet, the catalog may still
 3. **TUI (optional):** `I2PChat.app/Contents/MacOS/I2PChat-tui` with an optional profile argument.
 
 **TUI-only zip:** **`I2PChat-macos-arm64-tui-v<version>.zip`** unpacks to **`i2pchat-tui`** (launcher) plus **`I2PChat/`** (PyInstaller onedir). Run **`./i2pchat-tui`** from the extracted folder. Homebrew (tap added automatically): **`brew install --cask metanoicarmor/i2pchat/i2pchat-tui`** (GUI: **`…/i2pchat`**).
+
+<img src="icons/icons8-linux-48.png" alt="Linux" width="28" height="28" align="middle" /> <img src="icons/icons8-arch-linux-48.png" alt="Arch Linux" width="28" height="28" align="middle" /> <img src="icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" />
 
 ## Linux (x86_64)
 
@@ -39,7 +45,7 @@ If **`winget show`** does not list the latest version yet, the catalog may still
 
 **glibc / `GLIBC_X.XX not found`:** PyInstaller bundles use the **C standard library from the machine where they were built**. If you see `version 'GLIBC_2.xx' not found` in `libc.so.6`, your distro’s glibc is **older** than the build host’s (for example a zip built on Fedora 42 may require very new symbols). **Workarounds:** install **`I2PChat` from source** on your machine (see [Build from source](#build-from-source)), use **Flatpak** if available, or install **fresh** Linux zips / `.deb` built by **[Build Linux release artifacts](../.github/workflows/build-linux-release-artifacts.yml)** (Ubuntu 22.04; CI also smoke-tests the TUI zip in Docker). If you already used apt: **`sudo apt install --reinstall i2pchat-tui`** only helps after the mirror or local `.deb` was rebuilt — otherwise remove and install a newly downloaded `i2pchat-tui_*_amd64.deb` from Releases. To see what the bundle asks for: `strings /opt/i2pchat-tui/usr/bin/_internal/python3.*/lib-dynload/termios*.so 2>/dev/null | grep '^GLIBC_' | sort -u`.
 
-**Arch Linux (AUR):** with an AUR helper such as **yay** or **paru**:
+<img src="icons/icons8-arch-linux-48.png" alt="Arch Linux" width="28" height="28" align="middle" /> **Arch Linux (AUR):** with an AUR helper such as **yay** or **paru**:
 
 ```bash
 yay -S i2pchat-bin      # GUI: official AppImage → /opt/i2pchat, command i2pchat
@@ -48,9 +54,9 @@ yay -S i2pchat-tui-bin  # TUI-only: slim Linux zip → /opt/i2pchat-tui, command
 
 Package pages: [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Maintainer sources: [`packaging/aur/`](../packaging/aur/).
 
-**Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`** / **`i2pchat-tui_<version>_amd64.deb`** and **`i2pchat_<version>_arm64.deb`** / **`i2pchat-tui_<version>_arm64.deb`**. Install with `sudo apt install ./i2pchat_*_<arch>.deb` (or download from the browser). If missing, use the Linux zips or build locally — [`packaging/debian/README.md`](../packaging/debian/README.md).
+<img src="icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" /> **Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`** / **`i2pchat-tui_<version>_amd64.deb`** and **`i2pchat_<version>_arm64.deb`** / **`i2pchat-tui_<version>_arm64.deb`**. Install with `sudo apt install ./i2pchat_*_<arch>.deb` (or download from the browser). If missing, use the Linux zips or build locally — [`packaging/debian/README.md`](../packaging/debian/README.md).
 
-**apt mirror (Debian/Ubuntu, GitHub Pages)** is **not** guaranteed: it appears only after a maintainer configures **`APT_REPO_GPG_PRIVATE_KEY`** and deploys Pages via Actions — [`packaging/apt/README.md`](../packaging/apt/README.md). **Until then** use **`sudo apt install ./i2pchat_*_*.deb`** from Releases (see above).
+<img src="icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" /> **apt mirror (Debian/Ubuntu, GitHub Pages)** is **not** guaranteed: it appears only after a maintainer configures **`APT_REPO_GPG_PRIVATE_KEY`** and deploys Pages via Actions — [`packaging/apt/README.md`](../packaging/apt/README.md). **Until then** use **`sudo apt install ./i2pchat_*_*.deb`** from Releases (see above).
 
 **If** the mirror is published, add it with **deb822** (Debian 12+ / recent Ubuntu). Use **`Architectures: amd64 arm64`** when the mirror lists both architectures (see **`…/binary-arm64/Packages.gz`** on the site); if the mirror was built **amd64-only**, use **`Architectures: amd64`** or omit the line — [`packaging/apt/README.md`](../packaging/apt/README.md).
 
@@ -75,7 +81,7 @@ Legacy `sources.list` line:
 
 **glibc:** packages from the mirror are the same PyInstaller bundles as the `.deb` on Releases. If they were linked against **GLIBC_2.42**, distros with **older** glibc (e.g. **Ubuntu 24.04 ≈ 2.39**) can still report `GLIBC_2.42 not found` — install a build produced on an older baseline (see [Build Linux release artifacts](../.github/workflows/build-linux-release-artifacts.yml)) or use [Build from source](#build-from-source).
 
-**Optional `.rpm` (Fedora / RHEL-compatible):** соберите локально или через COPR — см. [`packaging/fedora/README.md`](../packaging/fedora/README.md). На странице релиза готовый `.rpm` не обязателен; можно поставить из **Linux AppImage zip** выше.
+<img src="icons/icons8-linux-48.png" alt="Linux" width="28" height="28" align="middle" /> **Optional `.rpm` (Fedora / RHEL-compatible):** соберите локально или через COPR — см. [`packaging/fedora/README.md`](../packaging/fedora/README.md). На странице релиза готовый `.rpm` не обязателен; можно поставить из **Linux AppImage zip** выше.
 
 ## Router (I2P)
 
