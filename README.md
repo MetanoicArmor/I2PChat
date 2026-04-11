@@ -460,7 +460,7 @@ Full zip layouts, **winget**, **`.deb`**, **Flatpak** notes → [**docs/INSTALL.
 
 ### 📦 Package managers
 
-**Windows (x64) — [winget](https://learn.microsoft.com/windows/package-manager/winget/)** (community manifests in [winget-pkgs](https://github.com/microsoft/winget-pkgs); ships the **`*-winget-*`** zip **without** embedded `i2pd`. For a bundled router, use the full **`*-windows-x64-v*.zip`** from [Releases](https://github.com/MetanoicArmor/I2PChat/releases).)
+<img src="docs/icons/icons8-windows-48.png" alt="Windows" width="28" height="28" align="middle" /> **Windows (x64) — [winget](https://learn.microsoft.com/windows/package-manager/winget/)** (community manifests in [winget-pkgs](https://github.com/microsoft/winget-pkgs); ships the **`*-winget-*`** zip **without** embedded `i2pd`. For a bundled router, use the full **`*-windows-x64-v*.zip`** from [Releases](https://github.com/MetanoicArmor/I2PChat/releases).)
 
 ```powershell
 winget install MetanoicArmor.I2PChat       # GUI
@@ -469,7 +469,7 @@ winget install MetanoicArmor.I2PChat.TUI  # TUI only
 
 If the catalog lags behind a fresh release merge, **`winget show MetanoicArmor.I2PChat`** lists available versions; use **`--version x.y.z`** only when you need to pin one.
 
-**macOS (arm64) — [Homebrew](https://brew.sh)** ([tap](https://github.com/MetanoicArmor/homebrew-i2pchat))
+<img src="docs/icons/icons8-macos-48.png" alt="macOS" width="28" height="28" align="middle" /> **macOS (arm64) — [Homebrew](https://brew.sh)** ([tap](https://github.com/MetanoicArmor/homebrew-i2pchat))
 
 ```bash
 brew install --cask metanoicarmor/i2pchat/i2pchat       # GUI — I2PChat.app
@@ -478,7 +478,7 @@ brew install --cask metanoicarmor/i2pchat/i2pchat-tui   # TUI only
 
 (`brew tap MetanoicArmor/i2pchat` then `brew install --cask i2pchat` works too.)
 
-**Arch Linux — [AUR](https://aur.archlinux.org/)** (x86_64 and aarch64; example [yay](https://github.com/Jguer/yay))
+<img src="docs/icons/icons8-arch-linux-48.png" alt="Arch Linux" width="28" height="28" align="middle" /> **Arch Linux — [AUR](https://aur.archlinux.org/)** (x86_64 and aarch64; example [yay](https://github.com/Jguer/yay))
 
 ```bash
 yay -S i2pchat-bin       # GUI — AppImage from release
@@ -487,7 +487,7 @@ yay -S i2pchat-tui-bin   # TUI only
 
 > **Not this repo:** [**`i2pchat-git`**](https://aur.archlinux.org/packages/i2pchat-git) (`yay -S i2pchat-git`) builds [**vituperative/i2pchat**](https://github.com/vituperative/i2pchat) — another I2P chat client (**Qt5**). It may still install and run as *that* app, but it is **not** **MetanoicArmor/I2PChat** (Python / PyQt6 / Textual TUI). For this project use **`i2pchat-bin`** / **`i2pchat-tui-bin`**, or clone this repo and run **`python -m i2pchat.gui`** / **`python -m i2pchat.tui`**.
 
-**Debian / Ubuntu — `.deb` from [Releases](https://github.com/MetanoicArmor/I2PChat/releases)** (works without any mirror):
+<img src="docs/icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" /> **Debian / Ubuntu — `.deb` from [Releases](https://github.com/MetanoicArmor/I2PChat/releases)** (works without any mirror):
 
 ```bash
 # after downloading e.g. i2pchat_1.3.0_amd64.deb
