@@ -68,7 +68,7 @@
 
 ### 🧠 Core architecture
 
-The runtime is built around one shared async engine — `I2PChatCore` — plus **`SessionManager`** (per-peer transport lifecycle and outbound policy since v1.2.6), with thin UI adapters on top and protocol / crypto / BlindBox services below.
+The runtime is built around one shared async engine — `I2PChatCore` — plus **`SessionManager`** (per-peer transport lifecycle and outbound policy since v1.2.6) and **parallel live streams** (`LivePeerSession` rows in **`_live_sessions[peer_id]`**), with **`GroupManager`** for text groups. Thin UI adapters sit on top; protocol / crypto / BlindBox below.
 
 **Toolchain:** Python dependencies are managed with **[uv](https://docs.astral.sh/uv/)** ([`pyproject.toml`](pyproject.toml), [`uv.lock`](uv.lock)). **I2P SAM** (router control connection, sessions, streams, naming lookups) is implemented in-tree as **`i2pchat.sam`** — not the PyPI **`i2plib`** package; the old vendored `i2plib` tree was removed.
 
@@ -89,6 +89,7 @@ status / drafts / replies / unread / groups / notification policy"]
         guiStore["GUI-side persistence
 chat_history.py
 contact_book.py
+group_store.py
 profile_backup.py"]
         run --> qt
         qt --> present
@@ -102,20 +103,25 @@ profile_backup.py"]
 I2PChatCore
 • profile/session bootstrap
 • accept/connect orchestration
+• _live_sessions[peer_id] → LivePeerSession
 • secure handshake + TOFU pinning
-• send/receive loops
+• per-peer send/receive loops
 • ACK tracking + delivery telemetry
-• text / file / image flows
+• text / file / image + text groups
 • BlindBox root exchange
 • delegates transport lifecycle → SessionManager"]
         sessionMgr["i2pchat/core/session_manager.py
 SessionManager
 per-peer transport state
 outbound policy · streams · reconnect"]
+        groupMgr["i2pchat/groups/manager.py
+GroupManager
+live + BlindBox fan-out"]
         retry["Retry helpers
 send_retry_policy.py
 transfer_retry.py"]
         core --> sessionMgr
+        core --> groupMgr
         core --> retry
     end
 
@@ -152,8 +158,9 @@ SESSION / STREAM / NAMING
 no PyPI i2plib"]
         sam["I2P router
 SAM API"]
-        peer["Remote peer
-live secure chat stream"]
+        peer["Remote peers
+N concurrent SAM streams
+one secure session per peer id"]
         boxes["BlindBox replicas
 I2P or loopback endpoints"]
     end
@@ -191,11 +198,12 @@ delivery callbacks"| qt
 Runtime in practice:
 
 1. **Startup**: `main_qt.py` runs **profile directory migration** when needed (flat `*.dat` in the data root → `profiles/<name>/`) before the profile picker, then creates `ChatWindow`; `start_core()` calls `I2PChatCore.init_session()`, which loads or creates the profile identity, opens the long-lived SAM session, warms up tunnels, and starts `accept_loop()` / `tunnel_watcher()`.
-2. **Transport lifecycle (`SessionManager`, since v1.2.6)**: per-peer transport state (connecting / handshaking / secure / stale / failed), outbound send policy (`LIVE_ONLY`, `PREFER_LIVE_FALLBACK_BLINDBOX`, `QUEUE_THEN_RETRY_LIVE`, `BLINDBOX_ONLY`), stream registry, reconnect metadata, and inflight ACK hooks live in **`SessionManager`**; `I2PChatCore` still owns the live stream handle (`self.conn`), protocol framing, and crypto. Delivery telemetry and UI routing read this layer so labels like **Send** vs **Send offline** stay in sync after a secure handshake completes.
-3. **Live chat path**: `connect_to_peer()` or `accept_loop()` establishes an I2P stream; `I2PChatCore` runs the plaintext handshake boundary, verifies/pins the peer signing key (TOFU), derives session subkeys, then switches to encrypted vNext frames through `ProtocolCodec` + `crypto`.
-4. **Delivery tracking**: each outgoing text / file / image gets a `MSG_ID` and ACK context; `message_delivery.py` turns low-level outcomes into UI states (`sending`, `queued`, `delivered`, `failed`).
-5. **Offline path (BlindBox)**: when no live secure session is available, `send_text()` can route through BlindBox — derive deterministic lookup/blob keys, encrypt a padded blob, PUT it to one or more BlindBox replicas, and later poll / decrypt GET results back into the chat stream.
-6. **UI responsibility split**: `I2PChatCore` stays UI-agnostic and emits callbacks only; the Qt layer renders chat, status and notifications, while GUI-side storage modules persist chat history, contacts, drafts and backup/export data.
+2. **Transport lifecycle (`SessionManager`, since v1.2.6)**: per-peer transport state (connecting / handshaking / secure / stale / failed), outbound send policy (`LIVE_ONLY`, `PREFER_LIVE_FALLBACK_BLINDBOX`, `QUEUE_THEN_RETRY_LIVE`, `BLINDBOX_ONLY`), stream registry, reconnect metadata, and inflight ACK hooks live in **`SessionManager`**. Parallel **live** traffic is keyed by **`peer_id`** in **`_live_sessions`** (`LivePeerSession`: `conn`, crypto, ACK tables, receive loop). Legacy `self.conn` may still reflect the active UI peer; **routing and ACKs are peer-scoped**, not “single global connection”. Delivery telemetry and UI read this so **Send** vs **Send offline** stay correct after handshake.
+3. **Live chat path**: `connect_to_peer()` / `accept_loop()` opens or updates **one** I2P stream per **peer**; `I2PChatCore` runs the handshake, TOFU pinning, and subkeys, then encrypted vNext frames via `ProtocolCodec` + `crypto`. Multiple peers can be **connected at once** (bounded by `max_concurrent_live_sessions`); the UI **selection** (`current_peer_addr`) does not define which peer receives a send — the **target peer** for that operation does.
+4. **Text groups**: **`GroupManager`** sends group envelopes over the same vNext stream as 1:1 chat; offline text fans out **per member** via pairwise BlindBox. State: `i2pchat/storage/group_store.py` (see [MANUAL_EN](docs/MANUAL_EN.md) / [PROTOCOL](docs/PROTOCOL.md)).
+5. **Delivery tracking**: each outgoing text / file / image gets a `MSG_ID` and ACK context; `message_delivery.py` turns low-level outcomes into UI states (`sending`, `queued`, `delivered`, `failed`).
+6. **Offline path (BlindBox)**: when no live secure session is available, `send_text()` can route through BlindBox — derive deterministic lookup/blob keys, encrypt a padded blob, PUT it to one or more BlindBox replicas, and later poll / decrypt GET results back into the chat stream.
+7. **UI responsibility split**: `I2PChatCore` stays UI-agnostic and emits callbacks only; the Qt layer renders chat, status and notifications, while GUI-side storage modules persist chat history, contacts, group state, drafts and backup/export data.
 
 ### 🔌 Protocol overview
 

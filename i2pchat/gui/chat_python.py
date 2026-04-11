@@ -91,6 +91,22 @@ from i2pchat.storage.profile_backup import (
     import_history_bundle,
     import_profile_bundle,
 )
+from i2pchat.groups import (
+    GroupTopologySnapshot,
+    build_observed_group_topology,
+    render_group_topology_ascii,
+)
+from i2pchat.groups.models import GroupState
+from i2pchat.presentation.group_conversations import (
+    is_group_conversation_key,
+    make_group_conversation_key,
+    render_group_control_text,
+    render_group_delivery_summary,
+    render_group_history_preview,
+    short_member_label,
+    split_group_member_tokens,
+)
+from i2pchat.storage.group_store import GroupHistoryEntry
 from i2pchat.updates.release_index import check_for_updates_sync
 
 try:
@@ -142,10 +158,11 @@ class I2PChat(App):
         ("f1", "show_actions", "Actions"),
         ("f2", "show_contacts", "Contacts"),
         ("f3", "show_media", "Media"),
-        ("f4", "show_settings", "Settings"),
-        ("f5", "show_router", "Router"),
-        ("f6", "show_history_screen", "History"),
-        ("f7", "show_diagnostics_screen", "Diagnostics"),
+        ("f4", "show_groups_screen", "Groups"),
+        ("f5", "show_settings", "Settings"),
+        ("f6", "show_router", "Router"),
+        ("f7", "show_history_screen", "History"),
+        ("f8", "show_diagnostics_screen", "Diagnostics"),
         ("ctrl+b", "show_contacts", "Contacts"),
         ("ctrl+d", "show_actions", "Actions"),
         ("ctrl+p", "show_media", "Media"),
@@ -219,6 +236,8 @@ class I2PChat(App):
         self._active_sam_address: Optional[tuple[str, int]] = None
         self._active_http_proxy_address: Optional[tuple[str, int]] = None
         self._core_init_task: Optional[asyncio.Task[bool]] = None
+        self._active_group_id: Optional[str] = None
+        self._loaded_group_history_id: Optional[str] = None
 
         self.core = self._create_core(self.profile, (
             self._router_settings.system_sam_host,
@@ -311,6 +330,9 @@ class I2PChat(App):
     def action_show_diagnostics_screen(self) -> None:
         self._show_diagnostics_screen()
 
+    def action_show_groups_screen(self) -> None:
+        self.push_screen(TuiGroupsScreen())
+
     async def _submit_compose(self) -> None:
         raw = self._compose_text_snapshot()
         text = raw.rstrip("\n")
@@ -319,6 +341,19 @@ class I2PChat(App):
             return
         if "\n" not in stripped and stripped.startswith("/"):
             await self._execute_command(stripped)
+            return
+        if self._active_group_id:
+            try:
+                await self.core.send_group_text(self._active_group_id, text, route="auto")
+            except Exception as exc:
+                self.post("error", str(exc).strip() or type(exc).__name__)
+                return
+            self._set_compose_text("")
+            if self._compose_draft_active_key is not None:
+                self._compose_drafts[self._compose_draft_active_key] = ""
+            self._flush_compose_drafts_to_disk()
+            self._refresh_group_conversation_display(force=True)
+            self._refresh_status_bar()
             return
         result = await self.core.send_text(
             text,
@@ -446,6 +481,7 @@ class I2PChat(App):
             on_file_delivered=self.handle_file_delivered,
             on_trust_decision=self.handle_trust_decision,
             on_trust_mismatch_decision=self.handle_trust_mismatch_decision,
+            on_saved_contacts_changed=self._reload_contacts_book_after_core_write,
         )
         setattr(
             core,
@@ -689,7 +725,16 @@ class I2PChat(App):
     def _refresh_status_bar(self) -> None:
         self._last_status_snapshot = self._build_status_snapshot()
         is_active = bool(self.core.current_peer_addr or self.selected_peer)
-        if self.core.proven:
+
+        if self._active_group_id:
+            state = self.core.load_group_state(self._active_group_id)
+            group_name = self._group_display_name(
+                self._active_group_id,
+                title=state.title if state is not None else None,
+            )
+            member_count = max(0, len(state.members) - 1) if state else 0
+            border_col, title = "magenta", "GROUP CHAT"
+        elif self.core.proven:
             border_col, title = "green", "VERIFIED SESSION"
         elif is_active:
             border_col, title = "cyan", "ACTIVE SESSION"
@@ -706,10 +751,16 @@ class I2PChat(App):
             f"[black on {tag_bg}] [bold]{mode_tag}[/] [/] "
             f"[bold]{self.profile.upper()}[/]  [white]{escape(self._last_status_snapshot.short)}[/]"
         )
-        right = (
-            f"[green]{self._short_peer(self.core.my_dest.base32 if self.core.my_dest else None)}[/]"
-            f" [white]→[/] [cyan]{self._short_peer(self._current_target_peer())}[/]"
-        )
+        if self._active_group_id:
+            right = (
+                f"[green]{self._short_peer(self.core.my_dest.base32 if self.core.my_dest else None)}[/]"
+                f" [white]→[/] [magenta]{escape(group_name)}[/] [dim]({member_count} peers)[/]"
+            )
+        else:
+            right = (
+                f"[green]{self._short_peer(self.core.my_dest.base32 if self.core.my_dest else None)}[/]"
+                f" [white]→[/] [cyan]{self._short_peer(self._current_target_peer())}[/]"
+            )
         if self._last_status_snapshot.ack_total > 0:
             right += f" [dim]ACKdrop:{self._last_status_snapshot.ack_total}[/]"
 
@@ -809,11 +860,11 @@ class I2PChat(App):
         align: str,
         border_color: str,
         timestamp: str,
-        ref_id: int,
+        ref_id: Optional[int] = None,
         delivery_state: Optional[str] = None,
         history: bool = False,
     ) -> None:
-        suffix_parts = [f"#{ref_id}"]
+        suffix_parts = [f"#{ref_id}"] if ref_id is not None else []
         if delivery_state:
             label = delivery_state_label(delivery_state)
             if label:
@@ -1103,12 +1154,113 @@ class I2PChat(App):
             )
         self._history_dirty = False
 
+    # ----- group helpers -----
+
+    def _group_display_name(self, group_id: str, *, title: Optional[str] = None) -> str:
+        clean = (title or "").strip()
+        return clean or (group_id or "").strip() or "Group"
+
+    def _group_member_label(self, member_id: Optional[str]) -> str:
+        normalized = normalize_peer_address(member_id or "") if member_id else ""
+        record = self._contact_book.get(normalized) if normalized else None
+        if record and record.display_name.strip():
+            return record.display_name.strip()
+        return short_member_label(member_id or "", fallback="Member")
+
+    def _set_active_group(self, group_id: str) -> bool:
+        state = self.core.load_group_state(group_id)
+        if state is None:
+            return False
+        self._save_history_if_needed()
+        self._active_group_id = state.group_id
+        self._loaded_group_history_id = None
+        draft_key = make_group_conversation_key(state.group_id)
+        self._sync_compose_draft_to_peer_key(draft_key)
+        self._refresh_group_conversation_display(force=True)
+        self._refresh_status_bar()
+        return True
+
+    def _clear_active_group(self) -> bool:
+        if not self._active_group_id:
+            return False
+        self._active_group_id = None
+        self._loaded_group_history_id = None
+        self._sync_compose_draft_to_peer_key(self._current_target_peer())
+        self._try_load_history(force=True)
+        self._refresh_status_bar()
+        return True
+
+    def _refresh_group_conversation_display(self, *, force: bool = False) -> None:
+        if not self._active_group_id:
+            self._loaded_group_history_id = None
+            return
+        group_id = self._active_group_id
+        if not force and self._loaded_group_history_id == group_id:
+            return
+        conversation = self.core.load_group(group_id)
+        if conversation is None:
+            self._active_group_id = None
+            self._loaded_group_history_id = None
+            self.post("error", f"Group not found: {group_id}")
+            return
+        self._save_history_if_needed()
+        self._history_loaded_for_peer = None
+        self._history_entries = []
+        self._history_dirty = False
+        chat_log = getattr(self, "chat_log", None)
+        if chat_log is not None:
+            chat_log.clear()
+        header = self._group_display_name(conversation.state.group_id, title=conversation.state.title)
+        member_count = max(0, len(conversation.state.members) - 1)
+        self.post("system", f"--- Group: {header} ({member_count} peer{'s' if member_count != 1 else ''}) ---")
+        if not conversation.history:
+            self.post("system", "No local group messages yet.")
+        else:
+            for entry in conversation.history:
+                self._append_group_history_entry(entry)
+        self.post("system", "--- end of group history ---")
+        self._loaded_group_history_id = group_id
+
+    def _append_group_history_entry(self, entry: GroupHistoryEntry) -> None:
+        ts_display = ""
+        if isinstance(entry.created_at, datetime):
+            ts_display = entry.created_at.strftime("%H:%M:%S")
+        if entry.content_type.value == "GROUP_CONTROL":
+            actor = "You" if entry.kind == "me" else self._group_member_label(entry.sender_id)
+            payload = entry.payload if isinstance(entry.payload, dict) else None
+            self.post("system", f"[{ts_display}] {render_group_control_text(payload, actor_label=actor)}")
+            return
+        sender = "Me" if entry.kind == "me" else self._group_member_label(entry.sender_id)
+        text = str(entry.text or "")
+        visible = text if entry.kind == "me" else f"{sender}: {text}"
+        self._render_chat_message(
+            sender_label=sender,
+            text=visible,
+            align="left" if entry.kind == "me" else "right",
+            border_color="green" if entry.kind == "me" else "cyan",
+            timestamp=ts_display,
+        )
+
+    def _compose_peer_key_from_ui(self) -> Optional[str]:
+        if self._active_group_id:
+            return make_group_conversation_key(self._active_group_id)
+        return self._current_target_peer()
+
     # ----- callbacks from core -----
 
     def handle_status(self, status: str) -> None:
         self.network_status = status
 
     def handle_message(self, msg: ChatMessage) -> None:
+        if getattr(msg, "conversation_kind", None) == "group" and getattr(msg, "conversation_id", None):
+            if self._active_group_id == msg.conversation_id:
+                self._refresh_group_conversation_display(force=True)
+            else:
+                group_label = self._group_display_name(msg.conversation_id)
+                sender = short_member_label(getattr(msg, "group_sender_id", None) or msg.source_peer or "")
+                self.post("system", f"[Group: {group_label}] {sender}: {msg.text[:80]}")
+            self._refresh_status_bar()
+            return
         if msg.kind in {"me", "peer"}:
             timestamp = msg.timestamp.astimezone(timezone.utc).strftime("%H:%M:%S")
             peer = msg.source_peer if msg.kind == "peer" else self._current_target_peer()
@@ -1683,6 +1835,7 @@ class I2PChat(App):
             "history-browser": "history-screen",
             "diagnostics": "diagnostics-screen",
             "diag": "diagnostics-screen",
+            "groups": "group",
         }
         return aliases.get(cmd, cmd)
 
@@ -2413,6 +2566,9 @@ class I2PChat(App):
         elif cmd == "updates":
             self.run_worker(self._check_updates())
 
+        elif cmd == "group":
+            await self._execute_group_subcommand(args)
+
         elif cmd == "help":
             self.show_help()
 
@@ -2425,6 +2581,189 @@ class I2PChat(App):
                 self._compose_drafts[self._compose_draft_active_key] = ""
             self._flush_compose_drafts_to_disk()
         self._refresh_status_bar()
+
+    async def _execute_group_subcommand(self, args: list[str]) -> None:
+        sub = args[0].lower() if args else "list"
+
+        if sub == "list":
+            states = self.core.list_group_states()
+            if not states:
+                self.post("system", "No groups. Use /group create <title> <member1> [member2 …] to create one.")
+                return
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("#", width=4)
+            table.add_column("Sel", width=3)
+            table.add_column("Title")
+            table.add_column("Peers", width=6)
+            table.add_column("Preview")
+            for idx, state in enumerate(states, start=1):
+                peer_count = max(0, len(state.members) - 1)
+                preview = ""
+                conv = self.core.load_group(state.group_id)
+                if conv is not None and conv.history:
+                    preview = render_group_history_preview(conv.history[-1])[:60]
+                sel = "▶" if self._active_group_id == state.group_id else ""
+                table.add_row(
+                    str(idx), sel,
+                    self._group_display_name(state.group_id, title=state.title),
+                    str(peer_count),
+                    preview or "—",
+                )
+            self.post_panel("Groups", table, border_style="magenta")
+
+        elif sub == "create":
+            if len(args) < 3:
+                self.post("error", "Usage: /group create <title> <member1> [member2 …]")
+                return
+            title = args[1]
+            member_tokens = args[2:]
+            members: list[str] = []
+            for token in member_tokens:
+                normalized = normalize_peer_address(token)
+                if not normalized:
+                    self.post("error", f"Invalid member address: {token}")
+                    return
+                if normalized not in members:
+                    members.append(normalized)
+            if not members:
+                self.post("error", "Add at least one member address.")
+                return
+            try:
+                state = self.core.create_group(title=title, members=members)
+            except Exception as exc:
+                self.post("error", f"Failed to create group: {exc}")
+                return
+            self._set_active_group(state.group_id)
+            self.post("success", f"Group created: {self._group_display_name(state.group_id, title=state.title)}")
+
+        elif sub == "open":
+            if len(args) < 2:
+                self.post("error", "Usage: /group open <group_id or index>")
+                return
+            selector = args[1]
+            group_id = self._resolve_group_selector(selector)
+            if not group_id:
+                self.post("error", f"Unknown group: {selector}")
+                return
+            if not self._set_active_group(group_id):
+                self.post("error", f"Could not open group: {group_id}")
+
+        elif sub == "close":
+            if not self._clear_active_group():
+                self.post("system", "No active group conversation.")
+            else:
+                self.post("system", "Returned to peer chat mode.")
+
+        elif sub == "info":
+            group_id = self._active_group_id
+            if len(args) >= 2:
+                group_id = self._resolve_group_selector(args[1])
+            if not group_id:
+                self.post("error", "No active group. Use /group info <group_id> or /group open first.")
+                return
+            state = self.core.load_group_state(group_id)
+            if state is None:
+                self.post("error", f"Group not found: {group_id}")
+                return
+            lines = [
+                f"Title: {state.title or '—'}",
+                f"Group ID: {state.group_id}",
+                f"Epoch: {state.epoch}",
+                f"Members ({len(state.members)}):",
+            ]
+            for member in state.members:
+                label = self._group_member_label(member)
+                lines.append(f"  {label} ({self._short_peer(member)})")
+            self.post_panel("Group info", "\n".join(lines), border_style="blue")
+
+        elif sub == "members":
+            group_id = self._active_group_id
+            if len(args) >= 2:
+                group_id = self._resolve_group_selector(args[1])
+            if not group_id:
+                self.post("error", "No active group.")
+                return
+            state = self.core.load_group_state(group_id)
+            if state is None:
+                self.post("error", f"Group not found: {group_id}")
+                return
+            hints = self.core.get_group_send_ui_hints(group_id)
+            live_by = hints.get("live_by_recipient", {})
+            table = Table(show_header=True, header_style="bold cyan")
+            table.add_column("Member")
+            table.add_column("Address")
+            table.add_column("Status")
+            for member in state.members:
+                label = self._group_member_label(member)
+                is_live = live_by.get(member, False) if isinstance(live_by, dict) else False
+                status = "live" if is_live else "offline"
+                table.add_row(label, self._short_peer(member), status)
+            self.post_panel("Group members", table, border_style="cyan")
+
+        elif sub == "topology":
+            group_id = self._active_group_id
+            if len(args) >= 2:
+                group_id = self._resolve_group_selector(args[1])
+            if not group_id:
+                self.post("error", "No active group.")
+                return
+            state = self.core.load_group_state(group_id)
+            if state is None:
+                self.post("error", f"Group not found: {group_id}")
+                return
+            local_member = ""
+            if self.core.my_dest is not None:
+                local_member = normalize_peer_address(str(self.core.my_dest.base32)) or ""
+            hints = self.core.get_group_send_ui_hints(group_id)
+            live_by = hints.get("live_by_recipient", {}) or {}
+            peer_state_by: dict[str, str] = {}
+            for member in state.members:
+                if isinstance(live_by, dict) and live_by.get(member):
+                    peer_state_by[member] = "live"
+                else:
+                    peer_state_by[member] = "disconnected"
+            snapshot = build_observed_group_topology(
+                state,
+                local_member_id=local_member,
+                live_by_member=live_by if isinstance(live_by, dict) else {},
+                peer_state_by_member=peer_state_by,
+            )
+            ascii_text = render_group_topology_ascii(snapshot)
+            self.post_panel("Group topology", ascii_text, border_style="yellow")
+
+        elif sub == "send":
+            if not self._active_group_id:
+                self.post("error", "No active group. Use /group open first.")
+                return
+            if len(args) < 2:
+                self.post("error", "Usage: /group send <text>")
+                return
+            text = " ".join(args[1:])
+            try:
+                await self.core.send_group_text(self._active_group_id, text, route="auto")
+            except Exception as exc:
+                self.post("error", str(exc).strip() or type(exc).__name__)
+                return
+            self._refresh_group_conversation_display(force=True)
+
+        else:
+            self.post("error",
+                "Usage: /group list | create <title> <members…> | open <id> | close | "
+                "info [id] | members [id] | topology [id] | send <text>")
+
+    def _resolve_group_selector(self, selector: str) -> Optional[str]:
+        states = self.core.list_group_states()
+        if selector.isdigit():
+            idx = int(selector) - 1
+            if 0 <= idx < len(states):
+                return states[idx].group_id
+            return None
+        for state in states:
+            if state.group_id == selector:
+                return state.group_id
+            if state.title and state.title.lower() == selector.lower():
+                return state.group_id
+        return None
 
     async def _send_image_me(self, lines: list[str]) -> None:
         now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -2441,7 +2780,8 @@ class I2PChat(App):
 
     def show_help(self) -> None:
         self.post("help", "Compose: Enter = newline, Ctrl+S / Ctrl+Enter = send current compose buffer.")
-        self.post("help", "Primary function keys: F1 actions, F2 contacts, F3 media, F4 settings, F5 history, F6 diagnostics.")
+        self.post("help", "Primary function keys: F1 actions, F2 contacts, F3 media, F4 settings, F5 history, F6 diagnostics, F8 groups.")
+        self.post("help", "Groups: F8 or /group list|create|open|close|info|members|topology|send. Compose box sends to active group when open.")
         self.post("help", "Connection: /connect <addr>, /disconnect, /save, /unlock, /status")
         self.post("help", "Messaging/media: /sendfile <path> (/send-file), /sendpic <path> (/send-picture), /img <path>, /img-bw <path>, /recent [count], /reply <ref>")
         self.post("help", "Launcher: optional via /launcher (/menu) if you want the quick launcher overlay.")
@@ -2456,6 +2796,186 @@ class I2PChat(App):
         self.post("help", "Settings: F4 or /settings for history/profile-import form; backups are nested there.")
         self.post("help", "TOFU: TUI now shows trust dialogs for new peer keys and key mismatches during handshake.")
         self.post("help", "Utility: /help, q or Ctrl+Q to quit")
+
+
+class TuiGroupsScreen(ModalScreen[None]):
+    BINDINGS = [
+        ("escape", "close", "Close"),
+        ("enter", "open_selected", "Open"),
+        ("n", "new_group", "New"),
+        ("i", "info_selected", "Info"),
+        ("t", "topology_selected", "Topology"),
+        ("d", "delete_selected", "Delete"),
+        ("r", "refresh", "Refresh"),
+    ]
+
+    CSS = """
+    TuiGroupsScreen {
+        align: center middle;
+    }
+    #groups_dialog {
+        width: 92;
+        height: 28;
+        border: heavy $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #groups_table {
+        height: 1fr;
+        margin: 1 0;
+    }
+    #groups_help {
+        color: $text-muted;
+        height: auto;
+    }
+    #groups_buttons {
+        height: auto;
+        align-horizontal: right;
+        margin-top: 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="groups_dialog"):
+            yield Static("Groups", id="groups_title")
+            yield DataTable(id="groups_table")
+            yield Static(
+                "Enter open · N new · I info · T topology · D delete · Esc close",
+                id="groups_help",
+            )
+            with Horizontal(id="groups_buttons"):
+                yield Button("New", id="groups_new")
+                yield Button("Open", id="groups_open", variant="primary")
+                yield Button("Info", id="groups_info")
+                yield Button("Topology", id="groups_topology")
+                yield Button("Delete", id="groups_delete", variant="warning")
+                yield Button("Close", id="groups_close")
+
+    @property
+    def host(self) -> I2PChat:
+        app = self.app
+        assert isinstance(app, I2PChat)
+        return app
+
+    @property
+    def table(self) -> DataTable:
+        return self.query_one("#groups_table", DataTable)
+
+    def on_mount(self) -> None:
+        self._refresh_table()
+        self.table.focus()
+
+    def _group_states(self) -> list[GroupState]:
+        return list(self.host.core.list_group_states())
+
+    def _selected_group_id(self) -> Optional[str]:
+        states = self._group_states()
+        if not states:
+            return None
+        row = self.table.cursor_row
+        if row < 0 or row >= len(states):
+            return None
+        return states[row].group_id
+
+    def _refresh_table(self) -> None:
+        table = self.table
+        table.clear(columns=True)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+        table.add_columns("#", "Sel", "Title", "Peers", "Preview")
+        states = self._group_states()
+        if not states:
+            table.add_row("—", "", "No groups", "Use /group create …", "", key="empty")
+            table.disabled = True
+            return
+        table.disabled = False
+        for idx, state in enumerate(states, start=1):
+            peer_count = max(0, len(state.members) - 1)
+            preview = ""
+            conv = self.host.core.load_group(state.group_id)
+            if conv is not None and conv.history:
+                preview = render_group_history_preview(conv.history[-1])[:60]
+            sel = "▶" if self.host._active_group_id == state.group_id else ""
+            table.add_row(
+                str(idx), sel,
+                self.host._group_display_name(state.group_id, title=state.title),
+                str(peer_count),
+                preview or "—",
+                key=state.group_id,
+            )
+        table.focus()
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def action_refresh(self) -> None:
+        self._refresh_table()
+
+    def action_open_selected(self) -> None:
+        group_id = self._selected_group_id()
+        if not group_id:
+            return
+        self.host._set_active_group(group_id)
+        self.dismiss(None)
+
+    def action_new_group(self) -> None:
+        self.host.post("system", "Use /group create <title> <member1> [member2 …] to create a group.")
+        self.dismiss(None)
+
+    def action_info_selected(self) -> None:
+        group_id = self._selected_group_id()
+        if not group_id:
+            return
+        asyncio.create_task(self.host._execute_command(f"/group info {group_id}"))
+        self.dismiss(None)
+
+    def action_topology_selected(self) -> None:
+        group_id = self._selected_group_id()
+        if not group_id:
+            return
+        asyncio.create_task(self.host._execute_command(f"/group topology {group_id}"))
+        self.dismiss(None)
+
+    def action_delete_selected(self) -> None:
+        group_id = self._selected_group_id()
+        if not group_id:
+            return
+        self.host.push_screen(
+            TuiConfirmScreen(
+                title="Delete group?",
+                message=f"Delete group {self.host._group_display_name(group_id)}?",
+                confirm_label="Delete",
+            ),
+            callback=lambda confirmed: self._handle_delete_confirmed(group_id, confirmed),
+        )
+
+    def _handle_delete_confirmed(self, group_id: str, confirmed: bool | None) -> None:
+        if not confirmed:
+            return
+        try:
+            self.host.core.delete_group(group_id)
+        except Exception:
+            pass
+        if self.host._active_group_id == group_id:
+            self.host._clear_active_group()
+        self.host.post("success", f"Deleted group {group_id}.")
+        self._refresh_table()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        mapping = {
+            "groups_new": self.action_new_group,
+            "groups_open": self.action_open_selected,
+            "groups_info": self.action_info_selected,
+            "groups_topology": self.action_topology_selected,
+            "groups_delete": self.action_delete_selected,
+            "groups_close": self.action_close,
+        }
+        handler = mapping.get(event.button.id or "")
+        if handler is not None:
+            handler()
+
+    def on_data_table_row_selected(self, _event: DataTable.RowSelected) -> None:
+        self.action_open_selected()
 
 
 class TuiContactsScreen(ModalScreen[None]):
@@ -2523,16 +3043,32 @@ class TuiContactsScreen(ModalScreen[None]):
         return self.query_one("#contacts_table", DataTable)
 
     def on_mount(self) -> None:
+        self._cached_group_states: list[GroupState] = []
         self._refresh_table()
         self.table.focus()
 
     def _selected_peer(self) -> Optional[str]:
-        if not self.host._contact_book.contacts:
-            return None
         row = self.table.cursor_row
-        if row < 0 or row >= len(self.host._contact_book.contacts):
+        if row < 0:
             return None
-        return self.host._contact_book.contacts[row].addr
+        group_count = len(self._cached_group_states)
+        # Rows: groups (0..group_count-1), separator (group_count), contacts (group_count+1..)
+        contact_start = group_count + (1 if group_count else 0)
+        contact_idx = row - contact_start
+        contacts = self.host._contact_book.contacts
+        if contact_idx < 0 or contact_idx >= len(contacts):
+            return None
+        return contacts[contact_idx].addr
+
+    def _selected_group_id(self) -> Optional[str]:
+        row = self.table.cursor_row
+        if row < 0 or row >= len(self._cached_group_states):
+            return None
+        return self._cached_group_states[row].group_id
+
+    def _is_group_row(self) -> bool:
+        row = self.table.cursor_row
+        return 0 <= row < len(self._cached_group_states)
 
     def _refresh_table(self) -> None:
         table = self.table
@@ -2540,8 +3076,26 @@ class TuiContactsScreen(ModalScreen[None]):
         table.cursor_type = "row"
         table.zebra_stripes = True
         table.add_columns("#", "Sel", "Name", "Address", "Flags", "Preview")
+        self._cached_group_states = list(self.host.core.list_group_states())
+        for idx, state in enumerate(self._cached_group_states, start=1):
+            peer_count = max(0, len(state.members) - 1)
+            preview = ""
+            conv = self.host.core.load_group(state.group_id)
+            if conv is not None and conv.history:
+                preview = render_group_history_preview(conv.history[-1])[:50]
+            sel = "▶" if self.host._active_group_id == state.group_id else ""
+            table.add_row(
+                str(idx), sel,
+                self.host._group_display_name(state.group_id, title=state.title),
+                f"{peer_count} peers",
+                "group",
+                preview or "—",
+                key=f"group:{state.group_id}",
+            )
+        if self._cached_group_states:
+            table.add_row("", "", "--- Saved peers ---", "", "", "", key="__separator__")
         contacts = self.host._contact_book.contacts
-        if not contacts:
+        if not contacts and not self._cached_group_states:
             table.add_row("—", "", "No saved peers", "Use /contacts add …", "", "", key="empty")
             table.disabled = True
             return
@@ -2580,9 +3134,16 @@ class TuiContactsScreen(ModalScreen[None]):
         self.host._show_contact_editor(peer=peer)
 
     def action_use_selected(self) -> None:
+        if self._is_group_row():
+            group_id = self._selected_group_id()
+            if group_id:
+                self.host._set_active_group(group_id)
+                self.dismiss(None)
+            return
         peer = self._selected_peer()
         if not peer:
             return
+        self.host._clear_active_group()
         self.host._set_selected_peer(peer, remember=True, announce="Selected peer")
         self.dismiss(None)
 

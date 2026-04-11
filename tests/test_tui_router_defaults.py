@@ -144,11 +144,11 @@ def test_tui_primary_function_key_order_is_sequential() -> None:
     assert bindings["f1"] == "show_actions"
     assert bindings["f2"] == "show_contacts"
     assert bindings["f3"] == "show_media"
-    assert bindings["f4"] == "show_settings"
-    assert bindings["f5"] == "show_router"
-    assert bindings["f6"] == "show_history_screen"
-    assert bindings["f7"] == "show_diagnostics_screen"
-    assert "f8" not in bindings
+    assert bindings["f4"] == "show_groups_screen"
+    assert bindings["f5"] == "show_settings"
+    assert bindings["f6"] == "show_router"
+    assert bindings["f7"] == "show_history_screen"
+    assert bindings["f8"] == "show_diagnostics_screen"
     assert "ctrl+shift+e" not in bindings
 
 
