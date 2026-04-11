@@ -11,11 +11,11 @@ pkgbase = i2pchat-bin
 	options = !strip
 	source_x86_64 = I2PChat-linux-x86_64-v1.3.0.zip::https://github.com/MetanoicArmor/I2PChat/releases/download/v1.3.0/I2PChat-linux-x86_64-v1.3.0.zip
 	source_x86_64 = icon.png::https://github.com/MetanoicArmor/I2PChat/raw/v1.3.0/icon.png
-	sha256sums_x86_64 = 0000000000000000000000000000000000000000000000000000000000000000
+	sha256sums_x86_64 = 9976208b16de28d2fc8915e1fe42bab3651e868212c688739783d56f735ff6d3
 	sha256sums_x86_64 = c49c198bef05e1cf3bf159858acefad100981fb21437e47e2588fcc1e4ad7217
 	source_aarch64 = I2PChat-linux-aarch64-v1.3.0.zip::https://github.com/MetanoicArmor/I2PChat/releases/download/v1.3.0/I2PChat-linux-aarch64-v1.3.0.zip
 	source_aarch64 = icon.png::https://github.com/MetanoicArmor/I2PChat/raw/v1.3.0/icon.png
-	sha256sums_aarch64 = 0000000000000000000000000000000000000000000000000000000000000000
+	sha256sums_aarch64 = b7bec5079defeed0219093b2e24d88120d6cfa2cd1e2be32b1e2dad2ae2b6e50
 	sha256sums_aarch64 = c49c198bef05e1cf3bf159858acefad100981fb21437e47e2588fcc1e4ad7217
 
 pkgname = i2pchat-bin
