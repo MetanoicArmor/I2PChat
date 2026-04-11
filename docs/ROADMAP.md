@@ -1,18 +1,29 @@
 # I2PChat Roadmap
 
-Current repository version: `1.0.1`
+**Repository version:** `1.3.0` (see [`VERSION`](../VERSION)).
 
-This roadmap is organized by product milestones rather than calendar time.
-The main goal is to improve daily usability first, then strengthen dialog
-workflow, trust visibility, offline delivery clarity, and finally portability
-and long-term retention before `1.0.0`.
+The milestone sections below are the **original product plan** (0.6.x → `1.0.0`). That work has largely **shipped** across releases through **1.3.x**; see [`releases/README.md`](releases/README.md) for versioned notes. **`SessionManager`** (per-peer transport lifecycle) landed in **v1.2.6**. **Text groups** shipped in **v1.3.0** (see [RELEASE_1.3.0.md](releases/RELEASE_1.3.0.md)); code under `i2pchat/groups/`, `i2pchat/storage/group_store.py`; user-facing behavior is in [MANUAL_EN.md](MANUAL_EN.md) / [MANUAL_RU.md](MANUAL_RU.md).
+
+## Snapshot (1.2.x)
+
+| Area | Notes |
+|------|--------|
+| Conversation UX | Saved peers, drafts, unread, delivery states, contacts, search |
+| Trust / offline | TOFU, key-change flows, BlindBox, diagnostics, retry policies |
+| Portability | PyInstaller zips, optional bundled `i2pd`, `.deb` / Homebrew / winget / AUR templates |
+| Core transport | `I2PChatCore` + **`SessionManager`** (outbound policy, telemetry, reconnect) |
+| Groups | Text groups (**v1.3.0**): live + pairwise BlindBox; see **PROTOCOL.md** § Text groups, **RELEASE_1.3.0.md** |
 
 ## Guiding principles
 
 - Keep protocol and transport changes minimal unless they clearly unlock user value.
 - Prefer UX improvements that expose existing capabilities before adding new complexity.
 - Preserve the privacy-first character of the project.
-- Defer high-risk features such as group chat and multi-device sync until after `1.0.0`.
+- Treat **multi-device real-time sync**, **plugins**, and **broad automation** as higher-risk, longer-horizon work.
+
+## Original milestones (reference)
+
+The subsections retain the **original planning text** for context. Intended outcomes listed there match what the app does today unless a backlog item says otherwise ([`ISSUE_BACKLOG.md`](ISSUE_BACKLOG.md)).
 
 ## 0.6.5 - UX polish
 
@@ -118,18 +129,18 @@ Release outcome:
 - drag-and-drop attachments match existing send actions;
 - pre-1.0 reliability coverage is strong enough for a stable niche release.
 
-## Post-1.0 candidates
+## Post-1.2.x / future candidates
 
-These are intentionally left outside the pre-1.0 scope:
+**Shipped in v1.3.0:** text groups (multi-member chat, live + pairwise BlindBox), Saved-peers inbound model, parallel live sessions — see [RELEASE_1.3.0.md](releases/RELEASE_1.3.0.md).
 
-- group chats;
-- real-time multi-device sync;
-- plugin or scripting systems;
-- broader automation surfaces beyond local preferences.
+Longer-horizon items (not committed on a fixed timeline):
+
+- **real-time multi-device sync** (same identity, multiple online clients);
+- **plugin or scripting** surfaces beyond local preferences;
+- **broader automation** beyond built-in settings.
 
 ## Tracking
 
-Detailed issue-sized backlog items for the milestones above are collected in
-[`ISSUE_BACKLOG.md`](ISSUE_BACKLOG.md).
+Issue-sized items: [`ISSUE_BACKLOG.md`](ISSUE_BACKLOG.md).
 
-Per-version release notes live under [`releases/README.md`](releases/README.md).
+Per-version release notes: [`releases/README.md`](releases/README.md).

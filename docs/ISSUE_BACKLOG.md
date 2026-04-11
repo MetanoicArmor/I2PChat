@@ -1,5 +1,7 @@
 # I2PChat Issue Backlog
 
+**Roadmap version:** `1.3.0` — see [`ROADMAP.md`](ROADMAP.md) for the milestone narrative and [`VERSION`](../VERSION) for the repo tag.
+
 This document collects issue-sized backlog items aligned with the roadmap in
 [`ROADMAP.md`](ROADMAP.md). The text is written so each section can be copied
 into a GitHub issue with minimal editing.

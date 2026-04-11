@@ -1,6 +1,6 @@
 # Installing I2PChat
 
-**Supported binaries** are published on **[GitHub Releases](https://github.com/MetanoicArmor/I2PChat/releases)**. File names include the version (for example `v1.2.3`); use **Latest** on that page for the current build.
+**Supported binaries** are published on **[GitHub Releases](https://github.com/MetanoicArmor/I2PChat/releases)**. File names include the version (for example `v1.3.0`); use **Latest** on that page for the current build.
 
 ## Windows (x64)
 

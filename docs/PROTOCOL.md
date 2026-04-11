@@ -10,7 +10,8 @@ I2PChat architecture:
 - secure handshake and post-handshake encryption;
 - delivery acknowledgements;
 - file / image transfer signaling;
-- BlindBox offline-delivery side protocol.
+- BlindBox offline-delivery side protocol;
+- **text groups** as an application-layer envelope on the same live stream (see below).
 
 It is intended as a developer-facing reference. Implementation details live in:
 
@@ -18,6 +19,7 @@ It is intended as a developer-facing reference. Implementation details live in:
 - `i2pchat/core/i2p_chat_core.py`
 - `i2pchat/crypto.py`
 - `i2pchat/blindbox/*.py`
+- `i2pchat/groups/` (group wire format and `GroupManager`)
 
 ## Transport
 
@@ -354,6 +356,19 @@ channel using dedicated signals such as:
 
 This is distinct from the replica `PUT`/`GET` traffic.
 
+## Text groups (application layer)
+
+**Text groups** are not a separate vNext version or SAM mode: they reuse the same
+encrypted stream and `PROTOCOL_VERSION` as 1:1 chat. Group membership and message
+semantics are carried in an **envelope** layer implemented in:
+
+- `i2pchat/groups/wire.py` — encode/decode group transport text
+- `i2pchat/groups/manager.py` — `GroupManager` (live send + BlindBox fan-out per member)
+- `i2pchat/storage/group_store.py` — local group state and history
+
+Offline delivery uses **pairwise** BlindBox roots to each other member (see the
+manuals for user-visible requirements). User-facing behavior: [MANUAL_EN.md](MANUAL_EN.md) / [MANUAL_RU.md](MANUAL_RU.md).
+
 ## Security notes
 
 - Post-handshake plaintext traffic is treated as suspicious / downgrade-like.
@@ -368,8 +383,10 @@ This is distinct from the replica `PUT`/`GET` traffic.
 |------|---------------------------|
 | Framing | `i2pchat/protocol/protocol_codec.py` |
 | Handshake / session state | `i2pchat/core/i2p_chat_core.py` |
+| Session / transport lifecycle | `i2pchat/core/session_manager.py` |
 | Crypto primitives | `i2pchat/crypto.py` |
 | Delivery model | `i2pchat/protocol/message_delivery.py` |
+| Text groups | `i2pchat/groups/manager.py`, `i2pchat/groups/wire.py` |
 | BlindBox client | `i2pchat/blindbox/blindbox_client.py` |
 | BlindBox blob | `i2pchat/blindbox/blindbox_blob.py` |
 | BlindBox local replica | `i2pchat/blindbox/blindbox_local_replica.py` |
@@ -384,5 +401,6 @@ For developers new to the repository, the easiest order is:
 3. `i2pchat/protocol/protocol_codec.py`
 4. `i2pchat/crypto.py`
 5. `i2pchat/core/i2p_chat_core.py`
-6. `i2pchat/blindbox/*.py`
-7. `tests/test_protocol_framing_vnext.py`
+6. `i2pchat/groups/wire.py` (if you work on groups)
+7. `i2pchat/blindbox/*.py`
+8. `tests/test_protocol_framing_vnext.py`
