@@ -528,7 +528,8 @@ class BlindBoxCoreTelemetryTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             core = I2PChatCore(profile="alice")
-            core.stored_peer = "g" * 52 + ".b32.i2p"
+            peer = "g" * 52 + ".b32.i2p"
+            core.current_peer_addr = peer
             core.my_dest = types.SimpleNamespace(base32="f" * 52)
             core._blindbox_root_secret = b"x" * 32  # noqa: SLF001
             core._blindbox_client = types.SimpleNamespace(put=AsyncMock())
@@ -553,7 +554,7 @@ class BlindBoxCoreTelemetryTests(unittest.IsolatedAsyncioTestCase):
         core = I2PChatCore(profile="default")
         self.assertEqual(
             core._normalize_peer_addr("a" * 52),  # noqa: SLF001 - validation behavior
-            ("a" * 52) + ".b32.i2p",
+            "a" * 52,
         )
 
     def test_normalize_peer_addr_extracts_from_pasted_line(self) -> None:
@@ -562,11 +563,15 @@ class BlindBoxCoreTelemetryTests(unittest.IsolatedAsyncioTestCase):
         full = f"{host52}.b32.i2p"
         self.assertEqual(
             core._normalize_peer_addr(f"  My Addr: {full}  "),  # noqa: SLF001
-            full,
+            host52,
+        )
+        self.assertEqual(
+            core._normalize_peer_addr(f"  My Addr: {host52}  "),  # noqa: SLF001 — без .b32.i2p
+            host52,
         )
         self.assertEqual(
             core._normalize_peer_addr(f"peer {full} trailing"),  # noqa: SLF001
-            full,
+            host52,
         )
 
 

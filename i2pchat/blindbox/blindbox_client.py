@@ -385,8 +385,14 @@ class BlindBoxClient:
         if success_count < self.put_quorum:
             for addr, err in put_failures:
                 self._log_box_failure("PUT", addr, err)
+            detail = ""
+            if put_failures:
+                first_err = put_failures[0][1]
+                first_detail = str(first_err).strip() or type(first_err).__name__
+                if first_detail:
+                    detail = f" (first failure: {first_detail})"
             raise RuntimeError(
-                f"Blind Box PUT quorum not reached: {success_count}/{self.put_quorum}"
+                f"Blind Box PUT quorum not reached: {success_count}/{self.put_quorum}{detail}"
             )
         # Quorum met: another Blind Box carried the message — failures are non-fatal noise.
         for addr, err in put_failures:

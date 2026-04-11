@@ -4,6 +4,10 @@ from __future__ import annotations
 
 
 def main() -> None:
+    from i2pchat.logging_setup import configure_i2pchat_logging_from_env
+
+    configure_i2pchat_logging_from_env()
+
     from i2pchat.gui.chat_python import I2PChat
 
     I2PChat().run()

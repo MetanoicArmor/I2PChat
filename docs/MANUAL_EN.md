@@ -76,7 +76,7 @@ Use **Connect** for live chat and the first BlindBox bootstrap session. If Blind
 
 The **Saved peers** strip on the **left** is your local **contact book** for the current profile. It is stored as `profiles/<profile>/<profile>.contacts.json` (alongside `<profile>.dat`).
 
-- **Rows** — each contact shows a display name (or shortened `.b32.i2p`), a subtitle (last message preview or your note), and unread styling when that peer is not the active chat.
+- **Rows** — each contact shows a display name (or shortened base32 id without the `.b32.i2p` suffix), a subtitle (last message preview or your note), and unread styling when that peer is not the active chat.
 - **Click** a row — sets the peer address field to that contact (same as typing the address) and syncs compose drafts; if the profile is **locked** to another peer, switching may be blocked (see status messages).
 - **◀ / ▶** — collapse or expand the sidebar; when the profile is **locked to a peer**, the strip may start **collapsed** to give more space to the chat.
 - **Drag** the narrow grip between the list and the chat to resize the strip (within min/max limits).
@@ -140,11 +140,11 @@ Example **I2P router** dialog (**⋯ → I2P router…** / **Ctrl/Cmd+R**):
 
 #### 4.2. Peer address field
 
-The `Peer .b32.i2p address` field is for the full destination of your peer:
+The peer address field uses the **canonical peer id**: a **base32** string (typically 40 characters) **without** the `.b32.i2p` suffix. The app stores and shows peers in this form (contacts, sessions, groups).
 
-```text
-<base32>.b32.i2p
-```
+Pasting a full **`<base32>.b32.i2p`** string is still accepted; it is normalized to the bare host.
+
+**Copy my address** copies your destination as **canonical base32** (no `.b32.i2p` suffix), matching contacts and the peer field.
 
 - You can type or paste the address manually.
 - If the current profile is already locked to a peer and the field is empty, the address is filled from the stored value automatically.
@@ -152,6 +152,8 @@ The `Peer .b32.i2p address` field is for the full destination of your peer:
 #### 4.3. `Connect` button
 
 The **`Connect`** button starts a live connection to the address currently present in the peer field.
+
+**Multiple live sessions:** you can keep several parallel SAM streams to different Saved peers (default cap **8**, override with environment variable **`I2PCHAT_MAX_LIVE_SESSIONS`**, range 1–64). **`Connect`** stays enabled when you already have a live chat, as long as the target peer is not already connected and the cap is not reached. Duplicate connections to the same peer are rejected.
 
 **Keyboard shortcut:** **Ctrl+1** on Windows/Linux, **⌘1** on macOS — same as clicking **`Connect`** when the button is enabled (also works when focus is in the message compose field).
 
@@ -186,12 +188,12 @@ On first contact with a new peer signing key, a **Trust on First Use (TOFU)** di
 - choose **Yes** to trust and pin the key, or **No** to abort the connection;
 - for higher security, verify the fingerprint with your peer out‑of‑band.
 
-**Button state:** **`Connect`** is **disabled** (dimmed) until the network status is **Pending** or **Visible** (I2P session ready), you have a peer address or a stored locked peer, and you are not already connected or already dialling out. While a connection attempt is in progress, **`Connect`** stays disabled; a second click is ignored by the core. **Tooltips** on the button explain why it is disabled (e.g. wait for Pending/Visible, enter an address, already connected) and include a **Shortcut:** line for **Ctrl+1** / **⌘1**.  
+**Button state:** **`Connect`** is **disabled** (dimmed) until the network status is **Pending** or **Visible** (I2P session ready), you have a peer address or a stored locked peer, you are not already in a live session **with that same peer**, the concurrent live-session limit is not reached, and you are not already dialling out. While a connection attempt is in progress, **`Connect`** stays disabled; a second click is ignored by the core. **Tooltips** on the button explain why it is disabled (e.g. wait for Pending/Visible, enter an address, already connected to this peer, session limit) and include a **Shortcut:** line for **Ctrl+1** / **⌘1**.  
 When BlindBox offline queue is already ready, the `Connect` tooltip explicitly marks live connect as **optional**.
 
 #### 4.4. `Disconnect` button
 
-The **`Disconnect`** button terminates the current connection to the peer.
+The **`Disconnect`** button terminates the **active** live session (the peer currently selected for chat — same behaviour as before when only one stream exists). With multiple live sessions, disconnect applies to the active peer’s stream.
 
 **Keyboard shortcut:** **Ctrl+0** on Windows/Linux, **⌘0** on macOS — same as **`Disconnect`** when the button is enabled.
 
@@ -217,7 +219,7 @@ Logic:
    ```
 
 2. If the destination is available:
-   - a string of the form `<base32>.b32.i2p` is placed into the system clipboard;
+   - the **bare base32** host id is placed into the system clipboard;
    - a system message appears in the chat:
 
    ```text
@@ -350,6 +352,7 @@ Using this button you can:
 - BlindBox queue/receive debug lines are not shown in the chat feed; delivery details remain in status/tooltips.
 - Runtime state appears in the **status row** (`Send:*` and BlindBox fields); hover for hints if something is misconfigured.
 - **Compatibility:** peers on older builds may not support BlindBox traffic; live chat and file/image transfer work as before.
+- **Text groups:** offline delivery to a group does **not** use a separate “group-wide” BlindBox key. Each copy is sent to **every** other member over the **same bilateral** BlindBox channel as direct chat with that peer: you need a **BlindBox root** with each such member (typically after at least one successful secure live 1:1 session). Peers currently connected may receive via live; others are queued via BlindBox when the pairwise material exists. After you send, the group feed shows a delivery summary; per-member failures add a **Details** line with the reason (for example `blindbox-await-root`).
 
 Example **BlindBox diagnostics** window (**⋯ → BlindBox diagnostics**): telemetry summary, editable replica endpoints (when allowed), per-replica auth, and **Example server…** / **Save and restart**.
 
@@ -615,6 +618,8 @@ Override via environment variable:
 ```bash
 I2PCHAT_PADDING_PROFILE=off python -m i2pchat.gui
 ```
+
+**Diagnostics:** set `I2PCHAT_LOG_LEVEL` to `DEBUG` or `INFO` to print `i2pchat` package logs to stderr (framing, HMAC verification, transport). Example: `I2PCHAT_LOG_LEVEL=DEBUG python -m i2pchat.gui`.
 
 Canonical entrypoints when running from source (repository root): Qt GUI —
 `python -m i2pchat.gui` or `python -m i2pchat.run_gui` (same as the PyInstaller

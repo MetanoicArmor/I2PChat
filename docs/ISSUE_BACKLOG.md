@@ -4,6 +4,10 @@ This document collects issue-sized backlog items aligned with the roadmap in
 [`ROADMAP.md`](ROADMAP.md). The text is written so each section can be copied
 into a GitHub issue with minimal editing.
 
+## Completed: multi-peer model (no “Lock to peer”)
+
+**Summary:** Legacy **Lock to peer** (`stored_peer` in `<profile>.dat`) is removed as a product feature. **Saved peers** (`<profile>.contacts.json` via `ContactBook`) gate inbound accepts and BlindBox live root exchange together with a verified session; profiles no longer bind outbound connect to one address. Old `.dat` files with a second lock line are migrated on load (address merged into Saved peers when missing). See [`README.md`](../README.md) feature list and core changes in `I2PChatCore`.
+
 ## Milestone: 0.6.5 - UX polish
 
 ### 1. Per-contact message drafts
@@ -116,7 +120,7 @@ Improve progress and error visibility for file and image sends.
 
 *Status: issues 7–12 are implemented in **v0.7.0** (see [`releases/RELEASE_0.7.0.md`](releases/RELEASE_0.7.0.md)).*
 
-*Implementation note (post–v0.7.0 tag): **Saved peers** list context menu — **Edit name & note…**, **Contact details…** (address, TOFU, remove pin), **Remove from saved peers…** (optional: encrypted history, pin, profile lock, BlindBox state file); core adds `clear_locked_peer()`, `contact_book` adds `remove_peer()`.*
+*Implementation note (post–v0.7.0 tag): **Saved peers** list context menu — **Edit name & note…**, **Contact details…** (address, TOFU, remove pin), **Remove from saved peers…** (optional: encrypted history, pin, BlindBox per-peer state file). Legacy **profile lock** APIs (`save_stored_peer` / `clear_locked_peer`) now map to Saved peers / `.dat` cleanup only.*
 
 ### 7. Contacts sidebar
 

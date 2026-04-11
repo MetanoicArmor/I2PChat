@@ -70,16 +70,83 @@ def router_runtime_dir() -> str:
     return path
 
 
+def _coerce_string_setting(value: Any, default: str) -> str:
+    text = str(value).strip() if value is not None else ""
+    return text or default
+
+
+def _coerce_int_setting(
+    value: Any,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int = 65535,
+) -> int:
+    try:
+        if isinstance(value, str):
+            value = value.strip()
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return default
+    if coerced < minimum or coerced > maximum:
+        return default
+    return coerced
+
+
+def _coerce_bool_setting(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
 def _coerce_router_settings(raw: dict[str, Any]) -> RouterSettings:
     defaults = asdict(RouterSettings())
-    merged: dict[str, Any] = dict(defaults)
-    for key in defaults:
-        if key in raw:
-            merged[key] = raw[key]
-    try:
-        return RouterSettings(**merged)
-    except Exception:
-        return RouterSettings()
+    backend = _coerce_string_setting(raw.get("backend"), defaults["backend"]).lower()
+    if backend not in {"system", "bundled"}:
+        backend = defaults["backend"]
+    return RouterSettings(
+        backend=backend,
+        system_sam_host=_coerce_string_setting(
+            raw.get("system_sam_host"),
+            defaults["system_sam_host"],
+        ),
+        system_sam_port=_coerce_int_setting(
+            raw.get("system_sam_port"),
+            defaults["system_sam_port"],
+        ),
+        bundled_sam_host=_coerce_string_setting(
+            raw.get("bundled_sam_host"),
+            defaults["bundled_sam_host"],
+        ),
+        bundled_sam_port=_coerce_int_setting(
+            raw.get("bundled_sam_port"),
+            defaults["bundled_sam_port"],
+        ),
+        bundled_http_proxy_port=_coerce_int_setting(
+            raw.get("bundled_http_proxy_port"),
+            defaults["bundled_http_proxy_port"],
+        ),
+        bundled_socks_proxy_port=_coerce_int_setting(
+            raw.get("bundled_socks_proxy_port"),
+            defaults["bundled_socks_proxy_port"],
+        ),
+        bundled_control_http_port=_coerce_int_setting(
+            raw.get("bundled_control_http_port"),
+            defaults["bundled_control_http_port"],
+        ),
+        bundled_auto_start=_coerce_bool_setting(
+            raw.get("bundled_auto_start"),
+            defaults["bundled_auto_start"],
+        ),
+    )
 
 
 def load_router_settings() -> RouterSettings:

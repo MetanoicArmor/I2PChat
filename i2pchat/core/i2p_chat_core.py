@@ -15,9 +15,9 @@ import sys
 import tempfile
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, List, Literal, Optional, Tuple
+from typing import Any, Awaitable, Callable, List, Literal, Mapping, Optional, Tuple
 
 from i2pchat import sam as i2plib
 from PIL import Image
@@ -25,17 +25,70 @@ from PIL import Image
 from i2pchat import crypto
 from i2pchat.blindbox.blindbox_blob import decrypt_blindbox_blob, encrypt_blindbox_blob
 from i2pchat.blindbox.blindbox_client import BlindBoxClient
-from i2pchat.blindbox.blindbox_key_schedule import derive_blindbox_message_keys
+from i2pchat.blindbox.blindbox_key_schedule import (
+    derive_blindbox_message_keys,
+    derive_group_blindbox_message_keys,
+)
 from i2pchat.blindbox.blindbox_local_replica import ensure_local_blindbox_replica
+from i2pchat.groups import (
+    GroupContentType,
+    GroupDeliveryStatus,
+    GroupEnvelope,
+    GroupImportResult,
+    GroupImportStatus,
+    GroupMemberDeliveryResult,
+    GroupMeshManager,
+    GroupMeshPeerSnapshot,
+    GroupManager,
+    GroupRecipientDeliveryMetadata,
+    GroupSendResult,
+    GroupState,
+    GroupTopologySnapshot,
+    GroupTransportOutcome,
+    build_observed_group_topology,
+    render_group_topology_ascii,
+    render_group_topology_mermaid,
+)
+from i2pchat.groups.models import normalize_member_id, utc_now
+from i2pchat.groups.wire import (
+    decode_group_transport_text,
+    encode_group_transport_text,
+    encode_group_transport_text_v2,
+)
+from i2pchat.storage.contact_book import (
+    load_book,
+    remember_peer,
+    same_i2p_destination,
+    save_book,
+    trim_book,
+)
 from i2pchat.storage.blindbox_state import (
     BlindBoxState,
     atomic_write_json,
     atomic_write_text,
 )
+from i2pchat.storage.group_store import (
+    GroupBlindBoxChannel,
+    GroupHistoryEntry,
+    GroupPendingBlindBoxMessage,
+    GroupPendingDelivery,
+    StoredGroupConversation,
+    append_group_history_entry,
+    delete_group_record,
+    load_group_conversation,
+    load_group_state as load_persisted_group_state,
+    list_group_states as list_persisted_group_states,
+    save_group_conversation,
+    upsert_group_state,
+)
 from i2pchat.storage.profile_blindbox_replicas import (
     load_profile_blindbox_replicas_bundle,
     normalize_replica_endpoints,
     save_profile_blindbox_replicas_bundle,
+)
+from i2pchat.presentation.group_conversations import (
+    render_group_control_text,
+    short_member_label,
 )
 from i2pchat.protocol.chat_text_chunking import split_long_chat_text
 from i2pchat.protocol.message_delivery import (
@@ -64,6 +117,7 @@ from i2pchat.core.session_manager import (
     SessionManager,
     TransportState,
 )
+from i2pchat.core.live_peer_session import LivePeerSession, max_concurrent_live_sessions
 
 logger = logging.getLogger("i2pchat")
 PROTOCOL_VERSION = 4
@@ -238,6 +292,12 @@ class ChatMessage:
     delivery_hint: str = ""
     delivery_reason: str = ""
     retryable: bool = False
+    conversation_kind: str = "direct"
+    conversation_id: Optional[str] = None
+    conversation_title: Optional[str] = None
+    group_sender_id: Optional[str] = None
+    group_content_type: Optional[str] = None
+    group_plain_text: Optional[str] = None
 
 
 @dataclass
@@ -282,6 +342,59 @@ class SendTextResult:
     message_id: Optional[str] = None
     delivery_state: Optional[str] = None
     retryable: bool = False
+
+
+@dataclass
+class _BlindBoxPeerSnapshot:
+    peer_addr: str
+    peer_id: str
+    state: BlindBoxState
+    root_secret: Optional[bytes] = None
+    root_epoch: int = 0
+    root_created_at: int = 0
+    root_send_index_base: int = 0
+    pending_root_secret: Optional[bytes] = None
+    pending_root_epoch: int = 0
+    pending_root_created_at: int = 0
+    pending_root_send_index_base: int = 0
+    prev_roots: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class _GroupBlindBoxSnapshot:
+    group_id: str
+    group_epoch: int
+    state: BlindBoxState
+    root_secret: Optional[bytes] = None
+    root_epoch: int = 0
+    root_created_at: int = 0
+    root_send_index_base: int = 0
+    pending_root_secret: Optional[bytes] = None
+    pending_root_epoch: int = 0
+    pending_root_created_at: int = 0
+    pending_root_send_index_base: int = 0
+    pending_root_target_members: tuple[str, ...] = ()
+    pending_root_acked_members: set[str] = field(default_factory=set)
+    prev_roots: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class _BlindBoxPollContext:
+    channel_id: str
+    state: BlindBoxState
+    root_candidates: list[dict[str, Any]]
+    save_state: Callable[[], None]
+    source_peer: Optional[str] = None
+    channel_kind: str = "peer"
+
+
+@dataclass
+class _BlindBoxPollGroupContext:
+    group_id: str
+    group_epoch: int
+    state: BlindBoxState
+    root_candidates: list[dict[str, Any]]
+    save_state: Callable[[], None]
 
 
 def _is_host_port_replica(value: str) -> bool:
@@ -858,7 +971,7 @@ def peek_persisted_stored_peer(profile: str) -> Optional[str]:
         host = raw
     if not re.fullmatch(r"[a-z2-7]{40,80}", host):
         return None
-    return host + ".b32.i2p"
+    return host
 
 
 def _resolve_blindbox_privacy_profile(raw: str) -> str:
@@ -1160,6 +1273,7 @@ class I2PChatCore:
         on_file_delivered: Optional[Callable[[str], Any]] = None,
         on_trust_decision: Optional[TrustDecisionCallback] = None,
         on_trust_mismatch_decision: Optional[TrustMismatchDecisionCallback] = None,
+        on_saved_contacts_changed: Optional[Callable[[], None]] = None,
     ) -> None:
         self.sam_address = sam_address
         self._sam_session_create_timeout = max(
@@ -1187,6 +1301,7 @@ class I2PChatCore:
         self.on_file_delivered = on_file_delivered
         self.on_trust_decision = on_trust_decision
         self.on_trust_mismatch_decision = on_trust_mismatch_decision
+        self.on_saved_contacts_changed = on_saved_contacts_changed
         self._trust_auto = (
             os.environ.get("I2PCHAT_TRUST_AUTO", "").strip().lower() in TRUTHY_ENV_VALUES
         )
@@ -1201,10 +1316,10 @@ class I2PChatCore:
 
         self.my_dest: Optional[i2plib.Destination] = None
         self.stored_peer: Optional[str] = None
+        # UI/chat selection (normalized bare id); not authoritative for routing or ACK tables.
         self.current_peer_addr: Optional[str] = None
         self.current_peer_dest_b64: Optional[str] = None
         self.peer_identity_binding_verified: bool = False
-        self.conn: Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]] = None
         self.proven: bool = False
 
         # файловый приём
@@ -1217,6 +1332,7 @@ class I2PChatCore:
         # буфер для inline-изображений (бинарные данные)
         self.inline_image_buffer: bytearray = bytearray()
         self.inline_image_info: Optional[Tuple[str, int]] = None  # (filename, size)
+        self._inline_image_last_emit: int = 0
 
         # криптография (устанавливается при handshake v2)
         self.shared_key: Optional[bytes] = None
@@ -1258,6 +1374,25 @@ class I2PChatCore:
             "expired_or_state": 0,
         }
         self.session_manager = SessionManager()
+        self.group_manager = GroupManager(
+            session_manager=self.session_manager,
+            send_live=self._send_group_envelope_live,
+            send_offline=self._send_group_envelope_via_blindbox,
+        )
+        self.group_mesh_manager = GroupMeshManager(
+            list_group_states=self.list_group_states,
+            get_local_member_id=self._local_group_member_id,
+            build_peer_snapshot=self._build_group_mesh_peer_snapshot,
+            schedule_peer_intros=self._schedule_group_peer_intros,
+        )
+        self._live_sessions: dict[str, LivePeerSession] = {}
+        self.active_live_peer_id: Optional[str] = None
+        # Очередь фоновых connect_to_peer для полного mesh группы (нормализованные peer id).
+        self._group_intro_backlog: set[str] = set()
+        self._group_intro_task: Optional[asyncio.Task[None]] = None
+        self._group_pending_flush_backlog: set[str] = set()
+        self._group_pending_flush_task: Optional[asyncio.Task[None]] = None
+        self._group_mesh_task: Optional[asyncio.Task[None]] = None
 
         # Флаг активной передачи файла (для защиты от timeout в receive_loop)
         self._file_transfer_active: bool = False
@@ -1606,20 +1741,33 @@ class I2PChatCore:
         delivery_hint: str = "",
         delivery_reason: str = "",
         retryable: bool = False,
+        conversation_kind: str = "direct",
+        conversation_id: Optional[str] = None,
+        conversation_title: Optional[str] = None,
+        group_sender_id: Optional[str] = None,
+        group_content_type: Optional[GroupContentType] = None,
+        group_plain_text: Optional[str] = None,
     ) -> None:
         if self.on_message:
-            sp = source_peer if kind == "peer" else None
             msg = ChatMessage(
                 kind=kind,
                 text=text,
                 timestamp=datetime.now(timezone.utc),
-                source_peer=sp,
+                source_peer=source_peer,
                 message_id=message_id,
                 delivery_state=delivery_state,
                 delivery_route=delivery_route,
                 delivery_hint=delivery_hint,
                 delivery_reason=delivery_reason,
                 retryable=retryable,
+                conversation_kind=conversation_kind,
+                conversation_id=conversation_id,
+                conversation_title=conversation_title,
+                group_sender_id=group_sender_id,
+                group_content_type=(
+                    str(group_content_type) if group_content_type is not None else None
+                ),
+                group_plain_text=group_plain_text,
             )
             self.on_message(msg)
 
@@ -1648,7 +1796,17 @@ class I2PChatCore:
             logger.debug("on_outbound_delivery_update callback failed", exc_info=True)
 
     def _emit_notify(
-        self, kind: str, text: str, source_peer: Optional[str] = None
+        self,
+        kind: str,
+        text: str,
+        source_peer: Optional[str] = None,
+        *,
+        conversation_kind: str = "direct",
+        conversation_id: Optional[str] = None,
+        conversation_title: Optional[str] = None,
+        group_sender_id: Optional[str] = None,
+        group_content_type: Optional[GroupContentType] = None,
+        group_plain_text: Optional[str] = None,
     ) -> None:
         """
         Уведомление UI о новом сообщении для системных нотификаций.
@@ -1658,13 +1816,22 @@ class I2PChatCore:
         callback = getattr(self, "on_notify", None)
         if callback is not None:
             try:
-                sp = source_peer if kind == "peer" else None
                 callback(
                     ChatMessage(
                         kind=kind,
                         text=text,
                         timestamp=datetime.now(timezone.utc),
-                        source_peer=sp,
+                        source_peer=source_peer,
+                        conversation_kind=conversation_kind,
+                        conversation_id=conversation_id,
+                        conversation_title=conversation_title,
+                        group_sender_id=group_sender_id,
+                        group_content_type=(
+                            str(group_content_type)
+                            if group_content_type is not None
+                            else None
+                        ),
+                        group_plain_text=group_plain_text,
                     )
                 )
             except Exception:
@@ -1711,42 +1878,81 @@ class I2PChatCore:
             else:
                 self.on_inline_image_received(path, is_from_me)
 
-    def _require_secure_channel(self) -> bool:
+    def _require_secure_channel(self, *, outbound_peer: Optional[str] = None) -> bool:
         """Проверяет, что можно отправлять пользовательские данные."""
-        if not self.conn:
-            self._emit_error("No active connection.")
-            return False
-        peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-        live_kwargs: dict[str, Any] = {"peer_id": peer_addr_norm}
-        if not peer_addr_norm:
-            live_kwargs["connected"] = True
-            live_kwargs["handshake_complete"] = self.handshake_complete
+        if outbound_peer and str(outbound_peer).strip():
+            try:
+                peer_addr_norm = self._normalize_peer_addr(outbound_peer)
+            except ValueError:
+                self._emit_error("Invalid peer address.")
+                return False
+        else:
+            peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+        if peer_addr_norm:
+            if not self._has_active_session_for_peer(peer_addr_norm):
+                self._emit_error("No active connection.")
+                return False
+            live_kwargs: dict[str, Any] = {"peer_id": peer_addr_norm}
+        else:
+            if not self.any_live_stream():
+                self._emit_error("No active connection.")
+                return False
+            live_kwargs = {
+                "connected": True,
+                "handshake_complete": self._handshake_complete_for_peer_route(""),
+            }
         if not self.session_manager.is_live_path_alive(**live_kwargs):
             self._emit_error("Secure channel not ready yet. Wait for 'Ready'.")
             return False
         return True
 
-    def _cancel_handshake_watchdog(self) -> None:
+    def _cancel_handshake_watchdog(self, peer_id: Optional[str] = None) -> None:
         # Не отменяем задачу напрямую внутри активной корутины: в некоторых
         # loop-интеграциях (Qt/qasync) это может вызвать re-entrant step Task.
+        if peer_id is not None:
+            k = self._normalize_peer_addr(peer_id)
+            w = self.session_manager.handshake_watchdog_peer_id
+            if w != k:
+                return
         self.session_manager.invalidate_handshake_watchdog()
 
     def _start_handshake_watchdog(
-        self, connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter]
+        self,
+        connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
+        peer_id: Optional[str] = None,
     ) -> None:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._cancel_handshake_watchdog()
+        self.session_manager.invalidate_handshake_watchdog()
+        self.session_manager.handshake_watchdog_peer_id = (
+            self._normalize_peer_addr(peer_id)
+            if peer_id
+            else self._normalize_peer_addr(self.current_peer_addr or "")
+        )
         generation = self.session_manager.handshake_watchdog_generation
         self.session_manager.handshake_watchdog_task = loop.create_task(
-            self._handshake_watchdog(connection, generation)
+            self._handshake_watchdog(connection, generation, peer_id)
         )
 
-    def _schedule_disconnect(self) -> None:
-        if self.session_manager.disconnecting or self.conn is None:
+    def _schedule_disconnect(self, peer_id: Optional[str] = None) -> None:
+        if self.session_manager.disconnecting:
             return
+        target_pid: Optional[str] = peer_id
+        if target_pid is None:
+            k = self._normalize_peer_addr(self.current_peer_addr or "")
+            if not k or k not in self._live_sessions:
+                return
+            if self._live_sessions[k].conn is None:
+                return
+            target_pid = k
+        else:
+            k = self._normalize_peer_addr(target_pid)
+            ls = self._live_sessions.get(k)
+            if ls is None or ls.conn is None:
+                return
+            target_pid = k
         if (
             self.session_manager.disconnect_task is not None
             and not self.session_manager.disconnect_task.done()
@@ -1756,7 +1962,9 @@ class I2PChatCore:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self.session_manager.disconnect_task = loop.create_task(self.disconnect())
+        self.session_manager.disconnect_task = loop.create_task(
+            self.disconnect_peer(target_pid)
+        )
         self.session_manager.transition_transport(
             TransportState.RECONNECTING, reason="scheduled-disconnect"
         )
@@ -1765,19 +1973,27 @@ class I2PChatCore:
         self,
         connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
         generation: int,
+        peer_id: Optional[str] = None,
     ) -> None:
         """Закрывает соединение, если handshake не завершился вовремя."""
         await asyncio.sleep(self.HANDSHAKE_TIMEOUT)
         if generation != self.session_manager.handshake_watchdog_generation:
             return
-        if self.conn == connection and not self.handshake_complete:
+        if peer_id is not None:
+            k = self._normalize_peer_addr(peer_id)
+            ls = self._live_sessions.get(k)
+            if (
+                ls is None
+                or ls.conn is not connection
+                or ls.handshake_complete
+            ):
+                return
             self._emit_error("Secure handshake timed out")
-            peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-            if peer_addr_norm:
-                self.session_manager.mark_peer_failed(
-                    peer_addr_norm, reason="handshake-timeout"
-                )
-            self._schedule_disconnect()
+            self.session_manager.mark_peer_failed(
+                k, reason="handshake-timeout"
+            )
+            self._schedule_disconnect(k)
+            return
 
     # ---------- протокол ----------
 
@@ -1788,8 +2004,143 @@ class I2PChatCore:
             self._next_msg_id = 1
         return msg_id
 
+    def _session_for_frame(self, peer_id: Optional[str]) -> Any:
+        """Crypto/frame state: LivePeerSession для подключённого пира; иначе поля ядра (до connect)."""
+        if peer_id:
+            k = self._normalize_peer_addr(peer_id)
+            s = self._live_sessions.get(k)
+            if s is None:
+                raise ValueError(f"No live session for peer_id={peer_id!r}")
+            return s
+        k = self._normalize_peer_addr(self.current_peer_addr or "")
+        if k in self._live_sessions:
+            return self._live_sessions[k]
+        return self
+
+    def _peer_id_for_frame(self) -> Optional[str]:
+        """When sending on the active chat, use extra session crypto if this peer lives there."""
+        if not self.current_peer_addr:
+            return None
+        k = self._normalize_peer_addr(self.current_peer_addr)
+        if k in self._live_sessions:
+            return k
+        return None
+
+    def _writer_frame_peer_and_text_acks(
+        self, peer_for_route: str
+    ) -> Tuple[Optional[asyncio.StreamWriter], Optional[str], Any]:
+        """Writer, peer_id для frame_message*, и таблица pending MSG_ACK для маршрута."""
+        try:
+            k = self._normalize_peer_addr(peer_for_route) if peer_for_route else ""
+        except ValueError:
+            k = self._normalize_peer_addr("")
+        if k in self._live_sessions:
+            ls = self._live_sessions[k]
+            if ls.conn:
+                return ls.conn[1], k, ls._pending_text_acks
+        return None, None, self._pending_text_acks
+
+    def _writer_frame_peer_and_file_acks(
+        self, peer_for_route: str
+    ) -> Tuple[Optional[asyncio.StreamWriter], Optional[str], Any]:
+        try:
+            k = self._normalize_peer_addr(peer_for_route) if peer_for_route else ""
+        except ValueError:
+            k = self._normalize_peer_addr("")
+        if k in self._live_sessions:
+            ls = self._live_sessions[k]
+            if ls.conn:
+                return ls.conn[1], k, ls._pending_file_acks
+        return None, None, self._pending_file_acks
+
+    def _writer_frame_peer_and_image_acks(
+        self, peer_for_route: str
+    ) -> Tuple[Optional[asyncio.StreamWriter], Optional[str], Any]:
+        try:
+            k = self._normalize_peer_addr(peer_for_route) if peer_for_route else ""
+        except ValueError:
+            k = self._normalize_peer_addr("")
+        if k in self._live_sessions:
+            ls = self._live_sessions[k]
+            if ls.conn:
+                return ls.conn[1], k, ls._pending_image_acks
+        return None, None, self._pending_image_acks
+
+    def _session_view_for_peer_route(self, peer_for_route: str) -> Any:
+        """LivePeerSession для выбранного маршрута (единственный источник live-состояния)."""
+        k = self._normalize_peer_addr(peer_for_route)
+        if k in self._live_sessions:
+            return self._live_sessions[k]
+        raise ValueError(f"No live session for peer route {peer_for_route!r}")
+
+    def _handshake_complete_for_peer_route(self, peer_for_route: str) -> bool:
+        try:
+            k = self._normalize_peer_addr(peer_for_route) if peer_for_route else ""
+        except ValueError:
+            k = ""
+        if not k:
+            cur = self._normalize_peer_addr(self.current_peer_addr or "")
+            if cur in self._live_sessions:
+                return bool(self._live_sessions[cur].handshake_complete)
+            return False
+        if k in self._live_sessions:
+            return bool(self._live_sessions[k].handshake_complete)
+        return False
+
+    def _live_stream_count(self) -> int:
+        return sum(1 for s in self._live_sessions.values() if s.conn)
+
+    def _has_live_session_slot_for_peer(self, peer_id: str) -> bool:
+        k = self._normalize_peer_addr(peer_id)
+        return k in self._live_sessions
+
+    def _has_active_session_for_peer(self, peer_id: str) -> bool:
+        k = self._normalize_peer_addr(peer_id)
+        s = self._live_sessions.get(k)
+        return bool(s and s.conn)
+
+    def _prefer_incoming_session(self, peer_id: str) -> bool:
+        try:
+            peer = self._normalize_peer_addr(peer_id)
+        except Exception:
+            return True
+        local_raw = getattr(self.my_dest, "base32", "") if self.my_dest is not None else ""
+        try:
+            local = self._normalize_peer_addr(local_raw)
+        except Exception:
+            local = ""
+        if not local or not peer:
+            return True
+        return local > peer
+
+    def _start_receive_loop_task(
+        self,
+        connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
+        *,
+        peer_id: str,
+    ) -> Optional[asyncio.Task[Any]]:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        normalized_peer = self._normalize_peer_addr(peer_id)
+        task = loop.create_task(self.receive_loop(connection, peer_id=normalized_peer))
+        sess = self._live_sessions.get(normalized_peer)
+        if sess is not None and sess.conn == connection:
+            sess.receive_task = task
+        return task
+
+    def has_active_live_session(self, peer_address: str) -> bool:
+        """True, если с этим пиром уже есть активный SAM-поток (legacy или extra)."""
+        return self._has_active_session_for_peer(peer_address)
+
     def frame_message_with_id(
-        self, msg_type: str, content: str, *, force_plain: bool = False
+        self,
+        msg_type: str,
+        content: str,
+        *,
+        force_plain: bool = False,
+        peer_id: Optional[str] = None,
     ) -> tuple[bytes, int]:
         """
         Формирует vNext-фрейм:
@@ -1797,19 +2148,16 @@ class I2PChatCore:
         """
         body = content.encode("utf-8")
         msg_id = self._allocate_msg_id()
+        sess = self._session_for_frame(peer_id)
 
-        if (
-            self.shared_key
-            and self.use_encryption
-            and not force_plain
-        ):
+        if sess.shared_key and sess.use_encryption and not force_plain:
             if not crypto.NACL_AVAILABLE:
                 raise RuntimeError("NaCl is required for secure protocol mode")
-            self._send_seq += 1
-            seq = self._send_seq
-            mac_key = self.shared_mac_key or self.shared_key
+            sess._send_seq += 1
+            seq = sess._send_seq
+            mac_key = sess.shared_mac_key or sess.shared_key
             padded_body = self._apply_padding_profile(body)
-            encrypted_body = crypto.encrypt_message(self.shared_key, padded_body)
+            encrypted_body = crypto.encrypt_message(sess.shared_key, padded_body)
             mac = crypto.compute_mac(
                 mac_key,
                 msg_type,
@@ -1854,13 +2202,19 @@ class I2PChatCore:
             raise ValueError("Malformed padded payload length")
         return payload[:original_len]
 
-    def frame_message(self, msg_type: str, content: str) -> bytes:
-        frame, _ = self.frame_message_with_id(msg_type, content)
+    def frame_message(
+        self, msg_type: str, content: str, *, peer_id: Optional[str] = None
+    ) -> bytes:
+        frame, _ = self.frame_message_with_id(msg_type, content, peer_id=peer_id)
         return frame
 
-    def frame_message_plain(self, msg_type: str, content: str) -> bytes:
+    def frame_message_plain(
+        self, msg_type: str, content: str, *, peer_id: Optional[str] = None
+    ) -> bytes:
         """Формирует незашифрованный фрейм (handshake/control)."""
-        frame, _ = self.frame_message_with_id(msg_type, content, force_plain=True)
+        frame, _ = self.frame_message_with_id(
+            msg_type, content, force_plain=True, peer_id=peer_id
+        )
         return frame
 
     # ---------- инициализация сессии ----------
@@ -1910,13 +2264,979 @@ class I2PChatCore:
         migrate_legacy_profile_files_if_needed(app_root=app, profile=self.profile)
         return get_profile_data_dir(self.profile, create=create, app_root=app)
 
+    def _local_group_member_id(self) -> str:
+        if self.my_dest is None or not getattr(self.my_dest, "base32", ""):
+            raise RuntimeError("Local destination is not initialized")
+        return normalize_member_id(str(self.my_dest.base32))
+
+    def _load_group_conversation(
+        self, group_id: str
+    ) -> Optional[StoredGroupConversation]:
+        conversation = load_group_conversation(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            group_id,
+        )
+        if conversation is not None:
+            self.group_manager.prime_group_sequence(
+                group_id,
+                next_group_seq=conversation.next_group_seq,
+            )
+        return conversation
+
+    def load_group(self, group_id: str) -> Optional[StoredGroupConversation]:
+        return self._load_group_conversation(group_id)
+
+    def save_group(
+        self,
+        state: GroupState,
+        *,
+        next_group_seq: Optional[int] = None,
+    ) -> StoredGroupConversation:
+        conversation = upsert_group_state(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            state,
+            next_group_seq=next_group_seq,
+        )
+        self.group_manager.prime_group_sequence(
+            state.group_id,
+            next_group_seq=conversation.next_group_seq,
+        )
+        return conversation
+
+    @staticmethod
+    def _is_recoverable_group_delivery_reason(reason: str) -> bool:
+        return str(reason or "").strip() in {
+            "blindbox-await-root",
+            "needs-live-session",
+        }
+
+    @staticmethod
+    def _group_delivery_reason_map(
+        result: GroupSendResult,
+    ) -> dict[str, str]:
+        reasons: dict[str, str] = {}
+        for peer_id, delivery in result.delivery_results.items():
+            reason = str(delivery.reason or "").strip()
+            if not reason or reason in {"live-session", "blindbox-ready"}:
+                continue
+            reasons[peer_id] = reason
+        return reasons
+
+    def _save_stored_group_conversation(
+        self,
+        conversation: StoredGroupConversation,
+    ) -> StoredGroupConversation:
+        save_group_conversation(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            conversation,
+        )
+        self.group_manager.prime_group_sequence(
+            conversation.state.group_id,
+            next_group_seq=conversation.next_group_seq,
+        )
+        return conversation
+
+    def _replace_stored_group_conversation(
+        self,
+        conversation: StoredGroupConversation,
+        *,
+        state: Optional[GroupState] = None,
+        history: Optional[tuple[GroupHistoryEntry, ...]] = None,
+        pending_deliveries: Optional[tuple[GroupPendingDelivery, ...]] = None,
+        blindbox_channel: Optional[GroupBlindBoxChannel | None] = None,
+        pending_group_blindbox_messages: Optional[
+            tuple[GroupPendingBlindBoxMessage, ...]
+        ] = None,
+    ) -> StoredGroupConversation:
+        return self._save_stored_group_conversation(
+            StoredGroupConversation(
+                state=state or conversation.state,
+                next_group_seq=conversation.next_group_seq,
+                history=history if history is not None else conversation.history,
+                seen_msg_ids=conversation.seen_msg_ids,
+                pending_deliveries=(
+                    pending_deliveries
+                    if pending_deliveries is not None
+                    else conversation.pending_deliveries
+                ),
+                blindbox_channel=(
+                    blindbox_channel
+                    if blindbox_channel is not None
+                    else conversation.blindbox_channel
+                ),
+                pending_group_blindbox_messages=(
+                    pending_group_blindbox_messages
+                    if pending_group_blindbox_messages is not None
+                    else conversation.pending_group_blindbox_messages
+                ),
+            )
+        )
+
+    def _build_group_pending_delivery(
+        self,
+        state: GroupState,
+        envelope: GroupEnvelope,
+        delivery: GroupMemberDeliveryResult,
+    ) -> GroupPendingDelivery | None:
+        delivery_id = str(delivery.delivery_id or "").strip()
+        if not delivery_id:
+            return None
+        recipient_id = normalize_member_id(delivery.recipient_id)
+        if not recipient_id:
+            return None
+        return GroupPendingDelivery(
+            group_id=state.group_id,
+            group_title=state.title,
+            group_members=state.members,
+            sender_id=envelope.sender_id,
+            recipient_id=recipient_id,
+            delivery_id=delivery_id,
+            msg_id=str(envelope.msg_id or "").strip(),
+            group_seq=int(envelope.group_seq),
+            epoch=int(envelope.epoch),
+            content_type=envelope.content_type,
+            payload=(
+                dict(envelope.payload)
+                if envelope.content_type == GroupContentType.GROUP_CONTROL
+                and isinstance(envelope.payload, dict)
+                else envelope.payload
+            ),
+            created_at=envelope.created_at,
+        )
+
+    def _mark_recoverable_group_deliveries_pending(
+        self,
+        state: GroupState,
+        result: GroupSendResult,
+    ) -> tuple[GroupPendingDelivery, ...]:
+        pending: list[GroupPendingDelivery] = []
+        for peer_id, delivery in list(result.delivery_results.items()):
+            reason = str(delivery.reason or "").strip()
+            if (
+                delivery.status != GroupDeliveryStatus.FAILED
+                or not self._is_recoverable_group_delivery_reason(reason)
+            ):
+                continue
+            pending_item = self._build_group_pending_delivery(
+                state,
+                result.envelope,
+                delivery,
+            )
+            if pending_item is None:
+                continue
+            pending.append(pending_item)
+            result.delivery_results[peer_id] = GroupMemberDeliveryResult(
+                recipient_id=delivery.recipient_id,
+                status=GroupDeliveryStatus.QUEUED_OFFLINE,
+                reason=reason,
+                transport_message_id=delivery.transport_message_id,
+                delivery_id=delivery.delivery_id,
+            )
+        return tuple(pending)
+
+    def _merge_group_pending_deliveries(
+        self,
+        conversation: StoredGroupConversation,
+        pending: tuple[GroupPendingDelivery, ...],
+    ) -> StoredGroupConversation:
+        if not pending:
+            return conversation
+        merged: dict[str, GroupPendingDelivery] = {
+            item.delivery_id: item for item in conversation.pending_deliveries
+        }
+        for item in pending:
+            merged[item.delivery_id] = item
+        ordered = tuple(
+            sorted(
+                merged.values(),
+                key=lambda item: (
+                    item.created_at.timestamp(),
+                    item.delivery_id,
+                ),
+            )
+        )
+        return self._replace_stored_group_conversation(
+            conversation,
+            pending_deliveries=ordered,
+        )
+
+    def _build_pending_group_blindbox_message(
+        self,
+        state: GroupState,
+        envelope: GroupEnvelope,
+        offline_recipients: tuple[str, ...],
+    ) -> GroupPendingBlindBoxMessage:
+        del offline_recipients
+        payload = envelope.payload
+        if (
+            envelope.content_type == GroupContentType.GROUP_CONTROL
+            and isinstance(payload, dict)
+        ):
+            payload = dict(payload)
+        return GroupPendingBlindBoxMessage(
+            group_id=state.group_id,
+            group_title=state.title,
+            group_members=state.members,
+            sender_id=envelope.sender_id,
+            msg_id=str(envelope.msg_id or "").strip(),
+            group_seq=int(envelope.group_seq),
+            epoch=int(envelope.epoch),
+            content_type=envelope.content_type,
+            payload=payload,
+            created_at=envelope.created_at,
+        )
+
+    def _merge_pending_group_blindbox_messages(
+        self,
+        conversation: StoredGroupConversation,
+        pending: tuple[GroupPendingBlindBoxMessage, ...],
+    ) -> StoredGroupConversation:
+        if not pending:
+            return conversation
+        merged: dict[str, GroupPendingBlindBoxMessage] = {
+            item.msg_id: item for item in conversation.pending_group_blindbox_messages
+        }
+        for item in pending:
+            if item.msg_id:
+                merged[item.msg_id] = item
+        ordered = tuple(
+            sorted(
+                merged.values(),
+                key=lambda item: (
+                    item.created_at.timestamp(),
+                    item.msg_id,
+                ),
+            )
+        )
+        return self._replace_stored_group_conversation(
+            conversation,
+            pending_group_blindbox_messages=ordered,
+        )
+
+    def _pending_group_blindbox_recipients(
+        self,
+        conversation: StoredGroupConversation,
+        pending: GroupPendingBlindBoxMessage,
+    ) -> tuple[str, ...]:
+        for entry in reversed(conversation.history):
+            if entry.msg_id != pending.msg_id:
+                continue
+            recipients = tuple(
+                recipient_id
+                for recipient_id, status in entry.delivery_results.items()
+                if status == GroupDeliveryStatus.QUEUED_OFFLINE.value
+                and entry.delivery_reasons.get(recipient_id, "")
+                == "blindbox-await-group-root"
+            )
+            if recipients:
+                return recipients
+            break
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            local_member = ""
+        return tuple(
+            member_id
+            for member_id in pending.group_members
+            if member_id and not same_i2p_destination(member_id, local_member)
+        )
+
+    async def _flush_pending_group_blindbox_messages_for_group(
+        self, group_id: str
+    ) -> int:
+        conversation = self._load_group_conversation(group_id)
+        if conversation is None or not conversation.pending_group_blindbox_messages:
+            return 0
+        remaining: list[GroupPendingBlindBoxMessage] = []
+        flushed = 0
+        for pending in conversation.pending_group_blindbox_messages:
+            result = await self._send_group_envelope_via_group_blindbox(
+                group_id,
+                pending.as_envelope(),
+                state_snapshot=pending.as_group_state(),
+            )
+            if not result.accepted:
+                remaining.append(pending)
+                continue
+            for recipient_id in self._pending_group_blindbox_recipients(
+                conversation,
+                pending,
+            ):
+                conversation = self._update_group_history_delivery_status(
+                    conversation,
+                    msg_id=pending.msg_id,
+                    recipient_id=recipient_id,
+                    status=GroupDeliveryStatus.QUEUED_OFFLINE,
+                    reason="",
+                )
+            flushed += 1
+        if flushed or len(remaining) != len(conversation.pending_group_blindbox_messages):
+            conversation = self._replace_stored_group_conversation(
+                conversation,
+                pending_group_blindbox_messages=tuple(remaining),
+            )
+        return flushed
+
+    def _schedule_flush_pending_group_blindbox_messages(
+        self, group_id: str
+    ) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self._flush_pending_group_blindbox_messages_for_group(group_id))
+
+    def _update_group_history_delivery_status(
+        self,
+        conversation: StoredGroupConversation,
+        *,
+        msg_id: str,
+        recipient_id: str,
+        status: GroupDeliveryStatus,
+        reason: str = "",
+    ) -> StoredGroupConversation:
+        normalized_msg_id = str(msg_id or "").strip()
+        normalized_recipient = normalize_member_id(recipient_id)
+        if not normalized_msg_id or not normalized_recipient:
+            return conversation
+        updated_history: list[GroupHistoryEntry] = []
+        changed = False
+        for entry in conversation.history:
+            if entry.msg_id != normalized_msg_id:
+                updated_history.append(entry)
+                continue
+            delivery_results = dict(entry.delivery_results)
+            delivery_results[normalized_recipient] = status.value
+            delivery_reasons = dict(entry.delivery_reasons)
+            clean_reason = str(reason or "").strip()
+            if clean_reason:
+                delivery_reasons[normalized_recipient] = clean_reason
+            else:
+                delivery_reasons.pop(normalized_recipient, None)
+            updated_history.append(
+                GroupHistoryEntry(
+                    kind=entry.kind,
+                    sender_id=entry.sender_id,
+                    content_type=entry.content_type,
+                    text=entry.text,
+                    payload=entry.payload,
+                    msg_id=entry.msg_id,
+                    group_seq=entry.group_seq,
+                    epoch=entry.epoch,
+                    created_at=entry.created_at,
+                    source_peer=entry.source_peer,
+                    delivery_results=delivery_results,
+                    delivery_reasons=delivery_reasons,
+                )
+            )
+            changed = True
+        if not changed:
+            return conversation
+        return self._replace_stored_group_conversation(
+            conversation,
+            history=tuple(updated_history),
+        )
+
+    def _schedule_group_pending_flush(self, peer_addrs: list[str]) -> None:
+        if not peer_addrs:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        for raw in peer_addrs:
+            try:
+                normalized = self._normalize_peer_addr(raw)
+            except Exception:
+                continue
+            if normalized:
+                self._group_pending_flush_backlog.add(normalized)
+        self._ensure_group_pending_flush_runner(loop)
+
+    def _ensure_group_pending_flush_runner(
+        self, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        if (
+            self._group_pending_flush_task is not None
+            and not self._group_pending_flush_task.done()
+        ):
+            return
+        self._group_pending_flush_task = loop.create_task(
+            self._run_group_pending_flush_backlog()
+        )
+
+    async def _run_group_pending_flush_backlog(self) -> None:
+        try:
+            while self._group_pending_flush_backlog:
+                batch = sorted(self._group_pending_flush_backlog)
+                self._group_pending_flush_backlog.clear()
+                for peer_id in batch:
+                    await self._flush_pending_group_deliveries_for_peer(peer_id)
+        finally:
+            self._group_pending_flush_task = None
+            if self._group_pending_flush_backlog:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    pass
+                else:
+                    self._ensure_group_pending_flush_runner(loop)
+
+    async def _flush_pending_group_deliveries_for_peer(self, peer_id: str) -> int:
+        normalized_peer = self._normalize_peer_addr(peer_id or "")
+        if not normalized_peer:
+            return 0
+        flushed = 0
+        for state in self.list_group_states():
+            conversation = self._load_group_conversation(state.group_id)
+            if conversation is None or not conversation.pending_deliveries:
+                continue
+            matching = [
+                item
+                for item in conversation.pending_deliveries
+                if same_i2p_destination(item.recipient_id, normalized_peer)
+            ]
+            if not matching:
+                continue
+            remaining = [
+                item
+                for item in conversation.pending_deliveries
+                if not same_i2p_destination(item.recipient_id, normalized_peer)
+            ]
+            cleared_any = False
+            for pending in matching:
+                delivery = await self._deliver_group_envelope_to_member(
+                    pending.recipient_id,
+                    pending.as_envelope(),
+                    pending.as_metadata(),
+                    state_snapshot=pending.as_group_state(),
+                    requested_route="auto",
+                )
+                if delivery.status == GroupDeliveryStatus.FAILED:
+                    remaining.append(pending)
+                    continue
+                clean_reason = str(delivery.reason or "").strip()
+                if clean_reason in {"live-session", "blindbox-ready"}:
+                    clean_reason = ""
+                conversation = self._update_group_history_delivery_status(
+                    conversation,
+                    msg_id=pending.msg_id,
+                    recipient_id=pending.recipient_id,
+                    status=delivery.status,
+                    reason=clean_reason,
+                )
+                flushed += 1
+                cleared_any = True
+            if cleared_any or len(remaining) != len(conversation.pending_deliveries):
+                conversation = self._replace_stored_group_conversation(
+                    conversation,
+                    pending_deliveries=tuple(remaining),
+                )
+        return flushed
+
+    async def _deliver_group_envelope_to_member(
+        self,
+        recipient_id: str,
+        envelope: GroupEnvelope,
+        metadata: GroupRecipientDeliveryMetadata,
+        *,
+        requested_route: str = "auto",
+        state_snapshot: Optional[GroupState] = None,
+    ) -> GroupMemberDeliveryResult:
+        policy = self.session_manager.select_outbound_policy(
+            requested_route=requested_route,
+            peer_id=recipient_id,
+        )
+        if policy in (
+            OutboundPolicy.LIVE_ONLY,
+            OutboundPolicy.PREFER_LIVE_FALLBACK_BLINDBOX,
+        ):
+            live_ready = self.session_manager.is_live_path_alive(peer_id=recipient_id)
+            if live_ready:
+                live_result = await self._send_group_envelope_live(
+                    recipient_id,
+                    envelope,
+                    metadata,
+                    state_snapshot=state_snapshot,
+                )
+                if live_result.accepted:
+                    return GroupMemberDeliveryResult(
+                        recipient_id=recipient_id,
+                        status=GroupDeliveryStatus.DELIVERED_LIVE,
+                        reason=live_result.reason or "live-session",
+                        transport_message_id=live_result.transport_message_id,
+                        delivery_id=metadata.delivery_id,
+                    )
+                if policy == OutboundPolicy.LIVE_ONLY:
+                    return GroupMemberDeliveryResult(
+                        recipient_id=recipient_id,
+                        status=GroupDeliveryStatus.FAILED,
+                        reason=live_result.reason or "needs-live-session",
+                        transport_message_id=live_result.transport_message_id,
+                        delivery_id=metadata.delivery_id,
+                    )
+            elif policy == OutboundPolicy.LIVE_ONLY:
+                return GroupMemberDeliveryResult(
+                    recipient_id=recipient_id,
+                    status=GroupDeliveryStatus.FAILED,
+                    reason="needs-live-session",
+                    delivery_id=metadata.delivery_id,
+                )
+
+        offline_result = await self._send_group_envelope_via_blindbox(
+            recipient_id,
+            envelope,
+            metadata,
+            state_snapshot=state_snapshot,
+        )
+        if offline_result.accepted:
+            return GroupMemberDeliveryResult(
+                recipient_id=recipient_id,
+                status=GroupDeliveryStatus.QUEUED_OFFLINE,
+                reason=offline_result.reason or "blindbox-ready",
+                transport_message_id=offline_result.transport_message_id,
+                delivery_id=metadata.delivery_id,
+            )
+        return GroupMemberDeliveryResult(
+            recipient_id=recipient_id,
+            status=GroupDeliveryStatus.FAILED,
+            reason=offline_result.reason or "blindbox-unavailable",
+            transport_message_id=offline_result.transport_message_id,
+            delivery_id=metadata.delivery_id,
+        )
+
+    def load_group_state(self, group_id: str) -> Optional[GroupState]:
+        conversation = self.load_group(group_id)
+        if conversation is not None:
+            return conversation.state
+        return load_persisted_group_state(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            group_id,
+        )
+
+    def save_group_state(
+        self,
+        state: GroupState,
+        *,
+        next_group_seq: Optional[int] = None,
+    ) -> GroupState:
+        return self.save_group(
+            state,
+            next_group_seq=next_group_seq,
+        ).state
+
+    def list_group_states(self) -> list[GroupState]:
+        return list_persisted_group_states(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+        )
+
+    def delete_group(self, group_id: str) -> bool:
+        """Remove local group record and history file; does not notify remote members."""
+        gid = (group_id or "").strip()
+        if not gid:
+            return False
+        ok = delete_group_record(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            gid,
+        )
+        if ok:
+            self.group_manager.forget_group(gid)
+            self._notify_group_mesh_manager()
+        return ok
+
+    def _group_auto_intro_enabled(self) -> bool:
+        v = os.environ.get("I2PCHAT_GROUP_AUTO_INTRO", "1").strip().lower()
+        return v not in ("0", "false", "no", "off")
+
+    def _notify_group_mesh_manager(self) -> None:
+        if self._group_mesh_task is None or self._group_mesh_task.done():
+            return
+        self.group_mesh_manager.request_scan()
+
+    def _build_group_mesh_peer_snapshot(self, peer_id: str) -> GroupMeshPeerSnapshot:
+        normalized_peer = self._normalize_peer_addr(peer_id or "")
+        peer_transport = self.session_manager.get_peer_transport(normalized_peer)
+        peer_state = (
+            peer_transport.peer_state.value
+            if peer_transport is not None
+            else "disconnected"
+        )
+        blindbox_ready = False
+        if self.blindbox_enabled:
+            try:
+                peer_snapshot = self._load_blindbox_peer_snapshot(normalized_peer)
+            except Exception:
+                blindbox_ready = False
+            else:
+                blindbox_ready = peer_snapshot.root_secret is not None
+        reconnect = self.session_manager.get_reconnect_metadata(peer_id=normalized_peer)
+        return GroupMeshPeerSnapshot(
+            peer_id=normalized_peer,
+            peer_state=peer_state,
+            live_ready=self.session_manager.is_live_path_alive(peer_id=normalized_peer),
+            active_session=self._has_active_session_for_peer(normalized_peer),
+            blindbox_ready=blindbox_ready,
+            next_retry_mono=float(reconnect.next_retry_mono),
+        )
+
+    def _ensure_group_mesh_runner(self, loop: asyncio.AbstractEventLoop) -> None:
+        if not self.group_mesh_manager.enabled():
+            return
+        if self._group_mesh_task is not None and not self._group_mesh_task.done():
+            return
+        self.group_mesh_manager.request_scan()
+        self._group_mesh_task = loop.create_task(self.group_mesh_manager.run())
+
+    def _repair_group_delivery_failures(self, result: GroupSendResult) -> None:
+        repair_peers: list[str] = []
+        for peer_id, delivery in result.delivery_results.items():
+            reason = str(delivery.reason or "").strip()
+            if delivery.status == GroupDeliveryStatus.FAILED and reason in {
+                "blindbox-await-root",
+                "needs-live-session",
+            }:
+                repair_peers.append(peer_id)
+        if repair_peers:
+            self._schedule_group_peer_intros(repair_peers)
+        self._notify_group_mesh_manager()
+
+    def _sync_group_members_to_saved_contacts(self, state: GroupState, local_member: str) -> bool:
+        """Add all remote group members to Saved peers. Returns True if contacts file changed."""
+        changed = False
+        for m in state.members:
+            if not m or same_i2p_destination(m, local_member):
+                continue
+            if self.ensure_peer_in_saved_contacts(m):
+                changed = True
+        return changed
+
+    def _collect_group_peers_needing_secure_intro(
+        self,
+        new_state: GroupState,
+        local_member: str,
+    ) -> list[str]:
+        """
+        Все удалённые участники группы, с которыми ещё нет завершённого secure handshake.
+
+        В отличие от выборки только «новых» member (added), это даёт полный mesh:
+        при каждом событии членства/импорте можно повторно попытаться достроить live-сессии.
+        """
+        out: list[str] = []
+        for mid in new_state.members:
+            if not mid or same_i2p_destination(mid, local_member):
+                continue
+            try:
+                n = self._normalize_peer_addr(mid)
+            except Exception:
+                continue
+            if not n:
+                continue
+            if self._handshake_complete_for_peer_route(n):
+                continue
+            if self._has_live_session_slot_for_peer(n):
+                continue
+            out.append(mid)
+        return sorted(out, key=lambda x: normalize_member_id(x))
+
+    def _on_group_membership_changed(
+        self,
+        previous_members: frozenset[str],
+        previous_epoch: int | None,
+        new_state: GroupState,
+        *,
+        group_label: str = "",
+    ) -> None:
+        """
+        При изменении состава или импорте группы: сохранить пиров в контакты,
+        затем по возможности достроить live-сессии ко всем участникам (mesh).
+        """
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return
+        self._on_group_blindbox_membership_changed(
+            previous_members,
+            previous_epoch,
+            new_state,
+        )
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            return
+        if self._sync_group_members_to_saved_contacts(new_state, local_member):
+            if self.on_saved_contacts_changed is not None:
+                try:
+                    self.on_saved_contacts_changed()
+                except Exception:
+                    logger.debug("on_saved_contacts_changed failed", exc_info=True)
+        intro = self._collect_group_peers_needing_secure_intro(
+            new_state, local_member
+        )
+        self._notify_group_mesh_manager()
+        if not intro:
+            return
+        prev = {normalize_member_id(x) for x in previous_members if x}
+        cur = {normalize_member_id(x) for x in new_state.members if x}
+        added = cur - prev
+        intro_norm = {normalize_member_id(x) for x in intro}
+        new_member_intros = sorted(intro_norm & added)
+        label = (group_label or new_state.title or new_state.group_id or "group").strip()
+        if new_member_intros:
+            short = ", ".join(
+                f"{p[:10]}…" if len(p) > 12 else p for p in new_member_intros[:4]
+            )
+            if len(new_member_intros) > 4:
+                short += ", …"
+            self._emit_system(
+                f'Group "{label}": secure introduction starting for new peer(s): {short}'
+            )
+        else:
+            logger.info(
+                'Group "%s": mesh top-up, scheduling live session(s) to %d peer(s)',
+                label,
+                len(intro),
+            )
+        self._schedule_group_peer_intros(intro)
+        self._schedule_group_blindbox_root_push(new_state)
+
+    def _on_group_blindbox_membership_changed(
+        self,
+        previous_members: frozenset[str],
+        previous_epoch: int | None,
+        new_state: GroupState,
+    ) -> None:
+        snapshot_bundle = self._group_blindbox_runtime_snapshot(new_state.group_id)
+        if snapshot_bundle is None:
+            return
+        snapshot, save_state = snapshot_bundle
+        current_members = frozenset(normalize_member_id(x) for x in new_state.members if x)
+        previous_members_norm = frozenset(
+            normalize_member_id(x) for x in previous_members if x
+        )
+        members_changed = previous_members_norm != current_members
+        epoch_changed = (
+            previous_epoch is None or int(previous_epoch) != int(new_state.epoch)
+        )
+        if (
+            not members_changed
+            and not epoch_changed
+            and int(snapshot.group_epoch) == int(new_state.epoch)
+        ):
+            return
+        if snapshot.root_secret is not None:
+            snapshot.prev_roots.append(
+                {
+                    "group_epoch": int(snapshot.group_epoch),
+                    "root_epoch": int(snapshot.root_epoch),
+                    "secret": snapshot.root_secret,
+                    "expires_at": int(time.time())
+                    + int(self._blindbox_previous_grace_seconds),
+                }
+            )
+        snapshot.prev_roots = self._blindbox_prune_previous_roots_list(
+            snapshot.prev_roots
+        )
+        snapshot.group_epoch = int(new_state.epoch)
+        snapshot.root_secret = None
+        snapshot.root_epoch = 0
+        snapshot.root_created_at = 0
+        snapshot.root_send_index_base = int(snapshot.state.send_index)
+        snapshot.pending_root_secret = None
+        snapshot.pending_root_epoch = 0
+        snapshot.pending_root_created_at = 0
+        snapshot.pending_root_send_index_base = int(snapshot.state.send_index)
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            local_member = ""
+        snapshot.pending_root_target_members = tuple(
+            member_id
+            for member_id in new_state.members
+            if member_id and not same_i2p_destination(member_id, local_member)
+        )
+        snapshot.pending_root_acked_members.clear()
+        save_state()
+
+    def _schedule_group_blindbox_root_push(self, state: GroupState) -> None:
+        if not self._should_initiate_group_blindbox_root_exchange(state):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        for member_id in self._group_blindbox_target_members(state):
+            writer, frame_peer_id, _text_acks = self._writer_frame_peer_and_text_acks(
+                member_id
+            )
+            if (
+                writer is None
+                or frame_peer_id is None
+                or not self.session_manager.is_live_path_alive(peer_id=member_id)
+            ):
+                continue
+            loop.create_task(
+                self._send_group_blindbox_root_if_needed(
+                    writer,
+                    state.group_id,
+                    peer_id=frame_peer_id,
+                )
+            )
+
+    def _schedule_group_peer_intros(self, peer_addrs: list[str]) -> None:
+        if not peer_addrs or not self._group_auto_intro_enabled():
+            return
+        if not crypto.NACL_AVAILABLE:
+            return
+        # Unit tests often have a running asyncio loop; never open real SAM connects there.
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        for raw in peer_addrs:
+            try:
+                n = self._normalize_peer_addr(raw)
+            except Exception:
+                continue
+            if n:
+                self._group_intro_backlog.add(n)
+        self._ensure_group_intro_runner(loop)
+
+    def _ensure_group_intro_runner(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self._group_intro_task is not None and not self._group_intro_task.done():
+            return
+        self._group_intro_task = loop.create_task(self._run_group_intro_backlog())
+
+    async def _run_group_intro_backlog(self) -> None:
+        try:
+            while self._group_intro_backlog:
+                batch = sorted(self._group_intro_backlog)
+                self._group_intro_backlog.clear()
+                for n in batch:
+                    if self._handshake_complete_for_peer_route(n):
+                        continue
+                    if self._has_live_session_slot_for_peer(n):
+                        continue
+                    activate = self._live_stream_count() == 0
+                    await self.connect_to_peer(
+                        n,
+                        activate_as_current=activate,
+                        announce_to_ui=False,
+                    )
+        finally:
+            self._group_intro_task = None
+            if self._group_intro_backlog:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    pass
+                else:
+                    self._ensure_group_intro_runner(loop)
+
+    def load_group_history(self, group_id: str) -> list[GroupHistoryEntry]:
+        conversation = self.load_group(group_id)
+        if conversation is None:
+            return []
+        return list(conversation.history)
+
+    def create_group(
+        self,
+        *,
+        title: str,
+        members: list[str] | tuple[str, ...],
+        group_id: Optional[str] = None,
+        epoch: int = 0,
+    ) -> GroupState:
+        local_member_id = self._local_group_member_id()
+        normalized_members = [local_member_id]
+        normalized_members.extend(normalize_member_id(member) for member in members)
+        state = GroupState(
+            group_id=(group_id or secrets.token_hex(12)),
+            epoch=int(epoch),
+            members=tuple(normalized_members),
+            title=title,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        state = self.save_group(
+            state,
+            next_group_seq=1,
+        ).state
+        self._emit_system(
+            f"Group ready: {state.title or state.group_id} ({max(0, len(state.members) - 1)} peers)."
+        )
+        self._on_group_membership_changed(
+            frozenset(),
+            None,
+            state,
+            group_label=state.title or state.group_id,
+        )
+        return state
+
+    def update_group(
+        self,
+        group_id: str,
+        *,
+        title: str,
+        members: list[str] | tuple[str, ...],
+    ) -> GroupState:
+        """
+        Локально обновить заголовок и список участников (как display name у saved peer).
+        Увеличивает epoch; next_group_seq и история сохраняются.
+        """
+        existing = self.load_group_state(group_id)
+        if existing is None:
+            raise ValueError(f"Unknown group: {group_id}")
+        prev_members = frozenset(existing.members)
+        local_member_id = self._local_group_member_id()
+        normalized_members = [local_member_id]
+        normalized_members.extend(normalize_member_id(member) for member in members)
+        clean_title = (title or "").strip()
+        new_state = GroupState(
+            group_id=existing.group_id,
+            epoch=int(existing.epoch) + 1,
+            members=tuple(normalized_members),
+            title=clean_title or None,
+            created_at=existing.created_at,
+            updated_at=utc_now(),
+        )
+        saved = self.save_group(new_state, next_group_seq=None)
+        self._emit_system(
+            f"Group updated: {saved.state.title or saved.state.group_id} "
+            f"({max(0, len(saved.state.members) - 1)} peers)."
+        )
+        self._on_group_membership_changed(
+            prev_members,
+            int(existing.epoch),
+            saved.state,
+            group_label=saved.state.title or saved.state.group_id,
+        )
+        return saved.state
+
+    def _group_display_name(self, state: GroupState) -> str:
+        return state.title or state.group_id
+
     def _blindbox_peer_id(self) -> Optional[str]:
-        peer = self._normalize_peer_addr(self.stored_peer or self.current_peer_addr or "")
+        lap = self._last_active_peer_for_telemetry()
+        peer = self._normalize_peer_addr(self.current_peer_addr or lap or "")
         if not peer:
             return None
-        if peer.endswith(".b32.i2p"):
-            return peer[: -len(".b32.i2p")]
         return peer
+
+    def _blindbox_peer_id_for_peer(self, peer_addr: str) -> Optional[str]:
+        peer = self._normalize_peer_addr(peer_addr or "")
+        if not peer:
+            return None
+        return peer
+
+    def _blindbox_state_path_for_peer(self, peer_id: str) -> str:
+        safe_peer = re.sub(r"[^a-z0-9._-]", "_", peer_id.lower())
+        return self._profile_scoped_path(f"{self.profile}.blindbox.{safe_peer}.json")
 
     def _blindbox_state_path(self) -> str:
         peer_id = self._blindbox_peer_id()
@@ -1924,6 +3244,134 @@ class I2PChatCore:
             raise ValueError("BlindBox peer id is not available")
         safe_peer = re.sub(r"[^a-z0-9._-]", "_", peer_id.lower())
         return self._profile_scoped_path(f"{self.profile}.blindbox.{safe_peer}.json")
+
+    def _load_blindbox_peer_snapshot(self, peer_addr: str) -> _BlindBoxPeerSnapshot:
+        peer = self._normalize_peer_addr(peer_addr or "")
+        peer_id = self._blindbox_peer_id_for_peer(peer)
+        if not peer_id:
+            raise ValueError("BlindBox peer id is not available")
+        snapshot = _BlindBoxPeerSnapshot(
+            peer_addr=peer,
+            peer_id=peer_id,
+            state=BlindBoxState(),
+        )
+        path = self._blindbox_state_path_for_peer(peer_id)
+        if not os.path.exists(path):
+            return snapshot
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+        if not isinstance(raw, dict):
+            raise ValueError("BlindBox state must be a JSON object")
+        snapshot.state = BlindBoxState.from_dict(raw)
+        wrap_version_raw = raw.get(
+            "blindbox_wrap_version", BLINDBOX_LOCAL_WRAP_VERSION_LEGACY
+        )
+        try:
+            wrap_version = int(wrap_version_raw)
+        except Exception:
+            wrap_version = BLINDBOX_LOCAL_WRAP_VERSION_LEGACY
+        enc_root = raw.get("blindbox_root_secret_enc")
+        if isinstance(enc_root, str) and enc_root:
+            snapshot.root_secret, _used_wrap_version = self._blindbox_decrypt_root_secret(
+                enc_root,
+                peer_id,
+                wrap_version=wrap_version,
+            )
+        snapshot.root_epoch = int(raw.get("blindbox_root_epoch", 0))
+        snapshot.root_created_at = int(
+            raw.get("blindbox_root_created_at", int(time.time()))
+        )
+        snapshot.root_send_index_base = int(
+            raw.get("blindbox_root_send_index_base", int(snapshot.state.send_index))
+        )
+        enc_pending_root = raw.get("blindbox_pending_root_secret_enc")
+        if isinstance(enc_pending_root, str) and enc_pending_root:
+            snapshot.pending_root_secret, _pending_wrap_version = (
+                self._blindbox_decrypt_root_secret(
+                    enc_pending_root,
+                    peer_id,
+                    wrap_version=wrap_version,
+                )
+            )
+        snapshot.pending_root_epoch = int(raw.get("blindbox_pending_root_epoch", 0))
+        snapshot.pending_root_created_at = int(
+            raw.get("blindbox_pending_root_created_at", int(time.time()))
+        )
+        snapshot.pending_root_send_index_base = int(
+            raw.get(
+                "blindbox_pending_root_send_index_base",
+                int(snapshot.state.send_index),
+            )
+        )
+        prev_items = raw.get("blindbox_prev_roots", [])
+        if isinstance(prev_items, list):
+            for prev in prev_items:
+                if not isinstance(prev, dict):
+                    continue
+                enc_prev = prev.get("secret_enc")
+                if not isinstance(enc_prev, str) or not enc_prev:
+                    continue
+                try:
+                    dec_prev, _prev_wrap_version = self._blindbox_decrypt_root_secret(
+                        enc_prev, peer_id, wrap_version=wrap_version
+                    )
+                except Exception:
+                    continue
+                if len(dec_prev) != 32:
+                    continue
+                snapshot.prev_roots.append(
+                    {
+                        "epoch": int(prev.get("epoch", 0)),
+                        "secret": dec_prev,
+                        "expires_at": int(prev.get("expires_at", 0)),
+                    }
+                )
+        snapshot.prev_roots = self._blindbox_prune_previous_roots_list(
+            snapshot.prev_roots
+        )
+        return snapshot
+
+    def _save_blindbox_peer_snapshot(self, snapshot: _BlindBoxPeerSnapshot) -> None:
+        if snapshot.root_secret is None and snapshot.pending_root_secret is None:
+            return
+        payload = snapshot.state.to_dict()
+        payload["blindbox_wrap_version"] = BLINDBOX_LOCAL_WRAP_VERSION_CURRENT
+        if snapshot.root_secret is not None:
+            payload["blindbox_root_secret_enc"] = self._blindbox_encrypt_root_secret(
+                snapshot.root_secret,
+                snapshot.peer_id,
+            )
+        payload["blindbox_root_epoch"] = int(snapshot.root_epoch)
+        payload["blindbox_root_created_at"] = int(snapshot.root_created_at)
+        payload["blindbox_root_send_index_base"] = int(snapshot.root_send_index_base)
+        if snapshot.pending_root_secret is not None:
+            payload["blindbox_pending_root_secret_enc"] = self._blindbox_encrypt_root_secret(
+                snapshot.pending_root_secret,
+                snapshot.peer_id,
+            )
+        payload["blindbox_pending_root_epoch"] = int(snapshot.pending_root_epoch)
+        payload["blindbox_pending_root_created_at"] = int(
+            snapshot.pending_root_created_at
+        )
+        payload["blindbox_pending_root_send_index_base"] = int(
+            snapshot.pending_root_send_index_base
+        )
+        payload["blindbox_prev_roots"] = [
+            {
+                "epoch": int(item.get("epoch", 0)),
+                "expires_at": int(item.get("expires_at", 0)),
+                "secret_enc": self._blindbox_encrypt_root_secret(
+                    bytes(item["secret"]), snapshot.peer_id
+                ),
+            }
+            for item in self._blindbox_prune_previous_roots_list(snapshot.prev_roots)
+            if isinstance(item.get("secret"), (bytes, bytearray))
+            and len(bytes(item["secret"])) == 32
+        ]
+        atomic_write_json(
+            self._blindbox_state_path_for_peer(snapshot.peer_id),
+            payload,
+        )
 
     def _blindbox_local_wrap_key(
         self,
@@ -1998,17 +3446,211 @@ class I2PChatCore:
                 return decrypted, version
         raise ValueError("Failed to decrypt BlindBox root secret")
 
+    def _group_blindbox_wrap_scope(self, group_id: str) -> str:
+        group_key = str(group_id or "").strip()
+        if not group_key:
+            raise ValueError("Group id is required")
+        return f"group:{group_key}"
+
+    def _group_blindbox_encrypt_root_secret(
+        self, root_secret: bytes, group_id: str
+    ) -> str:
+        wrap_scope = self._group_blindbox_wrap_scope(group_id)
+        wrap_key = self._blindbox_local_wrap_key(
+            wrap_scope,
+            wrap_version=BLINDBOX_LOCAL_WRAP_VERSION_CURRENT,
+        )
+        encrypted = crypto.encrypt_message(wrap_key, root_secret)
+        return encrypted.hex()
+
+    def _group_blindbox_decrypt_root_secret(
+        self, encrypted_hex: str, group_id: str
+    ) -> bytes:
+        encrypted = bytes.fromhex(encrypted_hex)
+        wrap_scope = self._group_blindbox_wrap_scope(group_id)
+        for version in (
+            BLINDBOX_LOCAL_WRAP_VERSION_CURRENT,
+            BLINDBOX_LOCAL_WRAP_VERSION_LEGACY,
+        ):
+            try:
+                wrap_key = self._blindbox_local_wrap_key(
+                    wrap_scope,
+                    wrap_version=version,
+                )
+            except Exception:
+                continue
+            decrypted = crypto.decrypt_message(wrap_key, encrypted)
+            if decrypted is not None:
+                return decrypted
+        raise ValueError("Failed to decrypt group BlindBox root secret")
+
+    def _load_group_blindbox_channel(
+        self, group_id: str
+    ) -> GroupBlindBoxChannel | None:
+        conversation = self._load_group_conversation(group_id)
+        if conversation is None:
+            return None
+        channel = conversation.blindbox_channel
+        if channel is None:
+            return None
+        return channel
+
+    def _save_group_blindbox_channel(
+        self,
+        group_id: str,
+        channel: GroupBlindBoxChannel,
+    ) -> None:
+        conversation = self._load_group_conversation(group_id)
+        if conversation is None:
+            raise ValueError(f"Unknown group: {group_id}")
+        self._replace_stored_group_conversation(
+            conversation,
+            blindbox_channel=channel,
+        )
+
+    def _group_blindbox_runtime_snapshot(
+        self, group_id: str
+    ) -> tuple[_GroupBlindBoxSnapshot, Callable[[], None]] | None:
+        conversation = self._load_group_conversation(group_id)
+        if conversation is None:
+            return None
+        state = conversation.state
+        channel = conversation.blindbox_channel
+        if channel is None:
+            snapshot = _GroupBlindBoxSnapshot(
+                group_id=group_id,
+                group_epoch=int(state.epoch),
+                state=BlindBoxState(),
+            )
+        else:
+            root_secret = None
+            if channel.root_secret_enc:
+                root_secret = self._group_blindbox_decrypt_root_secret(
+                    channel.root_secret_enc,
+                    group_id,
+                )
+            pending_root_secret = None
+            if channel.pending_root_secret_enc:
+                pending_root_secret = self._group_blindbox_decrypt_root_secret(
+                    channel.pending_root_secret_enc,
+                    group_id,
+                )
+            prev_roots: list[dict[str, Any]] = []
+            for item in channel.prev_roots:
+                secret_enc = str(item.get("secret_enc") or "").strip()
+                if not secret_enc:
+                    continue
+                try:
+                    secret = self._group_blindbox_decrypt_root_secret(
+                        secret_enc,
+                        group_id,
+                    )
+                except Exception:
+                    continue
+                if len(secret) != 32:
+                    continue
+                prev_roots.append(
+                    {
+                        "group_epoch": int(item.get("group_epoch", 0)),
+                        "root_epoch": int(item.get("root_epoch", 0)),
+                        "expires_at": int(item.get("expires_at", 0)),
+                        "secret": secret,
+                    }
+                )
+            snapshot = _GroupBlindBoxSnapshot(
+                group_id=group_id,
+                group_epoch=int(channel.group_epoch or state.epoch),
+                state=BlindBoxState.from_dict(channel.state.to_dict()),
+                root_secret=root_secret,
+                root_epoch=int(channel.root_epoch),
+                root_created_at=int(channel.root_created_at),
+                root_send_index_base=int(channel.root_send_index_base),
+                pending_root_secret=pending_root_secret,
+                pending_root_epoch=int(channel.pending_root_epoch),
+                pending_root_created_at=int(channel.pending_root_created_at),
+                pending_root_send_index_base=int(channel.pending_root_send_index_base),
+                pending_root_target_members=tuple(channel.pending_root_target_members),
+                pending_root_acked_members=set(channel.pending_root_acked_members),
+                prev_roots=self._blindbox_prune_previous_roots_list(prev_roots),
+            )
+
+        def _save_group_snapshot() -> None:
+            serialized_prev_roots = tuple(
+                {
+                    "group_epoch": int(item.get("group_epoch", snapshot.group_epoch)),
+                    "root_epoch": int(item.get("root_epoch", 0)),
+                    "expires_at": int(item.get("expires_at", 0)),
+                    "secret_enc": self._group_blindbox_encrypt_root_secret(
+                        bytes(item["secret"]),
+                        group_id,
+                    ),
+                }
+                for item in self._blindbox_prune_previous_roots_list(
+                    list(snapshot.prev_roots)
+                )
+                if isinstance(item.get("secret"), (bytes, bytearray))
+                and len(bytes(item["secret"])) == 32
+            )
+            self._save_group_blindbox_channel(
+                group_id,
+                GroupBlindBoxChannel(
+                    channel_id=self._group_blindbox_wrap_scope(group_id),
+                    group_epoch=int(snapshot.group_epoch),
+                    state=BlindBoxState.from_dict(snapshot.state.to_dict()),
+                    root_secret_enc=(
+                        self._group_blindbox_encrypt_root_secret(
+                            snapshot.root_secret,
+                            group_id,
+                        )
+                        if snapshot.root_secret is not None
+                        else None
+                    ),
+                    root_epoch=int(snapshot.root_epoch),
+                    root_created_at=int(snapshot.root_created_at),
+                    root_send_index_base=int(snapshot.root_send_index_base),
+                    pending_root_secret_enc=(
+                        self._group_blindbox_encrypt_root_secret(
+                            snapshot.pending_root_secret,
+                            group_id,
+                        )
+                        if snapshot.pending_root_secret is not None
+                        else None
+                    ),
+                    pending_root_epoch=int(snapshot.pending_root_epoch),
+                    pending_root_created_at=int(snapshot.pending_root_created_at),
+                    pending_root_send_index_base=int(
+                        snapshot.pending_root_send_index_base
+                    ),
+                    pending_root_target_members=tuple(
+                        snapshot.pending_root_target_members
+                    ),
+                    pending_root_acked_members=tuple(
+                        sorted(snapshot.pending_root_acked_members)
+                    ),
+                    prev_roots=serialized_prev_roots,
+                ),
+            )
+
+        return snapshot, _save_group_snapshot
+
     def _blindbox_prune_previous_roots(self) -> None:
+        self._blindbox_prev_roots = self._blindbox_prune_previous_roots_list(
+            self._blindbox_prev_roots
+        )
+
+    def _blindbox_prune_previous_roots_list(
+        self, items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         now_ts = int(time.time())
         filtered = [
             item
-            for item in self._blindbox_prev_roots
+            for item in items
             if int(item.get("expires_at", 0)) > now_ts
         ]
         filtered.sort(key=lambda item: int(item.get("epoch", 0)), reverse=True)
         if self._blindbox_max_previous_roots >= 0:
             filtered = filtered[: self._blindbox_max_previous_roots]
-        self._blindbox_prev_roots = filtered
+        return filtered
 
     def _blindbox_root_candidates(self) -> list[dict[str, Any]]:
         self._blindbox_prune_previous_roots()
@@ -2030,6 +3672,262 @@ class I2PChatCore:
                     }
                 )
         return candidates
+
+    def _blindbox_root_candidates_for_snapshot(
+        self,
+        snapshot: _BlindBoxPeerSnapshot,
+    ) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        if snapshot.root_secret is not None:
+            candidates.append(
+                {
+                    "epoch": int(snapshot.root_epoch),
+                    "secret": snapshot.root_secret,
+                }
+            )
+        for item in self._blindbox_prune_previous_roots_list(snapshot.prev_roots):
+            secret = item.get("secret")
+            if isinstance(secret, (bytes, bytearray)) and len(secret) == 32:
+                candidates.append(
+                    {
+                        "epoch": int(item.get("epoch", 0)),
+                        "secret": bytes(secret),
+                    }
+                )
+        return candidates
+
+    def _group_blindbox_root_candidates(
+        self,
+        snapshot: _GroupBlindBoxSnapshot,
+    ) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        if snapshot.root_secret is not None:
+            candidates.append(
+                {
+                    "group_epoch": int(snapshot.group_epoch),
+                    "root_epoch": int(snapshot.root_epoch),
+                    "secret": snapshot.root_secret,
+                }
+            )
+        for item in self._blindbox_prune_previous_roots_list(snapshot.prev_roots):
+            secret = item.get("secret")
+            if isinstance(secret, (bytes, bytearray)) and len(secret) == 32:
+                candidates.append(
+                    {
+                        "group_epoch": int(
+                            item.get("group_epoch", snapshot.group_epoch)
+                        ),
+                        "root_epoch": int(item.get("root_epoch", 0)),
+                        "secret": bytes(secret),
+                    }
+                )
+        return candidates
+
+    def _blindbox_send_snapshot_for_peer(
+        self, peer_addr: str
+    ) -> tuple[_BlindBoxPeerSnapshot, Callable[[], None]] | None:
+        return self._blindbox_runtime_snapshot_for_peer(peer_addr)
+
+    def _blindbox_runtime_snapshot_for_peer(
+        self, peer_addr: str
+    ) -> tuple[_BlindBoxPeerSnapshot, Callable[[], None]] | None:
+        peer_id = self._blindbox_peer_id_for_peer(peer_addr)
+        if not peer_id:
+            return None
+        current_peer = self._blindbox_peer_id()
+        if current_peer and same_i2p_destination(peer_id, current_peer):
+            snapshot = _BlindBoxPeerSnapshot(
+                peer_addr=peer_id,
+                peer_id=peer_id,
+                state=self._blindbox_state,
+                root_secret=self._blindbox_root_secret,
+                root_epoch=int(self._blindbox_root_epoch),
+                root_created_at=int(self._blindbox_root_created_at),
+                root_send_index_base=int(self._blindbox_root_send_index_base),
+                pending_root_secret=self._blindbox_pending_root_secret,
+                pending_root_epoch=int(self._blindbox_pending_root_epoch),
+                pending_root_created_at=int(self._blindbox_pending_root_created_at),
+                pending_root_send_index_base=int(
+                    self._blindbox_pending_root_send_index_base
+                ),
+                prev_roots=list(self._blindbox_prev_roots),
+            )
+            def _save_current_snapshot() -> None:
+                self._blindbox_state = snapshot.state
+                self._blindbox_root_secret = snapshot.root_secret
+                self._blindbox_root_epoch = int(snapshot.root_epoch)
+                self._blindbox_root_created_at = int(snapshot.root_created_at)
+                self._blindbox_root_send_index_base = int(
+                    snapshot.root_send_index_base
+                )
+                self._blindbox_pending_root_secret = snapshot.pending_root_secret
+                self._blindbox_pending_root_epoch = int(snapshot.pending_root_epoch)
+                self._blindbox_pending_root_created_at = int(
+                    snapshot.pending_root_created_at
+                )
+                self._blindbox_pending_root_send_index_base = int(
+                    snapshot.pending_root_send_index_base
+                )
+                self._blindbox_prev_roots = list(snapshot.prev_roots)
+                self._save_blindbox_state()
+
+            return snapshot, _save_current_snapshot
+        snapshot = self._load_blindbox_peer_snapshot(peer_id)
+        return snapshot, lambda: self._save_blindbox_peer_snapshot(snapshot)
+
+    def _blindbox_recv_candidates_for_state(self, state: BlindBoxState) -> list[int]:
+        recv_backtrack = max(
+            0, int(os.environ.get("I2PCHAT_BLINDBOX_RECV_BACKTRACK", "0"))
+        )
+        recv_lookahead = max(
+            0, int(os.environ.get("I2PCHAT_BLINDBOX_RECV_LOOKAHEAD", "64"))
+        )
+        recv_max_per_poll = max(
+            1, int(os.environ.get("I2PCHAT_BLINDBOX_RECV_MAX_PER_POLL", "64"))
+        )
+        recv_start = max(0, state.recv_base - recv_backtrack)
+        recv_span = max(state.recv_window, recv_lookahead)
+        recv_end = state.recv_base + recv_span
+        forward = (
+            idx
+            for idx in range(state.recv_base, recv_end)
+            if idx not in state.consumed_recv
+        )
+        backtrack = (
+            idx
+            for idx in range(recv_start, state.recv_base)
+            if idx not in state.consumed_recv
+        )
+        ordered = [*forward, *backtrack]
+        if len(ordered) > recv_max_per_poll:
+            return ordered[:recv_max_per_poll]
+        return ordered
+
+    def _blindbox_state_file_peer_ids(self) -> list[str]:
+        profile_dir = self.get_profile_data_dir(create=True)
+        prefix = f"{self.profile}.blindbox."
+        suffix = ".json"
+        peers: list[str] = []
+        try:
+            names = sorted(os.listdir(profile_dir))
+        except OSError:
+            return peers
+        for name in names:
+            if not (name.startswith(prefix) and name.endswith(suffix)):
+                continue
+            token = name[len(prefix) : -len(suffix)].strip().lower()
+            if not token:
+                continue
+            peers.append(token)
+        return peers
+
+    def _blindbox_poll_peer_ids(self) -> list[str]:
+        peers: set[str] = set()
+        current_peer = self._blindbox_peer_id()
+        if current_peer:
+            peers.add(current_peer)
+        if self.profile != TRANSIENT_PROFILE_NAME:
+            try:
+                book = load_book(self._contacts_json_path())
+            except Exception:
+                book = None
+            contacts_iter = getattr(book, "contacts", ()) if book is not None else ()
+            for rec in contacts_iter:
+                try:
+                    normalized = self._normalize_peer_addr(getattr(rec, "addr", ""))
+                except Exception:
+                    normalized = ""
+                if normalized:
+                    peers.add(normalized)
+            lap = str(getattr(book, "last_active_peer", "") or "").strip() if book is not None else ""
+            if lap:
+                try:
+                    peers.add(self._normalize_peer_addr(lap))
+                except Exception:
+                    pass
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            local_member = ""
+        for state in self.list_group_states():
+            for member_id in state.members:
+                normalized = normalize_member_id(member_id)
+                if not normalized or same_i2p_destination(normalized, local_member):
+                    continue
+                try:
+                    peers.add(self._normalize_peer_addr(normalized))
+                except Exception:
+                    continue
+        peers.update(self._blindbox_state_file_peer_ids())
+        return sorted(peers)
+
+    def _blindbox_poll_contexts(self) -> list[_BlindBoxPollContext]:
+        contexts: list[_BlindBoxPollContext] = []
+        current_peer = self._blindbox_peer_id()
+        for peer_id in self._blindbox_poll_peer_ids():
+            if current_peer and same_i2p_destination(peer_id, current_peer):
+                root_candidates = self._blindbox_root_candidates()
+                if not root_candidates:
+                    try:
+                        snapshot = self._load_blindbox_peer_snapshot(peer_id)
+                    except Exception:
+                        snapshot = None
+                    if snapshot is not None:
+                        root_candidates = self._blindbox_root_candidates_for_snapshot(
+                            snapshot
+                        )
+                if not root_candidates:
+                    continue
+                contexts.append(
+                    _BlindBoxPollContext(
+                        channel_id=peer_id,
+                        state=self._blindbox_state,
+                        root_candidates=root_candidates,
+                        save_state=self._save_blindbox_state,
+                    )
+                )
+                continue
+            try:
+                snapshot = self._load_blindbox_peer_snapshot(peer_id)
+            except Exception:
+                continue
+            root_candidates = self._blindbox_root_candidates_for_snapshot(snapshot)
+            if not root_candidates:
+                continue
+            contexts.append(
+                _BlindBoxPollContext(
+                    channel_id=peer_id,
+                    state=snapshot.state,
+                    root_candidates=root_candidates,
+                    save_state=lambda snap=snapshot: self._save_blindbox_peer_snapshot(
+                        snap
+                    ),
+                )
+            )
+        return contexts
+
+    def _blindbox_group_poll_contexts(self) -> list[_BlindBoxPollGroupContext]:
+        contexts: list[_BlindBoxPollGroupContext] = []
+        for group_state in self.list_group_states():
+            snapshot_bundle = self._group_blindbox_runtime_snapshot(
+                group_state.group_id
+            )
+            if snapshot_bundle is None:
+                continue
+            snapshot, save_state = snapshot_bundle
+            root_candidates = self._group_blindbox_root_candidates(snapshot)
+            if not root_candidates:
+                continue
+            contexts.append(
+                _BlindBoxPollGroupContext(
+                    group_id=group_state.group_id,
+                    group_epoch=int(snapshot.group_epoch),
+                    state=snapshot.state,
+                    root_candidates=root_candidates,
+                    save_state=save_state,
+                )
+            )
+        return contexts
 
     def _load_blindbox_state(self) -> None:
         if not self.blindbox_enabled:
@@ -2152,7 +4050,11 @@ class I2PChatCore:
             if wrap_migration_needed and self._blindbox_root_secret is not None:
                 self._save_blindbox_state()
         except Exception as e:
-            logger.warning("Failed to load BlindBox state: %s", e)
+            detail = str(e).strip()
+            if "Failed to decrypt BlindBox root secret" in detail:
+                logger.info("Ignoring stale BlindBox state: %s", detail)
+            else:
+                logger.warning("Failed to load BlindBox state: %s", e)
             self._blindbox_state = BlindBoxState()
             self._blindbox_root_secret = None
             self._blindbox_root_epoch = 0
@@ -2223,18 +4125,9 @@ class I2PChatCore:
     def _blindbox_ready(self) -> bool:
         return (
             self.blindbox_enabled
-            and bool(self.stored_peer)
             and bool(self.blindbox_replicas)
             and self.my_dest is not None
         )
-
-    def _blindbox_current_peer_matches_locked_peer(self) -> bool:
-        try:
-            locked_peer = self._normalize_peer_addr(self.stored_peer or "")
-            current_peer = self._normalize_peer_addr(self.current_peer_addr or "")
-        except ValueError:
-            return False
-        return bool(locked_peer and current_peer and locked_peer == current_peer)
 
     def _load_trust_store(self) -> None:
         """Загружает pinning-таблицу peer_addr -> signing_pub_hex."""
@@ -2304,8 +4197,8 @@ class I2PChatCore:
 
     def _normalize_peer_addr(self, addr: str) -> str:
         """
-        Канонический peer id: host из base32 + '.b32.i2p'.
-        Допускает типичный ввод из UI/чата: пробелы, префиксты («My Addr: …»), вставку строки целиком.
+        Канонический peer id: только lowercase base32 host (без суффикса ``.b32.i2p``).
+        Допускает типичный ввод из UI/чата: пробелы, префиксы («My Addr: …»), вставку с суффиксом или без.
         """
         raw = (addr or "").strip()
         if not raw:
@@ -2314,19 +4207,30 @@ class I2PChatCore:
         # Первая подходящая подстрока … .b32.i2p (игнорирует префикс/мусор вокруг).
         m = re.search(r"([a-z2-7]{40,80})\.b32\.i2p", lower)
         if m:
-            return m.group(1) + ".b32.i2p"
+            return m.group(1)
+        # «My Addr: <base32>» без суффикса (как в бабле Online / peer_b32).
+        m_my = re.search(r"my\s*addr\s*:\s*([a-z2-7]{40,80})(?:\s|$)", lower)
+        if m_my:
+            return m_my.group(1)
         compact = re.sub(r"\s+", "", lower)
         if any(ch in compact for ch in ("\r", "\n", "\x00", "\t", "=")):
             raise ValueError("Peer address contains forbidden characters")
         if compact.endswith(".b32.i2p"):
             host = compact[: -len(".b32.i2p")]
         elif "." in compact:
-            raise ValueError("Peer address must use .b32.i2p format")
+            raise ValueError("Peer address must be base32 host or *.b32.i2p")
         else:
             host = compact
         if not re.fullmatch(r"[a-z2-7]{40,80}", host):
             raise ValueError("Peer address format is invalid")
-        return host + ".b32.i2p"
+        return host
+
+    def _peer_sam_hostname(self, addr: str) -> str:
+        """SAM NAMING LOOKUP / STREAM CONNECT ожидают строку вида ``<base32>.b32.i2p``."""
+        bare = self._normalize_peer_addr(addr)
+        if not bare:
+            return ""
+        return f"{bare}.b32.i2p"
 
     def _canonical_dest_base64(self, raw_dest: str) -> str:
         dest = i2plib.Destination((raw_dest or "").strip())
@@ -2341,7 +4245,10 @@ class I2PChatCore:
             return False
         try:
             looked_up = await asyncio.wait_for(
-                i2plib.dest_lookup(normalized_addr, sam_address=self.sam_address),
+                i2plib.dest_lookup(
+                    self._peer_sam_hostname(normalized_addr),
+                    sam_address=self.sam_address,
+                ),
                 timeout=12.0,
             )
             looked_up_base64: str
@@ -2351,7 +4258,11 @@ class I2PChatCore:
                 looked_up_base64 = i2plib.Destination(str(looked_up)).base64
             return looked_up_base64 == dest_base64
         except Exception as e:
-            logger.warning("SAM binding verification failed for %s: %s", normalized_addr, e)
+            logger.warning(
+                "SAM binding verification failed for %s: %s",
+                self._peer_sam_hostname(normalized_addr),
+                e,
+            )
             return False
 
     async def _set_verified_peer_identity(
@@ -2365,11 +4276,26 @@ class I2PChatCore:
                 f"Rejected {source} identity: SAM lookup does not confirm {normalized_addr[:24]}..."
             )
             return False
-        self.current_peer_addr = normalized_addr
-        self.session_manager.set_active_peer(normalized_addr)
+        self.activate_peer_context(normalized_addr)
         self.current_peer_dest_b64 = canonical_dest
         self.peer_identity_binding_verified = True
         return True
+
+    def activate_peer_context(self, peer_addr: str) -> str:
+        normalized_addr = self._normalize_peer_addr(peer_addr)
+        try:
+            previous_peer = self._normalize_peer_addr(self.current_peer_addr or "")
+        except Exception:
+            previous_peer = ""
+        self.current_peer_addr = normalized_addr
+        self.active_live_peer_id = normalized_addr
+        self.session_manager.set_active_peer(normalized_addr)
+        if self.blindbox_enabled and (
+            normalized_addr != previous_peer or self._blindbox_root_secret is None
+        ):
+            self._load_blindbox_state()
+            self._trigger_blindbox_hot_poll("peer-switch")
+        return normalized_addr
 
     def _is_probable_peer_addr(self, value: str) -> bool:
         raw = (value or "").strip().lower()
@@ -2379,63 +4305,118 @@ class I2PChatCore:
             raw = raw[:-8]
         return bool(re.fullmatch(r"[a-z2-7]{40,80}", raw))
 
+    def _contacts_json_path(self) -> str:
+        return os.path.join(
+            self.get_profile_data_dir(create=True), f"{self.profile}.contacts.json"
+        )
+
+    def peer_in_saved_contacts(self, peer_addr: str) -> bool:
+        """True if peer is allowlisted for inbound. Transient profile allows any."""
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return True
+        try:
+            norm = self._normalize_peer_addr(peer_addr)
+        except Exception:
+            return False
+        if not norm:
+            return False
+        try:
+            current = self._normalize_peer_addr(self.current_peer_addr or "")
+        except Exception:
+            current = ""
+        if current and same_i2p_destination(current, norm):
+            return True
+        book = load_book(self._contacts_json_path())
+        for rec in book.contacts:
+            if same_i2p_destination(rec.addr, norm):
+                return True
+        if book.last_active_peer and same_i2p_destination(book.last_active_peer, norm):
+            return True
+        return False
+
+    def ensure_peer_in_saved_contacts(self, peer_addr: str) -> bool:
+        """Add peer to Saved peers if missing. Returns True if the book changed."""
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return False
+        try:
+            norm = self._normalize_peer_addr(peer_addr)
+        except Exception:
+            return False
+        if not norm:
+            return False
+        path = self._contacts_json_path()
+        book = load_book(path)
+        if remember_peer(book, norm):
+            save_book(path, trim_book(book))
+            return True
+        return False
+
+    def _telemetry_has_peer_target(self) -> bool:
+        if self.current_peer_addr:
+            return True
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return False
+        book = load_book(self._contacts_json_path())
+        return bool(book.last_active_peer or book.contacts)
+
+    def _last_active_peer_for_telemetry(self) -> str:
+        if self.current_peer_addr:
+            return self.current_peer_addr
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return ""
+        book = load_book(self._contacts_json_path())
+        return (book.last_active_peer or "").strip()
+
+    def _blindbox_live_peer_ok_for_root_exchange(
+        self, peer_id: Optional[str] = None
+    ) -> bool:
+        """Live session with a Saved peer — replaces legacy lock-to-peer check."""
+        target_peer = peer_id or self.current_peer_addr or ""
+        if not target_peer:
+            return False
+        try:
+            cur = self._normalize_peer_addr(target_peer)
+        except Exception:
+            return False
+        if not self._handshake_complete_for_peer_route(cur):
+            return False
+        if self.profile == TRANSIENT_PROFILE_NAME:
+            return bool(cur)
+        return bool(cur) and self.peer_in_saved_contacts(cur)
+
     def _write_profile_dat(
         self,
         private_key_base64: Optional[str],
         stored_peer: Optional[str],
     ) -> None:
-        """Сохраняет .dat в каноничном формате: key на 1-й, peer на 2-й строке."""
+        """Persist identity key on line 1 only. Legacy second-line lock peer is never written."""
+        del stored_peer  # kept in signature for callers; multi-peer model uses contacts.json
         if self.profile == TRANSIENT_PROFILE_NAME:
             return
-        lines: list[str] = []
         key = (private_key_base64 or "").strip()
-        peer = self._normalize_peer_addr(stored_peer or "")
-        if key:
-            lines.append(key)
-        if peer:
-            lines.append(peer)
-        if not lines:
+        if not key:
             return
         path = self._profile_path()
-        atomic_write_text(path, "\n".join(lines) + "\n")
+        atomic_write_text(path, key + "\n")
 
     def save_stored_peer(self, peer_addr: str) -> None:
         """
-        Сохраняет lock-пир в профиль без дублирования строк.
-
-        Форматы, которые поддерживаем:
-        - line1=private_key, line2=stored_peer
-        - line1=stored_peer (когда identity хранится в keyring)
+        Legacy API: adds the peer to Saved peers (Lock to peer removed).
         """
         if self.profile == TRANSIENT_PROFILE_NAME:
             raise ValueError("Cannot store peer for transient profile")
         normalized_peer = self._normalize_peer_addr(peer_addr)
         if not normalized_peer:
             raise ValueError("Peer address is empty")
-
-        private_key_base64: Optional[str] = None
-        if self.my_dest is not None:
-            try:
-                private_key_base64 = self.my_dest.private_key.base64
-            except Exception:
-                private_key_base64 = None
-        if not private_key_base64:
-            key_file = self._profile_path()
-            if os.path.exists(key_file):
-                with open(key_file, "r", encoding="utf-8") as f:
-                    lines = [line.strip() for line in f.readlines() if line.strip()]
-                if lines and not self._is_probable_peer_addr(lines[0]):
-                    private_key_base64 = lines[0]
-
-        self._write_profile_dat(private_key_base64, normalized_peer)
-        self.stored_peer = normalized_peer
+        if self.ensure_peer_in_saved_contacts(normalized_peer):
+            self._emit_system(
+                f"Added to Saved peers: {normalized_peer[:24]}..."
+            )
+        self.stored_peer = None
         self._load_blindbox_state()
 
     def clear_locked_peer(self) -> None:
-        """
-        Снять Lock to peer: в .dat остаётся только приватный ключ (или файл с одной строкой
-        пира удаляется при сценарии keyring-only .dat).
-        """
+        """Legacy no-op: lock removed; optionally strip legacy 2nd line from .dat."""
         if self.profile == TRANSIENT_PROFILE_NAME:
             return
         private_key_base64: Optional[str] = None
@@ -2465,11 +4446,11 @@ class I2PChatCore:
         self._load_blindbox_state()
 
     def is_current_peer_verified_for_lock(self) -> bool:
-        return bool(
-            self.current_peer_addr
-            and self.handshake_complete
-            and self.peer_identity_binding_verified
-        )
+        k = self._normalize_peer_addr(self.current_peer_addr or "")
+        ls = self._live_sessions.get(k) if k else None
+        if not ls:
+            return False
+        return bool(ls.handshake_complete and ls.peer_identity_binding_verified)
 
     async def _request_trust_decision(
         self, peer_addr: str, fingerprint: str, signing_key_hex: str
@@ -2556,8 +4537,13 @@ class I2PChatCore:
         if pinned_hex is None:
             if self.on_trust_decision is not None:
                 # Продлеваем окно handshake перед блокирующим UI-диалогом TOFU.
-                if self.conn is not None and not self.handshake_complete:
-                    self._start_handshake_watchdog(self.conn)
+                ls_tofu = self._live_sessions.get(peer_addr)
+                if (
+                    ls_tofu
+                    and ls_tofu.conn is not None
+                    and not ls_tofu.handshake_complete
+                ):
+                    self._start_handshake_watchdog(ls_tofu.conn, peer_id=peer_addr)
                 self._emit_system("Waiting for TOFU trust confirmation...")
                 approved = await self._request_trust_decision(peer_addr, fp, current_hex)
                 if not approved:
@@ -2592,8 +4578,13 @@ class I2PChatCore:
             except Exception:
                 old_fp = pinned_hex[:16]
             if self.on_trust_mismatch_decision is not None:
-                if self.conn is not None and not self.handshake_complete:
-                    self._start_handshake_watchdog(self.conn)
+                ls_mm = self._live_sessions.get(peer_addr)
+                if (
+                    ls_mm
+                    and ls_mm.conn is not None
+                    and not ls_mm.handshake_complete
+                ):
+                    self._start_handshake_watchdog(ls_mm.conn, peer_id=peer_addr)
                 self._emit_system("Trusted key changed. Waiting for user decision...")
                 approved = await self._request_trust_mismatch_decision(
                     peer_addr,
@@ -2740,6 +4731,7 @@ class I2PChatCore:
                 "Use a named profile for persistent peer-key trust continuity."
             )
         dest: Optional[i2plib.Destination] = None
+        legacy_lock_peer: Optional[str] = None
 
         if is_persistent:
             keyring_key = _try_keyring_get(self.profile)
@@ -2768,11 +4760,11 @@ class I2PChatCore:
                     # keyring-сценарий: в .dat может быть только pinned peer
                     stored_line = lines[0]
                 if stored_line:
-                    self.stored_peer = self._normalize_peer_addr(stored_line)
-                    disp_peer = self.stored_peer
-                    if not disp_peer.endswith(".b32.i2p"):
-                        disp_peer = disp_peer + ".b32.i2p"
-                    self._emit_system(f"Stored Contact: {disp_peer}")
+                    legacy_lock_peer = self._normalize_peer_addr(stored_line)
+                    disp_peer = self._peer_sam_hostname(legacy_lock_peer)
+                    self._emit_system(
+                        f"Legacy Lock to peer line (migrating to Saved peers): {disp_peer}"
+                    )
 
         if dest is None:
             self._emit_system("Generating new Ed25519 identity...")
@@ -2788,7 +4780,13 @@ class I2PChatCore:
 
         self.my_dest = dest
         if is_persistent:
-            self._write_profile_dat(self.my_dest.private_key.base64, self.stored_peer)
+            self.stored_peer = None
+            if legacy_lock_peer:
+                self.ensure_peer_in_saved_contacts(legacy_lock_peer)
+                self._emit_system(
+                    "Former lock peer was added to Saved peers; profile .dat no longer stores a second line."
+                )
+            self._write_profile_dat(self.my_dest.private_key.base64, None)
         self._load_trust_store()
         self._ensure_local_signing_key()
         self._load_blindbox_state()
@@ -2832,6 +4830,7 @@ class I2PChatCore:
             asyncio.create_task(self._ensure_blindbox_runtime_started())
 
         my_address = self.my_dest.base32 + ".b32.i2p"
+        my_addr_display = self.my_dest.base32
         self._emit_system("Building I2P tunnels (may take 1–2 min)...")
         self.session_manager.transition_transport(
             TransportState.WARMING_TUNNELS, reason="tunnel-warmup"
@@ -2854,14 +4853,14 @@ class I2PChatCore:
 
         if tunnels_ready:
             self._emit_status("visible")
-            self._emit_message("success", f"Online! My Address: {my_address}")
+            self._emit_message("success", f"Online! My Address: {my_addr_display}")
             self._emit_system("Tunnels ready. Waiting for incoming connections...")
             self.session_manager.transition_transport(
                 TransportState.READY, reason="tunnels-ready"
             )
         else:
             self._emit_status("local_ok")
-            self._emit_message("success", f"Online! My Address: {my_address}")
+            self._emit_message("success", f"Online! My Address: {my_addr_display}")
             self._emit_system(
                 "Tunnels may still be building. Wait 1–2 min before connecting."
             )
@@ -2869,12 +4868,13 @@ class I2PChatCore:
                 TransportState.DEGRADED, reason="tunnels-pending"
             )
 
-        self.peer_b32 = f"My Addr: {my_address}"
+        self.peer_b32 = f"My Addr: {my_addr_display}"
 
         # запуск фоновых задач
         loop = asyncio.get_running_loop()
         self.session_manager.accept_task = loop.create_task(self.accept_loop())
         self.session_manager.tunnel_task = loop.create_task(self.tunnel_watcher())
+        self._ensure_group_mesh_runner(loop)
         if self._blindbox_ready():
             # Sync with early parallel boot (or run once if that task has not won yet).
             await self._ensure_blindbox_runtime_started()
@@ -2900,13 +4900,28 @@ class I2PChatCore:
     ACK_MAX_PENDING = 4096
     ACK_PRUNE_INTERVAL = 15.0
 
-    def _activate_ack_session(self) -> None:
-        self._ack_session_epoch += 1
-        if self._ack_session_epoch > 0x7FFFFFFF:
-            self._ack_session_epoch = 1
+    def _activate_ack_session(self, peer_id: Optional[str] = None) -> None:
+        """Сброс inflight и новый epoch ACK для legacy-потока или указанного live-пира."""
+        if peer_id:
+            k = self._normalize_peer_addr(peer_id)
+            ls = self._live_sessions.get(k)
+            if ls:
+                ls._ack_session_epoch += 1
+                if ls._ack_session_epoch > 0x7FFFFFFF:
+                    ls._ack_session_epoch = 1
+        else:
+            self._ack_session_epoch += 1
+            if self._ack_session_epoch > 0x7FFFFFFF:
+                self._ack_session_epoch = 1
         self.session_manager.clear_inflight_messages(
-            peer_id=self._current_ack_peer()
+            peer_id=self._normalize_peer_addr(peer_id or self.current_peer_addr or "")
         )
+
+    def _ack_epoch_for_peer_addr(self, peer_addr: str) -> int:
+        k = self._normalize_peer_addr(peer_addr)
+        if k and k in self._live_sessions:
+            return self._live_sessions[k]._ack_session_epoch
+        return self._ack_session_epoch
 
     def _current_ack_peer(self) -> str:
         return self._normalize_peer_addr(self.current_peer_addr or "")
@@ -2958,19 +4973,26 @@ class I2PChatCore:
         *,
         token: str,
         ack_kind: str,
+        routing_peer_id: str = "",
     ) -> None:
         self._prune_pending_acks(force=False)
+        try:
+            cap = self._normalize_peer_addr(routing_peer_id) if routing_peer_id else ""
+        except ValueError:
+            cap = ""
+        if not cap:
+            cap = self._current_ack_peer()
         table[msg_id] = PendingAckEntry(
             token=token,
             ack_kind=ack_kind,
             created_at=time.monotonic(),
-            peer_addr=self._current_ack_peer(),
-            ack_session_epoch=self._ack_session_epoch,
+            peer_addr=cap,
+            ack_session_epoch=self._ack_epoch_for_peer_addr(cap),
             state="awaiting_ack",
         )
         self.session_manager.register_inflight_message(
             msg_id,
-            peer_id=self._current_ack_peer(),
+            peer_id=cap,
         )
         self._prune_pending_acks(force=False)
 
@@ -3053,10 +5075,11 @@ class I2PChatCore:
 
     def get_delivery_telemetry(self) -> dict[str, Any]:
         """Returns current delivery route hints for UI decisions."""
+        lap = self._last_active_peer_for_telemetry()
         peer_for_route = self._normalize_peer_addr(
-            self.current_peer_addr or self.stored_peer or ""
+            self.current_peer_addr or lap or ""
         )
-        connected = self.conn is not None
+        connected = self._any_live_stream()
         live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
         policy_kwargs: dict[str, Any] = {
             "requested_route": "auto",
@@ -3064,12 +5087,16 @@ class I2PChatCore:
         }
         if not peer_for_route:
             live_kwargs["connected"] = connected
-            live_kwargs["handshake_complete"] = self.handshake_complete
+            live_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
+                ""
+            )
             policy_kwargs["connected"] = connected
-            policy_kwargs["handshake_complete"] = self.handshake_complete
+            policy_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
+                ""
+            )
 
         secure_live = self.session_manager.is_live_path_alive(**live_kwargs)
-        has_target = bool(self.current_peer_addr or self.stored_peer)
+        has_target = self._telemetry_has_peer_target()
         ready = bool(self._blindbox_ready())
         has_root_secret = self._blindbox_root_secret is not None
         bb_client = self._blindbox_client
@@ -3094,7 +5121,12 @@ class I2PChatCore:
             else len(self.session_manager.outbound_streams)
         )
 
-        if connected and not self.handshake_complete:
+        route_hc = (
+            self._handshake_complete_for_peer_route(peer_for_route)
+            if peer_for_route
+            else self._handshake_complete_for_peer_route("")
+        )
+        if connected and not route_hc:
             state = "connecting-handshake"
         elif secure_live:
             state = "online-live"
@@ -3102,8 +5134,6 @@ class I2PChatCore:
             state = "offline-ready"
         elif ready and not has_root_secret:
             state = "await-live-root"
-        elif self.blindbox_enabled and not self.stored_peer:
-            state = "blindbox-needs-locked-peer"
         elif self.blindbox_enabled and len(self.blindbox_replicas) <= 0:
             state = "blindbox-needs-boxes"
         elif self.blindbox_enabled and self.my_dest is None:
@@ -3142,13 +5172,172 @@ class I2PChatCore:
             "reconnect_last_failure_reason": str(reconnect_meta.last_failure_reason),
         }
 
+    def get_group_send_ui_hints(self, group_id: str) -> dict[str, Any]:
+        """Aggregate route hints for the group Send button (mirrors 1:1 live vs offline-ready)."""
+        state = self.load_group_state(group_id)
+        if state is None:
+            return {
+                "can_send": False,
+                "show_offline_button": False,
+                "any_live_to_member": False,
+                "reason": "missing",
+                "live_by_recipient": {},
+                "group_blindbox_ready": False,
+                "await_group_root": False,
+            }
+        try:
+            local = self._local_group_member_id()
+        except RuntimeError:
+            return {
+                "can_send": False,
+                "show_offline_button": False,
+                "any_live_to_member": False,
+                "reason": "no-local-dest",
+                "live_by_recipient": {},
+                "group_blindbox_ready": False,
+                "await_group_root": False,
+            }
+        recipients = [
+            m
+            for m in state.members
+            if normalize_member_id(m) != normalize_member_id(local)
+        ]
+        if not recipients:
+            return {
+                "can_send": False,
+                "show_offline_button": False,
+                "any_live_to_member": False,
+                "reason": "no-recipients",
+                "live_by_recipient": {},
+                "group_blindbox_ready": False,
+                "await_group_root": False,
+            }
+        any_live = False
+        live_by_recipient: dict[str, bool] = {}
+        for raw in recipients:
+            target = self._normalize_peer_addr(raw)
+            if not target:
+                continue
+            alive = self.session_manager.is_live_path_alive(peer_id=target)
+            live_by_recipient[target] = alive
+            if alive:
+                any_live = True
+        d = self.get_delivery_telemetry()
+        blindbox_runtime_ok = bool(
+            d.get("blindbox_enabled")
+            and d.get("blindbox_ready")
+            and d.get("blindbox_runtime_ready")
+        )
+        snapshot_bundle = self._group_blindbox_runtime_snapshot(group_id)
+        group_blindbox_ready = False
+        await_group_root = False
+        if snapshot_bundle is not None:
+            snapshot, _save_state = snapshot_bundle
+            group_blindbox_ready = (
+                snapshot.root_secret is not None
+                and int(snapshot.group_epoch) == int(state.epoch)
+            )
+            await_group_root = bool(blindbox_runtime_ok and not group_blindbox_ready)
+        elif blindbox_runtime_ok:
+            await_group_root = True
+        can_send = bool(any_live or blindbox_runtime_ok)
+        show_offline = bool((not any_live) and blindbox_runtime_ok)
+        return {
+            "can_send": can_send,
+            "show_offline_button": show_offline,
+            "any_live_to_member": any_live,
+            "reason": "await-group-root" if await_group_root and not any_live else "ok",
+            "live_by_recipient": live_by_recipient,
+            "group_blindbox_ready": group_blindbox_ready,
+            "await_group_root": await_group_root,
+        }
+
+    def get_group_topology_snapshot(
+        self, group_id: str
+    ) -> Optional[GroupTopologySnapshot]:
+        """Observed group mesh from the local node's point of view."""
+        state = self.load_group_state(group_id)
+        if state is None:
+            return None
+        try:
+            local_member_id = self._local_group_member_id()
+        except RuntimeError:
+            local_member_id = ""
+
+        live_by_member: dict[str, bool] = {}
+        peer_state_by_member: dict[str, str] = {}
+        blindbox_ready_by_member: dict[str, bool] = {}
+        snapshot_bundle = self._group_blindbox_runtime_snapshot(group_id)
+        group_blindbox_ready = False
+        await_group_root = False
+        if snapshot_bundle is not None:
+            group_snapshot, _save_state = snapshot_bundle
+            group_blindbox_ready = (
+                group_snapshot.root_secret is not None
+                and int(group_snapshot.group_epoch) == int(state.epoch)
+            )
+            await_group_root = bool(self._blindbox_ready() and not group_blindbox_ready)
+        elif self._blindbox_ready():
+            await_group_root = True
+        for member_id in state.members:
+            normalized_member = normalize_member_id(member_id)
+            if not normalized_member:
+                continue
+            if local_member_id and normalized_member == normalize_member_id(local_member_id):
+                continue
+            live_by_member[normalized_member] = self.session_manager.is_live_path_alive(
+                peer_id=normalized_member
+            )
+            peer_transport = self.session_manager.get_peer_transport(normalized_member)
+            peer_state_by_member[normalized_member] = (
+                peer_transport.peer_state.value
+                if peer_transport is not None
+                else "disconnected"
+            )
+            blindbox_ready_by_member[normalized_member] = group_blindbox_ready
+
+        delivery_status_by_member: dict[str, str] = {}
+        delivery_reason_by_member: dict[str, str] = {}
+        conversation = self.load_group(group_id)
+        if conversation is not None:
+            for entry in reversed(conversation.history):
+                if entry.kind != "me" or not entry.delivery_results:
+                    continue
+                delivery_status_by_member = dict(entry.delivery_results)
+                delivery_reason_by_member = dict(entry.delivery_reasons)
+                break
+
+        return build_observed_group_topology(
+            state,
+            local_member_id=local_member_id,
+            live_by_member=live_by_member,
+            peer_state_by_member=peer_state_by_member,
+            group_blindbox_ready=group_blindbox_ready,
+            await_group_root=await_group_root,
+            blindbox_ready_by_member=blindbox_ready_by_member,
+            delivery_status_by_member=delivery_status_by_member,
+            delivery_reason_by_member=delivery_reason_by_member,
+        )
+
+    def get_group_topology_ascii(self, group_id: str) -> str:
+        snapshot = self.get_group_topology_snapshot(group_id)
+        if snapshot is None:
+            return ""
+        return render_group_topology_ascii(snapshot)
+
+    def get_group_topology_mermaid(self, group_id: str) -> str:
+        snapshot = self.get_group_topology_snapshot(group_id)
+        if snapshot is None:
+            return ""
+        return render_group_topology_mermaid(snapshot)
+
     def _offline_send_block_feedback(self) -> tuple[str, str]:
         delivery = self.get_delivery_telemetry()
         state = str(delivery.get("state", "unknown"))
         if not delivery.get("has_target"):
             return (
                 "no-target",
-                "No peer selected. Enter or lock a peer address, then send.",
+                "No peer selected. Choose a saved contact or enter a peer address, then send.",
             )
         if state == "blindbox-disabled-transient":
             return (
@@ -3165,11 +5354,6 @@ class I2PChatCore:
             return (
                 "handshake-in-progress",
                 "Secure channel handshake is in progress. Please wait a moment.",
-            )
-        if state == "blindbox-needs-locked-peer":
-            return (
-                "blindbox-needs-locked-peer",
-                "BlindBox requires a locked peer in the current profile.",
             )
         if state == "blindbox-needs-boxes":
             return (
@@ -3474,6 +5658,7 @@ class I2PChatCore:
             await client.start()
             self._emit_system("BlindBox runtime started")
             self._trigger_blindbox_hot_poll("startup")
+            self._schedule_group_pending_flush(self._blindbox_poll_peer_ids())
         except Exception as e:
             detail = _exception_user_message(e)
             logger.exception("BlindBox startup failed: %s", detail)
@@ -3486,16 +5671,13 @@ class I2PChatCore:
                     continue
                 # Poll even when a live TCP session exists: offline sends only hit Blind Box;
                 # the peer must GET+decrypt while connected too, otherwise messages never arrive.
-                if self._blindbox_root_secret is None:
-                    await self._blindbox_poll_sleep()
-                    continue
-                peer_id = self._blindbox_peer_id()
-                if not peer_id or not self.my_dest:
+                if not self.my_dest:
                     await self._blindbox_poll_sleep()
                     continue
                 local_id = self.my_dest.base32
-                root_candidates = self._blindbox_root_candidates()
-                if not root_candidates:
+                poll_contexts = self._blindbox_poll_contexts()
+                group_poll_contexts = self._blindbox_group_poll_contexts()
+                if not poll_contexts and not group_poll_contexts:
                     await self._blindbox_poll_sleep()
                     continue
                 cycle_started_mono = time.monotonic()
@@ -3504,101 +5686,202 @@ class I2PChatCore:
                 cycle_miss = 0
                 cycle_timeout = 0
                 slow_samples: list[str] = []
-                recv_cands = self._blindbox_recv_candidates()
-                if len(recv_cands) > self._blindbox_recv_scan_budget:
-                    recv_cands = recv_cands[: self._blindbox_recv_scan_budget]
-                for recv_index in recv_cands:
-                    cycle_checked += 1
-                    got_valid = False
-                    for root_item in root_candidates:
-                        keys = derive_blindbox_message_keys(
-                            bytes(root_item["secret"]),
-                            local_id,
-                            peer_id,
-                            "recv",
-                            recv_index,
-                            epoch=int(root_item["epoch"]),
-                        )
-                        async def _accept_blob(blob: bytes) -> bool:
-                            digest = hashlib.sha256(blob).hexdigest()
-                            if digest in self._blindbox_seen_hashes:
-                                return False
-                            try:
-                                frame = decrypt_blindbox_blob(
-                                    blob,
-                                    keys.blob_key,
-                                    # Blob direction is encoded by sender perspective.
-                                    # Receiver must expect "send" for inbound offline envelopes.
-                                    expected_direction="send",
-                                    expected_index=recv_index,
-                                    expected_state_tag=keys.state_tag,
-                                )
-                            except Exception:
-                                return False
-                            accepted = await self._process_blindbox_frame(frame)
-                            if accepted:
-                                self._remember_blindbox_seen_hash(digest)
-                                return True
-                            return False
-
-                        get_diag: dict[str, Any] = {}
-                        get_started_mono = time.monotonic()
-                        timed_out = False
-                        try:
-                            accepted_blob = await asyncio.wait_for(
-                                client.get_first_accepted(
-                                    keys.lookup_token,
-                                    accept_blob=_accept_blob,
-                                    miss_grace_sec=self._blindbox_get_first_miss_grace_sec,
-                                    diag=get_diag,
-                                ),
-                                timeout=self._blindbox_get_first_timeout_sec,
-                            )
-                        except asyncio.TimeoutError:
-                            timed_out = True
-                            accepted_blob = None
-                            cycle_timeout += 1
-                        except Exception as exc:
-                            logger.debug(
-                                "BlindBox get_first_accepted failed recv_index=%s epoch=%s: %s",
+                for context in poll_contexts:
+                    peer_id = context.channel_id
+                    recv_cands = self._blindbox_recv_candidates_for_state(context.state)
+                    if len(recv_cands) > self._blindbox_recv_scan_budget:
+                        recv_cands = recv_cands[: self._blindbox_recv_scan_budget]
+                    for recv_index in recv_cands:
+                        cycle_checked += 1
+                        got_valid = False
+                        for root_item in context.root_candidates:
+                            keys = derive_blindbox_message_keys(
+                                bytes(root_item["secret"]),
+                                local_id,
+                                peer_id,
+                                "recv",
                                 recv_index,
-                                int(root_item["epoch"]),
-                                exc,
-                                exc_info=True,
+                                epoch=int(root_item["epoch"]),
                             )
-                            continue
-                        get_elapsed = max(
-                            0.0, time.monotonic() - get_started_mono
-                        )
-                        if get_elapsed >= self._blindbox_debug_ui_slow_sec:
-                            accepted_addr = str(get_diag.get("accepted_addr", "")).strip()
-                            first_addr = str(get_diag.get("first_result_addr", "")).strip()
-                            canceled = [
-                                str(x).strip()
-                                for x in (get_diag.get("canceled_pending_addrs") or [])
-                                if str(x).strip()
-                            ]
-                            if accepted_addr:
-                                slow_addr = accepted_addr
-                            elif canceled:
-                                slow_addr = canceled[0]
-                            else:
-                                slow_addr = first_addr or "unknown"
-                            if timed_out:
-                                slow_addr = f"{slow_addr} (timeout)"
-                            slow_samples.append(
-                                f"idx={recv_index} t={get_elapsed:.2f}s box={slow_addr}"
+
+                            async def _accept_blob(blob: bytes) -> bool:
+                                digest = hashlib.sha256(blob).hexdigest()
+                                if digest in self._blindbox_seen_hashes:
+                                    return False
+                                try:
+                                    frame = decrypt_blindbox_blob(
+                                        blob,
+                                        keys.blob_key,
+                                        expected_direction="send",
+                                        expected_index=recv_index,
+                                        expected_state_tag=keys.state_tag,
+                                    )
+                                except Exception:
+                                    return False
+                                accepted = await self._process_blindbox_frame(
+                                    frame, source_peer=peer_id
+                                )
+                                if accepted:
+                                    self._remember_blindbox_seen_hash(digest)
+                                    return True
+                                return False
+
+                            get_diag: dict[str, Any] = {}
+                            get_started_mono = time.monotonic()
+                            timed_out = False
+                            try:
+                                accepted_blob = await asyncio.wait_for(
+                                    client.get_first_accepted(
+                                        keys.lookup_token,
+                                        accept_blob=_accept_blob,
+                                        miss_grace_sec=self._blindbox_get_first_miss_grace_sec,
+                                        diag=get_diag,
+                                    ),
+                                    timeout=self._blindbox_get_first_timeout_sec,
+                                )
+                            except asyncio.TimeoutError:
+                                timed_out = True
+                                accepted_blob = None
+                                cycle_timeout += 1
+                            except Exception as exc:
+                                logger.debug(
+                                    "BlindBox get_first_accepted failed peer=%s recv_index=%s epoch=%s: %s",
+                                    peer_id,
+                                    recv_index,
+                                    int(root_item["epoch"]),
+                                    exc,
+                                    exc_info=True,
+                                )
+                                continue
+                            get_elapsed = max(
+                                0.0, time.monotonic() - get_started_mono
                             )
-                        if accepted_blob is not None:
-                            got_valid = True
-                            break
-                    if got_valid:
-                        self._blindbox_state.mark_consumed(recv_index)
-                        self._save_blindbox_state()
-                        self._trigger_blindbox_hot_poll("received-offline-message")
-                        cycle_hit += 1
-                    else:
-                        cycle_miss += 1
+                            if get_elapsed >= self._blindbox_debug_ui_slow_sec:
+                                accepted_addr = str(get_diag.get("accepted_addr", "")).strip()
+                                first_addr = str(get_diag.get("first_result_addr", "")).strip()
+                                canceled = [
+                                    str(x).strip()
+                                    for x in (get_diag.get("canceled_pending_addrs") or [])
+                                    if str(x).strip()
+                                ]
+                                if accepted_addr:
+                                    slow_addr = accepted_addr
+                                elif canceled:
+                                    slow_addr = canceled[0]
+                                else:
+                                    slow_addr = first_addr or "unknown"
+                                if timed_out:
+                                    slow_addr = f"{slow_addr} (timeout)"
+                                slow_samples.append(
+                                    f"peer={peer_id[:10]} idx={recv_index} t={get_elapsed:.2f}s box={slow_addr}"
+                                )
+                            if accepted_blob is not None:
+                                got_valid = True
+                                break
+                        if got_valid:
+                            context.state.mark_consumed(recv_index)
+                            context.save_state()
+                            self._trigger_blindbox_hot_poll("received-offline-message")
+                            cycle_hit += 1
+                        else:
+                            cycle_miss += 1
+                for context in group_poll_contexts:
+                    recv_cands = self._blindbox_recv_candidates_for_state(context.state)
+                    if len(recv_cands) > self._blindbox_recv_scan_budget:
+                        recv_cands = recv_cands[: self._blindbox_recv_scan_budget]
+                    for recv_index in recv_cands:
+                        cycle_checked += 1
+                        got_valid = False
+                        for root_item in context.root_candidates:
+                            keys = derive_group_blindbox_message_keys(
+                                bytes(root_item["secret"]),
+                                context.group_id,
+                                "send",
+                                recv_index,
+                                group_epoch=int(root_item["group_epoch"]),
+                                root_epoch=int(root_item["root_epoch"]),
+                            )
+
+                            async def _accept_group_blob(blob: bytes) -> bool:
+                                digest = hashlib.sha256(blob).hexdigest()
+                                if digest in self._blindbox_seen_hashes:
+                                    return False
+                                try:
+                                    frame = decrypt_blindbox_blob(
+                                        blob,
+                                        keys.blob_key,
+                                        expected_direction="send",
+                                        expected_index=recv_index,
+                                        expected_state_tag=keys.state_tag,
+                                    )
+                                except Exception:
+                                    return False
+                                accepted = await self._process_blindbox_frame(frame)
+                                if accepted:
+                                    self._remember_blindbox_seen_hash(digest)
+                                    return True
+                                return False
+
+                            get_diag: dict[str, Any] = {}
+                            get_started_mono = time.monotonic()
+                            timed_out = False
+                            try:
+                                accepted_blob = await asyncio.wait_for(
+                                    client.get_first_accepted(
+                                        keys.lookup_token,
+                                        accept_blob=_accept_group_blob,
+                                        miss_grace_sec=self._blindbox_get_first_miss_grace_sec,
+                                        diag=get_diag,
+                                    ),
+                                    timeout=self._blindbox_get_first_timeout_sec,
+                                )
+                            except asyncio.TimeoutError:
+                                timed_out = True
+                                accepted_blob = None
+                                cycle_timeout += 1
+                            except Exception as exc:
+                                logger.debug(
+                                    "BlindBox group get_first_accepted failed group=%s recv_index=%s group_epoch=%s root_epoch=%s: %s",
+                                    context.group_id,
+                                    recv_index,
+                                    int(root_item["group_epoch"]),
+                                    int(root_item["root_epoch"]),
+                                    exc,
+                                    exc_info=True,
+                                )
+                                continue
+                            get_elapsed = max(
+                                0.0, time.monotonic() - get_started_mono
+                            )
+                            if get_elapsed >= self._blindbox_debug_ui_slow_sec:
+                                accepted_addr = str(get_diag.get("accepted_addr", "")).strip()
+                                first_addr = str(get_diag.get("first_result_addr", "")).strip()
+                                canceled = [
+                                    str(x).strip()
+                                    for x in (get_diag.get("canceled_pending_addrs") or [])
+                                    if str(x).strip()
+                                ]
+                                if accepted_addr:
+                                    slow_addr = accepted_addr
+                                elif canceled:
+                                    slow_addr = canceled[0]
+                                else:
+                                    slow_addr = first_addr or "unknown"
+                                if timed_out:
+                                    slow_addr = f"{slow_addr} (timeout)"
+                                slow_samples.append(
+                                    f"group={context.group_id[:10]} idx={recv_index} t={get_elapsed:.2f}s box={slow_addr}"
+                                )
+                            if accepted_blob is not None:
+                                got_valid = True
+                                break
+                        if got_valid:
+                            context.state.mark_consumed(recv_index)
+                            context.save_state()
+                            self._trigger_blindbox_hot_poll("received-offline-message")
+                            cycle_hit += 1
+                        else:
+                            cycle_miss += 1
                 cycle_elapsed = max(0.0, time.monotonic() - cycle_started_mono)
                 if self._blindbox_debug_ui and cycle_checked > 0:
                     slow_note = slow_samples[0] if slow_samples else ""
@@ -3648,7 +5931,9 @@ class I2PChatCore:
             logger.exception("BlindBox poller stopped: %s", detail)
             self._emit_error(f"BlindBox poller stopped: {detail}")
 
-    async def _process_blindbox_frame(self, frame: bytes) -> bool:
+    async def _process_blindbox_frame(
+        self, frame: bytes, *, source_peer: Optional[str] = None
+    ) -> bool:
         if len(frame) < HEADER_STRUCT.size:
             return False
         magic, version, msg_type_raw, flags, msg_id, msg_len = HEADER_STRUCT.unpack(
@@ -3667,31 +5952,180 @@ class I2PChatCore:
         if msg_type != "U":
             return False
         text = body.decode("utf-8", errors="strict")
-        sp = (self.stored_peer or self.current_peer_addr or "").strip() or None
+        lap = self._last_active_peer_for_telemetry()
+        sp = (source_peer or self.current_peer_addr or lap or "").strip() or None
+        result = self.import_group_transport(text, source_peer=sp)
+        if result is not None:
+            # INVALID нельзя считать успехом: иначе слот BlindBox «съедается» без импорта
+            # (типичный симптом: офлайн группы доходят только одному участнику).
+            return bool(result.imported or result.duplicate)
         self._emit_message("peer", text, source_peer=sp)
         self._emit_notify("peer", text, source_peer=sp)
         return True
 
-    async def _send_text_via_blindbox(self, text: str) -> Optional[int]:
+    @staticmethod
+    def _is_blindbox_slot_conflict(exc: Exception) -> bool:
+        text = str(exc or "").strip().lower()
+        return (
+            "verification mismatch" in text
+            or "put exists verification failed" in text
+            or "put exists" in text
+        )
+
+    def _blindbox_send_slot_retry_limit(self) -> int:
+        raw = os.environ.get("I2PCHAT_BLINDBOX_SEND_SLOT_RETRIES", "4").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 4
+        return max(0, min(value, 32))
+
+    async def _put_blindbox_frame_with_slot_retry_common(
+        self,
+        *,
+        frame: bytes,
+        state: BlindBoxState,
+        save_state: Callable[[], None],
+        put_timeout_sec: float,
+        log_label: str,
+        target_label: str,
+        derive_keys: Callable[[int], Any],
+    ) -> None:
+        if self._blindbox_client is None or self.my_dest is None:
+            raise RuntimeError("BlindBox runtime is not ready")
+        retry_limit = self._blindbox_send_slot_retry_limit()
+        attempt = 0
+        while True:
+            keys = derive_keys(state.send_index)
+            blob = encrypt_blindbox_blob(
+                frame,
+                keys.blob_key,
+                "send",
+                state.send_index,
+                keys.state_tag,
+                padding_bucket=self._blindbox_padding_bucket,
+            )
+            try:
+                await asyncio.wait_for(
+                    self._blindbox_client.put(keys.lookup_token, blob),
+                    timeout=put_timeout_sec,
+                )
+            except asyncio.TimeoutError:
+                raise
+            except Exception as exc:
+                if attempt < retry_limit and self._is_blindbox_slot_conflict(exc):
+                    state.send_index += 1
+                    state.updated_at = int(time.time())
+                    save_state()
+                    attempt += 1
+                    logger.info(
+                        "%s: BlindBox slot conflict for %s, retrying with send_index=%s",
+                        log_label,
+                        target_label[:24],
+                        state.send_index,
+                    )
+                    continue
+                raise
+            state.send_index += 1
+            state.updated_at = int(time.time())
+            save_state()
+            return
+
+    async def _put_blindbox_frame_with_slot_retry(
+        self,
+        *,
+        frame: bytes,
+        root_secret: bytes,
+        root_epoch: int,
+        peer_id: str,
+        state: BlindBoxState,
+        save_state: Callable[[], None],
+        put_timeout_sec: float,
+        log_label: str,
+    ) -> None:
+        await self._put_blindbox_frame_with_slot_retry_common(
+            frame=frame,
+            state=state,
+            save_state=save_state,
+            put_timeout_sec=put_timeout_sec,
+            log_label=log_label,
+            target_label=peer_id,
+            derive_keys=lambda send_index: derive_blindbox_message_keys(
+                root_secret,
+                self.my_dest.base32,
+                peer_id,
+                "send",
+                send_index,
+                epoch=root_epoch,
+            ),
+        )
+
+    async def _put_group_blindbox_frame_with_slot_retry(
+        self,
+        *,
+        frame: bytes,
+        root_secret: bytes,
+        group_id: str,
+        group_epoch: int,
+        root_epoch: int,
+        state: BlindBoxState,
+        save_state: Callable[[], None],
+        put_timeout_sec: float,
+        log_label: str,
+    ) -> None:
+        await self._put_blindbox_frame_with_slot_retry_common(
+            frame=frame,
+            state=state,
+            save_state=save_state,
+            put_timeout_sec=put_timeout_sec,
+            log_label=log_label,
+            target_label=f"group:{group_id}",
+            derive_keys=lambda send_index: derive_group_blindbox_message_keys(
+                root_secret,
+                group_id,
+                "send",
+                send_index,
+                group_epoch=group_epoch,
+                root_epoch=root_epoch,
+            ),
+        )
+
+    async def _send_text_via_blindbox(
+        self, text: str, *, peer_address: Optional[str] = None
+    ) -> Optional[int]:
         if not self._blindbox_ready():
-            return None
-        if self._blindbox_root_secret is None:
             return None
         if not self.my_dest or self._blindbox_client is None:
             return None
-        peer_id = self._blindbox_peer_id()
-        if not peer_id:
+        target_peer = self._blindbox_peer_id_for_peer(
+            peer_address or self.current_peer_addr or self._last_active_peer_for_telemetry()
+        )
+        if not target_peer:
             return None
 
         async with self._blindbox_send_lock:
             if not self._blindbox_ready():
                 return None
-            if self._blindbox_root_secret is None:
-                return None
             if not self.my_dest or self._blindbox_client is None:
                 return None
-            peer_id = self._blindbox_peer_id()
-            if not peer_id:
+            if not target_peer:
+                return None
+            try:
+                send_snapshot = self._blindbox_send_snapshot_for_peer(target_peer)
+            except Exception as e:
+                detail = _exception_user_message(e)
+                logger.warning(
+                    "Failed to load BlindBox snapshot for %s: %s",
+                    target_peer[:24],
+                    detail,
+                    exc_info=True,
+                )
+                self._emit_error(f"BlindBox send failed: {detail}")
+                return None
+            if send_snapshot is None:
+                return None
+            snapshot, save_state = send_snapshot
+            if snapshot.root_secret is None:
                 return None
             chunks = split_long_chat_text(text)
             if not chunks:
@@ -3702,22 +6136,6 @@ class I2PChatCore:
                     msg_id = self._allocate_msg_id()
                     frame = self._codec.encode(
                         "U", chunk.encode("utf-8"), msg_id=msg_id, flags=0
-                    )
-                    keys = derive_blindbox_message_keys(
-                        self._blindbox_root_secret,
-                        self.my_dest.base32,
-                        peer_id,
-                        "send",
-                        self._blindbox_state.send_index,
-                        epoch=self._blindbox_root_epoch,
-                    )
-                    blob = encrypt_blindbox_blob(
-                        frame,
-                        keys.blob_key,
-                        "send",
-                        self._blindbox_state.send_index,
-                        keys.state_tag,
-                        padding_bucket=self._blindbox_padding_bucket,
                     )
                     # Optimistic UI: show the bubble immediately; PUT over I2P can take many seconds.
                     self._emit_message(
@@ -3740,9 +6158,15 @@ class I2PChatCore:
                         ),
                     )
                     try:
-                        await asyncio.wait_for(
-                            self._blindbox_client.put(keys.lookup_token, blob),
-                            timeout=put_timeout_sec,
+                        await self._put_blindbox_frame_with_slot_retry(
+                            frame=frame,
+                            root_secret=snapshot.root_secret,
+                            root_epoch=snapshot.root_epoch,
+                            peer_id=snapshot.peer_id,
+                            state=snapshot.state,
+                            save_state=save_state,
+                            put_timeout_sec=put_timeout_sec,
+                            log_label="Direct BlindBox send",
                         )
                     except asyncio.TimeoutError:
                         self._emit_outbound_delivery_update(
@@ -3767,9 +6191,6 @@ class I2PChatCore:
                             retryable=False,
                         )
                         raise
-                    self._blindbox_state.send_index += 1
-                    self._blindbox_state.updated_at = int(time.time())
-                    self._save_blindbox_state()
                     self._emit_outbound_delivery_update(
                         str(msg_id),
                         delivery_state=DELIVERY_STATE_QUEUED,
@@ -3786,37 +6207,961 @@ class I2PChatCore:
                 self._emit_error(f"BlindBox send failed: {detail}")
                 return None
 
+    def _encode_group_transport_body(
+        self,
+        state: GroupState,
+        envelope: GroupEnvelope,
+        metadata: GroupRecipientDeliveryMetadata | None = None,
+        *,
+        delivery_scope: str = "recipient",
+    ) -> str:
+        if delivery_scope == "recipient":
+            if metadata is None:
+                raise ValueError("Recipient delivery metadata is required for v1 group transport")
+            return encode_group_transport_text(state, envelope, metadata)
+        if delivery_scope == "group_blindbox":
+            return encode_group_transport_text_v2(state, envelope)
+        raise ValueError(f"Unsupported group delivery scope: {delivery_scope}")
+
+    def _format_group_text_for_ui(
+        self,
+        state: GroupState,
+        *,
+        sender_id: str,
+        text: str,
+        incoming: bool,
+    ) -> str:
+        group_label = self._group_display_name(state)
+        if incoming:
+            return f"[Group {group_label}] {sender_id}: {text}"
+        return f"[Group {group_label}] {text}"
+
+    def _format_group_control_for_ui(
+        self,
+        state: GroupState,
+        *,
+        sender_id: str,
+        payload: Mapping[str, Any] | None,
+    ) -> str:
+        actor_label = "You"
+        try:
+            if normalize_member_id(sender_id) != self._local_group_member_id():
+                actor_label = short_member_label(sender_id)
+        except Exception:
+            actor_label = short_member_label(sender_id)
+        group_label = self._group_display_name(state)
+        return f"[Group {group_label}] " + render_group_control_text(
+            payload,
+            actor_label=actor_label,
+        )
+
+    def _group_history_kind(self, sender_id: str) -> str:
+        try:
+            if normalize_member_id(sender_id) == self._local_group_member_id():
+                return "me"
+        except Exception:
+            pass
+        return "peer"
+
+    def _build_group_history_entry(
+        self,
+        envelope: GroupEnvelope,
+        *,
+        source_peer: Optional[str] = None,
+        delivery_results: Optional[dict[str, str]] = None,
+        delivery_reasons: Optional[dict[str, str]] = None,
+    ) -> GroupHistoryEntry:
+        payload = envelope.payload
+        text = ""
+        if envelope.content_type == GroupContentType.GROUP_TEXT:
+            text = str(envelope.payload or "")
+        elif envelope.content_type == GroupContentType.GROUP_CONTROL and isinstance(
+            envelope.payload, dict
+        ):
+            payload = dict(envelope.payload)
+        return GroupHistoryEntry(
+            kind=self._group_history_kind(envelope.sender_id),
+            sender_id=envelope.sender_id,
+            content_type=envelope.content_type,
+            text=text,
+            payload=payload,
+            msg_id=envelope.msg_id,
+            group_seq=envelope.group_seq,
+            epoch=envelope.epoch,
+            created_at=envelope.created_at,
+            source_peer=self._normalize_peer_addr(source_peer or "") or None,
+            delivery_results=dict(delivery_results or {}),
+            delivery_reasons=dict(delivery_reasons or {}),
+        )
+
+    def _validate_imported_group_transport(self, decoded: Any) -> None:
+        if getattr(decoded, "state", None) is None or getattr(decoded, "envelope", None) is None:
+            raise ValueError("Group transport state and envelope are required")
+        state = decoded.state
+        envelope = decoded.envelope
+        delivery_scope = str(
+            getattr(decoded, "delivery_scope", "recipient") or "recipient"
+        ).strip()
+        group_id = str(getattr(envelope, "group_id", "") or "").strip()
+        if not group_id:
+            raise ValueError("Missing required group transport field: group_id")
+        if group_id != str(getattr(state, "group_id", "") or "").strip():
+            raise ValueError("Group transport group_id does not match state snapshot")
+        try:
+            envelope_epoch = int(envelope.epoch)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid group transport integer field: epoch") from exc
+        if envelope_epoch < 0:
+            raise ValueError("Invalid group transport integer field: epoch")
+        msg_id = str(getattr(envelope, "msg_id", "") or "").strip()
+        if not msg_id:
+            raise ValueError("Missing required group transport field: msg_id")
+        sender_id = normalize_member_id(str(getattr(envelope, "sender_id", "") or ""))
+        if not sender_id:
+            raise ValueError("Missing required group transport field: sender_id")
+        try:
+            group_seq = int(envelope.group_seq)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid group transport integer field: group_seq") from exc
+        if group_seq < 1:
+            raise ValueError("Invalid group transport integer field: group_seq")
+        if envelope.content_type not in (
+            GroupContentType.GROUP_TEXT,
+            GroupContentType.GROUP_CONTROL,
+        ):
+            raise ValueError("Unsupported group transport content type")
+        if not any(same_i2p_destination(sender_id, m) for m in state.members if m):
+            raise ValueError("Group transport sender is not a group member")
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            local_member = ""
+        if delivery_scope == "recipient":
+            if not decoded.recipient_id or not decoded.delivery_id:
+                raise ValueError("Group transport recipient metadata is required")
+            if not any(
+                same_i2p_destination(decoded.recipient_id, m) for m in state.members if m
+            ):
+                raise ValueError("Group transport recipient is not a group member")
+            if local_member and not same_i2p_destination(
+                decoded.recipient_id, local_member
+            ):
+                raise ValueError("Group transport recipient does not match this profile")
+        elif delivery_scope == "group_blindbox":
+            if decoded.recipient_id or decoded.delivery_id:
+                raise ValueError(
+                    "Group blindbox transport must not include recipient metadata"
+                )
+            if local_member and not any(
+                same_i2p_destination(local_member, member) for member in state.members if member
+            ):
+                raise ValueError("Group blindbox transport does not include this profile")
+        else:
+            raise ValueError("Unsupported group delivery scope")
+        if envelope.content_type == GroupContentType.GROUP_TEXT and not isinstance(
+            envelope.payload, str
+        ):
+            raise ValueError("GROUP_TEXT payload must be a string")
+        if envelope.content_type == GroupContentType.GROUP_CONTROL and not isinstance(
+            envelope.payload, dict
+        ):
+            raise ValueError("GROUP_CONTROL payload must be an object")
+
+    def _merge_group_state_snapshot(
+        self,
+        existing: Optional[GroupState],
+        incoming: GroupState,
+        *,
+        envelope: GroupEnvelope,
+    ) -> GroupState:
+        local_member = ""
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            local_member = ""
+        merged_members = list(existing.members if existing is not None else ())
+        merged_members.extend(incoming.members)
+        merged_members.append(envelope.sender_id)
+        if local_member:
+            merged_members.append(local_member)
+        return GroupState(
+            group_id=incoming.group_id,
+            title=(incoming.title or (existing.title if existing is not None else None)),
+            epoch=max(
+                int(envelope.epoch),
+                int(incoming.epoch),
+                int(existing.epoch) if existing is not None else 0,
+            ),
+            members=tuple(merged_members),
+            created_at=existing.created_at if existing is not None else incoming.created_at,
+            updated_at=max(
+                incoming.updated_at,
+                envelope.created_at,
+                existing.updated_at if existing is not None else incoming.updated_at,
+            ),
+        )
+
+    def _apply_group_control_payload(
+        self,
+        state: GroupState,
+        payload: Any,
+        *,
+        updated_at: datetime,
+        epoch: int,
+    ) -> GroupState:
+        if not isinstance(payload, dict):
+            return state
+        title = str(payload.get("title") or "").strip() or state.title
+        members = tuple(
+            str(member)
+            for member in payload.get("members", state.members)
+        )
+        control_epoch = int(payload.get("epoch", epoch))
+        return GroupState(
+            group_id=state.group_id,
+            title=title,
+            epoch=max(int(state.epoch), control_epoch),
+            members=members,
+            created_at=state.created_at,
+            updated_at=updated_at,
+        )
+
+    async def _send_group_envelope_live(
+        self,
+        recipient_id: str,
+        envelope: GroupEnvelope,
+        metadata: GroupRecipientDeliveryMetadata,
+        *,
+        state_snapshot: Optional[GroupState] = None,
+    ) -> GroupTransportOutcome:
+        target_peer = self._normalize_peer_addr(recipient_id)
+        if not target_peer or not self._has_active_session_for_peer(target_peer):
+            return GroupTransportOutcome(accepted=False, reason="needs-live-session")
+        if not self.session_manager.is_live_path_alive(peer_id=target_peer):
+            return GroupTransportOutcome(accepted=False, reason="needs-live-session")
+        state = state_snapshot or self.load_group_state(envelope.group_id)
+        if state is None:
+            return GroupTransportOutcome(accepted=False, reason="unknown-group")
+        frame_peer_id: Optional[str] = None
+        try:
+            writer, frame_peer_id, text_ack_table = self._writer_frame_peer_and_text_acks(
+                target_peer
+            )
+            if writer is None:
+                return GroupTransportOutcome(accepted=False, reason="needs-live-session")
+            if self._blindbox_ready():
+                await self._send_blindbox_root_if_needed(
+                    writer, peer_id=frame_peer_id
+                )
+            body = self._encode_group_transport_body(state, envelope, metadata)
+            frame, msg_id = self.frame_message_with_id(
+                "U", body, peer_id=frame_peer_id
+            )
+            writer.write(frame)
+            await writer.drain()
+            routing_pid = frame_peer_id or self._normalize_peer_addr(target_peer)
+            self._register_pending_ack(
+                text_ack_table,
+                msg_id,
+                token=body[:128],
+                ack_kind="msg",
+                routing_peer_id=routing_pid,
+            )
+            return GroupTransportOutcome(
+                accepted=True,
+                reason="live-session",
+                transport_message_id=str(msg_id),
+            )
+        except Exception as e:
+            self.session_manager.mark_live_failure(
+                reason="group-send-failed",
+                peer_id=target_peer,
+            )
+            self._schedule_disconnect(frame_peer_id)
+            return GroupTransportOutcome(
+                accepted=False,
+                reason=_exception_user_message(e),
+            )
+
+    async def _send_group_envelope_via_blindbox(
+        self,
+        recipient_id: str,
+        envelope: GroupEnvelope,
+        metadata: GroupRecipientDeliveryMetadata,
+        *,
+        state_snapshot: Optional[GroupState] = None,
+    ) -> GroupTransportOutcome:
+        if not self._blindbox_ready():
+            return GroupTransportOutcome(accepted=False, reason="blindbox-disabled")
+        # Не проверять locked() до async with: иначе между fan-out к N участникам
+        # другая корутина может успеть взять lock — второй+ получатель получал
+        # blindbox-send-busy без ожидания (в отличие от _send_text_via_blindbox).
+        if self.my_dest is None:
+            return GroupTransportOutcome(
+                accepted=False,
+                reason="blindbox-starting-local-session",
+            )
+        await self._ensure_blindbox_runtime_started()
+        if self._blindbox_client is None:
+            return GroupTransportOutcome(
+                accepted=False,
+                reason="blindbox-starting-local-session",
+            )
+        state = state_snapshot or self.load_group_state(envelope.group_id)
+        if state is None:
+            return GroupTransportOutcome(accepted=False, reason="unknown-group")
+        try:
+            snapshot = self._load_blindbox_peer_snapshot(recipient_id)
+        except Exception as e:
+            return GroupTransportOutcome(
+                accepted=False,
+                reason=_exception_user_message(e),
+            )
+        if snapshot.root_secret is None:
+            return GroupTransportOutcome(accepted=False, reason="blindbox-await-root")
+
+        async with self._blindbox_send_lock:
+            try:
+                body = self._encode_group_transport_body(state, envelope, metadata)
+                msg_id = self._allocate_msg_id()
+                frame = self._codec.encode(
+                    "U",
+                    body.encode("utf-8"),
+                    msg_id=msg_id,
+                    flags=0,
+                )
+                put_timeout_sec = max(
+                    5.0,
+                    float(os.environ.get("I2PCHAT_BLINDBOX_PUT_TIMEOUT_SEC", "30")),
+                )
+                await self._put_blindbox_frame_with_slot_retry(
+                    frame=frame,
+                    root_secret=snapshot.root_secret,
+                    root_epoch=snapshot.root_epoch,
+                    peer_id=snapshot.peer_id,
+                    state=snapshot.state,
+                    save_state=lambda: self._save_blindbox_peer_snapshot(snapshot),
+                    put_timeout_sec=put_timeout_sec,
+                    log_label="Group BlindBox send",
+                )
+                self._trigger_blindbox_hot_poll("group-offline-send")
+                return GroupTransportOutcome(
+                    accepted=True,
+                    reason="blindbox-ready",
+                    transport_message_id=str(msg_id),
+                )
+            except asyncio.TimeoutError:
+                return GroupTransportOutcome(
+                    accepted=False,
+                    reason="blindbox-put-timeout",
+                )
+            except Exception as e:
+                detail = _exception_user_message(e)
+                logger.warning("Group BlindBox send failed: %s", detail, exc_info=True)
+                return GroupTransportOutcome(
+                    accepted=False,
+                    reason=detail or "blindbox-put-failed",
+                )
+
+    async def _send_group_envelope_via_group_blindbox(
+        self,
+        group_id: str,
+        envelope: GroupEnvelope,
+        *,
+        state_snapshot: Optional[GroupState] = None,
+    ) -> GroupTransportOutcome:
+        if not self._blindbox_ready():
+            return GroupTransportOutcome(accepted=False, reason="blindbox-disabled")
+        if self.my_dest is None:
+            return GroupTransportOutcome(
+                accepted=False,
+                reason="blindbox-starting-local-session",
+            )
+        await self._ensure_blindbox_runtime_started()
+        if self._blindbox_client is None:
+            return GroupTransportOutcome(
+                accepted=False,
+                reason="blindbox-starting-local-session",
+            )
+        state = state_snapshot or self.load_group_state(group_id)
+        if state is None:
+            return GroupTransportOutcome(accepted=False, reason="unknown-group")
+        snapshot_bundle = self._group_blindbox_runtime_snapshot(group_id)
+        if snapshot_bundle is None:
+            return GroupTransportOutcome(accepted=False, reason="unknown-group")
+        snapshot, save_state = snapshot_bundle
+        if snapshot.root_secret is None or int(snapshot.group_epoch) != int(state.epoch):
+            return GroupTransportOutcome(
+                accepted=False,
+                reason="blindbox-await-group-root",
+            )
+
+        async with self._blindbox_send_lock:
+            try:
+                body = self._encode_group_transport_body(
+                    state,
+                    envelope,
+                    delivery_scope="group_blindbox",
+                )
+                msg_id = self._allocate_msg_id()
+                frame = self._codec.encode(
+                    "U",
+                    body.encode("utf-8"),
+                    msg_id=msg_id,
+                    flags=0,
+                )
+                put_timeout_sec = max(
+                    5.0,
+                    float(os.environ.get("I2PCHAT_BLINDBOX_PUT_TIMEOUT_SEC", "30")),
+                )
+                await self._put_group_blindbox_frame_with_slot_retry(
+                    frame=frame,
+                    root_secret=snapshot.root_secret,
+                    group_id=group_id,
+                    group_epoch=int(snapshot.group_epoch),
+                    root_epoch=int(snapshot.root_epoch),
+                    state=snapshot.state,
+                    save_state=save_state,
+                    put_timeout_sec=put_timeout_sec,
+                    log_label="Group BlindBox send",
+                )
+                self._trigger_blindbox_hot_poll("group-offline-send")
+                return GroupTransportOutcome(
+                    accepted=True,
+                    reason="blindbox-ready",
+                    transport_message_id=str(msg_id),
+                )
+            except asyncio.TimeoutError:
+                return GroupTransportOutcome(
+                    accepted=False,
+                    reason="blindbox-put-timeout",
+                )
+            except Exception as e:
+                detail = _exception_user_message(e)
+                logger.warning(
+                    "Group BlindBox channel send failed group=%s: %s",
+                    group_id,
+                    detail,
+                    exc_info=True,
+                )
+                return GroupTransportOutcome(
+                    accepted=False,
+                    reason=detail or "blindbox-put-failed",
+                )
+
+    async def _send_group_payload(
+        self,
+        state: GroupState,
+        *,
+        sender_id: str,
+        payload: Any,
+        content_type: GroupContentType,
+        requested_route: str,
+    ) -> tuple[GroupSendResult, tuple[GroupPendingBlindBoxMessage, ...]]:
+        recipients = self.group_manager._recipient_ids(state, sender_id)
+        envelope = self.group_manager._build_envelope(
+            state=state,
+            sender_id=sender_id,
+            payload=payload,
+            content_type=content_type,
+            recipients=recipients,
+        )
+        delivery_results: dict[str, GroupMemberDeliveryResult] = {}
+        offline_recipients: list[str] = []
+        for recipient_id in recipients:
+            metadata = envelope.member_metadata[recipient_id]
+            policy = self.session_manager.select_outbound_policy(
+                requested_route=requested_route,
+                peer_id=recipient_id,
+            )
+            if policy in (
+                OutboundPolicy.LIVE_ONLY,
+                OutboundPolicy.PREFER_LIVE_FALLBACK_BLINDBOX,
+            ):
+                live_ready = self.session_manager.is_live_path_alive(peer_id=recipient_id)
+                if live_ready:
+                    live_result = await self._send_group_envelope_live(
+                        recipient_id,
+                        envelope,
+                        metadata,
+                        state_snapshot=state,
+                    )
+                    if live_result.accepted:
+                        delivery_results[recipient_id] = GroupMemberDeliveryResult(
+                            recipient_id=recipient_id,
+                            status=GroupDeliveryStatus.DELIVERED_LIVE,
+                            reason=live_result.reason or "live-session",
+                            transport_message_id=live_result.transport_message_id,
+                            delivery_id=metadata.delivery_id,
+                        )
+                        continue
+                    if policy == OutboundPolicy.LIVE_ONLY:
+                        delivery_results[recipient_id] = GroupMemberDeliveryResult(
+                            recipient_id=recipient_id,
+                            status=GroupDeliveryStatus.FAILED,
+                            reason=live_result.reason or "needs-live-session",
+                            transport_message_id=live_result.transport_message_id,
+                            delivery_id=metadata.delivery_id,
+                        )
+                        continue
+                elif policy == OutboundPolicy.LIVE_ONLY:
+                    delivery_results[recipient_id] = GroupMemberDeliveryResult(
+                        recipient_id=recipient_id,
+                        status=GroupDeliveryStatus.FAILED,
+                        reason="needs-live-session",
+                        delivery_id=metadata.delivery_id,
+                    )
+                    continue
+            offline_recipients.append(recipient_id)
+
+        pending_group_blindbox: tuple[GroupPendingBlindBoxMessage, ...] = ()
+        if offline_recipients:
+            offline_result = await self._send_group_envelope_via_group_blindbox(
+                state.group_id,
+                envelope,
+                state_snapshot=state,
+            )
+            if offline_result.accepted:
+                for recipient_id in offline_recipients:
+                    metadata = envelope.member_metadata[recipient_id]
+                    delivery_results[recipient_id] = GroupMemberDeliveryResult(
+                        recipient_id=recipient_id,
+                        status=GroupDeliveryStatus.QUEUED_OFFLINE,
+                        reason=offline_result.reason or "blindbox-ready",
+                        transport_message_id=offline_result.transport_message_id,
+                        delivery_id=metadata.delivery_id,
+                    )
+            elif offline_result.reason == "blindbox-await-group-root":
+                pending_group_blindbox = (
+                    self._build_pending_group_blindbox_message(
+                        state,
+                        envelope,
+                        tuple(offline_recipients),
+                    ),
+                )
+                for recipient_id in offline_recipients:
+                    metadata = envelope.member_metadata[recipient_id]
+                    delivery_results[recipient_id] = GroupMemberDeliveryResult(
+                        recipient_id=recipient_id,
+                        status=GroupDeliveryStatus.QUEUED_OFFLINE,
+                        reason="blindbox-await-group-root",
+                        delivery_id=metadata.delivery_id,
+                    )
+                self._schedule_group_blindbox_root_push(state)
+            else:
+                for recipient_id in offline_recipients:
+                    metadata = envelope.member_metadata[recipient_id]
+                    delivery_results[recipient_id] = GroupMemberDeliveryResult(
+                        recipient_id=recipient_id,
+                        status=GroupDeliveryStatus.FAILED,
+                        reason=offline_result.reason or "blindbox-unavailable",
+                        transport_message_id=offline_result.transport_message_id,
+                        delivery_id=metadata.delivery_id,
+                    )
+
+        return (
+            GroupSendResult(
+                envelope=envelope,
+                delivery_results=delivery_results,
+            ),
+            pending_group_blindbox,
+        )
+
+    async def send_group_text(
+        self,
+        group_id: str,
+        text: str,
+        *,
+        route: Literal["auto", "live", "offline"] = "auto",
+    ) -> GroupSendResult:
+        conversation = self._load_group_conversation(group_id)
+        if conversation is None:
+            raise ValueError(f"Unknown group: {group_id}")
+        sender_id = self._local_group_member_id()
+        self.group_manager.prime_group_sequence(
+            group_id,
+            next_group_seq=conversation.next_group_seq,
+        )
+        result, pending_group_blindbox = await self._send_group_payload(
+            conversation.state,
+            sender_id=sender_id,
+            payload=text,
+            content_type=GroupContentType.GROUP_TEXT,
+            requested_route=route,
+        )
+        self._repair_group_delivery_failures(result)
+        pending_deliveries = self._mark_recoverable_group_deliveries_pending(
+            conversation.state,
+            result,
+        )
+        updated_state = GroupState(
+            group_id=conversation.state.group_id,
+            title=conversation.state.title,
+            epoch=max(int(conversation.state.epoch), int(result.envelope.epoch)),
+            members=conversation.state.members,
+            created_at=conversation.state.created_at,
+            updated_at=utc_now(),
+        )
+        append_group_history_entry(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            updated_state,
+            self._build_group_history_entry(
+                result.envelope,
+                delivery_results={
+                    peer_id: delivery.status.value
+                    for peer_id, delivery in result.delivery_results.items()
+                },
+                delivery_reasons=self._group_delivery_reason_map(result),
+            ),
+            next_group_seq=result.envelope.group_seq + 1,
+        )
+        conversation = self._load_group_conversation(updated_state.group_id)
+        if conversation is not None and pending_deliveries:
+            conversation = self._merge_group_pending_deliveries(
+                conversation,
+                pending_deliveries,
+            )
+        if conversation is not None and pending_group_blindbox:
+            conversation = self._merge_pending_group_blindbox_messages(
+                conversation,
+                pending_group_blindbox,
+            )
+        self._emit_message(
+            "me",
+            self._format_group_text_for_ui(
+                updated_state,
+                sender_id=sender_id,
+                text=str(result.envelope.payload or ""),
+                incoming=False,
+            ),
+            message_id=result.envelope.msg_id,
+            conversation_kind="group",
+            conversation_id=updated_state.group_id,
+            conversation_title=self._group_display_name(updated_state),
+            group_sender_id=sender_id,
+            group_content_type=result.envelope.content_type,
+            group_plain_text=str(result.envelope.payload or ""),
+        )
+        return result
+
+    async def send_group_control(
+        self,
+        group_id: str,
+        payload: dict[str, Any],
+        *,
+        route: Literal["auto", "live", "offline"] = "auto",
+    ) -> GroupSendResult:
+        conversation = self._load_group_conversation(group_id)
+        if conversation is None:
+            raise ValueError(f"Unknown group: {group_id}")
+        sender_id = self._local_group_member_id()
+        self.group_manager.prime_group_sequence(
+            group_id,
+            next_group_seq=conversation.next_group_seq,
+        )
+        result, pending_group_blindbox = await self._send_group_payload(
+            conversation.state,
+            sender_id=sender_id,
+            payload=payload,
+            content_type=GroupContentType.GROUP_CONTROL,
+            requested_route=route,
+        )
+        self._repair_group_delivery_failures(result)
+        pending_deliveries = self._mark_recoverable_group_deliveries_pending(
+            conversation.state,
+            result,
+        )
+        prev_members = frozenset(conversation.state.members)
+        updated_state = self._apply_group_control_payload(
+            conversation.state,
+            payload,
+            updated_at=utc_now(),
+            epoch=result.envelope.epoch,
+        )
+        append_group_history_entry(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            updated_state,
+            self._build_group_history_entry(
+                result.envelope,
+                delivery_results={
+                    peer_id: delivery.status.value
+                    for peer_id, delivery in result.delivery_results.items()
+                },
+                delivery_reasons=self._group_delivery_reason_map(result),
+            ),
+            next_group_seq=result.envelope.group_seq + 1,
+        )
+        conversation = self._load_group_conversation(updated_state.group_id)
+        if conversation is not None and pending_deliveries:
+            conversation = self._merge_group_pending_deliveries(
+                conversation,
+                pending_deliveries,
+            )
+        if conversation is not None and pending_group_blindbox:
+            conversation = self._merge_pending_group_blindbox_messages(
+                conversation,
+                pending_group_blindbox,
+            )
+        self._emit_message(
+            "system",
+            self._format_group_control_for_ui(
+                updated_state,
+                sender_id=sender_id,
+                payload=payload,
+            ),
+            message_id=result.envelope.msg_id,
+            conversation_kind="group",
+            conversation_id=updated_state.group_id,
+            conversation_title=self._group_display_name(updated_state),
+            group_sender_id=sender_id,
+            group_content_type=result.envelope.content_type,
+            group_plain_text=render_group_control_text(payload, actor_label="You"),
+        )
+        self._on_group_membership_changed(
+            prev_members,
+            int(conversation.state.epoch),
+            updated_state,
+            group_label=updated_state.title or updated_state.group_id,
+        )
+        return result
+
+    def import_group_transport(
+        self,
+        text: str,
+        *,
+        source_peer: Optional[str] = None,
+    ) -> GroupImportResult | None:
+        try:
+            decoded = decode_group_transport_text(text)
+        except Exception as e:
+            detail = _exception_user_message(e)
+            self._emit_error(f"Invalid group transport payload: {detail}")
+            return GroupImportResult(
+                status=GroupImportStatus.INVALID,
+                error=detail,
+            )
+        if decoded is None:
+            return None
+        try:
+            self._validate_imported_group_transport(decoded)
+        except Exception as e:
+            detail = _exception_user_message(e)
+            self._emit_error(f"Invalid group transport payload: {detail}")
+            return GroupImportResult(
+                status=GroupImportStatus.INVALID,
+                envelope=decoded.envelope,
+                state=decoded.state,
+                source_peer=(
+                    self._normalize_peer_addr(source_peer or decoded.envelope.sender_id)
+                    or None
+                ),
+                error=detail,
+            )
+        history_source_peer = source_peer or decoded.envelope.sender_id
+        normalized_source_peer = self._normalize_peer_addr(history_source_peer) or None
+        existing_conversation = self._load_group_conversation(decoded.state.group_id)
+        normalized_msg_id = str(decoded.envelope.msg_id or "").strip()
+        if (
+            existing_conversation is not None
+            and normalized_msg_id
+            and normalized_msg_id in set(existing_conversation.seen_msg_ids)
+        ):
+            return GroupImportResult(
+                status=GroupImportStatus.DUPLICATE,
+                envelope=decoded.envelope,
+                state=existing_conversation.state,
+                source_peer=normalized_source_peer,
+            )
+        existing_state = self.load_group_state(decoded.state.group_id)
+        if existing_conversation is not None:
+            prev_members_for_sync = frozenset(existing_conversation.state.members)
+        elif existing_state is not None:
+            prev_members_for_sync = frozenset(existing_state.members)
+        else:
+            prev_members_for_sync = frozenset()
+        merged_state = self._merge_group_state_snapshot(
+            existing_state,
+            decoded.state,
+            envelope=decoded.envelope,
+        )
+        if decoded.envelope.content_type == GroupContentType.GROUP_CONTROL:
+            merged_state = self._apply_group_control_payload(
+                merged_state,
+                decoded.envelope.payload,
+                updated_at=decoded.envelope.created_at,
+                epoch=decoded.envelope.epoch,
+            )
+        history_entry = self._build_group_history_entry(
+            decoded.envelope,
+            source_peer=history_source_peer,
+        )
+        next_group_seq = max(
+            decoded.envelope.group_seq + 1,
+            existing_conversation.next_group_seq if existing_conversation is not None else 1,
+        )
+        conversation, imported = append_group_history_entry(
+            self.get_profile_data_dir(create=True),
+            self.profile,
+            merged_state,
+            history_entry,
+            next_group_seq=next_group_seq,
+        )
+        if not imported:
+            return GroupImportResult(
+                status=GroupImportStatus.DUPLICATE,
+                envelope=decoded.envelope,
+                state=conversation.state,
+                source_peer=normalized_source_peer,
+            )
+        if decoded.envelope.content_type == GroupContentType.GROUP_TEXT:
+            rendered_text = self._format_group_text_for_ui(
+                conversation.state,
+                sender_id=decoded.envelope.sender_id,
+                text=str(decoded.envelope.payload or ""),
+                incoming=True,
+            )
+            self._emit_message(
+                "peer",
+                rendered_text,
+                source_peer=normalized_source_peer,
+                message_id=decoded.envelope.msg_id,
+                conversation_kind="group",
+                conversation_id=conversation.state.group_id,
+                conversation_title=self._group_display_name(conversation.state),
+                group_sender_id=decoded.envelope.sender_id,
+                group_content_type=decoded.envelope.content_type,
+                group_plain_text=str(decoded.envelope.payload or ""),
+            )
+            self._emit_notify(
+                "peer",
+                rendered_text,
+                source_peer=normalized_source_peer,
+                conversation_kind="group",
+                conversation_id=conversation.state.group_id,
+                conversation_title=self._group_display_name(conversation.state),
+                group_sender_id=decoded.envelope.sender_id,
+                group_content_type=decoded.envelope.content_type,
+                group_plain_text=str(decoded.envelope.payload or ""),
+            )
+        else:
+            self._emit_message(
+                "system",
+                self._format_group_control_for_ui(
+                    conversation.state,
+                    sender_id=decoded.envelope.sender_id,
+                    payload=(
+                        decoded.envelope.payload
+                        if isinstance(decoded.envelope.payload, Mapping)
+                        else None
+                    ),
+                ),
+                source_peer=normalized_source_peer,
+                message_id=decoded.envelope.msg_id,
+                conversation_kind="group",
+                conversation_id=conversation.state.group_id,
+                conversation_title=self._group_display_name(conversation.state),
+                group_sender_id=decoded.envelope.sender_id,
+                group_content_type=decoded.envelope.content_type,
+                group_plain_text=render_group_control_text(
+                    (
+                        decoded.envelope.payload
+                        if isinstance(decoded.envelope.payload, Mapping)
+                        else None
+                    ),
+                    actor_label=short_member_label(decoded.envelope.sender_id),
+                ),
+            )
+        self._on_group_membership_changed(
+            prev_members_for_sync,
+            (
+                int(existing_conversation.state.epoch)
+                if existing_conversation is not None
+                else (int(existing_state.epoch) if existing_state is not None else None)
+            ),
+            conversation.state,
+            group_label=conversation.state.title or conversation.state.group_id,
+        )
+        return GroupImportResult(
+            status=GroupImportStatus.IMPORTED,
+            envelope=decoded.envelope,
+            state=conversation.state,
+            source_peer=normalized_source_peer,
+        )
+
+    def import_group_transport_text(
+        self,
+        text: str,
+        *,
+        source_peer: Optional[str] = None,
+    ) -> bool:
+        result = self.import_group_transport(text, source_peer=source_peer)
+        return bool(result is not None and result.imported)
+
     def is_outbound_connect_busy(self) -> bool:
         """True, пока выполняется исходящий connect_to_peer (ожидание stream_connect)."""
         return self.session_manager.outbound_connect_busy
 
-    async def connect_to_peer(self, target_address: str) -> None:
+    async def connect_to_peer(
+        self,
+        target_address: str,
+        *,
+        activate_as_current: bool = True,
+        announce_to_ui: bool = True,
+    ) -> None:
+        target_preview = (target_address or "").strip()[:24]
+
+        def _emit_connect_system(text: str) -> None:
+            if announce_to_ui:
+                self._emit_system(text)
+            else:
+                logger.info("Silent connect to %s: %s", target_preview, text)
+
+        def _emit_connect_error(text: str) -> None:
+            if announce_to_ui:
+                self._emit_error(text)
+            else:
+                logger.info(
+                    "Silent connect to %s suppressed UI error: %s",
+                    target_preview,
+                    text,
+                )
+
         if not crypto.NACL_AVAILABLE:
             detail = getattr(crypto, "NACL_IMPORT_ERROR", "") or "pynacl not installed"
-            self._emit_error(f"Secure protocol requires PyNaCl. Install: pip install pynacl. ({detail})")
+            _emit_connect_error(
+                "Secure protocol requires PyNaCl. Install: pip install pynacl. "
+                f"({detail})"
+            )
             return
         try:
             normalized_target = self._normalize_peer_addr(target_address)
         except ValueError as e:
-            self._emit_error(str(e).strip() or "Invalid peer address")
+            _emit_connect_error(str(e).strip() or "Invalid peer address")
             return
-        try:
-            locked_peer = self._normalize_peer_addr(self.stored_peer or "")
-        except ValueError:
-            locked_peer = ""
-        if locked_peer and normalized_target and normalized_target != locked_peer:
-            self._emit_error(
-                "Profile is locked to another peer. "
-                "Connect to the stored peer or unlock/change the profile first."
+        target_preview = normalized_target[:24]
+        self.ensure_peer_in_saved_contacts(normalized_target)
+        if self._has_live_session_slot_for_peer(normalized_target):
+            _emit_connect_system("Already connected to this peer.")
+            return
+        max_live = max_concurrent_live_sessions()
+        if self._live_stream_count() >= max_live:
+            _emit_connect_system(
+                f"Maximum concurrent live sessions ({max_live}) reached. "
+                "Disconnect a peer first."
             )
             return
-        if self.conn is not None:
-            self._emit_system("Already connected. Disconnect first.")
-            return
         if self.session_manager.outbound_connect_busy:
-            self._emit_system("Connection attempt already in progress.")
+            _emit_connect_system("Connection attempt already in progress.")
             return
-        self.session_manager.set_active_peer(normalized_target)
+        extra_ls = LivePeerSession(
+            peer_id=normalized_target,
+            announce_lifecycle=bool(activate_as_current and announce_to_ui),
+        )
+        self._live_sessions[normalized_target] = extra_ls
+        if activate_as_current:
+            self.session_manager.set_active_peer(normalized_target)
         self.session_manager.set_outbound_connect_busy(True, peer_id=normalized_target)
         self.session_manager.set_peer_connected(
             normalized_target, state=PeerState.CONNECTING, reason="outbound-connect"
@@ -3828,12 +7173,23 @@ class I2PChatCore:
         deferred_system: Optional[str] = None
         try:
             try:
-                self._reset_crypto_state()
-                self.current_peer_addr = normalized_target
-                self._emit_system(
-                    f"Connecting to {normalized_target[:24]}... "
-                    "(may take 1–2 min while I2P builds tunnels)"
-                )
+                if activate_as_current:
+                    self.activate_peer_context(normalized_target)
+                    if announce_to_ui:
+                        self._emit_system(
+                            f"Connecting to {normalized_target[:24]}... "
+                            "(may take 1–2 min while I2P builds tunnels)"
+                        )
+                    else:
+                        logger.info(
+                            "Silent connect to %s started.",
+                            normalized_target[:24],
+                        )
+                else:
+                    logger.info(
+                        "Group intro: background connect to %s...",
+                        normalized_target[:24],
+                    )
                 reader: asyncio.StreamReader
                 writer: asyncio.StreamWriter
                 last_connect_exc: Optional[Exception] = None
@@ -3842,7 +7198,7 @@ class I2PChatCore:
                         reader, writer = await asyncio.wait_for(
                             i2plib.stream_connect(
                                 self.session_id,
-                                normalized_target,
+                                self._peer_sam_hostname(normalized_target),
                                 sam_address=self.sam_address,
                             ),
                             timeout=self.CONNECT_TIMEOUT,
@@ -3865,35 +7221,73 @@ class I2PChatCore:
                         )
                     raise last_connect_exc
 
+                if self._live_sessions.get(normalized_target) is not extra_ls:
+                    try:
+                        writer.close()
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+                    logger.info(
+                        "Outbound connect to %s yielded to another session slot.",
+                        normalized_target[:24],
+                    )
+                    return
+
                 if self.my_dest is not None:
                     # Backward-safe identity preface для accept_loop(reader.readline()).
                     writer.write(self.my_dest.base64.encode("utf-8") + b"\n")
-                    writer.write(self.frame_message("S", self.my_dest.base64))
+                    writer.write(
+                        self.frame_message_plain(
+                            "S", self.my_dest.base64, peer_id=normalized_target
+                        )
+                    )
                     await writer.drain()
 
-                    self.proven = True
+                    extra_ls.proven = True
                     self._emit_status("visible")
 
-                self.conn = (reader, writer)
+                if self._live_sessions.get(normalized_target) is not extra_ls:
+                    try:
+                        writer.close()
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+                    logger.info(
+                        "Outbound connect to %s yielded after preface write.",
+                        normalized_target[:24],
+                    )
+                    return
+
+                connection = (reader, writer)
+                extra_ls.conn = connection
                 self.session_manager.register_stream(
                     normalized_target,
                     state=PeerState.HANDSHAKING,
                     peer_id=normalized_target,
                 )
-                self._activate_ack_session()
-                self._emit_message(
-                    "info", "Handshake sent. Establishing secure channel... Wait"
-                )
+                self._activate_ack_session(normalized_target)
+                if extra_ls.announce_lifecycle:
+                    self._emit_message(
+                        "info", "Handshake sent. Establishing secure channel... Wait"
+                    )
 
                 loop = asyncio.get_running_loop()
-                loop.create_task(self.receive_loop(self.conn))
-                loop.create_task(self.initiate_secure_handshake())
-                self._start_handshake_watchdog(self.conn)
-                self.session_manager.keepalive_task = loop.create_task(
-                    self._keepalive_loop()
+                self._start_receive_loop_task(connection, peer_id=normalized_target)
+                loop.create_task(
+                    self.initiate_secure_handshake(normalized_target)
                 )
+                self._start_handshake_watchdog(
+                    connection, peer_id=normalized_target
+                )
+                if (
+                    self.session_manager.keepalive_task is None
+                    or self.session_manager.keepalive_task.done()
+                ):
+                    self.session_manager.keepalive_task = loop.create_task(
+                        self._keepalive_loop()
+                    )
             except asyncio.TimeoutError:
-                self.conn = None
+                self._live_sessions.pop(normalized_target, None)
                 self.session_manager.mark_peer_failed(
                     normalized_target, reason="connect-timeout"
                 )
@@ -3907,7 +7301,7 @@ class I2PChatCore:
                 )
                 deferred_system = "Waiting for incoming connections..."
             except Exception as e:
-                self.conn = None
+                self._live_sessions.pop(normalized_target, None)
                 self.session_manager.mark_peer_failed(
                     normalized_target, reason="connect-failed"
                 )
@@ -3930,16 +7324,24 @@ class I2PChatCore:
             )
 
         # После сброса busy — иначе UI обновится с is_outbound_connect_busy()==True и Connect останется серым.
-        if deferred_error:
-            self._emit_error(deferred_error)
-        if deferred_system:
-            self._emit_system(deferred_system)
+        if activate_as_current and announce_to_ui:
+            if deferred_error:
+                self._emit_error(deferred_error)
+            if deferred_system:
+                self._emit_system(deferred_system)
+        elif deferred_error:
+            logger.info(
+                "Background/silent connect to %s failed without UI notice: %s",
+                normalized_target[:24],
+                deferred_error,
+            )
 
     async def send_text(
         self,
         text: str,
         *,
         route: Literal["auto", "live", "offline"] = "auto",
+        peer_address: Optional[str] = None,
     ) -> SendTextResult:
         if not text:
             lifecycle = delivery_lifecycle_from_send_result(
@@ -3957,10 +7359,22 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
         r = route if route in ("auto", "live", "offline") else "auto"
-        peer_for_route = self._normalize_peer_addr(
-            self.current_peer_addr or self.stored_peer or ""
+        peer_for_route = ""
+        if peer_address and str(peer_address).strip():
+            try:
+                peer_for_route = self._normalize_peer_addr(peer_address)
+            except ValueError:
+                peer_for_route = ""
+        if not peer_for_route:
+            lap = self._last_active_peer_for_telemetry()
+            peer_for_route = self._normalize_peer_addr(
+                self.current_peer_addr or lap or ""
+            )
+        connected = (
+            bool(peer_for_route and self._has_active_session_for_peer(peer_for_route))
+            if peer_for_route
+            else self._any_live_stream()
         )
-        connected = self.conn is not None
         live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
         policy_kwargs: dict[str, Any] = {
             "requested_route": r,
@@ -3968,9 +7382,13 @@ class I2PChatCore:
         }
         if not peer_for_route:
             live_kwargs["connected"] = connected
-            live_kwargs["handshake_complete"] = self.handshake_complete
+            live_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
+                ""
+            )
             policy_kwargs["connected"] = connected
-            policy_kwargs["handshake_complete"] = self.handshake_complete
+            policy_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
+                ""
+            )
 
         policy = self.session_manager.select_outbound_policy(**policy_kwargs)
 
@@ -3992,7 +7410,9 @@ class I2PChatCore:
                     delivery_state=lifecycle.state,
                     retryable=lifecycle.retryable,
                 )
-            sent_offline = await self._send_text_via_blindbox(text)
+            sent_offline = await self._send_text_via_blindbox(
+                text, peer_address=peer_for_route
+            )
             if sent_offline is None:
                 reason, hint = self._offline_send_block_feedback()
                 self._emit_error(hint)
@@ -4030,7 +7450,9 @@ class I2PChatCore:
 
         if policy == OutboundPolicy.LIVE_ONLY:
             if not secure_live:
-                if self.conn is not None and not self.handshake_complete:
+                if connected and not self._handshake_complete_for_peer_route(
+                    peer_for_route
+                ):
                     hint = (
                         "Secure channel handshake is in progress. "
                         "Please wait before sending live."
@@ -4076,7 +7498,9 @@ class I2PChatCore:
                     delivery_state=lifecycle.state,
                     retryable=lifecycle.retryable,
                 )
-            sent_offline = await self._send_text_via_blindbox(text)
+            sent_offline = await self._send_text_via_blindbox(
+                text, peer_address=peer_for_route
+            )
             if sent_offline is None:
                 reason, hint = self._offline_send_block_feedback()
                 self._emit_error(hint)
@@ -4109,7 +7533,9 @@ class I2PChatCore:
                 delivery_state=lifecycle.state,
                 retryable=lifecycle.retryable,
             )
-        if not self._require_secure_channel():
+        if not self._require_secure_channel(
+            outbound_peer=peer_for_route or None
+        ):
             lifecycle = delivery_lifecycle_from_send_result(
                 route="blocked",
                 accepted=False,
@@ -4125,9 +7551,15 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
         try:
-            _, writer = self.conn
+            writer, frame_peer_id, text_ack_table = self._writer_frame_peer_and_text_acks(
+                peer_for_route
+            )
+            if writer is None:
+                raise ConnectionError("No live connection for the selected peer")
             if self._blindbox_ready():
-                await self._send_blindbox_root_if_needed(writer)
+                await self._send_blindbox_root_if_needed(
+                    writer, peer_id=frame_peer_id
+                )
             chunks = split_long_chat_text(text)
             last_msg_id: Optional[int] = None
             lifecycle = delivery_lifecycle_from_send_result(
@@ -4137,14 +7569,18 @@ class I2PChatCore:
                 hint="Message sent over live secure session.",
             )
             for chunk in chunks:
-                frame, msg_id = self.frame_message_with_id("U", chunk)
+                frame, msg_id = self.frame_message_with_id(
+                    "U", chunk, peer_id=frame_peer_id
+                )
                 writer.write(frame)
                 await writer.drain()
+                routing_pid = frame_peer_id or self._normalize_peer_addr(peer_for_route)
                 self._register_pending_ack(
-                    self._pending_text_acks,
+                    text_ack_table,
                     msg_id,
                     token=chunk[:128],
                     ack_kind="msg",
+                    routing_peer_id=routing_pid,
                 )
                 self._emit_message(
                     "me",
@@ -4172,7 +7608,7 @@ class I2PChatCore:
                 reason="send-failed",
                 peer_id=peer_for_route,
             )
-            self._schedule_disconnect()
+            self._schedule_disconnect(self._peer_id_for_frame())
             lifecycle = delivery_lifecycle_from_send_result(
                 route="blocked",
                 accepted=False,
@@ -4189,92 +7625,144 @@ class I2PChatCore:
             )
 
     async def _write_signal_frame_maybe_soft_drain(
-        self, writer: asyncio.StreamWriter, frame: bytes
+        self,
+        writer: asyncio.StreamWriter,
+        frame: bytes,
+        *,
+        sess: Any,
     ) -> None:
         """S-фрейм (MSG_ACK, IMG_ACK): при исходящей передаче файла реже await drain()."""
         writer.write(frame)
-        if not self._file_transfer_active:
+        if not sess._file_transfer_active:
             await writer.drain()
-            self._soft_signal_ack_since_drain = 0
+            sess._soft_signal_ack_since_drain = 0
             return
-        self._soft_signal_ack_since_drain += 1
-        if self._soft_signal_ack_since_drain >= _msg_ack_soft_drain_every():
+        sess._soft_signal_ack_since_drain += 1
+        if sess._soft_signal_ack_since_drain >= _msg_ack_soft_drain_every():
             await writer.drain()
-            self._soft_signal_ack_since_drain = 0
+            sess._soft_signal_ack_since_drain = 0
 
-    async def _send_abort_file(self) -> None:
+    async def _send_abort_file(self, peer_for_route: Optional[str] = None) -> None:
         """Отправить пиру сигнал отмены передачи файла (получатель отменил или отправитель)."""
-        if not self.conn:
+        lap = self._last_active_peer_for_telemetry()
+        pr = self._normalize_peer_addr(
+            peer_for_route or self.current_peer_addr or lap or ""
+        )
+        writer, fpid, _ = self._writer_frame_peer_and_file_acks(pr)
+        if writer is None:
             return
         try:
-            _, writer = self.conn
-            writer.write(self.frame_message("S", "__SIGNAL__:ABORT_FILE"))
+            writer.write(
+                self.frame_message("S", "__SIGNAL__:ABORT_FILE", peer_id=fpid)
+            )
             await writer.drain()
         except Exception:
             pass
 
-    async def reject_incoming_file(self, filename: str) -> None:
+    async def reject_incoming_file(
+        self, filename: str, *, peer_for_route: Optional[str] = None
+    ) -> None:
         """Уведомить отправителя, что получатель отклонил входящий файл."""
-        if not self.conn:
+        lap = self._last_active_peer_for_telemetry()
+        pr = self._normalize_peer_addr(
+            peer_for_route or self.current_peer_addr or lap or ""
+        )
+        writer, fpid, _ = self._writer_frame_peer_and_file_acks(pr)
+        if writer is None:
             return
         try:
-            _, writer = self.conn
-            writer.write(self.frame_message("S", f"__SIGNAL__:REJECT_FILE|{filename}"))
+            writer.write(
+                self.frame_message(
+                    "S",
+                    f"__SIGNAL__:REJECT_FILE|{filename}",
+                    peer_id=fpid,
+                )
+            )
             await writer.drain()
         except Exception:
             pass
 
     def cancel_file_transfer(self) -> None:
         """Отменить текущую передачу файла (на получателе — также уведомить отправителя)."""
+        lap = self._last_active_peer_for_telemetry()
+        pr = self._normalize_peer_addr(self.current_peer_addr or lap or "")
+        sess = self._session_view_for_peer_route(pr)
+        sess._cancel_transfer = True
         self._cancel_transfer = True
-        if self.incoming_file:
+        if sess.incoming_file:
             try:
-                self.incoming_file.close()
+                sess.incoming_file.close()
             except Exception:
                 pass
-            self.incoming_file = None
-        if self.incoming_info:
-            self._emit_file_event(FileTransferInfo(
-                filename=self.incoming_info.filename,
-                size=self.incoming_info.size,
-                received=-1,
-                is_sending=False,
-            ))
-            self.incoming_info = None
-        # Уведомить отправителя, чтобы он прекратил слать чанки
-        if self.conn:
+            sess.incoming_file = None
+        if sess.incoming_info:
+            self._emit_file_event(
+                FileTransferInfo(
+                    filename=sess.incoming_info.filename,
+                    size=sess.incoming_info.size,
+                    received=-1,
+                    is_sending=False,
+                )
+            )
+            sess.incoming_info = None
+        if sess.conn:
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._send_abort_file())
+                loop.create_task(self._send_abort_file(pr))
             except RuntimeError:
                 pass
 
-    async def send_file(self, path: str) -> None:
-        if not self._require_secure_channel():
+    async def send_file(
+        self, path: str, *, peer_address: Optional[str] = None
+    ) -> None:
+        peer_for_route = ""
+        if peer_address and str(peer_address).strip():
+            try:
+                peer_for_route = self._normalize_peer_addr(peer_address)
+            except ValueError:
+                peer_for_route = ""
+        if not peer_for_route:
+            lap = self._last_active_peer_for_telemetry()
+            peer_for_route = self._normalize_peer_addr(
+                self.current_peer_addr or lap or ""
+            )
+        if not peer_for_route:
+            self._emit_error("No peer selected for file transfer.")
             return
-        
+        if not self._require_secure_channel(outbound_peer=peer_for_route):
+            return
+
+        writer, fpid, file_acks = self._writer_frame_peer_and_file_acks(peer_for_route)
+        if writer is None:
+            self._emit_error("No live connection for the selected peer.")
+            return
+
+        sess = self._session_view_for_peer_route(peer_for_route)
         filename = os.path.basename(path)
         filesize = os.path.getsize(path)
-        
-        self._file_transfer_active = True
-        self._soft_signal_ack_since_drain = 0
-        self._cancel_transfer = False
-        self._transfer_aborted_by_peer = False
-        self._transfer_rejected_by_peer = False
-        
+
+        sess._file_transfer_active = True
+        sess._soft_signal_ack_since_drain = 0
+        sess._cancel_transfer = False
+        sess._transfer_aborted_by_peer = False
+        sess._transfer_rejected_by_peer = False
+
         try:
-            reader, writer = self.conn
             self._emit_system(f"Sending file: {filename} ({filesize} bytes)")
 
             header = f"{filename}|{filesize}"
-            header_frame, file_msg_id = self.frame_message_with_id("F", header)
+            header_frame, file_msg_id = self.frame_message_with_id(
+                "F", header, peer_id=fpid
+            )
             writer.write(header_frame)
             await writer.drain()
+            routing_pid = fpid or self._normalize_peer_addr(peer_for_route)
             self._register_pending_ack(
-                self._pending_file_acks,
+                file_acks,
                 file_msg_id,
                 token=os.path.basename(filename),
                 ack_kind="file",
+                routing_peer_id=routing_pid,
             )
 
             info = FileTransferInfo(
@@ -4292,15 +7780,15 @@ class I2PChatCore:
             pending_drains = 0
             with open(path, "rb") as f:
                 while True:
-                    if self._cancel_transfer:
+                    if sess._cancel_transfer:
                         if pending_drains:
                             try:
                                 await writer.drain()
                             except Exception:
                                 pass
-                        await self._send_abort_file()
+                        await self._send_abort_file(peer_for_route)
                         raise Exception("Transfer cancelled by user")
-                    if self._transfer_aborted_by_peer:
+                    if sess._transfer_aborted_by_peer:
                         if pending_drains:
                             try:
                                 await writer.drain()
@@ -4308,14 +7796,14 @@ class I2PChatCore:
                                 pass
                         self._emit_system("Receiver cancelled the transfer")
                         raise Exception("Transfer cancelled by receiver")
-                    if self._transfer_rejected_by_peer:
+                    if sess._transfer_rejected_by_peer:
                         if pending_drains:
                             try:
                                 await writer.drain()
                             except Exception:
                                 pass
                         raise Exception("Receiver rejected the file")
-                    if not self.conn:
+                    if not sess.conn:
                         raise ConnectionError("Connection lost during transfer")
 
                     chunk = await asyncio.to_thread(f.read, chunk_size)
@@ -4323,7 +7811,7 @@ class I2PChatCore:
                         break
 
                     encoded = base64.b64encode(chunk).decode()
-                    writer.write(self.frame_message("D", encoded))
+                    writer.write(self.frame_message("D", encoded, peer_id=fpid))
                     pending_drains += 1
                     if pending_drains >= drain_batch:
                         t0 = time.monotonic()
@@ -4353,7 +7841,7 @@ class I2PChatCore:
             if pending_drains:
                 await writer.drain()
 
-            writer.write(self.frame_message("E", ""))
+            writer.write(self.frame_message("E", "", peer_id=fpid))
             await writer.drain()
 
             info = FileTransferInfo(
@@ -4364,15 +7852,14 @@ class I2PChatCore:
                 source_path=path,
             )
             self._emit_file_event(info)
-            
-            # Перезапуск receive_loop если он был прерван timeout'ом во время передачи
-            if self.conn:
+
+            if sess.conn:
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(self.receive_loop(self.conn))
+                    loop.create_task(self.receive_loop(sess.conn, peer_id=fpid))
                 except RuntimeError:
                     pass
-            
+
         except (ConnectionError, ConnectionResetError, BrokenPipeError, OSError) as e:
             info = FileTransferInfo(
                 filename=filename,
@@ -4383,7 +7870,7 @@ class I2PChatCore:
             )
             self._emit_file_event(info)
             self._emit_error(f"File transfer interrupted: connection lost")
-            
+
         except Exception as e:
             rejected = "rejected" in str(e).lower()
             info = FileTransferInfo(
@@ -4400,21 +7887,39 @@ class I2PChatCore:
             else:
                 self._emit_error(f"File transfer failed: {e}")
         finally:
-            self._file_transfer_active = False
-            self._soft_signal_ack_since_drain = 0
+            sess._file_transfer_active = False
+            sess._soft_signal_ack_since_drain = 0
 
-    async def send_image_lines(self, lines: list[str]) -> None:
+    async def send_image_lines(
+        self, lines: list[str], *, peer_address: Optional[str] = None
+    ) -> None:
         """Отправить уже отрендеренное изображение построчно."""
-        if not self._require_secure_channel():
+        peer_for_route = ""
+        if peer_address and str(peer_address).strip():
+            try:
+                peer_for_route = self._normalize_peer_addr(peer_address)
+            except ValueError:
+                peer_for_route = ""
+        if not peer_for_route:
+            lap = self._last_active_peer_for_telemetry()
+            peer_for_route = self._normalize_peer_addr(
+                self.current_peer_addr or lap or ""
+            )
+        if not self._require_secure_channel(outbound_peer=peer_for_route):
             return
-        reader, writer = self.conn
+        writer, fpid, _ = self._writer_frame_peer_and_text_acks(peer_for_route)
+        if writer is None:
+            self._emit_error("No live connection for the selected peer.")
+            return
 
         for line in lines:
-            writer.write(self.frame_message("I", line))
-        writer.write(self.frame_message("I", "__END__"))
+            writer.write(self.frame_message("I", line, peer_id=fpid))
+        writer.write(self.frame_message("I", "__END__", peer_id=fpid))
         await writer.drain()
 
-    async def send_image(self, path: str) -> Optional[str]:
+    async def send_image(
+        self, path: str, *, peer_address: Optional[str] = None
+    ) -> Optional[str]:
         """
         Отправить изображение (PNG/JPEG/WebP) с валидацией.
         
@@ -4424,9 +7929,6 @@ class I2PChatCore:
         Returns:
             путь к копии изображения в images/ или None при ошибке
         """
-        if not self._require_secure_channel():
-            return None
-        
         # Валидация изображения
         is_valid, error_msg, detected_ext = validate_image(path)
         if not is_valid:
@@ -4450,15 +7952,39 @@ class I2PChatCore:
         except Exception as e:
             self._emit_error(f"Failed to copy image: {e}")
             return None
-        
-        self._file_transfer_active = True
-        self._soft_signal_ack_since_drain = 0
-        self._cancel_transfer = False
-        
+
+        peer_for_route = ""
+        if peer_address and str(peer_address).strip():
+            try:
+                peer_for_route = self._normalize_peer_addr(peer_address)
+            except ValueError:
+                peer_for_route = ""
+        if not peer_for_route:
+            lap = self._last_active_peer_for_telemetry()
+            peer_for_route = self._normalize_peer_addr(
+                self.current_peer_addr or lap or ""
+            )
+        if not peer_for_route:
+            self._emit_error("No peer selected for image transfer.")
+            return None
+        if not self._require_secure_channel(outbound_peer=peer_for_route):
+            return None
+
+        writer, fpid, image_acks = self._writer_frame_peer_and_image_acks(
+            peer_for_route
+        )
+        if writer is None:
+            self._emit_error("No live connection for the selected peer.")
+            return None
+
+        sess = self._session_view_for_peer_route(peer_for_route)
+        sess._file_transfer_active = True
+        sess._soft_signal_ack_since_drain = 0
+        sess._cancel_transfer = False
+
         try:
-            reader, writer = self.conn
             self._emit_system(f"Sending image: {filename} ({filesize} bytes)")
-            
+
             # Прогресс загрузки в UI (is_inline_image — чтобы GUI заменил виджет на превью, не «File sent»)
             self._emit_file_event(
                 FileTransferInfo(
@@ -4470,17 +7996,21 @@ class I2PChatCore:
                     source_path=path,
                 )
             )
-            
+
             # Отправляем заголовок: G + filename|size
             header = f"{filename}|{filesize}"
-            header_frame, image_msg_id = self.frame_message_with_id("G", header)
+            header_frame, image_msg_id = self.frame_message_with_id(
+                "G", header, peer_id=fpid
+            )
             writer.write(header_frame)
             await writer.drain()
+            routing_pid = fpid or self._normalize_peer_addr(peer_for_route)
             self._register_pending_ack(
-                self._pending_image_acks,
+                image_acks,
                 image_msg_id,
                 token=os.path.basename(filename),
                 ack_kind="image",
+                routing_peer_id=routing_pid,
             )
 
             chunk_size = _file_read_chunk_bytes()
@@ -4489,14 +8019,14 @@ class I2PChatCore:
             pending_drains = 0
             with open(path, "rb") as f:
                 while True:
-                    if self._cancel_transfer:
+                    if sess._cancel_transfer:
                         if pending_drains:
                             try:
                                 await writer.drain()
                             except Exception:
                                 pass
                         raise Exception("Transfer cancelled by user")
-                    if not self.conn:
+                    if not sess.conn:
                         raise ConnectionError("Connection lost during transfer")
 
                     chunk = await asyncio.to_thread(f.read, chunk_size)
@@ -4504,7 +8034,7 @@ class I2PChatCore:
                         break
 
                     encoded = base64.b64encode(chunk).decode()
-                    writer.write(self.frame_message("G", encoded))
+                    writer.write(self.frame_message("G", encoded, peer_id=fpid))
                     pending_drains += 1
                     if pending_drains >= drain_batch:
                         t0 = time.monotonic()
@@ -4537,7 +8067,7 @@ class I2PChatCore:
                 await writer.drain()
 
             # Отправляем маркер завершения
-            writer.write(self.frame_message("G", "__IMG_END__"))
+            writer.write(self.frame_message("G", "__IMG_END__", peer_id=fpid))
             await writer.drain()
             
             self._emit_file_event(
@@ -4587,78 +8117,206 @@ class I2PChatCore:
             self._emit_error(f"Image transfer failed: {e}")
             return None
         finally:
-            self._file_transfer_active = False
-            self._soft_signal_ack_since_drain = 0
+            sess._file_transfer_active = False
+            sess._soft_signal_ack_since_drain = 0
 
     async def send_control(self, signal: str) -> None:
-        if not self.conn:
+        lap = self._last_active_peer_for_telemetry()
+        pr = self._normalize_peer_addr(self.current_peer_addr or lap or "")
+        if not pr:
+            return
+        writer, fpid, _ = self._writer_frame_peer_and_text_acks(pr)
+        if writer is None:
             return
         try:
-            _, writer = self.conn
-            writer.write(self.frame_message("S", f"__SIGNAL__:{signal}"))
+            writer.write(
+                self.frame_message("S", f"__SIGNAL__:{signal}", peer_id=fpid)
+            )
             await writer.drain()
         except Exception:
             pass
 
-    async def disconnect(self) -> None:
-        if self.session_manager.disconnecting or not self.conn:
+    def _any_live_stream(self) -> bool:
+        return any(s.conn for s in self._live_sessions.values())
+
+    def any_live_stream(self) -> bool:
+        """Публичная проверка: есть ли хотя бы один активный SAM live-поток."""
+        return self._any_live_stream()
+
+    def live_stream_count(self) -> int:
+        """Число активных SAM live-потоков."""
+        return self._live_stream_count()
+
+    def is_current_peer_secure(self) -> bool:
+        """Handshake завершён для текущего выбранного пира."""
+        p = self._normalize_peer_addr(self.current_peer_addr or "")
+        return self._handshake_complete_for_peer_route(p)
+
+    async def _maybe_stop_keepalive_if_idle(self) -> None:
+        if self._any_live_stream():
             return
-        self.session_manager.disconnecting = True
-        try:
-            self._cancel_handshake_watchdog()
-            # Останавливаем keepalive
-            if self.session_manager.keepalive_task:
-                asyncio.get_running_loop().call_soon(self.session_manager.keepalive_task.cancel)
-                self.session_manager.keepalive_task = None
-            _, writer = self.conn
-            peer_before_disconnect = self._normalize_peer_addr(self.current_peer_addr or "")
-            self.conn = None
-            self.peer_b32 = "Waiting for incoming connections..."
-            had_secure_channel = self.handshake_complete and self.use_encryption and bool(self.shared_key)
+        if self.session_manager.keepalive_task:
+            asyncio.get_running_loop().call_soon(
+                self.session_manager.keepalive_task.cancel
+            )
+            self.session_manager.keepalive_task = None
+
+    async def _yield_session_slot_to_incoming(
+        self,
+        peer_id: str,
+        *,
+        expected_session: Optional[LivePeerSession] = None,
+    ) -> None:
+        k = self._normalize_peer_addr(peer_id)
+        current = self._live_sessions.get(k)
+        if current is None:
+            return
+        if expected_session is not None and current is not expected_session:
+            return
+        receive_task = current.receive_task
+        if (
+            receive_task is not None
+            and receive_task is not asyncio.current_task()
+            and not receive_task.done()
+        ):
+            receive_task.cancel()
+        current.receive_task = None
+        writer: Optional[asyncio.StreamWriter] = None
+        if current.conn is not None:
+            _, writer = current.conn
+            current.conn = None
+        self._live_sessions.pop(k, None)
+        self._cancel_handshake_watchdog(k)
+        current.reset_crypto()
+        self.session_manager.reset_peer_lifecycle(
+            k, reason="incoming-preferred", keep_reconnect_metadata=True
+        )
+        if self.active_live_peer_id == k:
+            self.active_live_peer_id = None
+        if writer is not None:
             try:
-                if had_secure_channel:
-                    writer.write(self.frame_message("S", "__SIGNAL__:QUIT"))
-                else:
-                    writer.write(self.frame_message_plain("S", "__SIGNAL__:QUIT"))
-                await writer.drain()
                 writer.close()
                 await writer.wait_closed()
             except Exception:
                 pass
-            self._reset_crypto_state()
-            if peer_before_disconnect:
-                self.session_manager.reset_peer_lifecycle(
-                    peer_before_disconnect, reason="disconnect"
-                )
+
+    async def _disconnect_extra_session(self, peer_id: str) -> None:
+        k = self._normalize_peer_addr(peer_id)
+        ls = self._live_sessions.get(k)
+        if not ls:
+            return
+        receive_task = ls.receive_task
+        if (
+            receive_task is not None
+            and receive_task is not asyncio.current_task()
+            and not receive_task.done()
+        ):
+            receive_task.cancel()
+        ls.receive_task = None
+        if not ls.conn:
+            self._live_sessions.pop(k, None)
+            self._cancel_handshake_watchdog(k)
+            self.session_manager.reset_peer_lifecycle(k, reason="disconnect-pending")
             self.session_manager.mark_live_failure(
                 reason="disconnect",
                 mark_peer_stale=False,
-                peer_id=peer_before_disconnect,
+                peer_id=k,
             )
-            self._emit_message("info", "You disconnected.")
-            self._emit_system("Waiting for incoming connections...")
-        finally:
-            self.session_manager.disconnecting = False
-            if self.session_manager.disconnect_task is asyncio.current_task():
-                self.session_manager.disconnect_task = None
-    
+            if self.active_live_peer_id == k:
+                self.active_live_peer_id = None
+            return
+        _, writer = ls.conn
+        ls.conn = None
+        had_secure = ls.handshake_complete and ls.use_encryption and bool(ls.shared_key)
+        try:
+            quit_frame: Optional[bytes] = None
+            if had_secure:
+                quit_frame = self.frame_message("S", "__SIGNAL__:QUIT", peer_id=k)
+            else:
+                quit_frame = self.frame_message_plain("S", "__SIGNAL__:QUIT", peer_id=k)
+            if quit_frame is not None:
+                writer.write(quit_frame)
+                await writer.drain()
+        except Exception:
+            pass
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+        self._live_sessions.pop(k, None)
+        ls.reset_crypto()
+        self.session_manager.reset_peer_lifecycle(k, reason="disconnect")
+        self.session_manager.mark_live_failure(
+            reason="disconnect",
+            mark_peer_stale=False,
+            peer_id=k,
+        )
+        if self.active_live_peer_id == k:
+            self.active_live_peer_id = None
+        if ls.announce_lifecycle:
+            self._emit_message("info", f"You disconnected from {k[:16]}...")
+        self._notify_group_mesh_manager()
+        await self._maybe_stop_keepalive_if_idle()
+        if self._any_live_stream() and (
+            self.session_manager.keepalive_task is None
+            or self.session_manager.keepalive_task.done()
+        ):
+            try:
+                loop = asyncio.get_running_loop()
+                self.session_manager.keepalive_task = loop.create_task(
+                    self._keepalive_loop()
+                )
+            except RuntimeError:
+                pass
+
+    async def disconnect_peer(self, peer_id: Optional[str] = None) -> None:
+        """
+        Закрыть одну live-сессию в ``_live_sessions``.
+        ``peer_id=None`` — сессия для ``active_live_peer_id`` или ``current_peer_addr``.
+        """
+        if peer_id is None:
+            k = self._normalize_peer_addr(
+                self.active_live_peer_id or self.current_peer_addr or ""
+            )
+            if not k:
+                return
+            await self._disconnect_extra_session(k)
+            return
+        await self._disconnect_extra_session(self._normalize_peer_addr(peer_id))
+
+    async def disconnect(self) -> None:
+        """Отключить выбранную live-сессию: сначала active_live_peer_id, иначе current_peer_addr при наличии потока."""
+        ap = self.active_live_peer_id
+        if not ap:
+            cur = self._normalize_peer_addr(self.current_peer_addr or "")
+            if cur and self._has_active_session_for_peer(cur):
+                ap = cur
+        if ap and self._has_active_session_for_peer(ap):
+            await self.disconnect_peer(ap)
+            return
+        await self.disconnect_peer(None)
+
     async def _keepalive_loop(self) -> None:
-        """Отправляет Ping каждые 15 секунд для поддержания соединения при простое."""
-        while self.conn:
+        """Отправляет Ping каждые 15 секунд для всех live-потоков."""
+        while self._any_live_stream():
             await asyncio.sleep(15)
-            if self.conn and not self._file_transfer_active:
-                if not (self.handshake_complete and self.use_encryption and self.shared_key):
+            for pid, ls in list(self._live_sessions.items()):
+                if not ls.conn or ls._file_transfer_active:
+                    continue
+                if not (
+                    ls.handshake_complete and ls.use_encryption and ls.shared_key
+                ):
                     continue
                 try:
-                    _, writer = self.conn
-                    writer.write(self.frame_message("P", ""))
-                    await writer.drain()
+                    _, w = ls.conn
+                    w.write(self.frame_message("P", "", peer_id=pid))
+                    await w.drain()
                 except Exception:
                     self.session_manager.mark_live_failure(
                         reason="keepalive-failed",
-                        peer_id=self._normalize_peer_addr(self.current_peer_addr or ""),
+                        peer_id=pid,
                     )
-                    break
     
     def _reset_crypto_state(self) -> None:
         """Сбрасывает криптографическое состояние при отключении."""
@@ -4684,7 +8342,7 @@ class I2PChatCore:
         self.peer_identity_binding_verified = False
         self.current_peer_dest_b64 = None
 
-    async def initiate_secure_handshake(self) -> bool:
+    async def initiate_secure_handshake(self, peer_id: Optional[str] = None) -> bool:
         """
         Инициирует защищённый handshake (v2 протокол с PFS).
         
@@ -4694,30 +8352,36 @@ class I2PChatCore:
         Returns:
             True если handshake успешен
         """
-        if not self.conn:
+        if not peer_id:
             return False
+        ls = self._live_sessions.get(self._normalize_peer_addr(peer_id))
+        if not ls or not ls.conn:
+            return False
+        _, writer = ls.conn
+        sess = ls
         if not crypto.NACL_AVAILABLE:
             self._emit_error("PyNaCl is required for secure protocol")
-            self._schedule_disconnect()
+            self._schedule_disconnect(peer_id)
             return False
-        
+
         try:
-            _, writer = self.conn
-            self.my_nonce = crypto.generate_nonce()
-            self.my_ephemeral_private, self.my_ephemeral_public = \
+            sess.my_nonce = crypto.generate_nonce()
+            sess.my_ephemeral_private, sess.my_ephemeral_public = (
                 crypto.generate_ephemeral_keypair()
+            )
             if not self.my_signing_seed or not self.my_signing_public:
                 raise ValueError("Local handshake signing key is missing")
-            if not self.current_peer_addr:
+            peer_addr = self._normalize_peer_addr(peer_id or self.current_peer_addr or "")
+            if not peer_addr:
                 raise ValueError("Peer address is unknown")
-            init_nonce_hex = self.my_nonce.hex()
-            init_eph_hex = self.my_ephemeral_public.hex()
+            init_nonce_hex = sess.my_nonce.hex()
+            init_eph_hex = sess.my_ephemeral_public.hex()
             init_sign_pub_hex = self.my_signing_public.hex()
             if not self.my_dest:
                 raise ValueError("Local destination is not initialized")
             init_sig_payload = self._build_init_sig_payload(
                 self.my_dest.base32,
-                self.current_peer_addr,
+                peer_addr,
                 init_nonce_hex,
                 init_eph_hex,
                 init_sign_pub_hex,
@@ -4729,16 +8393,18 @@ class I2PChatCore:
             handshake_data = (
                 f"INIT:{init_nonce_hex}:{init_eph_hex}:{init_sign_pub_hex}:{init_sig_hex}"
             )
-            self._handshake_initiated = True
-            self._emit_system("Initiating secure handshake with PFS...")
-            writer.write(self.frame_message_plain("H", handshake_data))
+            sess._handshake_initiated = True
+            if sess.announce_lifecycle:
+                self._emit_system("Initiating secure handshake with PFS...")
+            writer.write(self.frame_message_plain("H", handshake_data, peer_id=peer_id))
             await writer.drain()
             return True
         except Exception as e:
             logger.error(f"Handshake initiation failed: {e}")
+            self._schedule_disconnect(peer_id)
             return False
 
-    def _compute_session_subkeys(self, is_initiator: bool) -> Tuple[bytes, bytes]:
+    def _compute_session_subkeys(self, is_initiator: bool, sess: Any) -> Tuple[bytes, bytes]:
         """
         Вычисляет финальные subkeys для сессии.
 
@@ -4747,132 +8413,641 @@ class I2PChatCore:
         """
         if not crypto.NACL_AVAILABLE:
             raise RuntimeError("PyNaCl is required for secure protocol")
-        if not self.my_ephemeral_private or not self.peer_ephemeral_public:
+        if not sess.my_ephemeral_private or not sess.peer_ephemeral_public:
             raise ValueError("Missing ephemeral keys")
-        if not self.my_nonce or not self.peer_nonce:
+        if not sess.my_nonce or not sess.peer_nonce:
             raise ValueError("Missing handshake nonces")
 
         dh_shared = crypto.compute_dh_shared_secret(
-            self.my_ephemeral_private, self.peer_ephemeral_public
+            sess.my_ephemeral_private, sess.peer_ephemeral_public
         )
         if is_initiator:
-            nonce_init = self.my_nonce
-            nonce_resp = self.peer_nonce
+            nonce_init = sess.my_nonce
+            nonce_resp = sess.peer_nonce
         else:
-            nonce_init = self.peer_nonce
-            nonce_resp = self.my_nonce
+            nonce_init = sess.peer_nonce
+            nonce_resp = sess.my_nonce
         return crypto.derive_handshake_subkeys(dh_shared, nonce_init, nonce_resp)
 
-    def _should_initiate_blindbox_root_exchange(self) -> bool:
+    def _should_initiate_blindbox_root_exchange(
+        self, peer_id: Optional[str] = None
+    ) -> bool:
         if not self._blindbox_ready() or not self.my_dest:
             return False
-        peer_id = self._blindbox_peer_id()
-        if not peer_id:
+        target_peer = self._blindbox_peer_id_for_peer(
+            peer_id or self.current_peer_addr or self._last_active_peer_for_telemetry()
+        )
+        if not target_peer:
             return False
         local_id = self.my_dest.base32.strip().lower()
-        return local_id < peer_id.strip().lower()
+        return local_id < target_peer.strip().lower()
 
-    def _blindbox_should_rotate_root(self) -> bool:
-        if self._blindbox_root_secret is None:
+    def _blindbox_should_rotate_root(
+        self, *, snapshot: Optional[_BlindBoxPeerSnapshot] = None
+    ) -> bool:
+        root_secret = (
+            self._blindbox_root_secret if snapshot is None else snapshot.root_secret
+        )
+        if root_secret is None:
             return False
         now_ts = int(time.time())
-        elapsed_sec = max(0, now_ts - int(self._blindbox_root_created_at or now_ts))
+        root_created_at = (
+            self._blindbox_root_created_at
+            if snapshot is None
+            else snapshot.root_created_at
+        )
+        state = self._blindbox_state if snapshot is None else snapshot.state
+        root_send_index_base = (
+            self._blindbox_root_send_index_base
+            if snapshot is None
+            else snapshot.root_send_index_base
+        )
+        elapsed_sec = max(0, now_ts - int(root_created_at or now_ts))
         sent_since_epoch = max(
-            0, int(self._blindbox_state.send_index) - int(self._blindbox_root_send_index_base)
+            0, int(state.send_index) - int(root_send_index_base)
         )
         return (
             elapsed_sec >= self._blindbox_root_rotate_seconds
             or sent_since_epoch >= self._blindbox_root_rotate_messages
         )
 
-    def _blindbox_has_pending_root(self) -> bool:
+    def _group_blindbox_root_coordinator(self, state: GroupState) -> str:
+        members = [normalize_member_id(member_id) for member_id in state.members if member_id]
+        if not members:
+            return ""
+        return sorted(members)[0]
+
+    def _should_initiate_group_blindbox_root_exchange(self, state: GroupState) -> bool:
+        if not self._blindbox_ready():
+            return False
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            return False
+        coordinator = self._group_blindbox_root_coordinator(state)
+        has_remote_members = any(
+            member_id and not same_i2p_destination(member_id, local_member)
+            for member_id in state.members
+        )
+        if not has_remote_members:
+            return False
+        if coordinator and same_i2p_destination(local_member, coordinator):
+            return True
+        snapshot_bundle = self._group_blindbox_runtime_snapshot(state.group_id)
+        if snapshot_bundle is None:
+            return True
+        snapshot, _save_state = snapshot_bundle
+        has_current_root = (
+            snapshot.root_secret is not None
+            and int(snapshot.group_epoch) == int(state.epoch)
+        )
+        has_pending_root = (
+            snapshot.pending_root_secret is not None
+            and int(snapshot.group_epoch) == int(state.epoch)
+        )
+        # Bootstrap is allowed from any live member when the current epoch has no root yet.
+        # This avoids permanent await-group-root stalls when the canonical coordinator is offline.
+        return not has_current_root and not has_pending_root
+
+    def _group_blindbox_should_rotate_root(
+        self, snapshot: _GroupBlindBoxSnapshot
+    ) -> bool:
+        if snapshot.root_secret is None:
+            return False
+        now_ts = int(time.time())
+        elapsed_sec = max(0, now_ts - int(snapshot.root_created_at or now_ts))
+        sent_since_epoch = max(
+            0, int(snapshot.state.send_index) - int(snapshot.root_send_index_base)
+        )
         return (
-            self._blindbox_pending_root_secret is not None
-            and len(self._blindbox_pending_root_secret) == 32
-            and int(self._blindbox_pending_root_epoch) > 0
+            elapsed_sec >= self._blindbox_root_rotate_seconds
+            or sent_since_epoch >= self._blindbox_root_rotate_messages
         )
 
-    def _clear_pending_blindbox_root(self) -> None:
-        self._blindbox_pending_root_secret = None
-        self._blindbox_pending_root_epoch = 0
-        self._blindbox_pending_root_created_at = 0
-        self._blindbox_pending_root_send_index_base = int(self._blindbox_state.send_index)
+    def _group_blindbox_target_members(self, state: GroupState) -> tuple[str, ...]:
+        try:
+            local_member = self._local_group_member_id()
+        except Exception:
+            local_member = ""
+        return tuple(
+            normalize_member_id(member_id)
+            for member_id in state.members
+            if member_id and not same_i2p_destination(member_id, local_member)
+        )
 
-    def _ensure_pending_blindbox_root(
-        self, *, force_rotate: bool = False
+    def _ensure_pending_group_blindbox_root(
+        self,
+        state: GroupState,
+        snapshot: _GroupBlindBoxSnapshot,
+        *,
+        force_rotate: bool = False,
+        save_state: Callable[[], None],
     ) -> tuple[int, bytes, str, bool] | None:
-        if self._blindbox_has_pending_root():
-            if self._blindbox_pending_root_secret is None:
-                raise RuntimeError("BlindBox pending root invariant violated: secret is None")
-            reason = (
-                "initialized"
-                if self._blindbox_root_secret is None
-                else "rotated"
-            )
+        target_members = self._group_blindbox_target_members(state)
+        if not target_members:
+            return None
+        should_bootstrap = (
+            snapshot.root_secret is None
+            or int(snapshot.group_epoch) != int(state.epoch)
+        )
+        should_rotate = force_rotate or self._group_blindbox_should_rotate_root(snapshot)
+        if (
+            snapshot.pending_root_secret is not None
+            and int(snapshot.pending_root_epoch) > 0
+            and tuple(snapshot.pending_root_target_members) == target_members
+            and int(snapshot.group_epoch) == int(state.epoch)
+        ):
+            reason = "initialized" if should_bootstrap else "rotated"
             return (
-                int(self._blindbox_pending_root_epoch),
-                self._blindbox_pending_root_secret,
+                int(snapshot.pending_root_epoch),
+                snapshot.pending_root_secret,
                 reason,
                 False,
             )
-        should_bootstrap = self._blindbox_root_secret is None
-        should_rotate = force_rotate or self._blindbox_should_rotate_root()
+        if not should_bootstrap and not should_rotate:
+            return None
+        snapshot.group_epoch = int(state.epoch)
+        snapshot.pending_root_secret = os.urandom(32)
+        snapshot.pending_root_epoch = max(
+            int(snapshot.root_epoch),
+            int(snapshot.pending_root_epoch),
+        ) + 1
+        snapshot.pending_root_created_at = int(time.time())
+        snapshot.pending_root_send_index_base = int(snapshot.state.send_index)
+        snapshot.pending_root_target_members = target_members
+        snapshot.pending_root_acked_members.clear()
+        save_state()
+        reason = "initialized" if should_bootstrap else "rotated"
+        return (
+            int(snapshot.pending_root_epoch),
+            snapshot.pending_root_secret,
+            reason,
+            True,
+        )
+
+    def _commit_pending_group_blindbox_root(
+        self,
+        state: GroupState,
+        ack_member: str,
+        ack_epoch: int,
+        *,
+        snapshot: _GroupBlindBoxSnapshot,
+        save_state: Callable[[], None],
+    ) -> bool:
+        normalized_ack_member = normalize_member_id(ack_member)
+        if (
+            snapshot.pending_root_secret is None
+            or int(snapshot.pending_root_epoch) <= 0
+            or int(ack_epoch) != int(snapshot.pending_root_epoch)
+            or not normalized_ack_member
+            or normalized_ack_member not in set(snapshot.pending_root_target_members)
+            or normalized_ack_member
+            not in {normalize_member_id(member_id) for member_id in state.members if member_id}
+        ):
+            return False
+        snapshot.pending_root_acked_members.add(normalized_ack_member)
+        if not set(snapshot.pending_root_target_members).issubset(
+            snapshot.pending_root_acked_members
+        ):
+            save_state()
+            return False
+        if snapshot.root_secret is not None:
+            snapshot.prev_roots.append(
+                {
+                    "group_epoch": int(snapshot.group_epoch),
+                    "root_epoch": int(snapshot.root_epoch),
+                    "secret": snapshot.root_secret,
+                    "expires_at": int(time.time())
+                    + int(self._blindbox_previous_grace_seconds),
+                }
+            )
+        snapshot.prev_roots = self._blindbox_prune_previous_roots_list(
+            snapshot.prev_roots
+        )
+        snapshot.root_secret = snapshot.pending_root_secret
+        snapshot.root_epoch = int(snapshot.pending_root_epoch)
+        snapshot.root_created_at = int(snapshot.pending_root_created_at)
+        snapshot.root_send_index_base = int(snapshot.pending_root_send_index_base)
+        snapshot.group_epoch = int(state.epoch)
+        snapshot.pending_root_secret = None
+        snapshot.pending_root_epoch = 0
+        snapshot.pending_root_created_at = 0
+        snapshot.pending_root_send_index_base = int(snapshot.state.send_index)
+        snapshot.pending_root_target_members = ()
+        snapshot.pending_root_acked_members.clear()
+        save_state()
+        return True
+
+    def _blindbox_has_pending_root(
+        self, *, snapshot: Optional[_BlindBoxPeerSnapshot] = None
+    ) -> bool:
+        pending_root_secret = (
+            self._blindbox_pending_root_secret
+            if snapshot is None
+            else snapshot.pending_root_secret
+        )
+        pending_root_epoch = (
+            self._blindbox_pending_root_epoch
+            if snapshot is None
+            else snapshot.pending_root_epoch
+        )
+        return (
+            pending_root_secret is not None
+            and len(pending_root_secret) == 32
+            and int(pending_root_epoch) > 0
+        )
+
+    def _clear_pending_blindbox_root(
+        self, *, snapshot: Optional[_BlindBoxPeerSnapshot] = None
+    ) -> None:
+        if snapshot is None:
+            self._blindbox_pending_root_secret = None
+            self._blindbox_pending_root_epoch = 0
+            self._blindbox_pending_root_created_at = 0
+            self._blindbox_pending_root_send_index_base = int(
+                self._blindbox_state.send_index
+            )
+            return
+        snapshot.pending_root_secret = None
+        snapshot.pending_root_epoch = 0
+        snapshot.pending_root_created_at = 0
+        snapshot.pending_root_send_index_base = int(snapshot.state.send_index)
+
+    def _ensure_pending_blindbox_root(
+        self,
+        *,
+        force_rotate: bool = False,
+        snapshot: Optional[_BlindBoxPeerSnapshot] = None,
+        save_state: Optional[Callable[[], None]] = None,
+    ) -> tuple[int, bytes, str, bool] | None:
+        if self._blindbox_has_pending_root(snapshot=snapshot):
+            pending_root_secret = (
+                self._blindbox_pending_root_secret
+                if snapshot is None
+                else snapshot.pending_root_secret
+            )
+            pending_root_epoch = (
+                self._blindbox_pending_root_epoch
+                if snapshot is None
+                else snapshot.pending_root_epoch
+            )
+            root_secret = (
+                self._blindbox_root_secret if snapshot is None else snapshot.root_secret
+            )
+            if pending_root_secret is None:
+                raise RuntimeError("BlindBox pending root invariant violated: secret is None")
+            reason = (
+                "initialized"
+                if root_secret is None
+                else "rotated"
+            )
+            return (
+                int(pending_root_epoch),
+                pending_root_secret,
+                reason,
+                False,
+            )
+        root_secret = (
+            self._blindbox_root_secret if snapshot is None else snapshot.root_secret
+        )
+        state = self._blindbox_state if snapshot is None else snapshot.state
+        root_epoch = self._blindbox_root_epoch if snapshot is None else snapshot.root_epoch
+        pending_root_epoch = (
+            self._blindbox_pending_root_epoch
+            if snapshot is None
+            else snapshot.pending_root_epoch
+        )
+        should_bootstrap = root_secret is None
+        should_rotate = force_rotate or self._blindbox_should_rotate_root(
+            snapshot=snapshot
+        )
         if not should_bootstrap and not should_rotate:
             return None
         next_epoch = max(
-            int(self._blindbox_root_epoch),
-            int(self._blindbox_pending_root_epoch),
+            int(root_epoch),
+            int(pending_root_epoch),
         ) + 1
-        root_secret = os.urandom(32)
-        self._blindbox_pending_root_secret = root_secret
-        self._blindbox_pending_root_epoch = next_epoch
-        self._blindbox_pending_root_created_at = int(time.time())
-        self._blindbox_pending_root_send_index_base = int(self._blindbox_state.send_index)
-        self._save_blindbox_state()
+        new_root_secret = os.urandom(32)
+        if snapshot is None:
+            self._blindbox_pending_root_secret = new_root_secret
+            self._blindbox_pending_root_epoch = next_epoch
+            self._blindbox_pending_root_created_at = int(time.time())
+            self._blindbox_pending_root_send_index_base = int(state.send_index)
+        else:
+            snapshot.pending_root_secret = new_root_secret
+            snapshot.pending_root_epoch = next_epoch
+            snapshot.pending_root_created_at = int(time.time())
+            snapshot.pending_root_send_index_base = int(state.send_index)
+        if save_state is not None:
+            save_state()
+        elif snapshot is None:
+            self._save_blindbox_state()
         reason = "rotated" if should_rotate and not should_bootstrap else "initialized"
-        return (next_epoch, root_secret, reason, True)
+        return (next_epoch, new_root_secret, reason, True)
 
-    def _commit_pending_blindbox_root(self, ack_epoch: int) -> bool:
-        if not self._blindbox_has_pending_root():
+    def _commit_pending_blindbox_root(
+        self,
+        ack_epoch: int,
+        *,
+        snapshot: Optional[_BlindBoxPeerSnapshot] = None,
+        save_state: Optional[Callable[[], None]] = None,
+    ) -> bool:
+        if not self._blindbox_has_pending_root(snapshot=snapshot):
             return False
-        if int(ack_epoch) != int(self._blindbox_pending_root_epoch):
+        pending_root_epoch = (
+            self._blindbox_pending_root_epoch
+            if snapshot is None
+            else snapshot.pending_root_epoch
+        )
+        if int(ack_epoch) != int(pending_root_epoch):
             return False
-        if self._blindbox_pending_root_secret is None:
+        pending_root_secret = (
+            self._blindbox_pending_root_secret
+            if snapshot is None
+            else snapshot.pending_root_secret
+        )
+        if pending_root_secret is None:
             raise RuntimeError("BlindBox commit: pending root secret is None")
+        root_secret = (
+            self._blindbox_root_secret if snapshot is None else snapshot.root_secret
+        )
         reason = (
             "initialized"
-            if self._blindbox_root_secret is None
+            if root_secret is None
             else "rotated"
         )
-        if self._blindbox_root_secret is not None:
+        if root_secret is not None:
             expires_at = int(time.time()) + int(self._blindbox_previous_grace_seconds)
-            self._blindbox_prev_roots.append(
+            prev_roots = (
+                self._blindbox_prev_roots
+                if snapshot is None
+                else snapshot.prev_roots
+            )
+            prev_roots.append(
                 {
-                    "epoch": int(self._blindbox_root_epoch),
-                    "secret": self._blindbox_root_secret,
+                    "epoch": int(
+                        self._blindbox_root_epoch
+                        if snapshot is None
+                        else snapshot.root_epoch
+                    ),
+                    "secret": root_secret,
                     "expires_at": expires_at,
                 }
             )
-        self._blindbox_root_secret = self._blindbox_pending_root_secret
-        self._blindbox_root_epoch = int(self._blindbox_pending_root_epoch)
-        self._blindbox_root_created_at = int(self._blindbox_pending_root_created_at)
-        self._blindbox_root_send_index_base = int(
-            self._blindbox_pending_root_send_index_base
-        )
-        self._clear_pending_blindbox_root()
-        self._blindbox_prune_previous_roots()
-        self._save_blindbox_state()
+        if snapshot is None:
+            self._blindbox_root_secret = pending_root_secret
+            self._blindbox_root_epoch = int(self._blindbox_pending_root_epoch)
+            self._blindbox_root_created_at = int(self._blindbox_pending_root_created_at)
+            self._blindbox_root_send_index_base = int(
+                self._blindbox_pending_root_send_index_base
+            )
+            self._clear_pending_blindbox_root()
+            self._blindbox_prune_previous_roots()
+        else:
+            snapshot.root_secret = pending_root_secret
+            snapshot.root_epoch = int(snapshot.pending_root_epoch)
+            snapshot.root_created_at = int(snapshot.pending_root_created_at)
+            snapshot.root_send_index_base = int(snapshot.pending_root_send_index_base)
+            self._clear_pending_blindbox_root(snapshot=snapshot)
+            snapshot.prev_roots = self._blindbox_prune_previous_roots_list(
+                snapshot.prev_roots
+            )
+        if save_state is not None:
+            save_state()
+        elif snapshot is None:
+            self._save_blindbox_state()
         if reason == "initialized":
             self._emit_system("BlindBox root secret initialized")
         else:
             self._emit_system("BlindBox root secret rotated")
         return True
 
+    async def _send_group_blindbox_root_if_needed(
+        self,
+        writer: asyncio.StreamWriter,
+        group_id: str,
+        *,
+        force_rotate: bool = False,
+        peer_id: Optional[str] = None,
+    ) -> None:
+        if not self._blindbox_ready():
+            return
+        state = self.load_group_state(group_id)
+        if state is None or not self._should_initiate_group_blindbox_root_exchange(state):
+            return
+        target_peer = self._normalize_peer_addr(
+            peer_id or self.current_peer_addr or self._last_active_peer_for_telemetry()
+        )
+        if not target_peer or not any(
+            same_i2p_destination(target_peer, member_id) for member_id in state.members if member_id
+        ):
+            return
+        if not self._blindbox_live_peer_ok_for_root_exchange(target_peer):
+            return
+        snapshot_bundle = self._group_blindbox_runtime_snapshot(group_id)
+        if snapshot_bundle is None:
+            return
+        snapshot, save_state = snapshot_bundle
+        pending_root = self._ensure_pending_group_blindbox_root(
+            state,
+            snapshot,
+            force_rotate=force_rotate,
+            save_state=save_state,
+        )
+        if pending_root is None:
+            return
+        if (
+            target_peer in snapshot.pending_root_acked_members
+            or target_peer not in set(snapshot.pending_root_target_members)
+        ):
+            return
+        next_epoch, root_secret, reason, is_new_pending = pending_root
+        writer.write(
+            self.frame_message(
+                "S",
+                "__SIGNAL__:GROUP_BLINDBOX_ROOT|"
+                + state.group_id
+                + "|"
+                + str(int(state.epoch))
+                + "|"
+                + str(next_epoch)
+                + "|"
+                + root_secret.hex(),
+                peer_id=target_peer,
+            )
+        )
+        await writer.drain()
+        if is_new_pending:
+            self._emit_system(
+                f"Group BlindBox root {reason} for {state.title or state.group_id}; awaiting ACKs"
+            )
+
+    async def _handle_incoming_group_blindbox_root_signal(
+        self,
+        body: str,
+        writer: asyncio.StreamWriter,
+        *,
+        peer_id: Optional[str] = None,
+    ) -> None:
+        raw_tail = body.split("GROUP_BLINDBOX_ROOT|", 1)[1].strip()
+        parts = raw_tail.split("|", 3)
+        if len(parts) != 4 or not parts[1].isdigit() or not parts[2].isdigit():
+            raise ValueError("invalid group blindbox root payload")
+        group_id = parts[0].strip()
+        incoming_group_epoch = int(parts[1])
+        incoming_root_epoch = int(parts[2])
+        root_secret = bytes.fromhex(parts[3].strip())
+        if len(root_secret) != 32:
+            raise ValueError("invalid group blindbox root length")
+        state = self.load_group_state(group_id)
+        if state is None:
+            return
+        if incoming_group_epoch < int(state.epoch):
+            return
+        target_peer = self._normalize_peer_addr(
+            peer_id or self.current_peer_addr or self._last_active_peer_for_telemetry()
+        )
+        if not target_peer or not any(
+            same_i2p_destination(target_peer, member_id) for member_id in state.members if member_id
+        ):
+            return
+        snapshot_bundle = self._group_blindbox_runtime_snapshot(group_id)
+        if snapshot_bundle is None:
+            return
+        snapshot, save_state = snapshot_bundle
+        if incoming_group_epoch < int(snapshot.group_epoch):
+            return
+        if (
+            snapshot.root_secret is not None
+            and int(snapshot.group_epoch) == incoming_group_epoch
+            and int(snapshot.root_epoch) == incoming_root_epoch
+            and snapshot.root_secret == root_secret
+        ):
+            writer.write(
+                self.frame_message(
+                    "S",
+                    "__SIGNAL__:GROUP_BLINDBOX_ROOT_ACK|"
+                    + group_id
+                    + "|"
+                    + str(incoming_group_epoch)
+                    + "|"
+                    + str(incoming_root_epoch),
+                    peer_id=target_peer,
+                )
+            )
+            await writer.drain()
+            return
+        if (
+            snapshot.root_secret is not None
+            and int(snapshot.group_epoch) == incoming_group_epoch
+            and incoming_root_epoch < int(snapshot.root_epoch)
+        ):
+            return
+        if snapshot.root_secret is not None:
+            snapshot.prev_roots.append(
+                {
+                    "group_epoch": int(snapshot.group_epoch),
+                    "root_epoch": int(snapshot.root_epoch),
+                    "secret": snapshot.root_secret,
+                    "expires_at": int(time.time())
+                    + int(self._blindbox_previous_grace_seconds),
+                }
+            )
+        snapshot.prev_roots = self._blindbox_prune_previous_roots_list(
+            snapshot.prev_roots
+        )
+        snapshot.group_epoch = incoming_group_epoch
+        snapshot.root_secret = root_secret
+        snapshot.root_epoch = incoming_root_epoch
+        snapshot.root_created_at = int(time.time())
+        snapshot.root_send_index_base = int(snapshot.state.send_index)
+        snapshot.pending_root_secret = None
+        snapshot.pending_root_epoch = 0
+        snapshot.pending_root_created_at = 0
+        snapshot.pending_root_send_index_base = int(snapshot.state.send_index)
+        snapshot.pending_root_target_members = ()
+        snapshot.pending_root_acked_members.clear()
+        save_state()
+        writer.write(
+            self.frame_message(
+                "S",
+                "__SIGNAL__:GROUP_BLINDBOX_ROOT_ACK|"
+                + group_id
+                + "|"
+                + str(incoming_group_epoch)
+                + "|"
+                + str(incoming_root_epoch),
+                peer_id=target_peer,
+            )
+        )
+        await writer.drain()
+        self._schedule_flush_pending_group_blindbox_messages(group_id)
+
+    def _handle_group_blindbox_root_ack_signal(
+        self,
+        body: str,
+        *,
+        peer_id: Optional[str] = None,
+    ) -> None:
+        raw_tail = body.split("GROUP_BLINDBOX_ROOT_ACK|", 1)[1].strip()
+        parts = raw_tail.split("|", 2)
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            raise ValueError("invalid group blindbox root ACK payload")
+        group_id = parts[0].strip()
+        group_epoch = int(parts[1])
+        ack_epoch = int(parts[2])
+        state = self.load_group_state(group_id)
+        if state is None or int(state.epoch) != group_epoch:
+            return
+        ack_member = self._normalize_peer_addr(
+            peer_id or self.current_peer_addr or self._last_active_peer_for_telemetry()
+        )
+        if not ack_member:
+            return
+        snapshot_bundle = self._group_blindbox_runtime_snapshot(group_id)
+        if snapshot_bundle is None:
+            return
+        snapshot, save_state = snapshot_bundle
+        committed = self._commit_pending_group_blindbox_root(
+            state,
+            ack_member,
+            ack_epoch,
+            snapshot=snapshot,
+            save_state=save_state,
+        )
+        if committed:
+            self._emit_system(
+                f"Group BlindBox root ready for {state.title or state.group_id}"
+            )
+            self._schedule_flush_pending_group_blindbox_messages(group_id)
+
+    def _group_states_for_member(self, peer_id: str) -> list[GroupState]:
+        target_peer = self._normalize_peer_addr(peer_id or "")
+        if not target_peer:
+            return []
+        return [
+            state
+            for state in self.list_group_states()
+            if any(
+                same_i2p_destination(target_peer, member_id)
+                for member_id in state.members
+                if member_id
+            )
+        ]
+
     async def _send_blindbox_root_ack(
-        self, writer: asyncio.StreamWriter, incoming_epoch: int
+        self,
+        writer: asyncio.StreamWriter,
+        incoming_epoch: int,
+        *,
+        peer_id: Optional[str] = None,
     ) -> None:
         writer.write(
-            self.frame_message("S", f"__SIGNAL__:BLINDBOX_ROOT_ACK|{int(incoming_epoch)}")
+            self.frame_message(
+                "S",
+                f"__SIGNAL__:BLINDBOX_ROOT_ACK|{int(incoming_epoch)}",
+                peer_id=peer_id,
+            )
         )
         await writer.drain()
 
@@ -4880,6 +9055,8 @@ class I2PChatCore:
         self,
         body: str,
         writer: asyncio.StreamWriter,
+        *,
+        peer_id: Optional[str] = None,
     ) -> None:
         raw_tail = body.split("BLINDBOX_ROOT|", 1)[1].strip()
         parts = raw_tail.split("|")
@@ -4892,82 +9069,133 @@ class I2PChatCore:
             raise ValueError("invalid root secret length")
         if not self._blindbox_ready():
             self._emit_error(
-                "BlindBox root received outside persistent locked-peer mode."
+                "BlindBox root received while BlindBox is not ready."
             )
             return
-        if not self._blindbox_current_peer_matches_locked_peer():
+        target_peer = self._normalize_peer_addr(
+            peer_id or self.current_peer_addr or self._last_active_peer_for_telemetry()
+        )
+        if not target_peer:
+            self._emit_error("BlindBox root ignored: missing peer context.")
+            return
+        if not self._blindbox_live_peer_ok_for_root_exchange(target_peer):
             self._emit_error(
-                "BlindBox root ignored: connected peer does not match locked peer."
+                "BlindBox root ignored: need a verified live session with a Saved peer."
             )
             return
-        if self._blindbox_root_secret is None:
-            self._blindbox_root_secret = root_secret
-            self._blindbox_root_epoch = incoming_epoch
-            self._blindbox_root_created_at = int(time.time())
-            self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
-            self._save_blindbox_state()
+        snapshot_bundle = self._blindbox_runtime_snapshot_for_peer(target_peer)
+        if snapshot_bundle is None:
+            self._emit_error("BlindBox root ignored: missing peer snapshot.")
+            return
+        snapshot, save_state = snapshot_bundle
+        if snapshot.root_secret is None:
+            snapshot.root_secret = root_secret
+            snapshot.root_epoch = incoming_epoch
+            snapshot.root_created_at = int(time.time())
+            snapshot.root_send_index_base = int(snapshot.state.send_index)
+            save_state()
             self._emit_system(
                 f"BlindBox root secret received (epoch={incoming_epoch})"
             )
-            await self._send_blindbox_root_ack(writer, incoming_epoch)
+            await self._send_blindbox_root_ack(
+                writer, incoming_epoch, peer_id=target_peer
+            )
             return
-        if incoming_epoch > int(self._blindbox_root_epoch):
+        if incoming_epoch > int(snapshot.root_epoch):
             expires_at = int(time.time()) + int(self._blindbox_previous_grace_seconds)
-            self._blindbox_prev_roots.append(
+            snapshot.prev_roots.append(
                 {
-                    "epoch": int(self._blindbox_root_epoch),
-                    "secret": self._blindbox_root_secret,
+                    "epoch": int(snapshot.root_epoch),
+                    "secret": snapshot.root_secret,
                     "expires_at": expires_at,
                 }
             )
-            self._blindbox_root_secret = root_secret
-            self._blindbox_root_epoch = incoming_epoch
-            self._blindbox_root_created_at = int(time.time())
-            self._blindbox_root_send_index_base = int(self._blindbox_state.send_index)
-            self._blindbox_prune_previous_roots()
-            self._save_blindbox_state()
+            snapshot.root_secret = root_secret
+            snapshot.root_epoch = incoming_epoch
+            snapshot.root_created_at = int(time.time())
+            snapshot.root_send_index_base = int(snapshot.state.send_index)
+            snapshot.prev_roots = self._blindbox_prune_previous_roots_list(
+                snapshot.prev_roots
+            )
+            save_state()
             self._emit_system("BlindBox root rotated")
-            await self._send_blindbox_root_ack(writer, incoming_epoch)
+            await self._send_blindbox_root_ack(
+                writer, incoming_epoch, peer_id=target_peer
+            )
             return
         if (
-            incoming_epoch == int(self._blindbox_root_epoch)
-            and self._blindbox_root_secret == root_secret
+            incoming_epoch == int(snapshot.root_epoch)
+            and snapshot.root_secret == root_secret
         ):
-            await self._send_blindbox_root_ack(writer, incoming_epoch)
+            await self._send_blindbox_root_ack(
+                writer, incoming_epoch, peer_id=target_peer
+            )
             return
         self._emit_system("Ignoring stale BlindBox root signal.")
 
-    def _handle_blindbox_root_ack_signal(self, body: str) -> None:
+    def _handle_blindbox_root_ack_signal(
+        self, body: str, *, peer_id: Optional[str] = None
+    ) -> None:
         ack_raw = body.split("BLINDBOX_ROOT_ACK|", 1)[1].strip().split("|", 1)[0]
         if not ack_raw.isdigit():
             raise ValueError("invalid root ack epoch")
         ack_epoch = int(ack_raw)
         if not self._blindbox_ready():
             self._emit_error(
-                "BlindBox root ACK received outside persistent locked-peer mode."
+                "BlindBox root ACK received while BlindBox is not ready."
             )
             return
-        if not self._blindbox_current_peer_matches_locked_peer():
+        target_peer = self._normalize_peer_addr(
+            peer_id or self.current_peer_addr or self._last_active_peer_for_telemetry()
+        )
+        if not target_peer:
+            self._emit_error("BlindBox root ACK ignored: missing peer context.")
+            return
+        if not self._blindbox_live_peer_ok_for_root_exchange(target_peer):
             self._emit_error(
-                "BlindBox root ACK ignored: connected peer does not match locked peer."
+                "BlindBox root ACK ignored: need a verified live session with a Saved peer."
             )
             return
-        if not self._commit_pending_blindbox_root(ack_epoch):
+        snapshot_bundle = self._blindbox_runtime_snapshot_for_peer(target_peer)
+        if snapshot_bundle is None:
+            self._emit_error("BlindBox root ACK ignored: missing peer snapshot.")
+            return
+        snapshot, save_state = snapshot_bundle
+        if not self._commit_pending_blindbox_root(
+            ack_epoch, snapshot=snapshot, save_state=save_state
+        ):
             self._emit_system("Ignoring stale BlindBox root ACK.")
 
     async def _send_blindbox_root_if_needed(
-        self, writer: asyncio.StreamWriter, *, force_rotate: bool = False
+        self,
+        writer: asyncio.StreamWriter,
+        *,
+        force_rotate: bool = False,
+        peer_id: Optional[str] = None,
     ) -> None:
         if not self._blindbox_ready():
             return
-        if not self._blindbox_current_peer_matches_locked_peer():
+        target_peer = self._normalize_peer_addr(
+            peer_id or self.current_peer_addr or self._last_active_peer_for_telemetry()
+        )
+        if not target_peer:
+            return
+        if not self._blindbox_live_peer_ok_for_root_exchange(target_peer):
             self._emit_error(
-                "BlindBox root exchange blocked: connected peer does not match locked peer."
+                "BlindBox root exchange blocked: connect to a Saved peer and complete the handshake."
             )
             return
-        if not self._should_initiate_blindbox_root_exchange():
+        if not self._should_initiate_blindbox_root_exchange(target_peer):
             return
-        pending_root = self._ensure_pending_blindbox_root(force_rotate=force_rotate)
+        snapshot_bundle = self._blindbox_runtime_snapshot_for_peer(target_peer)
+        if snapshot_bundle is None:
+            return
+        snapshot, save_state = snapshot_bundle
+        pending_root = self._ensure_pending_blindbox_root(
+            force_rotate=force_rotate,
+            snapshot=snapshot,
+            save_state=save_state,
+        )
         if pending_root is None:
             return
         next_epoch, root_secret, reason, is_new_pending = pending_root
@@ -4978,6 +9206,7 @@ class I2PChatCore:
                 + str(next_epoch)
                 + "|"
                 + root_secret.hex(),
+                peer_id=target_peer,
             )
         )
         await writer.drain()
@@ -4985,9 +9214,14 @@ class I2PChatCore:
             self._emit_system(f"BlindBox root secret {reason}; awaiting ACK")
 
     async def _handle_handshake_message(
-        self, body: str, writer: asyncio.StreamWriter
+        self,
+        body: str,
+        writer: asyncio.StreamWriter,
+        peer_id: Optional[str] = None,
     ) -> None:
         """Обрабатывает входящее signed-handshake сообщение с поддержкой PFS."""
+        sess = self._session_for_frame(peer_id)
+        peer_addr = self._normalize_peer_addr(peer_id or self.current_peer_addr or "")
         try:
             if not crypto.NACL_AVAILABLE:
                 raise RuntimeError("PyNaCl is required for secure protocol")
@@ -5016,27 +9250,26 @@ class I2PChatCore:
                 return nonce, eph_pub, sign_pub, signature, nonce_hex, eph_hex, sign_pub_hex
 
             if body.startswith("INIT:"):
-                if self._handshake_initiated:
+                if sess._handshake_initiated:
                     logger.warning(
                         "Received INIT while local INIT is pending; closing to avoid handshake role conflict."
                     )
                     self._emit_error(
                         "Handshake role conflict detected; reconnecting."
                     )
-                    peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-                    if peer_addr_norm:
+                    if peer_addr:
                         self.session_manager.mark_peer_failed(
-                            peer_addr_norm, reason="handshake-role-conflict"
+                            peer_addr, reason="handshake-role-conflict"
                         )
-                    self._schedule_disconnect()
+                    self._schedule_disconnect(peer_id)
                     return
-                if not self.current_peer_addr or not self.my_dest:
+                if not peer_addr or not self.my_dest:
                     raise ValueError("Missing peer/local address for INIT verification")
                 if not self.my_signing_seed or not self.my_signing_public:
                     raise ValueError("Missing local handshake signing key")
                 (
-                    self.peer_nonce,
-                    self.peer_ephemeral_public,
+                    sess.peer_nonce,
+                    sess.peer_ephemeral_public,
                     peer_sign_pub,
                     peer_signature,
                     init_nonce_hex,
@@ -5044,7 +9277,7 @@ class I2PChatCore:
                     init_sign_pub_hex,
                 ) = _parse_signed_payload(body[5:])
                 init_sig_payload = self._build_init_sig_payload(
-                    self.current_peer_addr,
+                    peer_addr,
                     self.my_dest.base32,
                     init_nonce_hex,
                     init_eph_hex,
@@ -5052,20 +9285,21 @@ class I2PChatCore:
                 )
                 if not crypto.verify_signature(peer_sign_pub, init_sig_payload, peer_signature):
                     raise ValueError("INIT signature verification failed")
-                if not await self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
+                if not await self._pin_or_verify_peer_signing_key(peer_addr, peer_sign_pub):
                     raise ValueError("Peer signing key does not match pinned key")
-                self.peer_signing_public = peer_sign_pub
+                sess.peer_signing_public = peer_sign_pub
 
-                self.my_ephemeral_private, self.my_ephemeral_public = \
+                sess.my_ephemeral_private, sess.my_ephemeral_public = (
                     crypto.generate_ephemeral_keypair()
-                self.my_nonce = crypto.generate_nonce()
+                )
+                sess.my_nonce = crypto.generate_nonce()
 
-                resp_nonce_hex = self.my_nonce.hex()
-                resp_eph_hex = self.my_ephemeral_public.hex()
+                resp_nonce_hex = sess.my_nonce.hex()
+                resp_eph_hex = sess.my_ephemeral_public.hex()
                 resp_sign_pub_hex = self.my_signing_public.hex()
                 resp_sig_payload = self._build_resp_sig_payload(
                     self.my_dest.base32,
-                    self.current_peer_addr,
+                    peer_addr,
                     init_nonce_hex,
                     init_eph_hex,
                     init_sign_pub_hex,
@@ -5079,19 +9313,19 @@ class I2PChatCore:
                 response = (
                     f"RESP:{resp_nonce_hex}:{resp_eph_hex}:{resp_sign_pub_hex}:{resp_signature_hex}"
                 )
-                writer.write(self.frame_message_plain("H", response))
+                writer.write(self.frame_message_plain("H", response, peer_id=peer_id))
                 await writer.drain()
 
-                self.shared_key, self.shared_mac_key = self._compute_session_subkeys(
-                    is_initiator=False
+                sess.shared_key, sess.shared_mac_key = self._compute_session_subkeys(
+                    is_initiator=False, sess=sess
                 )
-                self.use_encryption = True
-                self.handshake_complete = True
-                self._handshake_initiated = False
-                self._recv_seq = 0
-                self._send_seq = 0
+                sess.use_encryption = True
+                sess.handshake_complete = True
+                sess._handshake_initiated = False
+                sess._recv_seq = 0
+                sess._send_seq = 0
                 self._cancel_handshake_watchdog()
-                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                peer_addr_norm = peer_addr
                 if peer_addr_norm:
                     self.session_manager.set_peer_handshake_complete(
                         peer_addr_norm, reason="handshake-ok"
@@ -5102,45 +9336,58 @@ class I2PChatCore:
                         peer_id=peer_addr_norm,
                     )
                 self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
-                self._emit_message("info", "Secure channel with PFS established")
-                self._emit_system("✔ Ready! You can now send messages.")
+                if sess.announce_lifecycle:
+                    self._emit_message("info", "Secure channel with PFS established")
+                    self._emit_system("✔ Ready! You can now send messages.")
                 self._trigger_blindbox_hot_poll("peer-online")
-                await self._send_blindbox_root_if_needed(writer)
+                self._notify_group_mesh_manager()
+                if peer_addr_norm:
+                    self._schedule_group_pending_flush([peer_addr_norm])
+                await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
+                if peer_addr_norm:
+                    for group_state in self._group_states_for_member(peer_addr_norm):
+                        if self._should_initiate_group_blindbox_root_exchange(
+                            group_state
+                        ):
+                            await self._send_group_blindbox_root_if_needed(
+                                writer,
+                                group_state.group_id,
+                                peer_id=peer_id,
+                            )
                 logger.info("Handshake completed (responder)")
 
             elif body.startswith("RESP:"):
                 if (
-                    not self._handshake_initiated
-                    or self.my_nonce is None
-                    or self.my_ephemeral_public is None
+                    not sess._handshake_initiated
+                    or sess.my_nonce is None
+                    or sess.my_ephemeral_public is None
                 ):
                     logger.warning("Received RESP without prior INIT")
-                    peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
-                    if peer_addr_norm:
+                    if peer_addr:
                         self.session_manager.mark_peer_failed(
-                            peer_addr_norm, reason="handshake-resp-without-init"
+                            peer_addr, reason="handshake-resp-without-init"
                         )
-                    self._schedule_disconnect()
+                    self._schedule_disconnect(peer_id)
                     return
-                if not self.current_peer_addr or not self.my_dest:
+                if not peer_addr or not self.my_dest:
                     raise ValueError("Missing peer/local address for RESP verification")
                 if not self.my_signing_public:
                     raise ValueError("Missing local handshake signing public key")
 
                 (
-                    self.peer_nonce,
-                    self.peer_ephemeral_public,
+                    sess.peer_nonce,
+                    sess.peer_ephemeral_public,
                     peer_sign_pub,
                     peer_signature,
                     resp_nonce_hex,
                     resp_eph_hex,
                     resp_sign_pub_hex,
                 ) = _parse_signed_payload(body[5:])
-                init_nonce_hex = self.my_nonce.hex()
-                init_eph_hex = self.my_ephemeral_public.hex()
+                init_nonce_hex = sess.my_nonce.hex()
+                init_eph_hex = sess.my_ephemeral_public.hex()
                 init_sign_pub_hex = self.my_signing_public.hex()
                 resp_sig_payload = self._build_resp_sig_payload(
-                    self.current_peer_addr,
+                    peer_addr,
                     self.my_dest.base32,
                     init_nonce_hex,
                     init_eph_hex,
@@ -5151,19 +9398,19 @@ class I2PChatCore:
                 )
                 if not crypto.verify_signature(peer_sign_pub, resp_sig_payload, peer_signature):
                     raise ValueError("RESP signature verification failed")
-                if not await self._pin_or_verify_peer_signing_key(self.current_peer_addr, peer_sign_pub):
+                if not await self._pin_or_verify_peer_signing_key(peer_addr, peer_sign_pub):
                     raise ValueError("Peer signing key does not match pinned key")
-                self.peer_signing_public = peer_sign_pub
-                self.shared_key, self.shared_mac_key = self._compute_session_subkeys(
-                    is_initiator=True
+                sess.peer_signing_public = peer_sign_pub
+                sess.shared_key, sess.shared_mac_key = self._compute_session_subkeys(
+                    is_initiator=True, sess=sess
                 )
-                self.use_encryption = True
-                self.handshake_complete = True
-                self._handshake_initiated = False
-                self._recv_seq = 0
-                self._send_seq = 0
+                sess.use_encryption = True
+                sess.handshake_complete = True
+                sess._handshake_initiated = False
+                sess._recv_seq = 0
+                sess._send_seq = 0
                 self._cancel_handshake_watchdog()
-                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                peer_addr_norm = peer_addr
                 if peer_addr_norm:
                     self.session_manager.set_peer_handshake_complete(
                         peer_addr_norm, reason="handshake-ok"
@@ -5174,10 +9421,24 @@ class I2PChatCore:
                         peer_id=peer_addr_norm,
                     )
                 self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
-                self._emit_message("info", "Secure channel with PFS established")
-                self._emit_system("✔ Ready! You can now send messages.")
+                if sess.announce_lifecycle:
+                    self._emit_message("info", "Secure channel with PFS established")
+                    self._emit_system("✔ Ready! You can now send messages.")
                 self._trigger_blindbox_hot_poll("peer-online")
-                await self._send_blindbox_root_if_needed(writer)
+                self._notify_group_mesh_manager()
+                if peer_addr_norm:
+                    self._schedule_group_pending_flush([peer_addr_norm])
+                await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
+                if peer_addr_norm:
+                    for group_state in self._group_states_for_member(peer_addr_norm):
+                        if self._should_initiate_group_blindbox_root_exchange(
+                            group_state
+                        ):
+                            await self._send_group_blindbox_root_if_needed(
+                                writer,
+                                group_state.group_id,
+                                peer_id=peer_id,
+                            )
                 logger.info("Handshake completed (initiator)")
 
             else:
@@ -5186,7 +9447,7 @@ class I2PChatCore:
         except Exception as e:
             logger.error(f"Handshake error: {e}")
             self._emit_error(f"Secure handshake failed: {e}")
-            peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+            peer_addr_norm = peer_addr
             if peer_addr_norm:
                 self.session_manager.mark_peer_failed(
                     peer_addr_norm, reason="handshake-error"
@@ -5195,20 +9456,34 @@ class I2PChatCore:
                 reason="handshake-error",
                 peer_id=peer_addr_norm,
             )
-            self._schedule_disconnect()
+            self._schedule_disconnect(peer_id)
 
     async def shutdown(self) -> None:
         """Аккуратно остановить фоновые задачи и закрыть соединения."""
         self.session_manager.transition_transport(
             TransportState.SHUTTING_DOWN, reason="shutdown"
         )
+        if self._group_mesh_task is not None and not self._group_mesh_task.done():
+            self.group_mesh_manager.stop()
+            self._group_mesh_task.cancel()
+            await asyncio.gather(self._group_mesh_task, return_exceptions=True)
+        self._group_mesh_task = None
+        if (
+            self._group_pending_flush_task is not None
+            and not self._group_pending_flush_task.done()
+        ):
+            self._group_pending_flush_task.cancel()
+            await asyncio.gather(
+                self._group_pending_flush_task, return_exceptions=True
+            )
+        self._group_pending_flush_task = None
         self.session_manager.invalidate_handshake_watchdog()
         self.session_manager.set_outbound_connect_busy(
             False,
             peer_id=self._normalize_peer_addr(self.current_peer_addr or ""),
         )
-        if self.conn:
-            await self.disconnect()
+        for pid in list(self._live_sessions.keys()):
+            await self.disconnect_peer(pid)
 
         await self.session_manager.cancel_tasks_and_close_session()
         if self._blindbox_task is not None and not self._blindbox_task.done():
@@ -5233,9 +9508,6 @@ class I2PChatCore:
                 self._emit_error("PyNaCl is required for secure protocol")
                 await asyncio.sleep(5)
                 continue
-            if self.conn:
-                await asyncio.sleep(1)
-                continue
             try:
                 reader, writer = await i2plib.stream_accept(
                     self.session_id, sam_address=self.sam_address
@@ -5255,14 +9527,7 @@ class I2PChatCore:
 
                 try:
                     raw_dest = peer_identity_line.decode().strip()
-                    peer_addr = i2plib.Destination(raw_dest).base32 + ".b32.i2p"
-
-                    if self.stored_peer and peer_addr != self.stored_peer:
-                        self._emit_error(
-                            f"Blocked unauthorized call from {peer_addr}..."
-                        )
-                        writer.close()
-                        continue
+                    peer_addr = i2plib.Destination(raw_dest).base32
 
                     verified = await self._set_verified_peer_identity(
                         peer_addr, raw_dest, source="preface"
@@ -5270,54 +9535,123 @@ class I2PChatCore:
                     if not verified:
                         writer.close()
                         continue
-                    self.peer_b32 = peer_addr
+                    if self.ensure_peer_in_saved_contacts(peer_addr):
+                        self._emit_system(
+                            f"Accepted first contact from {peer_addr[:12]}... "
+                            "and added it to Saved peers."
+                        )
+                    peer_addr_norm = self._normalize_peer_addr(peer_addr)
+                    existing_session = self._live_sessions.get(peer_addr_norm)
+                    if existing_session is not None:
+                        if existing_session.handshake_complete:
+                            logger.info(
+                                "Duplicate incoming connection from %s ignored; secure session already active.",
+                                peer_addr[:24],
+                            )
+                            writer.close()
+                            continue
+                        if self._prefer_incoming_session(peer_addr_norm):
+                            await self._yield_session_slot_to_incoming(
+                                peer_addr_norm,
+                                expected_session=existing_session,
+                            )
+                            logger.info(
+                                "Incoming connection from %s won simultaneous-connect tie-break.",
+                                peer_addr[:24],
+                            )
+                        else:
+                            logger.info(
+                                "Incoming connection from %s dropped; outbound session keeps tie-break.",
+                                peer_addr[:24],
+                            )
+                            writer.close()
+                            continue
+                    max_live = max_concurrent_live_sessions()
+                    if self._live_stream_count() >= max_live:
+                        self._emit_error(
+                            f"Incoming connection rejected: maximum live sessions ({max_live}) reached."
+                        )
+                        writer.close()
+                        continue
+
+                    extra_ls = LivePeerSession(peer_id=peer_addr_norm)
+                    self._live_sessions[peer_addr_norm] = extra_ls
+
                     self._emit_message(
                         "info", f"Connection accepted from {peer_addr[:12]}..."
                     )
                     # Отдельное событие для системного уведомления о входящем подключении.
                     self._emit_notify("connect", peer_addr)
-                    self._emit_peer_changed(peer_addr)
                 except Exception as e:
                     self._emit_error(f"Rejected incoming connection: invalid identity preface ({e})")
                     writer.close()
                     continue
 
                 if self.my_dest is not None:
-                    writer.write(self.frame_message("S", self.my_dest.base64))
+                    writer.write(
+                        self.frame_message_plain(
+                            "S", self.my_dest.base64, peer_id=peer_addr_norm
+                        )
+                    )
                     await writer.drain()
 
-                self.conn = (reader, writer)
-                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                connection = (reader, writer)
+                extra_ls.conn = connection
+
                 if peer_addr_norm:
                     self.session_manager.register_stream(
                         peer_addr_norm,
                         state=PeerState.HANDSHAKING,
                         peer_id=peer_addr_norm,
                     )
-                self._activate_ack_session()
+                self._activate_ack_session(peer_addr_norm)
                 self.session_manager.transition_transport(
                     TransportState.RECONNECTING, reason="incoming-connection"
                 )
 
                 loop = asyncio.get_running_loop()
-                loop.create_task(self.receive_loop(self.conn))
-                self._start_handshake_watchdog(self.conn)
-                self.session_manager.keepalive_task = loop.create_task(
-                    self._keepalive_loop()
+                self._start_receive_loop_task(connection, peer_id=peer_addr_norm)
+                self._start_handshake_watchdog(
+                    connection, peer_id=peer_addr_norm
                 )
+                if (
+                    self.session_manager.keepalive_task is None
+                    or self.session_manager.keepalive_task.done()
+                ):
+                    self.session_manager.keepalive_task = loop.create_task(
+                        self._keepalive_loop()
+                    )
             except Exception:
                 await asyncio.sleep(1)
+
+    @staticmethod
+    def _peer_protocol_err_suffix(peer_id: Optional[str]) -> str:
+        """Short peer label for user-facing protocol errors (canonical bare id)."""
+        if not peer_id:
+            return ""
+        p = str(peer_id).strip()
+        if len(p) <= 20:
+            return f" (peer {p})"
+        return f" (peer {p[:12]}…)"
 
     async def receive_loop(
         self,
         connection: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
         initial_type: Optional[str] = None,
+        peer_id: Optional[str] = None,
     ) -> None:
-        # Предотвращаем запуск дублирующего receive_loop
-        if self._recv_loop_active:
+        if not peer_id:
             return
-        self._recv_loop_active = True
-        
+        peer_id = self._normalize_peer_addr(peer_id)
+        sess = self._live_sessions.get(peer_id)
+        if sess is None or sess.conn != connection:
+            return
+        if sess._recv_loop_active:
+            return
+        sess._recv_loop_active = True
+        err_peer = peer_id or getattr(sess, "peer_id", None) or ""
+        _ps = self._peer_protocol_err_suffix
+
         reader, writer = connection
         current_type = initial_type
         restart_after_timeout = False
@@ -5337,60 +9671,89 @@ class I2PChatCore:
                             self._codec.read_frame(reader), timeout=self.READ_TIMEOUT
                         )
                     except ValueError as e:
-                        if self.handshake_complete:
+                        if sess.handshake_complete:
                             logger.warning(
-                                "Protocol framing violation after handshake: %s",
+                                "Protocol framing violation after handshake: %s (peer=%s)",
                                 e,
+                                (err_peer or "?")[:24],
                             )
-                            self._emit_error("Protocol downgrade detected")
-                            self._schedule_disconnect()
+                            self._emit_error(
+                                "Protocol downgrade detected"
+                                + _ps(err_peer)
+                            )
+                            self._schedule_disconnect(peer_id)
                             break
                         raise
                     except asyncio.TimeoutError:
-                        if self._file_transfer_active:
+                        if sess._file_transfer_active:
                             # Исходящая передача файла/картинки: цикл приёма не глушим — иначе до конца
                             # отправки не обрабатываются входящие U/P/сигналы собеседника.
                             continue
-                        if self.incoming_info is not None:
+                        if sess.incoming_info is not None:
                             restart_after_timeout = True
                             return
                         # Приём inline-картинки (G): как для F/D — не рвём сессию из-за долгой паузы I2P
-                        if self.inline_image_info is not None:
+                        if sess.inline_image_info is not None:
                             restart_after_timeout = True
                             return
-                        if self.conn == connection:
-                            self._emit_error("Connection timed out (no data received)")
+                        if sess.conn == connection:
+                            self._emit_error(
+                                "Connection timed out (no data received)" + _ps(err_peer)
+                            )
                         return
                     msg_type = frame.msg_type
                     msg_id = frame.msg_id
                     body_data = frame.payload
                     is_encrypted = bool(frame.flags & FLAG_ENCRYPTED)
 
-                if self.handshake_complete and msg_type == "H":
-                    logger.warning("Unexpected handshake frame after secure channel established")
-                    self._emit_error("Protocol violation: unexpected handshake frame")
-                    self._schedule_disconnect()
+                # disconnect() делает pop до отмены receive_loop: не разбирать хвост кадра на «осиротевшей» сессии.
+                if self._live_sessions.get(peer_id) is not sess:
                     break
-                if not self.handshake_complete and msg_type not in ["S", "H", "P", "O"]:
+
+                if sess.handshake_complete and msg_type == "H":
+                    logger.warning(
+                        "Unexpected handshake frame after secure channel (peer=%s)",
+                        (err_peer or "?")[:24],
+                    )
+                    self._emit_error(
+                        "Protocol violation: unexpected handshake frame" + _ps(err_peer)
+                    )
+                    self._schedule_disconnect(peer_id)
+                    break
+                if not sess.handshake_complete and msg_type not in ["S", "H", "P", "O"]:
                     logger.warning(
                         "Protocol violation: non-handshake frame before secure channel "
-                        "(msg_type=%r)",
+                        "(msg_type=%r peer=%s)",
                         msg_type,
+                        (err_peer or "?")[:24],
                     )
-                    self._emit_error("Protocol violation: data before secure handshake")
-                    self._schedule_disconnect()
+                    self._emit_error(
+                        "Protocol violation: data before secure handshake" + _ps(err_peer)
+                    )
+                    self._schedule_disconnect(peer_id)
                     break
                 seq_num: Optional[int] = None
                 if is_encrypted:
-                    if not self.shared_key or not self.use_encryption:
-                        logger.warning("Encrypted frame received before key setup")
-                        self._emit_error("Protocol error: encrypted frame before handshake")
-                        self._schedule_disconnect()
+                    if not sess.shared_key or not sess.use_encryption:
+                        logger.warning(
+                            "Encrypted frame received before key setup (peer=%s)",
+                            (err_peer or "?")[:24],
+                        )
+                        self._emit_error(
+                            "Protocol error: encrypted frame before handshake"
+                            + _ps(err_peer)
+                        )
+                        self._schedule_disconnect(peer_id)
                         break
                     if len(body_data) < ENCRYPTED_TRAILER_SIZE:
-                        logger.warning("Encrypted payload is too short")
-                        self._emit_error("Protocol error: encrypted payload too short")
-                        self._schedule_disconnect()
+                        logger.warning(
+                            "Encrypted payload is too short (peer=%s)",
+                            (err_peer or "?")[:24],
+                        )
+                        self._emit_error(
+                            "Protocol error: encrypted payload too short" + _ps(err_peer)
+                        )
+                        self._schedule_disconnect(peer_id)
                         break
                     seq_num = int.from_bytes(body_data[:8], "big", signed=False)
                     encrypted_body = body_data[8:-crypto.HMAC_SIZE]
@@ -5398,7 +9761,7 @@ class I2PChatCore:
                     if len(encrypted_body) == 0:
                         logger.warning("Encrypted body is empty")
                         break
-                    mac_key = self.shared_mac_key or self.shared_key
+                    mac_key = sess.shared_mac_key or sess.shared_key
                     if not crypto.verify_mac(
                         mac_key,
                         msg_type,
@@ -5410,23 +9773,34 @@ class I2PChatCore:
                     ):
                         logger.warning(
                             "HMAC verification failed - message integrity compromised "
-                            "(msg_type=%r body_len=%d)", msg_type, len(body_data)
+                            "(msg_type=%r body_len=%d peer=%s recv_seq=%s)",
+                            msg_type,
+                            len(body_data),
+                            (err_peer or "?")[:24],
+                            getattr(sess, "_recv_seq", "?"),
                         )
-                        self._emit_error("Message integrity check failed")
-                        self._schedule_disconnect()
+                        self._emit_error(
+                            "Message integrity check failed" + _ps(err_peer)
+                        )
+                        self._schedule_disconnect(peer_id)
                         break
-                    expected_seq = self._recv_seq + 1
+                    expected_seq = sess._recv_seq + 1
                     if seq_num != expected_seq:
                         logger.warning(
-                            "Replay/out-of-order frame detected: got=%d expected=%d",
+                            "Replay/out-of-order frame detected: got=%d expected=%d peer=%s",
                             seq_num,
                             expected_seq,
+                            (err_peer or "?")[:24],
                         )
-                        self._emit_error("Replay protection triggered")
-                        self._schedule_disconnect()
+                        self._emit_error(
+                            "Replay protection triggered"
+                            + _ps(err_peer)
+                            + f" (seq got {seq_num}, expected {expected_seq})"
+                        )
+                        self._schedule_disconnect(peer_id)
                         break
 
-                    decrypted = crypto.decrypt_message(self.shared_key, encrypted_body)
+                    decrypted = crypto.decrypt_message(sess.shared_key, encrypted_body)
                     if decrypted is None:
                         logger.warning("Decryption failed")
                         self._emit_error("Failed to decrypt message")
@@ -5436,72 +9810,82 @@ class I2PChatCore:
                     except ValueError as e:
                         logger.warning("Padded payload parse failed: %s", e)
                         self._emit_error("Protocol error: malformed padded payload")
-                        self._schedule_disconnect()
+                        self._schedule_disconnect(peer_id)
                         break
-                    self._recv_seq = seq_num
-                elif self.handshake_complete:
+                    sess._recv_seq = seq_num
+                elif sess.handshake_complete:
                     logger.warning(
                         "Protocol downgrade detected: plaintext frame after handshake "
-                        "(msg_type=%r)",
+                        "(msg_type=%r peer=%s encrypted=%s)",
                         msg_type,
+                        (err_peer or "?")[:24],
+                        is_encrypted,
                     )
-                    self._emit_error("Protocol downgrade detected")
-                    self._schedule_disconnect()
+                    self._emit_error(
+                        "Protocol downgrade detected"
+                        + _ps(err_peer)
+                        + f" (msg_type={msg_type!r}, encrypted={is_encrypted})"
+                    )
+                    self._schedule_disconnect(peer_id)
                     break
 
                 body = body_data.decode("utf-8")
-                peer_addr_norm = self._normalize_peer_addr(self.current_peer_addr or "")
+                peer_addr_norm = self._normalize_peer_addr(sess.peer_id or "")
                 if peer_addr_norm:
                     self.session_manager.touch_stream(peer_addr_norm)
 
                 if msg_type == "U":
-                    sp = self.current_peer_addr
-                    self._emit_message("peer", body, source_peer=sp)
-                    self._emit_notify("peer", body, source_peer=sp)
+                    sp = sess.peer_id
+                    if self.import_group_transport(body, source_peer=sp) is None:
+                        self._emit_message("peer", body, source_peer=sp)
+                        self._emit_notify("peer", body, source_peer=sp)
                     # Подтверждение доставки по MSG_ID (vNext)
                     if msg_id:
                         try:
                             await self._write_signal_frame_maybe_soft_drain(
                                 writer,
                                 self.frame_message(
-                                    "S", f"__SIGNAL__:MSG_ACK|{msg_id}"
+                                    "S",
+                                    f"__SIGNAL__:MSG_ACK|{msg_id}",
+                                    peer_id=peer_id,
                                 ),
+                                sess=sess,
                             )
                         except Exception:
                             pass
 
                 elif msg_type == "I":
                     if body == "__END__":
-                        img_text = "\n".join(self.image_buffer)
-                        self.image_buffer = []
+                        img_text = "\n".join(sess.image_buffer)
+                        sess.image_buffer = []
                         if self.on_image_received:
                             self.on_image_received(img_text)
                         else:
                             self._emit_message(
-                                "peer", img_text, source_peer=self.current_peer_addr
+                                "peer", img_text, source_peer=sess.peer_id
                             )
                     else:
-                        if len(self.image_buffer) < self.MAX_IMAGE_LINES:
-                            self.image_buffer.append(body)
-                        elif len(self.image_buffer) == self.MAX_IMAGE_LINES:
-                            self.image_buffer.append("[Image truncated - too large]")
+                        if len(sess.image_buffer) < self.MAX_IMAGE_LINES:
+                            sess.image_buffer.append(body)
+                        elif len(sess.image_buffer) == self.MAX_IMAGE_LINES:
+                            sess.image_buffer.append("[Image truncated - too large]")
                             self._emit_error("Image too large, truncating")
 
                 elif msg_type == "G":
                     # Inline image (binary PNG / JPEG / WebP)
                     if body == "__IMG_END__":
                         # Завершение приёма изображения
-                        if self.inline_image_info and self.inline_image_buffer:
-                            filename, expected_size = self.inline_image_info
-                            actual_size = len(self.inline_image_buffer)
+                        if sess.inline_image_info and sess.inline_image_buffer:
+                            filename, expected_size = sess.inline_image_info
+                            actual_size = len(sess.inline_image_buffer)
                             
                             # Проверяем размер
                             if actual_size > MAX_IMAGE_SIZE:
                                 self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                 self._emit_error("Received image too large, discarding")
-                                self.inline_image_buffer = bytearray()
-                                self.inline_image_info = None
-                                self._incoming_image_msg_id = None
+                                sess.inline_image_buffer = bytearray()
+                                sess.inline_image_info = None
+                                sess._incoming_image_msg_id = None
                                 continue
 
                             if actual_size != expected_size:
@@ -5517,25 +9901,25 @@ class I2PChatCore:
                                 self._emit_error(
                                     f"Image transfer incomplete: received {actual_size} of {expected_size} bytes"
                                 )
-                                self.inline_image_buffer = bytearray()
-                                self.inline_image_info = None
-                                self._incoming_image_msg_id = None
+                                sess.inline_image_buffer = bytearray()
+                                sess.inline_image_info = None
+                                sess._incoming_image_msg_id = None
                                 continue
                             
                             # Проверяем magic bytes
-                            header = bytes(self.inline_image_buffer[:12])
+                            header = bytes(sess.inline_image_buffer[:12])
                             detected_ext = detect_inline_image_format(header)
                             if detected_ext is None:
                                 self._emit_file_event(FileTransferInfo(filename=filename, size=expected_size, received=-1, is_sending=False, is_inline_image=True))
                                 self._emit_error("Received image has invalid format")
-                                self.inline_image_buffer = bytearray()
-                                self.inline_image_info = None
-                                self._incoming_image_msg_id = None
+                                sess.inline_image_buffer = bytearray()
+                                sess.inline_image_info = None
+                                sess._incoming_image_msg_id = None
                                 continue
                             
                             # Сохраняем и валидируем в thread pool (hash/PIL не блокируют qasync/Qt)
                             images_dir = get_images_dir()
-                            payload = bytes(self.inline_image_buffer)
+                            payload = bytes(sess.inline_image_buffer)
                             safe_path, disk_err = await asyncio.to_thread(
                                 _finalize_inline_image_worker,
                                 payload,
@@ -5570,13 +9954,15 @@ class I2PChatCore:
                                     )
                                     self._emit_inline_image(safe_path, is_from_me=False)
                                     try:
-                                        ack_id = self._incoming_image_msg_id or 0
+                                        ack_id = sess._incoming_image_msg_id or 0
                                         await self._write_signal_frame_maybe_soft_drain(
                                             writer,
                                             self.frame_message(
                                                 "S",
                                                 f"__SIGNAL__:IMG_ACK|{filename}|{ack_id}",
+                                                peer_id=peer_id,
                                             ),
+                                            sess=sess,
                                         )
                                     except Exception:
                                         pass
@@ -5593,10 +9979,10 @@ class I2PChatCore:
                                 )
                                 self._emit_error(f"Failed to save image: {e}")
                             
-                            self.inline_image_buffer = bytearray()
-                            self.inline_image_info = None
-                            self._incoming_image_msg_id = None
-                    elif self.inline_image_info is None:
+                            sess.inline_image_buffer = bytearray()
+                            sess.inline_image_info = None
+                            sess._incoming_image_msg_id = None
+                    elif sess.inline_image_info is None:
                         # Заголовок: filename|size
                         try:
                             parts = body.split("|")
@@ -5609,10 +9995,10 @@ class I2PChatCore:
                                         f"(max {MAX_IMAGE_SIZE // (1024*1024)} MB)"
                                     )
                                 else:
-                                    self.inline_image_info = (filename, size)
-                                    self._incoming_image_msg_id = msg_id or None
-                                    self.inline_image_buffer = bytearray()
-                                    self._inline_image_last_emit = 0
+                                    sess.inline_image_info = (filename, size)
+                                    sess._incoming_image_msg_id = msg_id or None
+                                    sess.inline_image_buffer = bytearray()
+                                    sess._inline_image_last_emit = 0
                                     self._emit_system(f"Receiving image: {filename} ({size} bytes)")
                                     self._emit_file_event(FileTransferInfo(filename=filename, size=size, received=0, is_sending=False, is_inline_image=True))
                         except Exception as e:
@@ -5620,8 +10006,8 @@ class I2PChatCore:
                     else:
                         # Данные изображения (base64)
                         try:
-                            fn, total = self.inline_image_info
-                            remaining = total - len(self.inline_image_buffer)
+                            fn, total = sess.inline_image_info
+                            remaining = total - len(sess.inline_image_buffer)
                             if remaining <= 0:
                                 raise ValueError("Image chunk exceeds declared size")
                             if len(body) > max_base64_chars_for_bytes(remaining):
@@ -5629,20 +10015,20 @@ class I2PChatCore:
                             chunk = base64.b64decode(body, validate=True)
                             if len(chunk) > remaining:
                                 raise ValueError("Decoded image chunk exceeds remaining size")
-                            self.inline_image_buffer.extend(chunk)
-                            if self.inline_image_info:
-                                received = len(self.inline_image_buffer)
+                            sess.inline_image_buffer.extend(chunk)
+                            if sess.inline_image_info:
+                                received = len(sess.inline_image_buffer)
                                 if received - getattr(self, "_inline_image_last_emit", 0) >= 65536 or received == total:
-                                    self._inline_image_last_emit = received
+                                    sess._inline_image_last_emit = received
                                     self._emit_file_event(FileTransferInfo(filename=fn, size=total, received=received, is_sending=False, is_inline_image=True))
                         except Exception as e:
                             self._emit_error(f"Image data error: {e}")
-                            if self.inline_image_info:
-                                fn, sz = self.inline_image_info
+                            if sess.inline_image_info:
+                                fn, sz = sess.inline_image_info
                                 self._emit_file_event(FileTransferInfo(filename=fn, size=sz, received=-1, is_sending=False, is_inline_image=True))
-                            self.inline_image_buffer = bytearray()
-                            self.inline_image_info = None
-                            self._incoming_image_msg_id = None
+                            sess.inline_image_buffer = bytearray()
+                            sess.inline_image_info = None
+                            sess._incoming_image_msg_id = None
 
                 elif msg_type == "F":
                     try:
@@ -5654,8 +10040,8 @@ class I2PChatCore:
                                 f"File too large: {size} bytes "
                                 f"(max {self.MAX_FILE_SIZE // (1024*1024)} MB)"
                             )
-                            self.incoming_file = None
-                            self.incoming_info = None
+                            sess.incoming_file = None
+                            sess.incoming_info = None
                             continue
                         safe_name = os.path.basename(filename)
                         safe_path = allocate_unique_filename(get_downloads_dir(), safe_name)
@@ -5664,34 +10050,39 @@ class I2PChatCore:
                             final_name, size
                         )
                         if not accepted:
-                            await self.reject_incoming_file(final_name)
+                            prj = peer_id or self._normalize_peer_addr(
+                                self.current_peer_addr or ""
+                            )
+                            await self.reject_incoming_file(
+                                final_name, peer_for_route=prj
+                            )
                             self._emit_system(
                                 f"Incoming file rejected by user: {final_name}"
                             )
-                            self.incoming_file = None
-                            self.incoming_info = None
+                            sess.incoming_file = None
+                            sess.incoming_info = None
                             continue
                         if final_name != safe_name:
                             self._emit_system(
                                 f"Filename collision detected: saved as {final_name}"
                             )
-                        self.incoming_file = open(safe_path, "xb")
-                        self._incoming_file_msg_id = msg_id or None
-                        self.incoming_info = FileTransferInfo(
+                        sess.incoming_file = open(safe_path, "xb")
+                        sess._incoming_file_msg_id = msg_id or None
+                        sess.incoming_info = FileTransferInfo(
                             filename=safe_path, size=size, received=0
                         )
                         self._file_xfer_debug_last_recv_emit_mono = None
                         self._emit_system(
                             f"Receiving file: {final_name} ({size} bytes)"
                         )
-                        self._emit_file_event(self.incoming_info)
+                        self._emit_file_event(sess.incoming_info)
                     except Exception as e:
                         self._emit_error(f"Invalid file header: {e}")
 
                 elif msg_type == "D":
                     try:
-                        if self.incoming_file and self.incoming_info:
-                            remaining = self.incoming_info.size - self.incoming_info.received
+                        if sess.incoming_file and sess.incoming_info:
+                            remaining = sess.incoming_info.size - sess.incoming_info.received
                             if remaining <= 0:
                                 raise ValueError("File chunk exceeds declared size")
                             if len(body) > max_base64_chars_for_bytes(remaining):
@@ -5699,10 +10090,10 @@ class I2PChatCore:
                             chunk = base64.b64decode(body, validate=True)
                             if len(chunk) > remaining:
                                 raise ValueError("Decoded file chunk exceeds remaining size")
-                            self.incoming_file.write(chunk)
-                            self.incoming_info.received += len(chunk)
-                            rcv = self.incoming_info.received
-                            tot = self.incoming_info.size
+                            sess.incoming_file.write(chunk)
+                            sess.incoming_info.received += len(chunk)
+                            rcv = sess.incoming_info.received
+                            tot = sess.incoming_info.size
                             clen = len(chunk)
                             if should_emit_file_progress(rcv, clen, tot):
                                 if self._file_xfer_debug:
@@ -5718,38 +10109,38 @@ class I2PChatCore:
                                                 tot,
                                             )
                                     self._file_xfer_debug_last_recv_emit_mono = now
-                                self._emit_file_event(self.incoming_info)
+                                self._emit_file_event(sess.incoming_info)
                     except Exception as e:
                         self._emit_error(f"File chunk error: {e}")
-                        if self.incoming_file:
+                        if sess.incoming_file:
                             try:
-                                self.incoming_file.close()
+                                sess.incoming_file.close()
                             except Exception:
                                 pass
-                        if self.incoming_info:
+                        if sess.incoming_info:
                             self._emit_file_event(
                                 FileTransferInfo(
-                                    filename=self.incoming_info.filename,
-                                    size=self.incoming_info.size,
+                                    filename=sess.incoming_info.filename,
+                                    size=sess.incoming_info.size,
                                     received=-1,
                                     is_sending=False,
                                 )
                             )
                             try:
-                                os.remove(self.incoming_info.filename)
+                                os.remove(sess.incoming_info.filename)
                             except OSError:
                                 pass
-                        self.incoming_file = None
-                        self.incoming_info = None
-                        self._incoming_file_msg_id = None
+                        sess.incoming_file = None
+                        sess.incoming_info = None
+                        sess._incoming_file_msg_id = None
 
                 elif msg_type == "E":
-                    if self.incoming_file and self.incoming_info:
-                        ack_filename = self.incoming_info.filename
-                        expected_size = self.incoming_info.size
-                        received_size = self.incoming_info.received
+                    if sess.incoming_file and sess.incoming_info:
+                        ack_filename = sess.incoming_info.filename
+                        expected_size = sess.incoming_info.size
+                        received_size = sess.incoming_info.received
                         try:
-                            self.incoming_file.close()
+                            sess.incoming_file.close()
                         except Exception:
                             pass
                         if received_size != expected_size:
@@ -5768,11 +10159,11 @@ class I2PChatCore:
                                 os.remove(ack_filename)
                             except OSError:
                                 pass
-                            self.incoming_file = None
-                            self.incoming_info = None
-                            self._incoming_file_msg_id = None
+                            sess.incoming_file = None
+                            sess.incoming_info = None
+                            sess._incoming_file_msg_id = None
                             continue
-                        ack_msg_id = self._incoming_file_msg_id or 0
+                        ack_msg_id = sess._incoming_file_msg_id or 0
                         self._emit_file_event(
                             FileTransferInfo(
                                 filename=ack_filename,
@@ -5781,33 +10172,54 @@ class I2PChatCore:
                                 is_sending=False,
                             )
                         )
-                        self.incoming_file = None
-                        self.incoming_info = None
+                        sess.incoming_file = None
+                        sess.incoming_info = None
                         # Подтверждение получения файла (галочки у отправителя); отправляем basename, чтобы совпало с file_name у отправителя
                         try:
                             writer.write(
                                 self.frame_message(
                                     "S",
                                     f"__SIGNAL__:FILE_ACK|{os.path.basename(ack_filename)}|{ack_msg_id}",
+                                    peer_id=peer_id,
                                 )
                             )
                             await writer.drain()
                         except Exception:
                             pass
-                        self._incoming_file_msg_id = None
+                        sess._incoming_file_msg_id = None
 
                 elif msg_type == "S":
                     if "__SIGNAL__:" in body:
-                        if "BLINDBOX_ROOT|" in body:
+                        if "GROUP_BLINDBOX_ROOT|" in body:
+                            try:
+                                await self._handle_incoming_group_blindbox_root_signal(
+                                    body, writer, peer_id=peer_id
+                                )
+                            except Exception as e:
+                                self._emit_error(
+                                    f"Invalid Group BlindBox root signal: {e}"
+                                )
+                        elif "GROUP_BLINDBOX_ROOT_ACK|" in body:
+                            try:
+                                self._handle_group_blindbox_root_ack_signal(
+                                    body, peer_id=peer_id
+                                )
+                            except Exception as e:
+                                self._emit_error(
+                                    f"Invalid Group BlindBox root ACK signal: {e}"
+                                )
+                        elif "BLINDBOX_ROOT|" in body:
                             try:
                                 await self._handle_incoming_blindbox_root_signal(
-                                    body, writer
+                                    body, writer, peer_id=peer_id
                                 )
                             except Exception as e:
                                 self._emit_error(f"Invalid BlindBox root signal: {e}")
                         elif "BLINDBOX_ROOT_ACK|" in body:
                             try:
-                                self._handle_blindbox_root_ack_signal(body)
+                                self._handle_blindbox_root_ack_signal(
+                                    body, peer_id=peer_id
+                                )
                             except Exception as e:
                                 self._emit_error(
                                     f"Invalid BlindBox root ACK signal: {e}"
@@ -5816,7 +10228,7 @@ class I2PChatCore:
                             try:
                                 ack_id_raw = body.split("MSG_ACK|", 1)[1].strip().split("|", 1)[0]
                                 ack_id = int(ack_id_raw)
-                                entry = self._pending_text_acks.get(ack_id)
+                                entry = sess._pending_text_acks.get(ack_id)
                                 if entry is None:
                                     self._record_ack_drop("unknown_id", f"MSG_ACK id={ack_id}")
                                 elif entry.state != "awaiting_ack":
@@ -5826,8 +10238,8 @@ class I2PChatCore:
                                     )
                                 elif (
                                     entry.ack_kind != "msg"
-                                    or entry.peer_addr != self._current_ack_peer()
-                                    or entry.ack_session_epoch != self._ack_session_epoch
+                                    or entry.peer_addr != self._normalize_peer_addr(sess.peer_id or "")
+                                    or entry.ack_session_epoch != sess._ack_session_epoch
                                 ):
                                     self._record_ack_drop(
                                         "context_mismatch",
@@ -5836,14 +10248,16 @@ class I2PChatCore:
                                 else:
                                     if self.on_text_delivered:
                                         self.on_text_delivered(str(ack_id))
-                                    self._pending_text_acks.pop(ack_id, None)
+                                    sess._pending_text_acks.pop(ack_id, None)
                                     self.session_manager.acknowledge_inflight_message(
                                         ack_id,
-                                        peer_id=self._current_ack_peer(),
+                                        peer_id=self._normalize_peer_addr(
+                                            sess.peer_id or ""
+                                        ),
                                     )
                             except Exception:
                                 self._record_ack_drop("invalid_format", "MSG_ACK parse failed")
-                        if "IMG_ACK|" in body:
+                        elif "IMG_ACK|" in body:
                             try:
                                 ack_payload = body.split("IMG_ACK|", 1)[1].strip()
                                 parts = ack_payload.split("|")
@@ -5852,7 +10266,7 @@ class I2PChatCore:
                                 if len(parts) > 1:
                                     try:
                                         ack_id = int(parts[1].strip())
-                                        entry = self._pending_image_acks.get(ack_id)
+                                        entry = sess._pending_image_acks.get(ack_id)
                                         ack_name = os.path.basename(ack_filename)
                                         if entry is None:
                                             self._record_ack_drop(
@@ -5867,13 +10281,17 @@ class I2PChatCore:
                                         elif (
                                             entry.ack_kind == "image"
                                             and os.path.basename(entry.token) == ack_name
-                                            and entry.peer_addr == self._current_ack_peer()
-                                            and entry.ack_session_epoch == self._ack_session_epoch
+                                            and entry.peer_addr
+                                            == self._normalize_peer_addr(sess.peer_id or "")
+                                            and entry.ack_session_epoch
+                                            == sess._ack_session_epoch
                                         ):
-                                            self._pending_image_acks.pop(ack_id, None)
+                                            sess._pending_image_acks.pop(ack_id, None)
                                             self.session_manager.acknowledge_inflight_message(
                                                 ack_id,
-                                                peer_id=self._current_ack_peer(),
+                                                peer_id=self._normalize_peer_addr(
+                                                    sess.peer_id or ""
+                                                ),
                                             )
                                             ack_valid = True
                                         else:
@@ -5898,7 +10316,7 @@ class I2PChatCore:
                                 if len(parts) > 1:
                                     try:
                                         ack_id = int(parts[1].strip())
-                                        entry = self._pending_file_acks.get(ack_id)
+                                        entry = sess._pending_file_acks.get(ack_id)
                                         ack_name = os.path.basename(ack_filename)
                                         if entry is None:
                                             self._record_ack_drop(
@@ -5913,13 +10331,17 @@ class I2PChatCore:
                                         elif (
                                             entry.ack_kind == "file"
                                             and os.path.basename(entry.token) == ack_name
-                                            and entry.peer_addr == self._current_ack_peer()
-                                            and entry.ack_session_epoch == self._ack_session_epoch
+                                            and entry.peer_addr
+                                            == self._normalize_peer_addr(sess.peer_id or "")
+                                            and entry.ack_session_epoch
+                                            == sess._ack_session_epoch
                                         ):
-                                            self._pending_file_acks.pop(ack_id, None)
+                                            sess._pending_file_acks.pop(ack_id, None)
                                             self.session_manager.acknowledge_inflight_message(
                                                 ack_id,
-                                                peer_id=self._current_ack_peer(),
+                                                peer_id=self._normalize_peer_addr(
+                                                    sess.peer_id or ""
+                                                ),
                                             )
                                             ack_valid = True
                                         else:
@@ -5936,39 +10358,34 @@ class I2PChatCore:
                             except Exception:
                                 self._record_ack_drop("invalid_format", "FILE_ACK parse failed")
                         elif "REJECT_FILE|" in body:
-                            self._transfer_rejected_by_peer = True
+                            sess._transfer_rejected_by_peer = True
                         elif "QUIT" in body:
                             self._emit_system("Peer requested disconnect.")
                             break
                         elif "ABORT_FILE" in body:
-                            self._transfer_aborted_by_peer = True
-                            if self.incoming_file and self.incoming_info:
+                            sess._transfer_aborted_by_peer = True
+                            if sess.incoming_file and sess.incoming_info:
                                 try:
-                                    self.incoming_file.close()
+                                    sess.incoming_file.close()
                                 except Exception:
                                     pass
-                                self.incoming_file = None
+                                sess.incoming_file = None
                                 self._emit_file_event(FileTransferInfo(
-                                    filename=self.incoming_info.filename,
-                                    size=self.incoming_info.size,
+                                    filename=sess.incoming_info.filename,
+                                    size=sess.incoming_info.size,
                                     received=-1,
                                     is_sending=False,
                                 ))
-                                self.incoming_info = None
+                                sess.incoming_info = None
                                 self._emit_system("Sender cancelled the transfer")
                             continue
                     else:
                         try:
                             dest_obj = i2plib.Destination(body)
-                            new_peer = dest_obj.base32 + ".b32.i2p"
-                            if self.current_peer_addr and new_peer != self.current_peer_addr:
+                            new_peer = dest_obj.base32
+                            if sess.peer_id and new_peer != sess.peer_id:
                                 self._emit_error(
-                                    f"Blocked identity mismatch: expected {self.current_peer_addr[:16]}..., got {new_peer[:16]}..."
-                                )
-                                break
-                            if self.stored_peer and new_peer != self.stored_peer:
-                                self._emit_error(
-                                    f"Blocked identity spoof: {new_peer[:16]}..."
+                                    f"Blocked identity mismatch: expected {sess.peer_id[:16]}..., got {new_peer[:16]}..."
                                 )
                                 break
                             if not await self._set_verified_peer_identity(
@@ -5984,50 +10401,49 @@ class I2PChatCore:
                             pass
 
                 elif msg_type == "H":
-                    await self._handle_handshake_message(body, writer)
+                    await self._handle_handshake_message(body, writer, peer_id=peer_id)
 
                 elif msg_type == "P":
-                    writer.write(self.frame_message("O", ""))
+                    writer.write(self.frame_message("O", "", peer_id=peer_id))
                     await writer.drain()
 
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         except Exception as e:
-            if self.conn == connection:
+            if sess.conn == connection:
                 self._emit_error(f"Protocol Error: {e}")
         finally:
-            self._recv_loop_active = False
+            current_task = asyncio.current_task()
+            sess._recv_loop_active = False
             skip_cleanup = False
             if (
                 restart_after_timeout
-                and self.conn == connection
+                and sess.conn == connection
                 and (
-                    self.incoming_info is not None
-                    or self.inline_image_info is not None
+                    sess.incoming_info is not None
+                    or sess.inline_image_info is not None
                 )
-                and not self._file_transfer_active
+                and not sess._file_transfer_active
             ):
                 try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(self.receive_loop(connection))
+                    self._start_receive_loop_task(connection, peer_id=peer_id)
                 except RuntimeError:
                     pass
                 skip_cleanup = True
+            if sess.receive_task is current_task:
+                sess.receive_task = None
             # Не сбрасываем соединение если идёт передача или приём файла / inline-изображения
             if (
                 not skip_cleanup
-                and self.conn == connection
-                and not self._file_transfer_active
-                and self.incoming_info is None
-                and self.inline_image_info is None
+                and sess.conn == connection
+                and not sess._file_transfer_active
+                and sess.incoming_info is None
+                and sess.inline_image_info is None
             ):
-                self._cancel_handshake_watchdog()
-                if self.session_manager.keepalive_task:
-                    self.session_manager.keepalive_task.cancel()
-                    self.session_manager.keepalive_task = None
-                peer_before_cleanup = self._normalize_peer_addr(self.current_peer_addr or "")
-                self.conn = None
-                self._reset_crypto_state()
+                self._cancel_handshake_watchdog(peer_id)
+                peer_before_cleanup = self._normalize_peer_addr(sess.peer_id or "")
+                self._live_sessions.pop(peer_id, None)
+                sess.reset_crypto()
                 if peer_before_cleanup:
                     self.session_manager.reset_peer_lifecycle(
                         peer_before_cleanup, reason="receive-loop-cleanup"
@@ -6037,14 +10453,29 @@ class I2PChatCore:
                     mark_peer_stale=False,
                     peer_id=peer_before_cleanup,
                 )
-                self._emit_message("info", "Peer disconnected.")
+                if sess.announce_lifecycle:
+                    self._emit_message("info", "Peer disconnected.")
                 self.peer_b32 = "Waiting for incoming connections..."
-                self._emit_system("Waiting for incoming connections...")
+                if sess.announce_lifecycle:
+                    self._emit_system("Waiting for incoming connections...")
+                self._notify_group_mesh_manager()
                 try:
                     writer.close()
                     await writer.wait_closed()
                 except Exception:
                     pass
+                await self._maybe_stop_keepalive_if_idle()
+                if self._any_live_stream() and (
+                    self.session_manager.keepalive_task is None
+                    or self.session_manager.keepalive_task.done()
+                ):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        self.session_manager.keepalive_task = loop.create_task(
+                            self._keepalive_loop()
+                        )
+                    except RuntimeError:
+                        pass
 
     async def tunnel_watcher(self) -> None:
         while True:

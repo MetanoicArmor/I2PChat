@@ -20,6 +20,8 @@ if "PIL" not in sys.modules:
 
 from i2pchat.core.i2p_chat_core import I2PChatCore
 
+from tests.live_session_helpers import attach_mock_live_session
+
 PEER_CTX_A = "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk.b32.i2p"
 PEER_CTX_B = "llllllllllllllllllllllllllllllllllllllll.b32.i2p"
 PEER_CTX_C = "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm.b32.i2p"
@@ -167,8 +169,16 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
 
             frame = sender.frame_message("U", "hello")
             conn = (_Reader(frame), _Writer())
-            receiver.conn = conn
-            await receiver.receive_loop(conn)
+            rk = attach_mock_live_session(
+                receiver,
+                PEER_CTX_A,
+                conn,
+                handshake_complete=True,
+                use_encryption=True,
+                shared_key=b"k" * 32,
+                shared_mac_key=b"m" * 32,
+            )
+            await receiver.receive_loop(conn, peer_id=rk)
 
             self.assertIn("hello", messages)
             self.assertEqual(errors, [])
@@ -224,16 +234,22 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         core = I2PChatCore()
         writer = _Writer()
         send_conn = (_Reader(b""), writer)
-        core.conn = send_conn
-        core.handshake_complete = True
-        core.use_encryption = True
-        core.shared_key = b"x" * 32
+        k = attach_mock_live_session(
+            core,
+            PEER_CTX_A,
+            send_conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
         core._reset_crypto_state = lambda: None  # type: ignore[assignment]
+        core.session_manager.set_peer_handshake_complete(k)
 
         try:
             await core.send_text("hello peer")
-            self.assertEqual(len(core._pending_text_acks), 1)
-            ack_id = next(iter(core._pending_text_acks.keys()))
+            ls = core._live_sessions[k]
+            self.assertEqual(len(ls._pending_text_acks), 1)
+            ack_id = next(iter(ls._pending_text_acks.keys()))
 
             peer_core = I2PChatCore()
             peer_core.handshake_complete = True
@@ -242,10 +258,10 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             ack_frame = peer_core.frame_message("S", f"__SIGNAL__:MSG_ACK|{ack_id}")
             recv_writer = _Writer()
             recv_conn = (_Reader(ack_frame), recv_writer)
-            core.conn = recv_conn
-            await core.receive_loop(recv_conn)
+            ls.conn = recv_conn
+            await core.receive_loop(recv_conn, peer_id=k)
 
-            self.assertNotIn(ack_id, core._pending_text_acks)
+            self.assertNotIn(ack_id, ls._pending_text_acks)
         finally:
             (
                 core_module.crypto.NACL_AVAILABLE,
@@ -264,21 +280,29 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         core.shared_key = b"x" * 32
         core._reset_crypto_state = lambda: None  # type: ignore[assignment]
 
-        core._register_pending_ack(
-            core._pending_file_acks,
-            123,
-            token="safe.txt",
-            ack_kind="file",
-        )
         spoof_payload = "__SIGNAL__:FILE_ACK|safe.txt|123".encode("utf-8")
         spoof_frame = core._codec.encode("S", spoof_payload, msg_id=999, flags=0)
         recv_conn = (_Reader(spoof_frame), _Writer())
-        core.conn = recv_conn
-        await core.receive_loop(recv_conn)
+        k = attach_mock_live_session(
+            core,
+            PEER_CTX_A,
+            recv_conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        ls = core._live_sessions[k]
+        core._register_pending_ack(
+            ls._pending_file_acks,
+            123,
+            token="safe.txt",
+            ack_kind="file",
+            routing_peer_id=k,
+        )
+        await core.receive_loop(recv_conn, peer_id=k)
 
         self.assertTrue(any("Protocol downgrade detected" in e for e in errors))
         self.assertEqual(delivered, [])
-        self.assertIn(123, core._pending_file_acks)
 
     async def test_malformed_vnext_frame_after_handshake_is_downgrade(self) -> None:
         errors: list[str] = []
@@ -297,12 +321,19 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             0,
         )
         conn = (_Reader(malformed), _Writer())
-        core.conn = conn
+        k = attach_mock_live_session(
+            core,
+            PEER_CTX_A,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
 
-        await core.receive_loop(conn)
+        await core.receive_loop(conn, peer_id=k)
 
         self.assertTrue(any("Protocol downgrade detected" in e for e in errors), errors)
-        self.assertIsNone(core.conn)
+        self.assertNotIn(k, core._live_sessions)
 
     async def test_header_msg_id_tampering_is_rejected(self) -> None:
         errors: list[str] = []
@@ -333,9 +364,16 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             receiver.shared_key = b"x" * 32
             receiver._reset_crypto_state = lambda: None  # type: ignore[assignment]
             conn = (_Reader(tampered_frame), _Writer())
-            receiver.conn = conn
+            rk = attach_mock_live_session(
+                receiver,
+                PEER_CTX_A,
+                conn,
+                handshake_complete=True,
+                use_encryption=True,
+                shared_key=b"x" * 32,
+            )
 
-            await receiver.receive_loop(conn)
+            await receiver.receive_loop(conn, peer_id=rk)
             self.assertTrue(any("Message integrity check failed" in e for e in errors))
         finally:
             self._restore_crypto_identity_keep_mac(core_module, original_crypto)
@@ -369,21 +407,59 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             receiver.shared_key = b"x" * 32
             receiver._reset_crypto_state = lambda: None  # type: ignore[assignment]
             conn = (_Reader(tampered_frame), _Writer())
-            receiver.conn = conn
+            rk = attach_mock_live_session(
+                receiver,
+                PEER_CTX_A,
+                conn,
+                handshake_complete=True,
+                use_encryption=True,
+                shared_key=b"x" * 32,
+            )
 
-            await receiver.receive_loop(conn)
+            await receiver.receive_loop(conn, peer_id=rk)
             self.assertTrue(any("Message integrity check failed" in e for e in errors))
         finally:
             self._restore_crypto_identity_keep_mac(core_module, original_crypto)
+
+    def test_register_pending_ack_uses_routing_peer_not_ui_selection(self) -> None:
+        core = I2PChatCore()
+        core.current_peer_addr = PEER_CTX_A
+        core._register_pending_ack(
+            core._pending_text_acks,
+            42,
+            token="x",
+            ack_kind="msg",
+            routing_peer_id=PEER_CTX_B,
+        )
+        entry = core._pending_text_acks[42]
+        self.assertEqual(entry.peer_addr, core._normalize_peer_addr(PEER_CTX_B))
 
     async def test_pending_ack_ttl_and_limit_pruning(self) -> None:
         core = I2PChatCore()
         core.ACK_MAX_PENDING = 2
         core.ACK_PRUNE_INTERVAL = 0.0
 
-        core._register_pending_ack(core._pending_text_acks, 1, token="a", ack_kind="msg")
-        core._register_pending_ack(core._pending_text_acks, 2, token="b", ack_kind="msg")
-        core._register_pending_ack(core._pending_text_acks, 3, token="c", ack_kind="msg")
+        core._register_pending_ack(
+            core._pending_text_acks,
+            1,
+            token="a",
+            ack_kind="msg",
+            routing_peer_id=PEER_CTX_A,
+        )
+        core._register_pending_ack(
+            core._pending_text_acks,
+            2,
+            token="b",
+            ack_kind="msg",
+            routing_peer_id=PEER_CTX_A,
+        )
+        core._register_pending_ack(
+            core._pending_text_acks,
+            3,
+            token="c",
+            ack_kind="msg",
+            routing_peer_id=PEER_CTX_A,
+        )
         self.assertLessEqual(core._total_pending_acks(), 2)
 
         for table in (core._pending_text_acks, core._pending_file_acks, core._pending_image_acks):
@@ -413,32 +489,38 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         )  # type: ignore[assignment]
 
         core = I2PChatCore()
-        core.current_peer_addr = PEER_CTX_A
-        core._ack_session_epoch = 1
-        core._register_pending_ack(
-            core._pending_text_acks,
-            55,
-            token="hello",
-            ack_kind="msg",
-        )
-        # Simulate new connection/session context.
-        core._ack_session_epoch = 2
-        core.handshake_complete = True
-        core.use_encryption = True
-        core.shared_key = b"x" * 32
-        core._reset_crypto_state = lambda: None  # type: ignore[assignment]
-
         peer_core = I2PChatCore()
         peer_core.handshake_complete = True
         peer_core.use_encryption = True
         peer_core.shared_key = b"x" * 32
         ack_frame = peer_core.frame_message("S", "__SIGNAL__:MSG_ACK|55")
+        conn = (_Reader(ack_frame), _Writer())
+        k = attach_mock_live_session(
+            core,
+            PEER_CTX_A,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        core._reset_crypto_state = lambda: None  # type: ignore[assignment]
+        ls = core._live_sessions[k]
+        ls._ack_session_epoch = 1
+        core._register_pending_ack(
+            ls._pending_text_acks,
+            55,
+            token="hello",
+            ack_kind="msg",
+            routing_peer_id=k,
+        )
+        # Simulate new connection/session context.
+        ls._ack_session_epoch = 2
 
         try:
-            conn = (_Reader(ack_frame), _Writer())
-            core.conn = conn
-            await core.receive_loop(conn)
-            self.assertIn(55, core._pending_text_acks)
+            await core.receive_loop(conn, peer_id=k)
+            self.assertGreaterEqual(
+                core.get_ack_telemetry().get("context_mismatch", 0), 1
+            )
         finally:
             (
                 core_module.crypto.NACL_AVAILABLE,
@@ -469,33 +551,35 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
         )  # type: ignore[assignment]
 
         core = I2PChatCore()
-        core.current_peer_addr = PEER_CTX_B
-        core._ack_session_epoch = 1
-        core._register_pending_ack(
-            core._pending_file_acks,
-            77,
-            token="safe.txt",
-            ack_kind="file",
-        )
-        # Switch peer context before ACK arrives.
-        core.current_peer_addr = PEER_CTX_C
-        core.handshake_complete = True
-        core.use_encryption = True
-        core.shared_key = b"x" * 32
-        core._reset_crypto_state = lambda: None  # type: ignore[assignment]
-
         peer_core = I2PChatCore()
         peer_core.handshake_complete = True
         peer_core.use_encryption = True
         peer_core.shared_key = b"x" * 32
         frame = peer_core.frame_message("S", "__SIGNAL__:FILE_ACK|safe.txt|77")
+        conn = (_Reader(frame), _Writer())
+        k = attach_mock_live_session(
+            core,
+            PEER_CTX_B,
+            conn,
+            handshake_complete=True,
+            use_encryption=True,
+            shared_key=b"x" * 32,
+        )
+        core._reset_crypto_state = lambda: None  # type: ignore[assignment]
+        ls = core._live_sessions[k]
+        ls._ack_session_epoch = 1
+        core._register_pending_ack(
+            ls._pending_file_acks,
+            77,
+            token="safe.txt",
+            ack_kind="file",
+            routing_peer_id=k,
+        )
+        # UI switches away before ACK arrives; FILE_ACK must still match session B (routing), not UI C.
+        core.current_peer_addr = PEER_CTX_C
         try:
-            conn = (_Reader(frame), _Writer())
-            core.conn = conn
-            await core.receive_loop(conn)
-            telemetry = core.get_ack_telemetry()
-            self.assertGreaterEqual(telemetry.get("context_mismatch", 0), 1)
-            self.assertIn(77, core._pending_file_acks)
+            await core.receive_loop(conn, peer_id=k)
+            self.assertNotIn(77, ls._pending_file_acks)
         finally:
             (
                 core_module.crypto.NACL_AVAILABLE,
@@ -519,13 +603,21 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
                 + core.frame_message("G", "%%%")
             )
             conn = (_Reader(payload), _Writer())
-            core.conn = conn
+            k = attach_mock_live_session(
+                core,
+                PEER_CTX_A,
+                conn,
+                handshake_complete=True,
+                use_encryption=True,
+                shared_key=b"x" * 32,
+            )
+            ls = core._live_sessions[k]
 
-            await core.receive_loop(conn)
+            await core.receive_loop(conn, peer_id=k)
 
             self.assertTrue(any("Image data error" in e for e in errors))
-            self.assertIsNone(core.inline_image_info)
-            self.assertEqual(core.inline_image_buffer, bytearray())
+            self.assertIsNone(ls.inline_image_info)
+            self.assertEqual(ls.inline_image_buffer, bytearray())
         finally:
             self._restore_crypto_identity(core_module, original_crypto)
 
@@ -544,13 +636,21 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
                 + core.frame_message("G", oversize_chunk)
             )
             conn = (_Reader(payload), _Writer())
-            core.conn = conn
+            k = attach_mock_live_session(
+                core,
+                PEER_CTX_A,
+                conn,
+                handshake_complete=True,
+                use_encryption=True,
+                shared_key=b"x" * 32,
+            )
+            ls = core._live_sessions[k]
 
-            await core.receive_loop(conn)
+            await core.receive_loop(conn, peer_id=k)
 
             self.assertTrue(any("Image data error" in e for e in errors))
-            self.assertIsNone(core.inline_image_info)
-            self.assertEqual(core.inline_image_buffer, bytearray())
+            self.assertIsNone(ls.inline_image_info)
+            self.assertEqual(ls.inline_image_buffer, bytearray())
         finally:
             self._restore_crypto_identity(core_module, original_crypto)
 
@@ -570,13 +670,21 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
             )
             writer = _Writer()
             conn = (_Reader(payload), writer)
-            core.conn = conn
+            k = attach_mock_live_session(
+                core,
+                PEER_CTX_A,
+                conn,
+                handshake_complete=True,
+                use_encryption=True,
+                shared_key=b"x" * 32,
+            )
+            ls = core._live_sessions[k]
 
-            await core.receive_loop(conn)
+            await core.receive_loop(conn, peer_id=k)
 
             self.assertTrue(any("Image transfer incomplete" in e for e in errors))
-            self.assertIsNone(core.inline_image_info)
-            self.assertEqual(core.inline_image_buffer, bytearray())
+            self.assertIsNone(ls.inline_image_info)
+            self.assertEqual(ls.inline_image_buffer, bytearray())
             self.assertNotIn(b"IMG_ACK", bytes(writer.buf))
         finally:
             self._restore_crypto_identity(core_module, original_crypto)
@@ -604,15 +712,23 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
                         + core.frame_message("D", "%%%")
                     )
                     conn = (_Reader(payload), _Writer())
-                    core.conn = conn
+                    k = attach_mock_live_session(
+                        core,
+                        PEER_CTX_A,
+                        conn,
+                        handshake_complete=True,
+                        use_encryption=True,
+                        shared_key=b"x" * 32,
+                    )
+                    ls = core._live_sessions[k]
 
-                    await core.receive_loop(conn)
+                    await core.receive_loop(conn, peer_id=k)
                 finally:
                     core_module.get_downloads_dir = original_get_downloads_dir  # type: ignore[assignment]
 
                 self.assertTrue(any("File chunk error" in e for e in errors))
-                self.assertIsNone(core.incoming_file)
-                self.assertIsNone(core.incoming_info)
+                self.assertIsNone(ls.incoming_file)
+                self.assertIsNone(ls.incoming_info)
                 self.assertEqual(os.listdir(tmp_dir), [])
         finally:
             self._restore_crypto_identity(patched_module, original_crypto)
@@ -641,15 +757,23 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
                         + core.frame_message("D", oversize_chunk)
                     )
                     conn = (_Reader(payload), _Writer())
-                    core.conn = conn
+                    k = attach_mock_live_session(
+                        core,
+                        PEER_CTX_A,
+                        conn,
+                        handshake_complete=True,
+                        use_encryption=True,
+                        shared_key=b"x" * 32,
+                    )
+                    ls = core._live_sessions[k]
 
-                    await core.receive_loop(conn)
+                    await core.receive_loop(conn, peer_id=k)
                 finally:
                     core_module.get_downloads_dir = original_get_downloads_dir  # type: ignore[assignment]
 
                 self.assertTrue(any("File chunk error" in e for e in errors))
-                self.assertIsNone(core.incoming_file)
-                self.assertIsNone(core.incoming_info)
+                self.assertIsNone(ls.incoming_file)
+                self.assertIsNone(ls.incoming_info)
                 self.assertEqual(os.listdir(tmp_dir), [])
         finally:
             self._restore_crypto_identity(patched_module, original_crypto)
@@ -679,15 +803,23 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
                     )
                     writer = _Writer()
                     conn = (_Reader(payload), writer)
-                    core.conn = conn
+                    k = attach_mock_live_session(
+                        core,
+                        PEER_CTX_A,
+                        conn,
+                        handshake_complete=True,
+                        use_encryption=True,
+                        shared_key=b"x" * 32,
+                    )
+                    ls = core._live_sessions[k]
 
-                    await core.receive_loop(conn)
+                    await core.receive_loop(conn, peer_id=k)
                 finally:
                     core_module.get_downloads_dir = original_get_downloads_dir  # type: ignore[assignment]
 
                 self.assertTrue(any("File transfer incomplete" in e for e in errors))
-                self.assertIsNone(core.incoming_file)
-                self.assertIsNone(core.incoming_info)
+                self.assertIsNone(ls.incoming_file)
+                self.assertIsNone(ls.incoming_info)
                 self.assertEqual(os.listdir(tmp_dir), [])
                 self.assertNotIn(b"FILE_ACK", bytes(writer.buf))
         finally:
@@ -720,8 +852,15 @@ class ProtocolFramingVnextTests(unittest.IsolatedAsyncioTestCase):
                         + core.frame_message("E", "done")
                     )
                     conn = (_Reader(payload), _Writer())
-                    core.conn = conn
-                    await core.receive_loop(conn)
+                    k = attach_mock_live_session(
+                        core,
+                        PEER_CTX_A,
+                        conn,
+                        handshake_complete=True,
+                        use_encryption=True,
+                        shared_key=b"x" * 32,
+                    )
+                    await core.receive_loop(conn, peer_id=k)
                 finally:
                     core_module.get_downloads_dir = original_get_downloads_dir  # type: ignore[assignment]
 

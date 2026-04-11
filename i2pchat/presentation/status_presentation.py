@@ -41,7 +41,6 @@ def delivery_route_label(delivery_state: str) -> str:
         "online-live": "Live",
         "offline-ready": "Will deliver later",
         "await-live-root": "Need live chat once",
-        "blindbox-needs-locked-peer": "Lock peer first",
         "blindbox-needs-boxes": "Configure Blind Boxes",
         "blindbox-starting-local-session": "Waiting for I2P…",
         "blindbox-disabled-transient": "Live only (transient)",

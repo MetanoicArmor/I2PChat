@@ -19,7 +19,10 @@ class AuditRemediationPolicyTests(unittest.TestCase):
         self.assertIn("def derive_handshake_subkeys(", crypto_content)
         self.assertIn("hkdf_extract(", crypto_content)
         self.assertIn("hkdf_expand(", crypto_content)
-        self.assertIn("self.shared_key, self.shared_mac_key = self._compute_session_subkeys(", core_content)
+        self.assertIn(
+            "sess.shared_key, sess.shared_mac_key = self._compute_session_subkeys(",
+            core_content,
+        )
 
     def test_padding_profile_balanced_is_default(self) -> None:
         content = _read("i2pchat/core/i2p_chat_core.py")

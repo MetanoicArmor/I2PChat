@@ -326,7 +326,7 @@ def test_tui_post_ignores_missing_chat_widget() -> None:
     I2PChat.post_panel(app, "Title", "Body")
 
 
-def test_tui_copyaddr_adds_b32_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tui_copyaddr_copies_bare_b32(monkeypatch: pytest.MonkeyPatch) -> None:
     from i2pchat.gui.chat_python import I2PChat
 
     class _Dest:
@@ -349,8 +349,8 @@ def test_tui_copyaddr_adds_b32_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
     asyncio.run(I2PChat._execute_command(app, "/copyaddr"))
 
-    assert copied == ["exampleaddress.b32.i2p"]
-    assert messages[-1] == ("success", "Copied local address to clipboard: exampleaddress.b32.i2p")
+    assert copied == ["exampleaddress"]
+    assert messages[-1] == ("success", "Copied local address to clipboard: exampleaddress")
 
 
 def test_tui_on_mount_schedules_background_init(
@@ -541,6 +541,9 @@ def test_tui_summary_helpers_include_core_status_lines() -> None:
         proven = False
         stored_peer = None
 
+        def any_live_stream(self) -> bool:
+            return False
+
     app = object.__new__(I2PChat)
     app.core = _Core()
     app._router_status_block = lambda: "Configured backend: system\nSelection source: TUI default\nActive runtime: external/system SAM\nActive SAM address: ('127.0.0.1', 7656)"  # type: ignore[method-assign]
@@ -551,7 +554,7 @@ def test_tui_summary_helpers_include_core_status_lines() -> None:
         blindbox_bar="BlindBox: on",
         ack_total=0,
     )
-    app._current_target_peer = lambda: "peer.b32.i2p"  # type: ignore[method-assign]
+    app._current_target_peer = lambda: "pppppppppppppppppppppppppppppppppppppppp"  # type: ignore[method-assign]
 
     launcher = I2PChat._launcher_summary_text(app)
     actions = I2PChat._actions_summary_text(app)
@@ -559,6 +562,8 @@ def test_tui_summary_helpers_include_core_status_lines() -> None:
 
     assert "full status" in launcher
     assert "Configured backend:" in launcher
-    assert "Current peer: peer.b32.i2p" in actions
+    assert (
+        "Current peer: ppppppppppppppppppppppppppppppppppppppp" in actions
+    )
     assert "Connected: no" in actions
     assert "BlindBox: on" in media

@@ -48,7 +48,7 @@
 - **End‑to‑end communication over I2P SAM** (internal `i2pchat.sam` layer)
 - **E2E encryption** — handshake, key signing and verification
 - **TOFU** — peer key pinning on first contact
-- **Lock to peer** — bind a profile to a single peer
+- **Multi-peer profiles** — switch between **Saved peers** freely; incoming connections are accepted only from addresses present in the contact book (empty book ⇒ no inbound whitelist matches)
 - **PyQt6 GUI** with light and dark themes (macOS-style, consistent and predictable on all platforms)
 - **File transfer** and **image sending** (Send picture: PNG, JPEG, WebP) between peers
 - **Profiles (.dat)** — multiple profiles, load and import; each profile’s data lives under **`profiles/<name>/`** in the app data directory (if older **flat** `*.dat` files still sit in the data root, they are **migrated on startup** into that layout — see **§ profile paths** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md))
@@ -160,13 +160,13 @@ I2P or loopback endpoints"]
     subgraph ProfileState["Profile / local identity"]
         profile["profiles/<name>/ per profile
 <name>.dat + keyring
-stored peer lock
+contacts.json Saved peers
 trust store
 signing seed"]
     end
 
     profile -->|"load / save identity,
-trust pins, peer lock"| core
+trust pins, contacts"| core
     core -->|"encode / decode frames"| codec
     core -->|"derive UI delivery semantics"| delivery
     core -->|"handshake, encryption,

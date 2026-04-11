@@ -10,9 +10,10 @@ import subprocess
 import shutil
 import sys
 import time
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, replace
-from typing import Callable, List, Optional
+from typing import Callable, List, Literal, Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
@@ -41,6 +42,15 @@ from i2pchat.blindbox.local_server_example import (
     get_i2pd_blindbox_tunnel_example_source,
 )
 from i2pchat.presentation.compose_drafts import apply_compose_draft_peer_switch
+from i2pchat.groups import GroupTopologySnapshot
+from i2pchat.groups.models import GroupState
+from i2pchat.presentation.group_conversations import (
+    make_group_conversation_key,
+    render_group_control_text,
+    render_group_history_preview,
+    short_member_label,
+    split_group_member_tokens,
+)
 from i2pchat.protocol.message_delivery import (
     DELIVERY_STATE_DELIVERED,
     DELIVERY_STATE_FAILED,
@@ -49,6 +59,7 @@ from i2pchat.protocol.message_delivery import (
     normalize_loaded_delivery_state,
 )
 from i2pchat.presentation.reply_format import format_reply_quote
+from i2pchat.core.live_peer_session import max_concurrent_live_sessions
 from i2pchat.core.send_retry_policy import should_start_auto_connect_retry as _should_start_auto_connect_retry
 from i2pchat.presentation.status_presentation import build_status_presentation
 from i2pchat.presentation.notification_prefs import (
@@ -106,6 +117,9 @@ from i2pchat.core.i2p_chat_core import (
     validate_image,
 )
 from i2pchat.gui import menu_manual_tooltips as menu_tt
+
+# Тип строки в едином QListWidget сайдбара (группы + Saved peers).
+_SIDEBAR_LIST_ROLE = QtCore.Qt.ItemDataRole.UserRole
 from i2pchat.gui.rounded_qtooltip import (
     I2PChatQApplication,
     apply_tooltip_handling,
@@ -150,6 +164,7 @@ from i2pchat.storage.contact_book import (
     normalize_peer_address,
     remember_peer,
     remove_peer,
+    same_i2p_destination,
     save_book,
     set_last_active_peer,
     set_peer_profile,
@@ -296,18 +311,17 @@ _CONTACT_B32_TITLE_SUFFIX_LEN = 8
 
 
 def _contact_row_address_title(addr: str) -> str:
-    """Заголовок строки без display_name: компактная подпись .b32 (полный адрес — в toolTip)."""
+    """Заголовок строки без display_name: компактная подпись base32 (полный id — в toolTip)."""
     s = (addr or "").strip()
-    low = s.lower()
-    if not low.endswith(".b32.i2p"):
+    host = normalize_peer_address(s)
+    if not host:
         return s
-    host = low[: -len(".b32.i2p")]
     max_plain = _CONTACT_B32_TITLE_PREFIX_LEN + _CONTACT_B32_TITLE_SUFFIX_LEN
     if len(host) <= max_plain:
-        return s
+        return host
     p = _CONTACT_B32_TITLE_PREFIX_LEN
     t = _CONTACT_B32_TITLE_SUFFIX_LEN
-    return f"{host[:p]}…{host[-t:]}.b32.i2p"
+    return f"{host[:p]}…{host[-t:]}"
 
 
 def _peer_lock_indicator_pixmap(
@@ -418,11 +432,6 @@ def _delivery_status_bar_and_tooltip(state: str) -> tuple[str, str]:
             "Send: need Connect once",
             "BlindBox is enabled but not initialized for this peer yet. "
             "Run one successful live secure Connect to bootstrap offline delivery.",
-        )
-    if state == "blindbox-needs-locked-peer":
-        return (
-            "Send: lock peer first",
-            "BlindBox requires a locked peer in the current profile.",
         )
     if state == "blindbox-needs-boxes":
         return (
@@ -714,6 +723,10 @@ THEMES: dict[str, dict[str, object]] = {
                 border: 1px solid #ffffff;
                 border-radius: 14px;
             }
+            QLineEdit#ChatSearchLineEdit {
+                padding: 5px 10px;
+                min-height: 0px;
+            }
             QLabel#ChatSearchStatusInline {
                 color: rgba(60, 60, 67, 0.55);
                 background: transparent;
@@ -904,17 +917,39 @@ THEMES: dict[str, dict[str, object]] = {
                 font-size: 12px;
                 font-weight: 600;
             }
+            QPushButton#GroupsCreateButton {
+                padding: 2px 18px;
+                font-size: 12px;
+                font-weight: 600;
+            }
             QListWidget#ContactsList {
                 background: transparent;
                 border: none;
                 outline: none;
+                padding: 0px;
+                margin: 0px;
             }
             QListWidget#ContactsList::item {
                 background: transparent;
-                padding: 0px;
+                /* top, right, bottom, left — без левого отступа, как у заголовка «Groups» над списком */
+                padding: 1px 6px 1px 0px;
             }
             QListWidget#ContactsList::item:selected {
-                background: rgba(10, 132, 255, 0.12);
+                background: transparent;
+                border-radius: 8px;
+            }
+            QListWidget#GroupsList {
+                background: transparent;
+                border: none;
+                outline: none;
+                padding-top: 3px;
+            }
+            QListWidget#GroupsList::item {
+                background: transparent;
+                padding: 0px;
+            }
+            QListWidget#GroupsList::item:selected {
+                background: rgba(0, 0, 0, 0.07);
                 border-radius: 8px;
             }
             QLabel#ContactRowTitle {
@@ -1263,6 +1298,10 @@ THEMES: dict[str, dict[str, object]] = {
                 border: 1px solid #2f3541;
                 border-radius: 14px;
             }
+            QLineEdit#ChatSearchLineEdit {
+                padding: 5px 10px;
+                min-height: 0px;
+            }
             QLabel#ChatSearchStatusInline {
                 color: rgba(245, 245, 247, 0.55);
                 background: transparent;
@@ -1444,17 +1483,38 @@ THEMES: dict[str, dict[str, object]] = {
                 font-size: 12px;
                 font-weight: 600;
             }
+            QPushButton#GroupsCreateButton {
+                padding: 2px 18px;
+                font-size: 12px;
+                font-weight: 600;
+            }
             QListWidget#ContactsList {
                 background: transparent;
                 border: none;
                 outline: none;
+                padding: 0px;
+                margin: 0px;
             }
             QListWidget#ContactsList::item {
                 background: transparent;
-                padding: 0px;
+                padding: 1px 6px 1px 0px;
             }
             QListWidget#ContactsList::item:selected {
-                background: rgba(10, 132, 255, 0.22);
+                background: transparent;
+                border-radius: 8px;
+            }
+            QListWidget#GroupsList {
+                background: transparent;
+                border: none;
+                outline: none;
+                padding-top: 3px;
+            }
+            QListWidget#GroupsList::item {
+                background: transparent;
+                padding: 0px;
+            }
+            QListWidget#GroupsList::item:selected {
+                background: rgba(255, 255, 255, 0.10);
                 border-radius: 8px;
             }
             QLabel#ContactRowTitle {
@@ -3732,6 +3792,12 @@ class AddressLineEdit(QtWidgets.QLineEdit):
         self._context_popup: Optional["ActionsPopup"] = None
         self._context_popup_suppress_until_ms = 0
 
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        """QLineEdit leaves the cursor at the end after setText; long base32 ids then show the tail."""
+        super().setText(text)
+        if text:
+            self.setCursorPosition(0)
+
     def set_theme(self, theme_id: str) -> None:
         self._theme_id = _resolve_theme(theme_id)
 
@@ -4295,6 +4361,543 @@ class ActionsPopup(QtWidgets.QFrame):
         self._apply_win_popup_mask()
 
 
+class _GroupTopologyMapWidget(QtWidgets.QWidget):
+    peerActivated = QtCore.pyqtSignal(str)
+
+    def __init__(
+        self,
+        snapshot: GroupTopologySnapshot,
+        *,
+        theme_id: Optional[str] = None,
+        parent: Optional[QtWidgets.QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("GroupTopologyMapWidget")
+        self._snapshot = snapshot
+        self._theme_id = _resolve_theme(theme_id)
+        self.setMinimumSize(640, 420)
+        self.setMouseTracking(True)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+
+    def set_snapshot(self, snapshot: GroupTopologySnapshot) -> None:
+        self._snapshot = snapshot
+        self.update()
+
+    def _theme_palette(self) -> dict[str, QtGui.QColor]:
+        night = self._theme_id == "night"
+        return {
+            "bg": QtGui.QColor("#13161d" if night else "#f4f7fb"),
+            "panel": QtGui.QColor("#1c212b" if night else "#ffffff"),
+            "panel_alt": QtGui.QColor("#252c38" if night else "#edf3fb"),
+            "text": QtGui.QColor("#f5f7fb" if night else "#17212d"),
+            "muted": QtGui.QColor("#b5bdca" if night else "#64748b"),
+            "border": QtGui.QColor("#394457" if night else "#d6dfeb"),
+            "orbit": QtGui.QColor("#2d3950" if night else "#d9e4f2"),
+            "accent": QtGui.QColor("#4ca1ff" if night else "#2076e6"),
+            "live": QtGui.QColor("#2fb36c"),
+            "handshaking": QtGui.QColor("#f0a128"),
+            "await-root": QtGui.QColor("#f0a128"),
+            "blindbox": QtGui.QColor("#6c63ff"),
+            "degraded": QtGui.QColor("#d87a2f"),
+            "failed": QtGui.QColor("#de4f4f"),
+            "idle": QtGui.QColor("#8b93a7"),
+        }
+
+    def _edge_color(self, state: str) -> QtGui.QColor:
+        palette = self._theme_palette()
+        return QtGui.QColor(palette.get(state, palette["idle"]))
+
+    def _remote_nodes(self) -> list[object]:
+        return [
+            node
+            for node in self._snapshot.nodes
+            if not getattr(node, "is_local", False)
+        ]
+
+    def _status_key(self, node: object, edge: object | None) -> str:
+        if edge is not None:
+            raw = str(getattr(edge, "state", "") or "").strip().lower()
+            if raw:
+                return raw
+        if getattr(node, "live_ready", False):
+            return "live"
+        peer_state = str(getattr(node, "peer_state", "") or "").strip().lower()
+        if peer_state in {"connecting", "handshaking"}:
+            return "handshaking"
+        if (
+            getattr(self._snapshot, "await_group_root", False)
+            and not getattr(node, "blindbox_ready", False)
+        ):
+            return "await-root"
+        if peer_state == "stale":
+            return "degraded"
+        if peer_state == "failed":
+            return "failed"
+        if getattr(node, "blindbox_ready", False):
+            return "blindbox"
+        return "idle"
+
+    def _status_text(self, status_key: str) -> str:
+        return {
+            "live": "Live secure",
+            "handshaking": "Secure intro in progress",
+            "await-root": "Awaiting group BlindBox root",
+            "blindbox": "Offline route ready",
+            "degraded": "Needs refresh",
+            "failed": "Last connect failed",
+            "idle": "Idle",
+        }.get(status_key, status_key.replace("_", " ").title())
+
+    def _status_chip_text(self, status_key: str) -> str:
+        return {
+            "live": "LIVE",
+            "handshaking": "INTRO",
+            "await-root": "ROOT",
+            "blindbox": "BLINDBOX",
+            "degraded": "STALE",
+            "failed": "FAILED",
+            "idle": "IDLE",
+        }.get(status_key, status_key.upper())
+
+    def _elide(self, painter: QtGui.QPainter, text: str, width: float) -> str:
+        metrics = QtGui.QFontMetricsF(painter.font())
+        return metrics.elidedText(
+            str(text or ""),
+            QtCore.Qt.TextElideMode.ElideRight,
+            max(16.0, width),
+        )
+
+    def _column_positions(
+        self,
+        count: int,
+        *,
+        top: float,
+        bottom: float,
+        item_height: float,
+    ) -> list[float]:
+        if count <= 0:
+            return []
+        usable = max(item_height, bottom - top)
+        if count == 1:
+            return [top + usable / 2.0]
+        gap = (usable - item_height * count) / float(count - 1)
+        gap = max(12.0, gap)
+        start = top + item_height / 2.0
+        return [start + idx * (item_height + gap) for idx in range(count)]
+
+    def _layout_node_rects(
+        self, rect: QtCore.QRectF
+    ) -> tuple[QtCore.QRectF, dict[str, QtCore.QRectF]]:
+        remotes = self._remote_nodes()
+        circle_d = max(132.0, min(188.0, rect.height() * 0.34))
+        card_w = max(188.0, min(248.0, rect.width() * 0.26))
+        card_h = max(88.0, min(108.0, rect.height() * 0.20))
+        side_margin = 12.0
+        center_x = rect.center().x()
+        center_y = rect.center().y() + 10.0
+        local_rect = QtCore.QRectF(
+            center_x - circle_d / 2.0,
+            center_y - circle_d / 2.0,
+            circle_d,
+            circle_d,
+        )
+        left_nodes = remotes[::2]
+        right_nodes = remotes[1::2]
+        top = rect.top() + 30.0
+        bottom = rect.bottom() - 12.0
+        left_x = rect.left() + side_margin
+        right_x = rect.right() - side_margin - card_w
+        left_ys = self._column_positions(
+            len(left_nodes), top=top, bottom=bottom, item_height=card_h
+        )
+        right_ys = self._column_positions(
+            len(right_nodes), top=top, bottom=bottom, item_height=card_h
+        )
+        node_rects: dict[str, QtCore.QRectF] = {}
+        for node, cy in zip(left_nodes, left_ys):
+            node_rects[getattr(node, "member_id")] = QtCore.QRectF(
+                left_x,
+                cy - card_h / 2.0,
+                card_w,
+                card_h,
+            )
+        for node, cy in zip(right_nodes, right_ys):
+            node_rects[getattr(node, "member_id")] = QtCore.QRectF(
+                right_x,
+                cy - card_h / 2.0,
+                card_w,
+                card_h,
+            )
+        return local_rect, node_rects
+
+    def _layout_state(
+        self,
+    ) -> tuple[
+        QtCore.QRectF,
+        QtCore.QRectF,
+        dict[str, QtCore.QRectF],
+        dict[str, object],
+        dict[str, object],
+    ]:
+        rect = QtCore.QRectF(self.rect()).adjusted(14.0, 14.0, -14.0, -14.0)
+        inner = rect.adjusted(18.0, 18.0, -18.0, -18.0)
+        map_rect = inner.adjusted(8.0, 64.0, -8.0, -8.0)
+        local_rect, node_rects = self._layout_node_rects(map_rect)
+        edges_by_target = {
+            getattr(edge, "target_id"): edge
+            for edge in self._snapshot.edges
+        }
+        nodes_by_id = {
+            getattr(node, "member_id"): node
+            for node in self._remote_nodes()
+        }
+        return rect, local_rect, node_rects, edges_by_target, nodes_by_id
+
+    def _hit_test_remote_peer(self, pos: QtCore.QPointF) -> str | None:
+        _rect, _local_rect, node_rects, _edges, _nodes = self._layout_state()
+        for member_id, rect in node_rects.items():
+            if rect.contains(pos):
+                return member_id
+        return None
+
+    def _tooltip_for_peer(self, peer_id: str) -> str:
+        _rect, _local_rect, _node_rects, edges_by_target, nodes_by_id = self._layout_state()
+        node = nodes_by_id.get(peer_id)
+        if node is None:
+            return ""
+        edge = edges_by_target.get(peer_id)
+        status_key = self._status_key(node, edge)
+        lines = [str(getattr(node, "label", "Peer")), str(peer_id)]
+        lines.append(f"Route: {self._status_text(status_key)}")
+        peer_state = str(getattr(node, "peer_state", "") or "").strip()
+        if peer_state:
+            lines.append(f"Peer state: {peer_state}")
+        lines.append(
+            (
+                "BlindBox: awaiting group root"
+                if (
+                    getattr(self._snapshot, "await_group_root", False)
+                    and not getattr(node, "blindbox_ready", False)
+                )
+                else (
+                    "BlindBox: ready"
+                    if getattr(node, "blindbox_ready", False)
+                    else "BlindBox: not ready"
+                )
+            )
+        )
+        last_delivery = str(getattr(node, "last_delivery_status", "") or "").strip()
+        if last_delivery:
+            lines.append(f"Last delivery: {last_delivery}")
+        reason = str(getattr(node, "last_delivery_reason", "") or "").strip()
+        if reason:
+            lines.append(f"Details: {reason}")
+        lines.append("Click to open direct chat.")
+        return "\n".join(lines)
+
+    def _draw_chip(
+        self,
+        painter: QtGui.QPainter,
+        rect: QtCore.QRectF,
+        *,
+        fill: QtGui.QColor,
+        text: str,
+        text_color: QtGui.QColor,
+        radius: float = 9.0,
+        border: Optional[QtGui.QColor] = None,
+        font: Optional[QtGui.QFont] = None,
+    ) -> None:
+        painter.save()
+        painter.setPen(QtGui.QPen(border or fill.darker(115), 1.0))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(rect, radius, radius)
+        if font is not None:
+            painter.setFont(font)
+        painter.setPen(text_color)
+        painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
+
+    def _draw_connection(
+        self,
+        painter: QtGui.QPainter,
+        *,
+        local_rect: QtCore.QRectF,
+        target_rect: QtCore.QRectF,
+        state: str,
+        dashed: bool,
+    ) -> None:
+        base_color = self._edge_color(state)
+        pen = QtGui.QPen(base_color, 2.6)
+        if dashed:
+            pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+        pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+        source = QtCore.QPointF(local_rect.center().x(), local_rect.center().y())
+        if target_rect.center().x() < local_rect.center().x():
+            source.setX(local_rect.left() + 8.0)
+            target = QtCore.QPointF(target_rect.right() - 2.0, target_rect.center().y())
+        else:
+            source.setX(local_rect.right() - 8.0)
+            target = QtCore.QPointF(target_rect.left() + 2.0, target_rect.center().y())
+        spread = abs(target.x() - source.x()) * 0.42
+        ctrl1 = QtCore.QPointF(
+            source.x() + (spread if target.x() > source.x() else -spread),
+            source.y(),
+        )
+        ctrl2 = QtCore.QPointF(
+            target.x() - (spread if target.x() > source.x() else -spread),
+            target.y(),
+        )
+        path = QtGui.QPainterPath(source)
+        path.cubicTo(ctrl1, ctrl2, target)
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        glow = QtGui.QPen(base_color, 7.0)
+        glow_color = QtGui.QColor(base_color)
+        glow_color.setAlpha(48 if self._theme_id == "night" else 36)
+        glow.setColor(glow_color)
+        if dashed:
+            glow.setStyle(QtCore.Qt.PenStyle.DashLine)
+        glow.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+        painter.setPen(glow)
+        painter.drawPath(path)
+        painter.setPen(pen)
+        painter.drawPath(path)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(base_color)
+        painter.drawEllipse(target, 4.0, 4.0)
+        painter.restore()
+
+    def _draw_local_node(
+        self,
+        painter: QtGui.QPainter,
+        rect: QtCore.QRectF,
+        *,
+        palette: dict[str, QtGui.QColor],
+    ) -> None:
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        grad = QtGui.QLinearGradient(rect.topLeft(), rect.bottomRight())
+        grad.setColorAt(0.0, palette["accent"])
+        grad.setColorAt(1.0, QtGui.QColor(palette["accent"]).lighter(118))
+        painter.setPen(QtGui.QPen(palette["accent"].darker(120), 1.4))
+        painter.setBrush(grad)
+        painter.drawEllipse(rect)
+        ring = QtCore.QRectF(rect.adjusted(11.0, 11.0, -11.0, -11.0))
+        painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 44), 1.2))
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(ring)
+
+        title_font = QtGui.QFont(self.font())
+        title_font.setPointSize(max(14, title_font.pointSize() + 2))
+        title_font.setWeight(QtGui.QFont.Weight.Bold)
+        painter.setFont(title_font)
+        painter.setPen(QtGui.QColor("#ffffff"))
+        painter.drawText(
+            rect.adjusted(10.0, 10.0, -10.0, -10.0),
+            QtCore.Qt.AlignmentFlag.AlignCenter,
+            "You",
+        )
+        painter.restore()
+
+    def _draw_remote_card(
+        self,
+        painter: QtGui.QPainter,
+        *,
+        node: object,
+        edge: object | None,
+        rect: QtCore.QRectF,
+        palette: dict[str, QtGui.QColor],
+    ) -> None:
+        status_key = self._status_key(node, edge)
+        status_color = self._edge_color(status_key)
+        fill = QtGui.QColor(palette["panel"])
+        accent_fill = QtGui.QColor(status_color)
+        accent_fill.setAlpha(32 if self._theme_id == "night" else 24)
+
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QtGui.QPen(palette["border"], 1.0))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(rect, 18.0, 18.0)
+        accent_rect = QtCore.QRectF(rect.left(), rect.top(), 10.0, rect.height())
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(status_color)
+        painter.drawRoundedRect(accent_rect, 18.0, 18.0)
+        painter.setBrush(accent_fill)
+        painter.drawRoundedRect(rect.adjusted(10.0, 0.0, 0.0, 0.0), 16.0, 16.0)
+
+        name_font = QtGui.QFont(self.font())
+        name_font.setPointSize(max(10, name_font.pointSize()))
+        name_font.setWeight(QtGui.QFont.Weight.DemiBold)
+        painter.setFont(name_font)
+        painter.setPen(palette["text"])
+        name_rect = rect.adjusted(22.0, 10.0, -92.0, -52.0)
+        painter.drawText(
+            name_rect,
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop,
+            self._elide(
+                painter,
+                str(getattr(node, "label", "Peer")),
+                name_rect.width(),
+            ),
+        )
+
+        chip_font = QtGui.QFont(self.font())
+        chip_font.setPointSize(max(8, chip_font.pointSize() - 1))
+        chip_font.setWeight(QtGui.QFont.Weight.Bold)
+        chip_text = self._status_chip_text(status_key)
+        chip_rect = QtCore.QRectF(rect.right() - 86.0, rect.top() + 10.0, 72.0, 22.0)
+        self._draw_chip(
+            painter,
+            chip_rect,
+            fill=status_color,
+            text=chip_text,
+            text_color=QtGui.QColor("#ffffff"),
+            radius=11.0,
+            border=status_color.darker(118),
+            font=chip_font,
+        )
+
+        subtitle_font = QtGui.QFont(self.font())
+        subtitle_font.setPointSize(max(9, subtitle_font.pointSize() - 1))
+        painter.setFont(subtitle_font)
+        painter.setPen(palette["muted"])
+        subtitle_rect = rect.adjusted(22.0, 34.0, -14.0, -34.0)
+        painter.drawText(
+            subtitle_rect,
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop,
+            self._elide(painter, self._status_text(status_key), subtitle_rect.width()),
+        )
+
+        detail_bits: list[str] = []
+        if getattr(node, "blindbox_ready", False) and status_key != "blindbox":
+            detail_bits.append("BlindBox ready")
+        last_delivery = str(getattr(node, "last_delivery_status", "") or "").strip()
+        if last_delivery:
+            detail_bits.append(f"Last: {last_delivery}")
+        reason = str(getattr(node, "last_delivery_reason", "") or "").strip()
+        if reason:
+            detail_bits.append(reason)
+        if detail_bits:
+            painter.setPen(palette["text"])
+            footer_rect = rect.adjusted(22.0, 56.0, -14.0, -10.0)
+            painter.drawText(
+                footer_rect,
+                QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop,
+                self._elide(painter, " · ".join(detail_bits), footer_rect.width()),
+            )
+        painter.restore()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        del event
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        palette = self._theme_palette()
+        rect = QtCore.QRectF(self.rect()).adjusted(14.0, 14.0, -14.0, -14.0)
+
+        painter.setPen(QtGui.QPen(palette["border"], 1.0))
+        painter.setBrush(palette["bg"])
+        painter.drawRoundedRect(rect, 20.0, 20.0)
+
+        inner = rect.adjusted(18.0, 18.0, -18.0, -18.0)
+        map_rect = inner.adjusted(4.0, 4.0, -4.0, -4.0)
+        remote_nodes = self._remote_nodes()
+        if not remote_nodes:
+            painter.setPen(palette["muted"])
+            painter.drawText(
+                map_rect,
+                QtCore.Qt.AlignmentFlag.AlignCenter,
+                "No remote members in this group yet.",
+            )
+            return
+
+        local_rect, node_rects = self._layout_node_rects(map_rect)
+        center_band = QtCore.QRectF(
+            local_rect.left() - 34.0,
+            map_rect.top() + 14.0,
+            local_rect.width() + 68.0,
+            map_rect.height() - 28.0,
+        )
+        band_fill = QtGui.QColor(palette["panel_alt"])
+        band_fill.setAlpha(65 if self._theme_id == "night" else 95)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(band_fill)
+        painter.drawRoundedRect(center_band, 40.0, 40.0)
+        orbit_pen = QtGui.QPen(palette["orbit"], 1.2)
+        orbit_pen.setStyle(QtCore.Qt.PenStyle.DotLine)
+        painter.setPen(orbit_pen)
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(center_band.adjusted(10.0, 10.0, -10.0, -10.0), 34.0, 34.0)
+
+        edges_by_target = {
+            getattr(edge, "target_id"): edge
+            for edge in self._snapshot.edges
+        }
+        for node in remote_nodes:
+            member_id = getattr(node, "member_id")
+            target_rect = node_rects.get(member_id)
+            if target_rect is None:
+                continue
+            edge = edges_by_target.get(member_id)
+            status_key = self._status_key(node, edge)
+            dashed = bool(
+                getattr(edge, "blindbox_ready", False)
+                and not getattr(edge, "live_ready", False)
+            )
+            self._draw_connection(
+                painter,
+                local_rect=local_rect,
+                target_rect=target_rect,
+                state=status_key,
+                dashed=dashed,
+            )
+
+        self._draw_local_node(painter, local_rect, palette=palette)
+        for node in remote_nodes:
+            member_id = getattr(node, "member_id")
+            target_rect = node_rects.get(member_id)
+            if target_rect is None:
+                continue
+            self._draw_remote_card(
+                painter,
+                node=node,
+                edge=edges_by_target.get(member_id),
+                rect=target_rect,
+                palette=palette,
+            )
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        peer_id = self._hit_test_remote_peer(event.position())
+        if peer_id:
+            self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            show_rounded_tooltip_at(
+                event.globalPosition().toPoint(),
+                self._tooltip_for_peer(peer_id),
+                owner=self,
+            )
+        else:
+            self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+            hide_rounded_tooltip()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:  # type: ignore[override]
+        self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        hide_rounded_tooltip()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            peer_id = self._hit_test_remote_peer(event.position())
+            if peer_id:
+                self.peerActivated.emit(peer_id)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+
 class ProfileSelectDialog(QtWidgets.QDialog):
     """Начальное окно выбора профиля в стиле приложения."""
     
@@ -4450,6 +5053,31 @@ class ProfileSelectDialog(QtWidgets.QDialog):
         return ensure_valid_profile_name(text)
 
 
+class _SidebarSectionHeader(QtWidgets.QWidget):
+    """Заголовок секции («Saved peers») внутри общего списка; строка не выбирается."""
+
+    def __init__(self, title: str, parent: Optional[QtWidgets.QWidget] = None) -> None:
+        super().__init__(parent)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 22, 0, 4)
+        lay.setSpacing(0)
+        lab = QtWidgets.QLabel(title)
+        lab.setObjectName("ContactsSidebarTitle")
+        lay.addWidget(lab)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+
+
+def _sidebar_row_preview_one_line(text: str) -> str:
+    """Одна строка превью в сайдбаре: переносы иначе обрезаются фиксированной высотой QLabel."""
+    s = (text or "").strip()
+    if not s:
+        return ""
+    return " ".join(s.replace("\r\n", "\n").replace("\r", "\n").split())
+
+
 class ContactRowWidget(QtWidgets.QWidget):
     """Строка контакта в боковом списке (две строки: имя / превью)."""
 
@@ -4460,9 +5088,12 @@ class ContactRowWidget(QtWidgets.QWidget):
         self._addr = record.addr
         self._badges = ""
         self._display_name = record.display_name.strip()
-        self._base_sub = (record.last_preview or record.note or "").strip()
+        self._base_sub = _sidebar_row_preview_one_line(
+            (record.last_preview or record.note or "").strip()
+        )
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
+        # Боковые поля + отступ элемента списка в QSS: иначе край viewport обрезает глифы.
+        layout.setContentsMargins(16, 6, 16, 6)
         layout.setSpacing(2)
         self._full_title = record.display_name.strip() or _contact_row_address_title(
             record.addr
@@ -4486,11 +5117,37 @@ class ContactRowWidget(QtWidgets.QWidget):
         layout.addWidget(self._title)
         layout.addWidget(self._subtitle)
         self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        # Одна фиксированная высота строки: иначе QListWidget и элипсис при узкой панели дают «прыгающие» строки.
+        _th = self._title.fontMetrics().height()
+        _sh = self._subtitle.fontMetrics().height()
+        self._title.setFixedHeight(_th)
+        self._subtitle.setFixedHeight(_sh)
+        _m = layout.contentsMargins()
+        self._row_fixed_height = _m.top() + _th + layout.spacing() + _sh + _m.bottom()
+        self._sidebar_row_h_margin = _m.left()
+        self.setFixedHeight(self._row_fixed_height)
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Minimum,
+            QtWidgets.QSizePolicy.Policy.Fixed,
         )
+        # Уникальное имя для QSS подсветки выбора (см. set_sidebar_row_highlight).
+        self.setObjectName(f"SidebarContactRow_{id(self)}")
         self._sync_row_tooltip()
+
+    def set_sidebar_row_highlight(self, color: Optional[QtGui.QColor]) -> None:
+        """Подсветка выбранной строки в объединённом QListWidget (фон item перекрыт виджетом)."""
+        if color is None or not color.isValid():
+            self.setStyleSheet("")
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, False)
+            return
+        c = color
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        name = self.objectName() or f"SidebarContactRow_{id(self)}"
+        self.setStyleSheet(
+            f"#{name} {{ background-color: rgba({c.red()},{c.green()},{c.blue()},{c.alpha()}); "
+            f"border-radius: 8px; }}"
+            f"#{name} QLabel {{ background: transparent; }}"
+        )
 
     @property
     def contact_addr(self) -> str:
@@ -4506,7 +5163,12 @@ class ContactRowWidget(QtWidgets.QWidget):
             self.setToolTip(f"{addr}{badge_text}")
 
     def _apply_elide(self) -> None:
-        w = max(1, self.width() - 20)
+        # Пока панель не получила ширину, элипсис по ширине 0–1px даёт пустой/мигающий текст.
+        if self.width() < 48:
+            return
+        hm = getattr(self, "_sidebar_row_h_margin", 10)
+        # −1: запас от субпиксельного клиппинга QLabel по горизонтали.
+        w = max(1, self.width() - 2 * hm - 1)
         fm = self._title.fontMetrics()
         self._title.setText(
             fm.elidedText(self._full_title, QtCore.Qt.TextElideMode.ElideMiddle, w)
@@ -4524,7 +5186,9 @@ class ContactRowWidget(QtWidgets.QWidget):
     def set_record(self, record: ContactRecord) -> None:
         self._addr = record.addr
         self._display_name = record.display_name.strip()
-        self._base_sub = (record.last_preview or record.note or "").strip()
+        self._base_sub = _sidebar_row_preview_one_line(
+            (record.last_preview or record.note or "").strip()
+        )
         self._full_title = record.display_name.strip() or _contact_row_address_title(
             record.addr
         )
@@ -4892,12 +5556,17 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         self._bundled_socks_proxy_port.setRange(1, 65535)
         self._bundled_socks_proxy_port.setValue(int(settings.bundled_socks_proxy_port))
 
+        self._bundled_control_http_port = QtWidgets.QSpinBox(self)
+        self._bundled_control_http_port.setRange(1, 65535)
+        self._bundled_control_http_port.setValue(int(settings.bundled_control_http_port))
+
         self._system_host.setMinimumWidth(260)
 
         form.addRow(_router_form_section_label("Built-in router (Bundled i2pd)"))
         form.addRow("SAM port", _wrap_history_numeric_row(self._bundled_sam_port))
         form.addRow("HTTP proxy", _wrap_history_numeric_row(self._bundled_http_proxy_port))
         form.addRow("SOCKS proxy", _wrap_history_numeric_row(self._bundled_socks_proxy_port))
+        form.addRow("Control HTTP", _wrap_history_numeric_row(self._bundled_control_http_port))
         form.addRow(
             _router_form_section_label(
                 "External router (System i2pd)", secondary=True
@@ -5021,6 +5690,7 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         self._bundled_sam_port.setEnabled(bundled_enabled)
         self._bundled_http_proxy_port.setEnabled(bundled_enabled)
         self._bundled_socks_proxy_port.setEnabled(bundled_enabled)
+        self._bundled_control_http_port.setEnabled(bundled_enabled)
         self._btn_restart.setEnabled(bundled_enabled)
         if not bundled_i2pd_allowed():
             self._status_label.setText(
@@ -5041,7 +5711,7 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
             bundled_sam_port=int(self._bundled_sam_port.value()),
             bundled_http_proxy_port=int(self._bundled_http_proxy_port.value()),
             bundled_socks_proxy_port=int(self._bundled_socks_proxy_port.value()),
-            bundled_control_http_port=17070,
+            bundled_control_http_port=int(self._bundled_control_http_port.value()),
             bundled_auto_start=(backend == "bundled"),
         ))
 
@@ -5433,6 +6103,21 @@ class _UpdateCheckThread(QtCore.QThread):
         )
 
 
+def _sidebar_group_rows_sort_key(state: GroupState) -> tuple[str, str]:
+    """Стабильный порядок групп в сайдбаре (не по last updated)."""
+    title = (state.title or "").strip()
+    gid = (state.group_id or "").strip()
+    primary = title.lower() if title else gid.lower()
+    return (primary, gid.lower())
+
+
+def _sidebar_saved_peer_sort_key(rec: ContactRecord) -> tuple[str, str]:
+    """Стабильный порядок контактов: по отображаемому имени, затем по адресу (не MRU из файла)."""
+    name = (rec.display_name or "").strip()
+    primary = name.lower() if name else (rec.addr or "").lower()
+    return (primary, (rec.addr or "").lower())
+
+
 class ChatWindow(QtWidgets.QMainWindow):
     # Ниже этого порога ширины лейбла статуса показывается сокращённая строка.
     _STATUS_LABEL_COMPACT_PX = 700
@@ -5509,6 +6194,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.more_actions_popup.closed.connect(self._on_more_actions_popup_closed)
 
         self._history_loaded_for_peer: Optional[str] = None
+        self._loaded_group_history_id: Optional[str] = None
+        self._active_group_id: Optional[str] = None
         self._history_entries: list[HistoryEntry] = []
         self._history_dirty = False
         self._history_save_error_reported = False
@@ -5668,6 +6355,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         _wrap_lay.setContentsMargins(0, 0, 0, 0)
         _wrap_lay.setSpacing(0)
         self._chat_search_edit = QtWidgets.QLineEdit(self._chat_search_field_wrap)
+        self._chat_search_edit.setObjectName("ChatSearchLineEdit")
         self._chat_search_edit.setPlaceholderText("Search in this chat…")
         self._chat_search_edit.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -5676,8 +6364,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._chat_search_edit.setMinimumWidth(0)
         _search_fm = self._chat_search_edit.fontMetrics()
         _search_row_h = max(34, _search_fm.height() + 14)
-        self._chat_search_edit.setMinimumHeight(_search_row_h)
-        self._chat_search_field_wrap.setMinimumHeight(_search_row_h)
+        # Только minimum давал QLineEdit разрастаться выше ◀/▶ и кнопки New (глобальный padding QSS).
+        self._chat_search_edit.setFixedHeight(_search_row_h)
+        self._chat_search_field_wrap.setFixedHeight(_search_row_h)
         self._chat_search_edit.setTextMargins(
             self._chat_search_lineedit_left_pad_px(), 0, 0, 0
         )
@@ -5835,7 +6524,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         self.addr_edit = AddressLineEdit(self)
         self.addr_edit.setObjectName("PeerAddressEdit")
-        self.addr_edit.setPlaceholderText("Peer .b32.i2p address")
+        self.addr_edit.setPlaceholderText("Peer base32 address (optional .b32.i2p when pasting)")
         # Адрес — главный элемент панели действий
         self.addr_edit.setMinimumWidth(220)
         self.addr_edit.setSizePolicy(
@@ -5863,6 +6552,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.peer_lock_label = _PeerLockIndicatorLabel(self)
         self.peer_lock_label.setObjectName("PeerLockIndicator")
         self.peer_lock_label.setFixedSize(22, actions_fixed_height)
+        self.peer_lock_label.setVisible(False)
         self.peer_lock_label.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
@@ -5899,19 +6589,41 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.contacts_sidebar.setMinimumWidth(0)
         sidebar_layout = QtWidgets.QVBoxLayout(self.contacts_sidebar)
         # Справа — как у гриппа ◀↔чат, чтобы зазор слева от кнопки не казался шире правого.
+        # Сверху тот же g, что и у ChatSurface (строка поиска): иначе «Groups»/«New» на ~2px
+        # ниже поля поиска (раньше было g+2). При обрезке верхней кромки скругления 14px — g+1.
         sidebar_layout.setContentsMargins(
             g, g, self._CONTACTS_RESIZE_GRIP_WIDTH_PX, g
         )
         sidebar_layout.setSpacing(self._UI_GRID_PX)
-        contacts_title = QtWidgets.QLabel("Saved peers", self.contacts_sidebar)
-        contacts_title.setObjectName("ContactsSidebarTitle")
-        contacts_title.setAlignment(
+        groups_header = QtWidgets.QWidget(self.contacts_sidebar)
+        groups_header_layout = QtWidgets.QHBoxLayout(groups_header)
+        # Как у search_h: правый внутренний отступ — та же «ось» по горизонтали, что и у строки поиска.
+        _search_row_pad_right = max(2, self._UI_GRID_PX // 2)
+        groups_header_layout.setContentsMargins(0, 0, _search_row_pad_right, 0)
+        groups_header_layout.setSpacing(max(4, self._UI_GRID_PX // 2))
+        groups_header_layout.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        groups_title = QtWidgets.QLabel("Groups", self.contacts_sidebar)
+        groups_title.setObjectName("ContactsSidebarTitle")
+        groups_title.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
-        contacts_title.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Preferred,
+        self.groups_create_btn = QtWidgets.QPushButton("New", self.contacts_sidebar)
+        self.groups_create_btn.setObjectName("GroupsCreateButton")
+        self.groups_create_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.groups_create_btn.setToolTip(
+            _tooltip_with_portable_shortcut(menu_tt.TT_NEW_TEXT_GROUP, "Ctrl+G")
+        )
+        # Высота как у ◀/▶ в строке поиска; ширина — по стилю (глобальный min-width кнопки).
+        self.groups_create_btn.setFixedHeight(_search_row_h)
+        self.groups_create_btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Minimum,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
+        groups_header_layout.addWidget(groups_title, 1)
+        groups_header_layout.addWidget(self.groups_create_btn, 0)
+        # Один список: группы сверху, заголовок «Saved peers», контакты; общая прокрутка и выделение.
         self.contacts_list = QtWidgets.QListWidget(self.contacts_sidebar)
         self.contacts_list.setObjectName("ContactsList")
         self.contacts_list.setHorizontalScrollBarPolicy(
@@ -5921,13 +6633,21 @@ class ChatWindow(QtWidgets.QMainWindow):
             QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
         )
         self.contacts_list.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.contacts_list.setUniformItemSizes(False)
         self.contacts_list.setContextMenuPolicy(
             QtCore.Qt.ContextMenuPolicy.CustomContextMenu
         )
         self.contacts_list.customContextMenuRequested.connect(
-            self._on_saved_peers_context_menu
+            self._on_sidebar_list_context_menu
         )
-        sidebar_layout.addWidget(contacts_title)
+        self.contacts_list.itemSelectionChanged.connect(
+            self._apply_sidebar_list_selection_backgrounds
+        )
+        self.contacts_list.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.contacts_list.setViewportMargins(0, 0, 0, 0)
+        self._contacts_list_viewport = self.contacts_list.viewport()
+        self._contacts_list_viewport.installEventFilter(self)
+        sidebar_layout.addWidget(groups_header)
         sidebar_layout.addWidget(self.contacts_list, 1)
 
         self.contacts_right_pack = QtWidgets.QWidget(self.contacts_splitter)
@@ -6040,10 +6760,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.input_edit.imagePasteReady.connect(self.on_clipboard_image_ready)
         self.connect_button.clicked.connect(self.on_connect_clicked)
         self.disconnect_button.clicked.connect(self.on_disconnect_clicked)
+        self.groups_create_btn.clicked.connect(self._show_create_group_dialog)
         self.addr_edit.textChanged.connect(lambda _t: self._refresh_connection_buttons())
-        self.addr_edit.textChanged.connect(lambda _t: self._sync_contacts_list_selection())
+        self.addr_edit.textChanged.connect(lambda _t: self._sync_sidebar_list_selection())
         self.addr_edit.textChanged.connect(lambda _t: self._update_peer_lock_indicator())
-        self.peer_lock_label.clicked.connect(self.on_lock_peer_clicked)
+        self.addr_edit.textEdited.connect(self._on_addr_text_edited)
         self.addr_edit.editingFinished.connect(self._on_addr_editing_finished_for_drafts)
         self.input_edit.composeTextChanged.connect(self._on_compose_text_changed)
         self.more_actions_popup.add_action(
@@ -6063,6 +6784,14 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.on_send_file_clicked,
             tool_tip=_tooltip_with_portable_shortcut(menu_tt.TT_SEND_FILE, "Ctrl+F"),
             shortcut_hint=_native_shortcut_text("Ctrl+F"),
+        )
+        self.more_actions_popup.add_action(
+            "New text group…",
+            self._show_create_group_dialog,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_NEW_TEXT_GROUP, "Ctrl+G"
+            ),
+            shortcut_hint=_native_shortcut_text("Ctrl+G"),
         )
         self.more_actions_popup.add_action(
             "BlindBox diagnostics",
@@ -6130,14 +6859,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         self.more_actions_popup.add_separator()
         self.more_actions_popup.add_action(
-            "Lock to peer",
-            self.on_lock_peer_clicked,
-            tool_tip=_tooltip_with_portable_shortcut(
-                menu_tt.TT_LOCK_TO_PEER, _LOCK_TO_PEER_SHORTCUT_PORTABLE
-            ),
-            shortcut_hint=_native_shortcut_text(_LOCK_TO_PEER_SHORTCUT_PORTABLE),
-        )
-        self.more_actions_popup.add_action(
             "Forget pinned peer key",
             self.on_forget_pinned_peer_key_clicked,
             tool_tip=menu_tt.TT_FORGET_PINNED_PEER_KEY,
@@ -6201,7 +6922,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._load_compose_drafts_from_disk()
         self._load_contacts_book()
         self._ensure_stored_peer_in_contact_book()
-        self._refresh_contacts_list()
+        self._refresh_contacts_sidebar_list()
         self._apply_startup_peer_from_book()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self._apply_theme(self._theme_preference, persist=False)
@@ -6216,11 +6937,14 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _load_contacts_book(self) -> None:
         self._contact_book = load_book(_contacts_file_path_for_read(self.profile))
 
+    def _reload_contacts_book_after_core_write(self) -> None:
+        """Core persisted ``contacts.json`` (e.g. group member sync); refresh MRU list."""
+        self._load_contacts_book()
+        self._refresh_contacts_sidebar_list()
+
     def _ensure_stored_peer_in_contact_book(self) -> None:
-        """Lock-пир из .dat всегда есть в Saved peers, даже если contacts.json пустой."""
-        raw = (self.core.stored_peer or "").strip() or (
-            peek_persisted_stored_peer(self.profile) or ""
-        )
+        """Ensure legacy second line from profile .dat is in Saved peers (pre-init peek)."""
+        raw = (peek_persisted_stored_peer(self.profile) or "").strip()
         sp = normalize_peer_address(raw)
         if not sp:
             return
@@ -6234,6 +6958,696 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _save_contacts_book(self) -> None:
         save_book(_contacts_file_path_for_write(self.profile), self._contact_book)
+
+    def _resolved_peer_addr_for_actions(self) -> str:
+        """Address for Connect / retries when the field is empty: session, last active, first saved."""
+        raw = (self.addr_edit.text() or "").strip()
+        if raw:
+            return normalize_peer_address(raw) or raw
+        if self.core is not None:
+            cur = (self.core.current_peer_addr or "").strip()
+            if cur:
+                return cur
+        lap = (self._contact_book.last_active_peer or "").strip()
+        if lap:
+            return lap
+        if self._contact_book.contacts:
+            return self._contact_book.contacts[0].addr
+        return ""
+
+    def _outbound_peer_arg(self) -> Optional[str]:
+        """Куда слать live-текст/файлы: поле адреса / контакт важнее, чем last SAM session."""
+        r = self._resolved_peer_addr_for_actions()
+        return r if r else None
+
+    def _group_display_name(
+        self, group_id: str, *, title: Optional[str] = None
+    ) -> str:
+        clean_title = (title or "").strip()
+        return clean_title or (group_id or "").strip() or "Group"
+
+    def _group_member_label(self, member_id: Optional[str]) -> str:
+        normalized = normalize_peer_address(member_id or "") if member_id else ""
+        record = self._contact_book.get(normalized) if normalized else None
+        if record and record.display_name.strip():
+            return record.display_name.strip()
+        return short_member_label(member_id or "", fallback="Member")
+
+    def _group_topology_snapshot_for_ui(
+        self, snapshot: GroupTopologySnapshot
+    ) -> GroupTopologySnapshot:
+        nodes = []
+        for node in snapshot.nodes:
+            if getattr(node, "is_local", False):
+                nodes.append(node)
+                continue
+            label = self._group_member_label(getattr(node, "member_id", None))
+            if hasattr(node, "__dataclass_fields__"):
+                nodes.append(replace(node, label=label))
+            else:
+                payload = dict(vars(node))
+                payload["label"] = label
+                nodes.append(SimpleNamespace(**payload))
+        if hasattr(snapshot, "__dataclass_fields__"):
+            return replace(snapshot, nodes=tuple(nodes))
+        payload = dict(vars(snapshot))
+        payload["nodes"] = tuple(nodes)
+        return SimpleNamespace(**payload)
+
+    def _clear_active_group_selection(self) -> bool:
+        if not self._active_group_id:
+            return False
+        self._active_group_id = None
+        self._loaded_group_history_id = None
+        self._sync_sidebar_list_selection()
+        return True
+
+    def _apply_sidebar_list_selection_backgrounds(self) -> None:
+        """Группы — серое выделение как у бывшего GroupsList; контакты — синее.
+        Фон задаём на ContactRowWidget: setItemWidget перекрывает фон QListWidgetItem."""
+        lst = self.contacts_list
+        night = self.theme_id == "night"
+        group_sel = (
+            QtGui.QColor(255, 255, 255, 26)
+            if night
+            else QtGui.QColor(0, 0, 0, 18)
+        )
+        contact_sel = (
+            QtGui.QColor(10, 132, 255, 56)
+            if night
+            else QtGui.QColor(10, 132, 255, 31)
+        )
+        empty = QtGui.QBrush()
+        for i in range(lst.count()):
+            it = lst.item(i)
+            role = it.data(_SIDEBAR_LIST_ROLE)
+            w = lst.itemWidget(it)
+            if isinstance(w, ContactRowWidget):
+                if not it.isSelected():
+                    w.set_sidebar_row_highlight(None)
+                    it.setBackground(empty)
+                    continue
+                if role == "group":
+                    w.set_sidebar_row_highlight(group_sel)
+                    it.setBackground(empty)
+                elif role == "contact":
+                    w.set_sidebar_row_highlight(contact_sel)
+                    it.setBackground(empty)
+                else:
+                    w.set_sidebar_row_highlight(None)
+                    it.setBackground(empty)
+                continue
+            if not it.isSelected():
+                it.setBackground(empty)
+                continue
+            if role == "group":
+                it.setBackground(QtGui.QBrush(group_sel))
+            elif role == "contact":
+                it.setBackground(QtGui.QBrush(contact_sel))
+            else:
+                it.setBackground(empty)
+
+    def _layout_contacts_sidebar_row_widths(self) -> None:
+        """Ширина строк под ширину списка; уже viewport — иначе край режет скругление справа.
+
+        QSS: ``padding: 1px 6px 1px 0px`` — справа 6px, слева 0 → ширина контентной области
+        строки = viewport − 6. Ширину виджета нужно задавать ровно такой (а не viewport−12):
+        иначе виджет уже области содержимого и стиль центрирует его по горизонтали — текст
+        строк смещается вправо.
+
+        Заголовок секции «Saved peers» (``_SidebarSectionHeader``) задаём на полную ширину
+        viewport: так подпись совпадает по левому краю с «Groups» над списком (без сдвига
+        от центрирования узкой строки).
+        """
+        lst = getattr(self, "contacts_list", None)
+        if lst is None:
+            return
+        vp_w = lst.viewport().width()
+        _item_content_pad = 6
+        for i in range(lst.count()):
+            it = lst.item(i)
+            w = lst.itemWidget(it)
+            if w is None:
+                continue
+            if isinstance(w, _SidebarSectionHeader):
+                usable_w = max(1, vp_w)
+            else:
+                usable_w = max(1, vp_w - _item_content_pad)
+            h = w.sizeHint().height()
+            if h <= 0:
+                h = max(1, int(w.height()))
+            it.setSizeHint(QtCore.QSize(usable_w, h))
+            w.setFixedWidth(usable_w)
+
+    def _refresh_contacts_sidebar_list(self) -> None:
+        """Единый список: группы, заголовок «Saved peers», контакты; одна прокрутка."""
+        lst = self.contacts_list
+        lst.setUpdatesEnabled(False)
+        try:
+            while lst.count() > 0:
+                lst.takeItem(lst.count() - 1)
+            if self.core is not None:
+                group_states = list(self.core.list_group_states())
+                group_states.sort(key=_sidebar_group_rows_sort_key)
+                for state in group_states:
+                    conversation = self.core.load_group(state.group_id)
+                    peer_count = max(0, len(state.members) - 1)
+                    preview = (
+                        f"{peer_count} peer{'s' if peer_count != 1 else ''}"
+                        if peer_count
+                        else "Only you are in this group."
+                    )
+                    if conversation is not None and conversation.history:
+                        preview = (
+                            f"{preview} · {render_group_history_preview(conversation.history[-1])}"
+                        )
+                    row = ContactRowWidget(
+                        ContactRecord(
+                            addr=state.group_id,
+                            display_name=self._group_display_name(
+                                state.group_id,
+                                title=state.title,
+                            ),
+                            note=preview,
+                        )
+                    )
+                    row.activate.connect(self._on_group_row_activated)
+                    item = QtWidgets.QListWidgetItem()
+                    item.setData(_SIDEBAR_LIST_ROLE, "group")
+                    lst.addItem(item)
+                    lst.setItemWidget(item, row)
+                    hint = row.sizeHint()
+                    item.setSizeHint(QtCore.QSize(hint.width(), hint.height()))
+            sec_item = QtWidgets.QListWidgetItem()
+            sec_item.setData(_SIDEBAR_LIST_ROLE, "section")
+            sec_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            sec_w = _SidebarSectionHeader("Saved peers", lst)
+            lst.addItem(sec_item)
+            lst.setItemWidget(sec_item, sec_w)
+            sec_item.setSizeHint(sec_w.sizeHint())
+            for rec in sorted(
+                self._contact_book.contacts,
+                key=_sidebar_saved_peer_sort_key,
+            ):
+                item = QtWidgets.QListWidgetItem()
+                item.setData(_SIDEBAR_LIST_ROLE, "contact")
+                row = ContactRowWidget(rec)
+                info = (
+                    self.core.get_peer_trust_info(rec.addr)
+                    if self.core is not None
+                    else None
+                )
+                row.set_status_badges(
+                    pinned=bool(info and info.pinned),
+                    locked=False,
+                )
+                row.activate.connect(self._on_contact_row_activated)
+                lst.addItem(item)
+                lst.setItemWidget(item, row)
+                hint = row.sizeHint()
+                item.setSizeHint(QtCore.QSize(hint.width(), hint.height()))
+        finally:
+            lst.setUpdatesEnabled(True)
+        self._layout_contacts_sidebar_row_widths()
+        self._sync_sidebar_list_selection()
+        lst.viewport().update()
+
+    def _refresh_groups_list(self) -> None:
+        self._refresh_contacts_sidebar_list()
+
+    def _refresh_contacts_list(self) -> None:
+        self._refresh_contacts_sidebar_list()
+
+    def _set_active_group(self, group_id: str) -> bool:
+        if self.core is None:
+            return False
+        state = self.core.load_group_state(group_id)
+        if state is None:
+            return False
+        self._save_history_if_needed()
+        self._active_group_id = state.group_id
+        self._loaded_group_history_id = None
+        self._sync_sidebar_list_selection()
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+        self._refresh_offline_history_display()
+        self.refresh_status_label()
+        self._refresh_connection_buttons()
+        return True
+
+    def _on_group_row_activated(self, group_id: str) -> None:
+        if self._set_active_group(group_id):
+            return
+        self.handle_error(f"Could not open group: {group_id}")
+        self._refresh_groups_list()
+
+    def _normalize_group_member_list(self, raw_members: str) -> list[str]:
+        members: list[str] = []
+        invalid: list[str] = []
+        for token in split_group_member_tokens(raw_members):
+            normalized = normalize_peer_address(token)
+            if not normalized:
+                invalid.append(token)
+                continue
+            if normalized not in members:
+                members.append(normalized)
+        if invalid:
+            raise ValueError(
+                "Invalid member address: " + ", ".join(invalid[:3])
+            )
+        if not members:
+            raise ValueError("Add at least one member address.")
+        return members
+
+    def _saved_group_member_records(self) -> list[ContactRecord]:
+        local_member = ""
+        if self.core is not None and self.core.my_dest is not None:
+            local_member = normalize_peer_address(str(self.core.my_dest.base32)) or ""
+
+        records: list[ContactRecord] = []
+        seen: set[str] = set()
+        for record in self._contact_book.contacts:
+            normalized = normalize_peer_address(record.addr)
+            if not normalized or normalized in seen:
+                continue
+            if local_member and same_i2p_destination(normalized, local_member):
+                continue
+            seen.add(normalized)
+            records.append(record)
+        return records
+
+    def _normalize_group_member_selection(
+        self,
+        selected_members: list[str],
+        *,
+        allowed_members: Optional[set[str]] = None,
+    ) -> list[str]:
+        members: list[str] = []
+        invalid: list[str] = []
+        allowed = {
+            normalized
+            for normalized in (
+                normalize_peer_address(addr) for addr in (allowed_members or set())
+            )
+            if normalized
+        }
+        for raw in selected_members:
+            normalized = normalize_peer_address(raw)
+            if not normalized:
+                invalid.append(raw)
+                continue
+            if allowed and normalized not in allowed:
+                invalid.append(raw)
+                continue
+            if normalized not in members:
+                members.append(normalized)
+        if invalid:
+            raise ValueError("Members can only be chosen from the list.")
+        if not members:
+            raise ValueError("Select at least one member from Saved peers.")
+        return members
+
+    def _group_member_picker_label(
+        self,
+        record: ContactRecord,
+        *,
+        in_saved_peers: bool,
+    ) -> str:
+        name = (record.display_name or "").strip()
+        short_addr = _contact_row_address_title(record.addr)
+        if name:
+            label = f"{name} ({short_addr})"
+        else:
+            label = short_addr
+        if not in_saved_peers:
+            label += " [Current member]"
+        return label
+
+    def _create_group_from_values(
+        self,
+        *,
+        title: str,
+        members_text: str = "",
+        selected_members: Optional[list[str]] = None,
+        allowed_members: Optional[set[str]] = None,
+    ) -> str:
+        if self.core is None:
+            raise RuntimeError("I2P session is not ready yet.")
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("Group title is required.")
+        if selected_members is None:
+            members = self._normalize_group_member_list(members_text)
+        else:
+            members = self._normalize_group_member_selection(
+                selected_members,
+                allowed_members=allowed_members,
+            )
+        created = self.core.create_group(
+            title=clean_title,
+            members=members,
+        )
+        self._refresh_groups_list()
+        self._set_active_group(created.group_id)
+        return created.group_id
+
+    def _show_create_group_dialog(self) -> None:
+        self._show_group_editor_dialog(existing_group_id=None)
+
+    def _show_group_editor_dialog(self, *, existing_group_id: Optional[str]) -> None:
+        if self.core is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Group",
+                "Wait for the local I2P session to finish starting, then try again.",
+            )
+            return
+
+        editing = bool(existing_group_id)
+        initial_title = ""
+        initial_members: list[str] = []
+        if editing:
+            st = self.core.load_group_state(existing_group_id or "")
+            if st is None:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Edit group",
+                    "This group no longer exists.",
+                )
+                return
+            initial_title = (st.title or "").strip()
+            initial_members = list(st.members[1:]) if len(st.members) > 1 else []
+
+        saved_member_records = self._saved_group_member_records()
+        saved_member_addrs = {
+            normalize_peer_address(record.addr) or "" for record in saved_member_records
+        }
+        picker_records = list(saved_member_records)
+        for member in initial_members:
+            normalized = normalize_peer_address(member)
+            if not normalized or normalized in saved_member_addrs:
+                continue
+            picker_records.append(ContactRecord(addr=normalized))
+
+        allowed_members = {
+            normalize_peer_address(record.addr) or "" for record in picker_records
+        }
+        allowed_members.discard("")
+        initial_member_set = {
+            normalize_peer_address(member) or "" for member in initial_members
+        }
+        initial_member_set.discard("")
+
+        dialog = QtWidgets.QDialog(self)
+        _apply_dialog_theme_sheet(dialog, self.theme_id)
+        dialog.setWindowTitle("Edit text group" if editing else "New text-only group")
+        dialog.resize(480, 440)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title_label = QtWidgets.QLabel("Title", dialog)
+        title_edit = QtWidgets.QLineEdit(dialog)
+        title_edit.setObjectName("GroupTitleEdit")
+        title_edit.setPlaceholderText("Weekend plans")
+        title_edit.setText(initial_title)
+        members_label = QtWidgets.QLabel("Members from Saved peers", dialog)
+        members_help = QtWidgets.QLabel(
+            "Choose one or more peers from Saved peers for this group.",
+            dialog,
+        )
+        members_help.setWordWrap(True)
+        members_filter = QtWidgets.QLineEdit(dialog)
+        members_filter.setObjectName("GroupMembersFilterEdit")
+        members_filter.setPlaceholderText("Filter Saved peers")
+        members_list = QtWidgets.QListWidget(dialog)
+        members_list.setObjectName("GroupMembersSavedPeersList")
+        members_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        members_list.setMinimumHeight(220)
+        members_list.setUniformItemSizes(True)
+        empty_filter_hint = QtWidgets.QLabel("No saved peers match this filter.", dialog)
+        empty_filter_hint.setObjectName("GroupMembersEmptyFilterHint")
+        empty_filter_hint.setWordWrap(True)
+        empty_filter_hint.hide()
+        members_count = QtWidgets.QLabel(dialog)
+        members_count.setObjectName("GroupMembersCountLabel")
+
+        extra_member_count = max(0, len(picker_records) - len(saved_member_records))
+        if extra_member_count:
+            members_help.setText(
+                "Choose members from Saved peers. Current group members that are not in "
+                "Saved peers stay available here until you remove them."
+            )
+
+        for record in picker_records:
+            normalized = normalize_peer_address(record.addr) or ""
+            in_saved_peers = normalized in saved_member_addrs
+            item = QtWidgets.QListWidgetItem(
+                self._group_member_picker_label(record, in_saved_peers=in_saved_peers),
+                members_list,
+            )
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, normalized)
+            search_parts = [
+                normalized,
+                (record.display_name or "").strip(),
+                (record.note or "").strip(),
+                "saved peers" if in_saved_peers else "current member",
+            ]
+            item.setData(
+                QtCore.Qt.ItemDataRole.UserRole + 1,
+                " ".join(part for part in search_parts if part).lower(),
+            )
+            item.setToolTip(
+                normalized
+                if in_saved_peers
+                else f"{normalized}\nCurrent group member not in Saved peers."
+            )
+            item.setFlags(
+                item.flags()
+                | QtCore.Qt.ItemFlag.ItemIsEnabled
+                | QtCore.Qt.ItemFlag.ItemIsUserCheckable
+            )
+            item.setCheckState(
+                QtCore.Qt.CheckState.Checked
+                if normalized in initial_member_set
+                else QtCore.Qt.CheckState.Unchecked
+            )
+
+        hint = QtWidgets.QLabel(
+            "Files, images, voice, invites, and roles are not part of this first group flow.",
+            dialog,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(title_label)
+        layout.addWidget(title_edit)
+        layout.addWidget(members_label)
+        layout.addWidget(members_help)
+        layout.addWidget(members_filter)
+        layout.addWidget(members_list, 1)
+        layout.addWidget(empty_filter_hint)
+        layout.addWidget(members_count)
+        layout.addWidget(hint)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        ok_btn = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        ok_btn.setText("Save" if editing else "Create")
+        layout.addWidget(buttons)
+
+        def _checked_members() -> list[str]:
+            selected: list[str] = []
+            for row in range(members_list.count()):
+                item = members_list.item(row)
+                if item.checkState() == QtCore.Qt.CheckState.Checked:
+                    addr = normalize_peer_address(
+                        str(item.data(QtCore.Qt.ItemDataRole.UserRole) or "")
+                    )
+                    if addr and addr not in selected:
+                        selected.append(addr)
+            return selected
+
+        def _sync_members_filter() -> None:
+            query = members_filter.text().strip().lower()
+            visible_count = 0
+            for row in range(members_list.count()):
+                item = members_list.item(row)
+                haystack = str(
+                    item.data(QtCore.Qt.ItemDataRole.UserRole + 1) or ""
+                ).lower()
+                is_hidden = bool(query) and query not in haystack
+                item.setHidden(is_hidden)
+                if not is_hidden:
+                    visible_count += 1
+            empty_filter_hint.setVisible(bool(picker_records) and visible_count == 0)
+
+        def _sync_members_summary() -> None:
+            selected_count = len(_checked_members())
+            total_count = len(allowed_members)
+            visible_count = sum(
+                1
+                for row in range(members_list.count())
+                if not members_list.item(row).isHidden()
+            )
+            if not picker_records:
+                members_count.setText("No group members are available yet.")
+            elif visible_count != total_count:
+                members_count.setText(
+                    f"Selected {selected_count} of {total_count} members "
+                    f"({visible_count} visible)"
+                )
+            else:
+                members_count.setText(
+                    f"Selected {selected_count} of {total_count} members"
+                )
+            ok_btn.setEnabled(bool(picker_records) and selected_count > 0)
+
+        _sync_members_filter()
+        _sync_members_summary()
+
+        members_filter.textChanged.connect(
+            lambda _text: (_sync_members_filter(), _sync_members_summary())
+        )
+        members_list.itemChanged.connect(lambda _item: _sync_members_summary())
+
+        if not picker_records:
+            members_help.setText(
+                "No Saved peers yet. Add peers to Saved peers first, then create the group."
+            )
+            members_filter.setEnabled(False)
+            members_list.setEnabled(False)
+            ok_btn.setEnabled(False)
+
+        def _accept() -> None:
+            try:
+                if editing:
+                    assert existing_group_id is not None
+                    self.core.update_group(
+                        existing_group_id,
+                        title=title_edit.text(),
+                        members=self._normalize_group_member_selection(
+                            _checked_members(),
+                            allowed_members=allowed_members,
+                        ),
+                    )
+                    self._refresh_groups_list()
+                    if self._active_group_id == existing_group_id:
+                        self._refresh_offline_history_display()
+                        self.refresh_status_label()
+                    self.handle_system(f"Updated group: {existing_group_id}")
+                else:
+                    group_id = self._create_group_from_values(
+                        title=title_edit.text(),
+                        selected_members=_checked_members(),
+                        allowed_members=allowed_members,
+                    )
+                    self.handle_system(f"Created group: {group_id}")
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(
+                    dialog,
+                    "Edit group" if editing else "New group",
+                    str(exc).strip() or type(exc).__name__,
+                )
+                return
+            dialog.accept()
+
+        buttons.accepted.connect(_accept)
+        buttons.rejected.connect(dialog.reject)
+        title_edit.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+        dialog.exec()
+
+    def _confirm_delete_group(self, group_id: str) -> None:
+        if self.core is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Delete group",
+                "Wait for the local I2P session to finish starting, then try again.",
+            )
+            return
+        state = self.core.load_group_state(group_id)
+        if state is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Delete group",
+                "This group no longer exists.",
+            )
+            self._refresh_groups_list()
+            return
+        label = self._group_display_name(group_id, title=state.title)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Delete group",
+            f'Delete the group "{label}" from this device?\n\n'
+            "This removes the local group file and chat history. Other members are not notified.",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        if not self.core.delete_group(group_id):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Delete group",
+                "Could not delete the group file.",
+            )
+            return
+        was_active = self._active_group_id == group_id
+        if was_active:
+            self._clear_active_group_selection()
+            self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+            self._refresh_offline_history_display()
+            self.refresh_status_label()
+            self._refresh_connection_buttons()
+        self._refresh_groups_list()
+        self.handle_system(f"Deleted group: {group_id}")
+
+    def _show_group_topology_dialog(self, group_id: str) -> None:
+        if self.core is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Group map",
+                "Wait for the local I2P session to finish starting, then try again.",
+            )
+            return
+        state = self.core.load_group_state(group_id)
+        if state is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Group map",
+                "This group no longer exists.",
+            )
+            self._refresh_groups_list()
+            return
+        snapshot = self.core.get_group_topology_snapshot(group_id)
+        if snapshot is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Group map",
+                "Could not build the local group map.",
+            )
+            return
+        snapshot = self._group_topology_snapshot_for_ui(snapshot)
+
+        label = self._group_display_name(group_id, title=state.title)
+        dlg = QtWidgets.QDialog(self)
+        _apply_dialog_theme_sheet(dlg, self.theme_id)
+        dlg.setWindowTitle(f"Group map: {label}")
+        dlg.resize(760, 620)
+        layout = QtWidgets.QVBoxLayout(dlg)
+
+        visual_wrap = QtWidgets.QWidget(dlg)
+        visual_layout = QtWidgets.QVBoxLayout(visual_wrap)
+        visual_layout.setContentsMargins(8, 8, 8, 8)
+        visual_layout.setSpacing(0)
+
+        visual_map = _GroupTopologyMapWidget(snapshot, theme_id=self.theme_id, parent=visual_wrap)
+        visual_map.peerActivated.connect(
+            lambda peer_id: (dlg.accept(), self._on_contact_row_activated(peer_id))
+        )
+        visual_layout.addWidget(visual_map, 1)
+        layout.addWidget(visual_wrap, 1)
+        dlg.exec()
 
     def _stop_contacts_sidebar_animation(self) -> None:
         if self._contacts_sidebar_anim is None:
@@ -6345,8 +7759,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         lay.setContentsMargins(left, m.top(), m.right(), m.bottom())
 
     def _apply_startup_peer_from_book(self) -> None:
-        if self.core.stored_peer:
-            return
         lap = self._contact_book.last_active_peer
         if lap and not self.addr_edit.text().strip():
             self.addr_edit.setText(lap)
@@ -6355,12 +7767,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         """После смены профиля выставить адрес пира из .dat / contact book.
 
         `refresh_status_label` заполняет поле только если addr_edit пустой; при переключении
-        профиля иначе остаётся адрес предыдущего профиля — не обновляются lock UI и Saved peers.
+        профиля иначе остаётся адрес предыдущего профиля — не обновляются Saved peers.
         """
-        sp = (self.core.stored_peer or "").strip()
-        if sp:
-            self.addr_edit.setText(sp)
-            return
         lap = (self._contact_book.last_active_peer or "").strip()
         if lap:
             n = normalize_peer_address(lap)
@@ -6369,14 +7777,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.addr_edit.clear()
 
     def _apply_contacts_sidebar_startup_state(self) -> None:
-        # stored_peer в ядре выставляется только в async init; до этого читаем .dat синхронно.
-        locked = bool(
-            self.core.stored_peer or peek_persisted_stored_peer(self.profile)
-        )
-        if locked:
-            self._set_contacts_sidebar_collapsed(True, animated=False)
-        else:
-            self._set_contacts_sidebar_collapsed(False, animated=False)
+        self._set_contacts_sidebar_collapsed(False, animated=False)
 
     def _set_contacts_sidebar_collapsed(self, collapsed: bool, *, animated: bool) -> None:
         self._stop_contacts_sidebar_animation()
@@ -6477,83 +7878,89 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.contacts_sidebar.show()
         self._sync_contacts_right_pack_left_margin()
 
-    def _refresh_contacts_list(self) -> None:
-        # clear() с setItemWidget иногда оставляет «залипшие» строки на некоторых стеках Qt;
-        # takeItem снимает строки явно.
-        self.contacts_list.setUpdatesEnabled(False)
-        try:
-            while self.contacts_list.count() > 0:
-                self.contacts_list.takeItem(self.contacts_list.count() - 1)
-        finally:
-            self.contacts_list.setUpdatesEnabled(True)
-        locked_peer = normalize_peer_address(self.core.stored_peer or "")
-        for rec in self._contact_book.contacts:
-            item = QtWidgets.QListWidgetItem()
-            row = ContactRowWidget(rec)
-            info = self.core.get_peer_trust_info(rec.addr)
-            row.set_status_badges(
-                pinned=bool(info and info.pinned),
-                locked=bool(
-                    locked_peer and normalize_peer_address(rec.addr) == locked_peer
-                ),
-            )
-            row.activate.connect(self._on_contact_row_activated)
-            self.contacts_list.addItem(item)
-            self.contacts_list.setItemWidget(item, row)
-            hint = row.sizeHint()
-            item.setSizeHint(QtCore.QSize(hint.width(), max(56, hint.height())))
-        self._sync_contacts_list_selection()
-        self.contacts_list.viewport().update()
-
     def _peer_key_for_contact_selection(self) -> Optional[str]:
-        if self.core is None:
-            raw = self.addr_edit.text().strip()
-        else:
-            raw = (
-                (self.core.stored_peer or "").strip()
-                or (self.core.current_peer_addr or "").strip()
-                or self.addr_edit.text().strip()
-            )
+        if self._active_group_id:
+            return None
+        # Как у _resolved_peer_addr_for_actions: выбор в UI ведёт поле адреса, а не устаревший current_peer_addr.
+        raw = (self.addr_edit.text() or "").strip()
+        if not raw and self.core is not None:
+            raw = (self.core.current_peer_addr or "").strip()
         if not raw:
             return None
         return normalize_peer_addr(raw)
 
-    def _sync_contacts_list_selection(self) -> None:
-        key = self._peer_key_for_contact_selection()
-        if not key:
-            self.contacts_list.clearSelection()
-            return
-        norm = normalize_peer_address(key)
-        target = norm or key
-        for i in range(self.contacts_list.count()):
-            it = self.contacts_list.item(i)
-            w = self.contacts_list.itemWidget(it)
-            if isinstance(w, ContactRowWidget) and normalize_peer_addr(
-                w.contact_addr
-            ) == normalize_peer_addr(target):
-                self.contacts_list.setCurrentRow(i)
+    def _sync_sidebar_list_selection(self) -> None:
+        lst = self.contacts_list
+        try:
+            if self._active_group_id:
+                for i in range(lst.count()):
+                    it = lst.item(i)
+                    if it.data(_SIDEBAR_LIST_ROLE) != "group":
+                        continue
+                    w = lst.itemWidget(it)
+                    if isinstance(w, ContactRowWidget) and w.contact_addr == self._active_group_id:
+                        lst.setCurrentRow(i)
+                        return
+                lst.clearSelection()
                 return
-        self.contacts_list.clearSelection()
+            key = self._peer_key_for_contact_selection()
+            if not key:
+                lst.clearSelection()
+                return
+            norm = normalize_peer_address(key)
+            target = norm or key
+            for i in range(lst.count()):
+                it = lst.item(i)
+                if it.data(_SIDEBAR_LIST_ROLE) != "contact":
+                    continue
+                w = lst.itemWidget(it)
+                if isinstance(w, ContactRowWidget) and same_i2p_destination(
+                    w.contact_addr, target
+                ):
+                    lst.setCurrentRow(i)
+                    return
+            lst.clearSelection()
+        finally:
+            self._apply_sidebar_list_selection_backgrounds()
+
+    def _sync_contacts_list_selection(self) -> None:
+        self._sync_sidebar_list_selection()
 
     def _on_contact_row_activated(self, addr: str) -> None:
-        norm = normalize_peer_address(addr)
+        raw = (addr or "").strip()
+        if not raw:
+            return
+        # Сразу выходим из группы: иначе при «плохом» адресе для normalize_peer_address
+        # ранний return оставлял _active_group_id и личный чат не открывался.
+        leaving_group = self._active_group_id is not None
+        self._active_group_id = None
+        self._loaded_group_history_id = None
+        norm = normalize_peer_address(raw)
         if not norm:
-            return
+            norm = raw.lower()
+        prev_norm = ""
         if self.core is not None:
-            stored = normalize_peer_address(self.core.stored_peer or "")
-        else:
-            stored = normalize_peer_address(
-                peek_persisted_stored_peer(self.profile) or ""
-            )
-        if stored and norm != stored:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Saved peers",
-                "This profile is locked to a different peer. You cannot switch contacts "
-                "from the list while Lock to peer is in effect.",
-            )
-            return
+            try:
+                prev_norm = self.core._normalize_peer_addr(
+                    self.core.current_peer_addr or ""
+                )
+            except Exception:
+                prev_norm = (self.core.current_peer_addr or "").strip().lower()
+        peer_switch = leaving_group or (bool(prev_norm) and prev_norm != norm)
+        if peer_switch:
+            self._save_history_if_needed()
+            self._history_flush_timer.stop()
+            self._history_loaded_for_peer = None
+            self._history_entries = []
+            self._history_dirty = False
+            self.chat_model.clear_items()
         self.addr_edit.setText(norm)
+        if self.core is not None:
+            try:
+                canon = self.core._normalize_peer_addr(norm)
+            except Exception:
+                canon = norm
+            self.core.activate_peer_context(canon)
         changed = False
         if remember_peer(self._contact_book, norm):
             changed = True
@@ -6561,39 +7968,57 @@ class ChatWindow(QtWidgets.QMainWindow):
             changed = True
         if changed:
             self._save_contacts_book()
-        self._refresh_contacts_list()
+        self._refresh_contacts_sidebar_list()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self._refresh_offline_history_display()
         self.refresh_status_label()
         self._refresh_connection_buttons()
 
-    def _on_saved_peers_context_menu(self, pos: QtCore.QPoint) -> None:
+    def _on_sidebar_list_context_menu(self, pos: QtCore.QPoint) -> None:
         item = self.contacts_list.itemAt(pos)
         if item is None:
             return
+        role = item.data(_SIDEBAR_LIST_ROLE)
         w = self.contacts_list.itemWidget(item)
-        if not isinstance(w, ContactRowWidget):
+        if role == "section" or not isinstance(w, ContactRowWidget):
             return
         addr = w.contact_addr
         popup = self.saved_peers_context_popup
         popup.clear_actions()
         popup.apply_theme(self.theme_id)
-        popup.add_action(
-            "Edit name & note…",
-            lambda a=addr: self._saved_peer_edit_name_note(a),
-            tool_tip=menu_tt.TT_EDIT_NAME_NOTE,
-        )
-        popup.add_action(
-            "Contact details…",
-            lambda a=addr: self._saved_peer_contact_details(a),
-            tool_tip=menu_tt.TT_CONTACT_DETAILS,
-        )
-        popup.add_separator()
-        popup.add_action(
-            "Remove from saved peers…",
-            lambda a=addr: self._saved_peer_remove(a),
-            tool_tip=menu_tt.TT_REMOVE_SAVED_PEER,
-        )
+        if role == "group":
+            popup.add_action(
+                "Edit title & members…",
+                lambda g=addr: self._show_group_editor_dialog(existing_group_id=g),
+                tool_tip=menu_tt.TT_EDIT_GROUP,
+            )
+            popup.add_action(
+                "Map…",
+                lambda g=addr: self._show_group_topology_dialog(g),
+                tool_tip=menu_tt.TT_GROUP_MAP,
+            )
+            popup.add_action(
+                "Delete group…",
+                lambda g=addr: self._confirm_delete_group(g),
+                tool_tip=menu_tt.TT_DELETE_GROUP,
+            )
+        else:
+            popup.add_action(
+                "Edit name & note…",
+                lambda a=addr: self._saved_peer_edit_name_note(a),
+                tool_tip=menu_tt.TT_EDIT_NAME_NOTE,
+            )
+            popup.add_action(
+                "Contact details…",
+                lambda a=addr: self._saved_peer_contact_details(a),
+                tool_tip=menu_tt.TT_CONTACT_DETAILS,
+            )
+            popup.add_separator()
+            popup.add_action(
+                "Remove from saved peers…",
+                lambda a=addr: self._saved_peer_remove(a),
+                tool_tip=menu_tt.TT_REMOVE_SAVED_PEER,
+            )
         popup.show_at_global(self.contacts_list.mapToGlobal(pos))
 
     def _saved_peer_edit_name_note(self, addr: str) -> None:
@@ -6612,7 +8037,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         name, note = d.profile_values()
         if set_peer_profile(self._contact_book, norm, display_name=name, note=note):
             self._save_contacts_book()
-            self._refresh_contacts_list()
+            self._refresh_contacts_sidebar_list()
 
     def _saved_peer_contact_details(self, addr: str) -> None:
         norm = normalize_peer_address(addr) or (addr or "").strip().lower()
@@ -6719,13 +8144,13 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _peer_matches_active_connection(self, norm_cb: str) -> bool:
         if self.core is None:
             return False
-        if self.core.conn is None:
-            return False
         cur = (self.core.current_peer_addr or "").strip()
         if not cur:
             return False
         try:
-            return normalize_peer_address(norm_cb) == normalize_peer_address(cur)
+            if normalize_peer_address(norm_cb) != normalize_peer_address(cur):
+                return False
+            return self.core.has_active_live_session(norm_cb)
         except Exception:
             return False
 
@@ -6754,13 +8179,11 @@ class ChatWindow(QtWidgets.QMainWindow):
                 "Disconnect from this peer first, then remove it from Saved peers.",
             )
             return
-        stored_n = normalize_peer_address(self.core.stored_peer or "")
-        show_lock = self.profile != TRANSIENT_PROFILE_NAME and bool(stored_n) and stored_n == norm_cb
         show_bb = self.profile != TRANSIENT_PROFILE_NAME
         dlg = _RemoveSavedPeerDialog(
             self,
             peer_addr=norm_cb,
-            show_lock_checkbox=show_lock,
+            show_lock_checkbox=False,
             show_blindbox_checkbox=show_bb,
             theme_id=self.theme_id,
         )
@@ -6785,15 +8208,6 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self.core.forget_pinned_peer_key(norm_cb)
             except Exception as e:  # pragma: no cover
                 self.handle_error(f"Failed to remove pin: {e}")
-        if del_lock and show_lock:
-            try:
-                self.core.clear_locked_peer()
-            except Exception as e:  # pragma: no cover
-                self.handle_error(f"Failed to clear lock: {e}")
-            self._update_peer_lock_indicator()
-            self._set_contacts_sidebar_collapsed(False, animated=False)
-            QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
-            self.handle_system("Profile lock cleared.")
         if del_bb and show_bb:
             p = self._blindbox_state_path_for_peer_b32(norm_cb)
             try:
@@ -6810,7 +8224,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         remove_peer(self._contact_book, norm_cb)
         self._save_contacts_book()
-        self._refresh_contacts_list()
+        self._refresh_contacts_sidebar_list()
 
         if self._saved_peer_ui_targets_peer(norm_cb):
             self._save_history_if_needed()
@@ -6828,49 +8242,23 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.handle_system(f"Removed from saved peers: {norm_cb}")
 
     def _update_peer_lock_indicator(self) -> None:
-        # stored_peer в ядре появляется после async init_session; до этого читаем .dat (как сайдбар при старте).
-        if self.core is None:
-            locked = bool(peek_persisted_stored_peer(self.profile))
-            peer_raw = self.addr_edit.text().strip()
-            info = None
-        else:
-            locked = bool(
-                self.core.stored_peer or peek_persisted_stored_peer(self.profile)
-            )
-            peer_raw = self.addr_edit.text().strip() or (self.core.current_peer_addr or "")
-            info = self.core.get_peer_trust_info(peer_raw) if peer_raw else None
-        light = self.theme_id == "ligth"
-        dpr = max(1.0, float(self.devicePixelRatioF()))
-        pm = _peer_lock_indicator_pixmap(locked=locked, light_theme=light, dpr=dpr)
-        self.peer_lock_label.setPixmap(pm)
-        tooltip_lines = [
-            (
-                "Profile is locked to one peer (Lock to peer). Click for status."
-                if locked
-                else "Profile is not locked: you may select any saved contact. "
-                "Click to lock after a verified connection (same as ⋯ → Lock to peer)."
-            )
-        ]
-        if info is not None:
-            tooltip_lines.append(
-                "TOFU pin: present" if info.pinned else "TOFU pin: not stored"
-            )
-        _set_tooltip_if_changed(
-            self.peer_lock_label,
-            _tooltip_with_portable_shortcut(
-                "\n".join(tooltip_lines), _LOCK_TO_PEER_SHORTCUT_PORTABLE
-            ),
-        )
+        """Lock to peer removed; indicator hidden."""
+        return
 
     def _peer_target_available(self) -> bool:
         if self.core is None:
             return bool(self.addr_edit.text().strip())
-        return bool(self.addr_edit.text().strip()) or bool(self.core.stored_peer)
+        return bool(self._resolved_peer_addr_for_actions())
 
     def _send_action_allowed(self) -> bool:
         """Разрешить Send: live-сессия или готовый BlindBox (очередь офлайн)."""
         if self.core is None:
             return False
+        if self._active_group_id:
+            if self.core.load_group_state(self._active_group_id) is None:
+                return False
+            hints = self.core.get_group_send_ui_hints(self._active_group_id)
+            return bool(hints.get("can_send"))
         d = self.core.get_delivery_telemetry()
         if bool(d.get("secure_live")):
             return True
@@ -6902,22 +8290,42 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._refresh_send_controls()
             return
 
-        connected = self.core.conn is not None
+        connected = self.core.any_live_stream()
         busy = self.core.is_outbound_connect_busy()
         has_target = self._peer_target_available()
+        resolved = self._resolved_peer_addr_for_actions()
+        try:
+            norm_target = (
+                self.core._normalize_peer_addr(resolved) if resolved else ""
+            )
+        except Exception:
+            norm_target = ""
+        already_for_target = (
+            bool(norm_target and self.core.has_active_live_session(norm_target))
+        )
+        at_cap = self.core._live_stream_count() >= max_concurrent_live_sessions()
         # Исходящий I2P-connect имеет смысл только после local_ok (в UI — pending) или visible.
         network_ready = self.core.network_status in ("local_ok", "visible")
         can_connect = (
-            (not connected) and (not busy) and has_target and network_ready
+            (not busy)
+            and has_target
+            and network_ready
+            and (not already_for_target)
+            and (not at_cap)
         )
         if self.connect_button.isEnabled() != can_connect:
             self.connect_button.setEnabled(can_connect)
         if connected:
-            c_tip = "Already connected — use Disconnect to end the session."
+            n = self.core._live_stream_count()
+            cap = max_concurrent_live_sessions()
+            c_tip = (
+                f"Live sessions: {n}/{cap}. Connect another Saved peer if below the limit "
+                "and this address is not already connected."
+            )
         elif busy:
             c_tip = "Connecting… please wait."
         elif not has_target:
-            c_tip = "Enter a peer .b32.i2p address (or lock profile to a stored peer)."
+            c_tip = "Enter a peer base32 address or pick a saved contact."
         elif not network_ready:
             c_tip = (
                 "Wait until status shows Pending or Visible — I2P session is still starting."
@@ -6957,10 +8365,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._refresh_send_controls()
 
     def _refresh_send_controls(self) -> None:
+        shortcut_tip = _compose_send_shortcut_tooltip_text(
+            enter_sends=self._compose_enter_sends
+        )
         if self.core is None:
-            shortcut_tip = _compose_send_shortcut_tooltip_text(
-                enter_sends=self._compose_enter_sends
-            )
             self.send_button.setEnabled(False)
             self.send_button.setText("Send")
             tip = "Start I2P session first (router/SAM reachable)."
@@ -6971,12 +8379,59 @@ class ChatWindow(QtWidgets.QMainWindow):
             )
             return
 
+        if self._active_group_id:
+            state = self.core.load_group_state(self._active_group_id)
+            hints = self.core.get_group_send_ui_hints(self._active_group_id)
+            can_send = bool(hints.get("can_send"))
+            self.send_button.setEnabled(can_send)
+            if hints.get("show_offline_button"):
+                self.send_button.setText("Send\noffline")
+            else:
+                self.send_button.setText("Send")
+            group_name = self._group_display_name(
+                self._active_group_id,
+                title=state.title if state is not None else None,
+            )
+            if state is None:
+                send_tip = "This group is no longer available."
+            elif not can_send:
+                send_tip = (
+                    "Need a live secure session to at least one member, or BlindBox ready "
+                    "(I2P up, replicas, runtime). Offline delivery uses per-peer BlindBox state "
+                    "after a successful live session."
+                )
+            elif hints.get("any_live_to_member"):
+                send_tip = (
+                    f"Send text to {group_name}. At least one member has a live session; "
+                    "others use BlindBox when no live path is available.\n"
+                    "Hold Shift while sending to queue BlindBox for every member "
+                    "(not only those without live)."
+                )
+            else:
+                send_tip = (
+                    f"Send text to {group_name} via the BlindBox queue (no live session to any member). "
+                    "Per-member delivery still follows each peer's BlindBox handshake state."
+                )
+            lb = hints.get("live_by_recipient")
+            if isinstance(lb, dict) and lb:
+                per_lines = [
+                    f"{short_member_label(pid)}: {'live' if alive else 'no live'}"
+                    for pid, alive in sorted(lb.items())
+                ]
+                send_tip = send_tip + "\n\nPer member: " + "; ".join(per_lines)
+            _set_tooltip_if_changed(
+                self.send_button,
+                f"{send_tip}\n\n{shortcut_tip}",
+            )
+            _set_tooltip_if_changed(
+                self.input_edit,
+                "Current mode: active group conversation.\n\n" + shortcut_tip,
+            )
+            return
+
         delivery = self.core.get_delivery_telemetry()
         state = str(delivery.get("state", "unknown"))
         short_route, route_tip = _delivery_status_bar_and_tooltip(state)
-        shortcut_tip = _compose_send_shortcut_tooltip_text(
-            enter_sends=self._compose_enter_sends
-        )
         secure_live = bool(delivery.get("secure_live"))
         bb_runtime = bool(delivery.get("blindbox_runtime_ready"))
         can_send = self._send_action_allowed()
@@ -6994,7 +8449,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             if can_send
             else (
                 "Send needs a finished live secure session (Connect + handshake) "
-                "or a started BlindBox runtime (lock peer, I2P up, replicas)."
+                "or a started BlindBox runtime (I2P up, replicas)."
             )
         )
         _set_tooltip_if_changed(
@@ -7364,6 +8819,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         if _physical_key_matches(event, win_vk=0x46, mac_vk=0x03, linux_evdev=33):
             self.on_send_file_clicked()
             return True
+        if _physical_key_matches(event, win_vk=0x47, mac_vk=0x05, linux_evdev=34):
+            self._show_create_group_dialog()
+            return True
         if _physical_key_matches(event, win_vk=0x44, mac_vk=0x02, linux_evdev=32):
             self._show_blindbox_diagnostics()
             return True
@@ -7372,9 +8830,6 @@ class ChatWindow(QtWidgets.QMainWindow):
             return True
         if _physical_key_matches(event, win_vk=0x49, mac_vk=0x22, linux_evdev=23):
             self._import_profile_backup()
-            return True
-        if _physical_key_matches(event, win_vk=0x4C, mac_vk=0x25, linux_evdev=38):
-            self.on_lock_peer_clicked()
             return True
         if _physical_key_matches(event, win_vk=0x54, mac_vk=0x11, linux_evdev=20):
             self.on_theme_switch_clicked()
@@ -7394,6 +8849,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         return False
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
+        if (
+            obj is getattr(self, "_contacts_list_viewport", None)
+            and event.type() == QtCore.QEvent.Type.Resize
+        ):
+            self._layout_contacts_sidebar_row_widths()
+            self._apply_sidebar_list_selection_backgrounds()
         if event.type() == QtCore.QEvent.Type.KeyPress:
             ke = event
             if isinstance(ke, QtGui.QKeyEvent):
@@ -7563,7 +9024,52 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(object)
     def handle_message(self, msg: ChatMessage) -> None:
+        if msg.conversation_kind == "group" and msg.conversation_id:
+            group_key = make_group_conversation_key(msg.conversation_id)
+            if msg.kind == "peer":
+                bump_unread_for_incoming_peer_message(
+                    self._unread_by_peer,
+                    active_key=self._compose_peer_key_from_ui(),
+                    msg_peer_key=group_key,
+                    chat_is_foreground=self._peer_chat_is_foreground(),
+                )
+                self._update_unread_chrome()
+            if self._active_group_id != msg.conversation_id:
+                self._refresh_groups_list()
+                self.refresh_status_label()
+                self._refresh_connection_buttons()
+                return
+
+            self._refresh_group_conversation_display(
+                force=True,
+                clear_unread=(msg.kind != "peer" or self._peer_chat_is_foreground()),
+            )
+            self.refresh_status_label()
+            self._refresh_connection_buttons()
+            return
+
         kind = msg.kind
+        incoming_direct_peer_key = (
+            normalize_peer_addr(msg.source_peer)
+            if kind == "peer" and msg.source_peer
+            else None
+        )
+        active_direct_peer_key = (
+            normalize_peer_addr(self._current_history_peer() or "")
+            if not self._active_group_id
+            else None
+        )
+        direct_peer_offscreen = bool(
+            kind == "peer"
+            and incoming_direct_peer_key
+            and (
+                self._active_group_id is not None
+                or (
+                    active_direct_peer_key is not None
+                    and active_direct_peer_key != incoming_direct_peer_key
+                )
+            )
+        )
         ts = msg.timestamp.strftime("%H:%M:%S")
         text = msg.text
         if kind == "peer":
@@ -7583,7 +9089,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         else:
             sender = "SYSTEM"
 
-        if kind in ("me", "peer") and self._history_enabled:
+        if direct_peer_offscreen:
+            self._persist_direct_message_history_for_peer(msg)
+        elif kind in ("me", "peer") and self._history_enabled:
             ts_iso = msg.timestamp.isoformat()
             self._history_entries.append(
                 HistoryEntry(
@@ -7618,21 +9126,22 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._history_dirty = False
             self._history_flush_timer.stop()
 
-        self._append_item(
-            ChatItem(
-                kind=kind,
-                timestamp=ts,
-                sender=sender,
-                text=text,
-                message_id=msg.message_id,
-                delivery_state=msg.delivery_state,
-                delivery_route=msg.delivery_route,
-                delivery_hint=msg.delivery_hint,
-                delivery_reason=msg.delivery_reason,
-                retryable=msg.retryable,
-                retry_kind="text" if kind == "me" and msg.retryable else None,
+        if not direct_peer_offscreen:
+            self._append_item(
+                ChatItem(
+                    kind=kind,
+                    timestamp=ts,
+                    sender=sender,
+                    text=text,
+                    message_id=msg.message_id,
+                    delivery_state=msg.delivery_state,
+                    delivery_route=msg.delivery_route,
+                    delivery_hint=msg.delivery_hint,
+                    delivery_reason=msg.delivery_reason,
+                    retryable=msg.retryable,
+                    retry_kind="text" if kind == "me" and msg.retryable else None,
+                )
             )
-        )
         self.refresh_status_label()
         self._refresh_connection_buttons()
         if kind == "peer" and msg.source_peer:
@@ -7647,7 +9156,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     book_changed = True
                 if book_changed:
                     self._save_contacts_book()
-                    self._refresh_contacts_list()
+                    self._refresh_contacts_sidebar_list()
             bump_unread_for_incoming_peer_message(
                 self._unread_by_peer,
                 active_key=self._compose_peer_key_from_ui(),
@@ -7655,6 +9164,57 @@ class ChatWindow(QtWidgets.QMainWindow):
                 chat_is_foreground=self._peer_chat_is_foreground(),
             )
             self._update_unread_chrome()
+
+    def _persist_direct_message_history_for_peer(self, msg: ChatMessage) -> None:
+        if not self._history_enabled or self.core is None or not msg.source_peer:
+            return
+        identity_key = self.core.get_identity_key_bytes()
+        if not identity_key:
+            return
+        peer = normalize_peer_addr(msg.source_peer)
+        if not peer:
+            return
+        try:
+            entries = load_history(
+                self.core.get_profile_data_dir(),
+                self.core.profile,
+                peer,
+                identity_key,
+                app_data_root=self.core.get_profiles_dir(),
+            )
+            entries.append(
+                HistoryEntry(
+                    kind="peer",
+                    text=msg.text,
+                    ts=msg.timestamp.isoformat(),
+                    message_id=msg.message_id,
+                    delivery_state=msg.delivery_state,
+                    delivery_route=msg.delivery_route,
+                    delivery_hint=msg.delivery_hint,
+                    delivery_reason=msg.delivery_reason,
+                    retryable=msg.retryable,
+                )
+            )
+            entries, _ = apply_history_retention(
+                entries,
+                max_messages=load_history_max_messages(),
+                max_age_days=load_history_retention_days(),
+            )
+            save_history(
+                self.core.get_profile_data_dir(),
+                self.core.profile,
+                peer,
+                entries,
+                identity_key,
+                max_messages=load_history_max_messages(),
+                app_data_root=self.core.get_profiles_dir(),
+            )
+            self._history_save_error_reported = False
+        except Exception as e:
+            logger.warning("Failed to save chat history: %s", e, exc_info=True)
+            if not self._history_save_error_reported:
+                self.handle_system(f"Warning: failed to save chat history: {e}")
+                self._history_save_error_reported = True
 
     def _peer_chat_is_foreground(self) -> bool:
         """True when the user is likely looking at the active chat (no unread bump for same peer)."""
@@ -7689,7 +9249,19 @@ class ChatWindow(QtWidgets.QMainWindow):
         if not isinstance(msg, ChatMessage):
             return
 
-        if msg.kind == "peer":
+        if msg.conversation_kind == "group" and msg.conversation_id and msg.kind == "peer":
+            notify_kind = "peer"
+            group_title = self._group_display_name(
+                msg.conversation_id,
+                title=msg.conversation_title,
+            )
+            sender_label = self._group_member_label(msg.group_sender_id or msg.source_peer)
+            preview = f"{sender_label}: {(msg.group_plain_text or msg.text or '').replace(chr(10), ' ')}"
+            title = f"New group message in {group_title}"
+            msg_key = make_group_conversation_key(msg.conversation_id)
+            active = self._compose_peer_key_from_ui()
+            same_chat = msg_key == active
+        elif msg.kind == "peer":
             notify_kind = "peer"
             preview = (msg.text or "").replace("\n", " ")
             title = "New message"
@@ -7699,6 +9271,13 @@ class ChatWindow(QtWidgets.QMainWindow):
                 if len(clean_peer) > 12:
                     clean_peer = f"{clean_peer[:6]}..{clean_peer[-6:]}"
                 title = f"New message from {clean_peer}"
+            msg_key = normalize_peer_addr(msg.source_peer) if msg.source_peer else None
+            active = self._compose_peer_key_from_ui()
+            same_chat = (
+                msg_key is not None
+                and active is not None
+                and msg_key == active
+            )
         elif msg.kind == "connect":
             notify_kind = "connect"
             peer = (msg.text or "").strip()
@@ -7706,7 +9285,10 @@ class ChatWindow(QtWidgets.QMainWindow):
             if len(clean_peer) > 12:
                 clean_peer = f"{clean_peer[:6]}..{clean_peer[-6:]}"
             title = "Incoming connection"
-            preview = f"{clean_peer}.b32.i2p connected" if peer else "Peer connected"
+            preview = f"{clean_peer} connected" if peer else "Peer connected"
+            msg_key = None
+            active = None
+            same_chat = False
         else:
             return
 
@@ -7721,15 +9303,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         is_window_active = self.isActiveWindow() and not self.isMinimized()
 
         if msg.kind == "peer":
-            msg_key = (
-                normalize_peer_addr(msg.source_peer) if msg.source_peer else None
-            )
-            active = self._compose_peer_key_from_ui()
-            same_chat = (
-                msg_key is not None
-                and active is not None
-                and msg_key == active
-            )
             if is_app_active and is_window_active and same_chat:
                 return
         elif msg.kind == "connect":
@@ -8168,7 +9741,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     changed = True
                 if changed:
                     self._save_contacts_book()
-                self._refresh_contacts_list()
+                self._refresh_contacts_sidebar_list()
         else:
             self._sync_contacts_list_selection()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
@@ -8203,6 +9776,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             on_file_delivered=self.handle_file_delivered,
             on_trust_decision=self.handle_trust_decision,
             on_trust_mismatch_decision=self.handle_trust_mismatch_decision,
+            on_saved_contacts_changed=self._reload_contacts_book_after_core_write,
         )
         # динамически навешиваем колбэк уведомлений,
         # чтобы не менять публичную сигнатуру конструктора ядра
@@ -8588,6 +10162,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._update_peer_lock_indicator()
         self._refresh_connection_buttons()
         self._chat_search_console.set_console_theme(self.theme_id)
+        self._apply_sidebar_list_selection_backgrounds()
 
     def _setup_more_actions_shortcuts(self) -> None:
         """Горячие клавиши обрабатываются в eventFilter → _try_layout_independent_shortcut
@@ -8886,18 +10461,20 @@ class ChatWindow(QtWidgets.QMainWindow):
         def _short_addr(addr: Optional[str]) -> str:
             if not addr:
                 return "none"
-            clean = addr.replace(".b32.i2p", "")
+            bare = normalize_peer_address(addr)
+            if bare:
+                clean = bare
+            else:
+                clean = addr.replace(".b32.i2p", "").lower()
             if len(clean) > 12:
-                clean = f"{clean[:6]}..{clean[-6:]}"
-            return clean + ".b32.i2p"
+                return f"{clean[:6]}..{clean[-6:]}"
+            return clean
 
-        stored = self.core.stored_peer
-        if stored and not self.addr_edit.text().strip():
-            # stored уже содержит полный адрес (с суффиксом), используем как есть.
-            self.addr_edit.setText(stored)
+        lap = (self._contact_book.last_active_peer or "").strip()
+        stored = lap or None
 
-        link_state = "online" if self.core.conn else "offline"
-        secure_state = "on" if self.core.handshake_complete else "off"
+        link_state = "online" if self.core.any_live_stream() else "offline"
+        secure_state = "on" if self.core.is_current_peer_secure() else "off"
         blindbox_state = "off"
         blindbox_sync = "idle"
         blindbox_queue = "0"
@@ -8924,9 +10501,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                         blindbox_hint = "waiting for initial BlindBox root exchange over a secure live session"
                 else:
                     blindbox_state = "on"
-                    if not self.core.stored_peer:
-                        blindbox_hint = "lock profile to a peer to activate BlindBox"
-                    elif int(bb.get("blind_boxes", bb.get("replicas", 0))) <= 0:
+                    if int(bb.get("blind_boxes", bb.get("replicas", 0))) <= 0:
                         blindbox_hint = (
                             "configure Blind Box servers via I2PCHAT_BLINDBOX_REPLICAS "
                             "or I2PCHAT_BLINDBOX_DEFAULT_REPLICAS/"
@@ -8982,16 +10557,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         current_peer_disp = _short_addr(peer_for_status)
         stored_disp = _short_addr(stored)
         my_disp = _short_addr(
-            (self.core.my_dest.base32 + ".b32.i2p")
-            if self.core.my_dest is not None
-            else None
+            self.core.my_dest.base32 if self.core.my_dest is not None else None
         )
         ack_part = f"ACKdrop:{ack_drop_total}" if ack_drop_total > 0 else "ACKdrop:0"
 
         pres = build_status_presentation(
             network_status_raw=self._last_status,
-            connected=bool(self.core.conn),
-            handshake_complete=bool(self.core.handshake_complete),
+            connected=bool(self.core.any_live_stream()),
+            handshake_complete=bool(self.core.is_current_peer_secure()),
             outbound_connect_busy=bool(self.core.is_outbound_connect_busy()),
             delivery_state=delivery_state,
             send_in_flight=bool(self._status_send_in_flight),
@@ -9010,6 +10583,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         primary_full = pres.primary_full
         if ack_drop_total > 0:
             primary_full = f"{primary_full} | {ack_part}"
+        try:
+            live_n = int(self.core.live_stream_count())
+        except Exception:
+            live_n = 1
+        if live_n > 1:
+            primary_full = f"{primary_full} | Live×{live_n}"
         self._set_status_text(primary_full, pres.primary_short)
         current_signature = (status, link_state, secure_state, delivery_state)
         if (
@@ -9041,7 +10620,37 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.refresh_status_label()
         try:
             draft_key = self._compose_peer_key_from_ui()
-            result = await self.core.send_text(text)
+            if self._active_group_id:
+                active_group_id = self._active_group_id
+                try:
+                    hints = self.core.get_group_send_ui_hints(active_group_id)
+                    mods = QtWidgets.QApplication.keyboardModifiers()
+                    shift_down = bool(mods & QtCore.Qt.KeyboardModifier.ShiftModifier)
+                    if hints.get("show_offline_button") or (
+                        shift_down and hints.get("any_live_to_member")
+                    ):
+                        group_route: Literal["auto", "live", "offline"] = "offline"
+                    else:
+                        group_route = "auto"
+                    grp_result = await self.core.send_group_text(
+                        active_group_id, text, route=group_route
+                    )
+                except Exception as exc:
+                    self.handle_error(str(exc).strip() or type(exc).__name__)
+                    return
+                if draft_key:
+                    self._compose_drafts.pop(draft_key, None)
+                self.input_edit.clear()
+                self._schedule_compose_drafts_persist()
+                if self._active_group_id == active_group_id:
+                    self._refresh_group_conversation_display(force=True)
+                else:
+                    self._refresh_groups_list()
+                return
+            result = await self.core.send_text(
+                text,
+                peer_address=self._outbound_peer_arg(),
+            )
             if result.accepted:
                 if draft_key:
                     self._compose_drafts.pop(draft_key, None)
@@ -9076,26 +10685,38 @@ class ChatWindow(QtWidgets.QMainWindow):
     async def _auto_connect_and_retry_send(self, text: str) -> None:
         """Single-click flow: try live connect, then retry send once."""
         try:
-            addr = self.addr_edit.text().strip() or (self.core.stored_peer or "")
+            addr = self.addr_edit.text().strip() or self._resolved_peer_addr_for_actions()
             if not addr:
                 self.handle_system("Auto-connect failed, message kept in input.")
                 return
             self.handle_system("Auto-connect started for this message...")
-            if not self.core.conn and not self.core.is_outbound_connect_busy():
+            norm_addr = self.core._normalize_peer_addr(addr)
+            self.core.activate_peer_context(norm_addr)
+            if (
+                not self.core.has_active_live_session(norm_addr)
+                and not self.core.is_outbound_connect_busy()
+            ):
                 await self.core.connect_to_peer(addr)
             deadline = time.monotonic() + 75.0
             while time.monotonic() < deadline:
-                if self.core.conn is not None and self.core.handshake_complete:
+                if self.core.has_active_live_session(
+                    norm_addr
+                ) and self.core._handshake_complete_for_peer_route(norm_addr):
                     break
                 if (
-                    self.core.conn is None
+                    not self.core.any_live_stream()
                     and not self.core.is_outbound_connect_busy()
                 ):
                     self.handle_system("Auto-connect failed, message kept in input.")
                     return
                 await asyncio.sleep(0.25)
-            if self.core.conn is not None and self.core.handshake_complete:
-                retry = await self.core.send_text(text)
+            if self.core.has_active_live_session(
+                norm_addr
+            ) and self.core._handshake_complete_for_peer_route(norm_addr):
+                retry = await self.core.send_text(
+                    text,
+                    peer_address=norm_addr,
+                )
                 if retry.accepted:
                     dk = self._compose_peer_key_from_ui()
                     if dk:
@@ -9116,19 +10737,23 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_connect_clicked(self) -> None:
-        addr = self.addr_edit.text().strip()
+        addr = (self.addr_edit.text() or "").strip()
         if not addr:
-            # Если адрес не введён, но есть сохранённый контакт, используем его.
-            if self.core.stored_peer:
-                addr = self.core.stored_peer
+            addr = self._resolved_peer_addr_for_actions()
+            if addr:
                 self.addr_edit.setText(addr)
-            else:
-                QtWidgets.QMessageBox.warning(
-                    self, "Connect", "Please enter peer address"
-                )
-                return
+        else:
+            addr = normalize_peer_address(addr) or addr
+        if not addr:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Connect",
+                "Enter a peer base32 address or pick a saved contact.",
+            )
+            return
+        self.core.activate_peer_context(addr)
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
-        if self.core.conn is None:
+        if not self.core.any_live_stream():
             self._refresh_offline_history_display()
         asyncio.create_task(self.core.connect_to_peer(addr))
         QtCore.QTimer.singleShot(0, self._refresh_connection_buttons)
@@ -9171,54 +10796,41 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_lock_peer_clicked(self) -> None:
+        """Legacy name: add current verified peer to Saved peers (Lock to peer removed)."""
         if self.profile == TRANSIENT_PROFILE_NAME:
             QtWidgets.QMessageBox.warning(
                 self,
-                "Lock to peer",
-                "Cannot lock in TRANSIENT mode. Restart with a profile name.",
+                "Saved peers",
+                "Cannot persist contacts in TRANSIENT mode. Restart with a profile name.",
             )
             return
-
-        if self.core.stored_peer:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Lock to peer",
-                f"Profile already locked to:\n{self.core.stored_peer}",
-            )
-            return
-
         if not self.core.current_peer_addr:
             QtWidgets.QMessageBox.warning(
                 self,
-                "Lock to peer",
+                "Saved peers",
                 "Peer address not yet verified.\nEstablish a connection first.",
             )
             return
         if not self.core.is_current_peer_verified_for_lock():
             QtWidgets.QMessageBox.warning(
                 self,
-                "Lock to peer",
+                "Saved peers",
                 "Identity binding is not cryptographically verified yet.\n"
-                "Complete secure handshake and verify peer fingerprint out-of-band first.",
+                "Complete secure handshake first.",
             )
             return
-
         try:
             self.core.save_stored_peer(self.core.current_peer_addr)
             asyncio.create_task(self.core.ensure_blindbox_runtime_started())
-            self.handle_system(
-                f"Identity {self.profile} is now locked to this peer."
-            )
             n = normalize_peer_address(self.core.current_peer_addr or "")
             if n:
                 remember_peer(self._contact_book, n)
                 set_last_active_peer(self._contact_book, n)
                 self._save_contacts_book()
-                self._refresh_contacts_list()
-            self._set_contacts_sidebar_collapsed(True, animated=False)
-            QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
+                self._refresh_contacts_sidebar_list()
             self._update_peer_lock_indicator()
             self.refresh_status_label()
+            self.handle_system("Current peer added to Saved peers.")
         except Exception as e:  # pragma: no cover - GUI path
             self.handle_error(f"Failed to save: {e}")
 
@@ -9232,7 +10844,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             )
             return
 
-        addr = self.core.my_dest.base32 + ".b32.i2p"
+        addr = str(self.core.my_dest.base32).strip().lower()
         QtWidgets.QApplication.clipboard().setText(addr)
         self.handle_system("My address copied to clipboard.")
 
@@ -9261,17 +10873,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.handle_system(f"Opened app directory: {app_dir}")
 
     def _current_history_peer(self) -> Optional[str]:
-        if self.core is None:
-            text = self.addr_edit.text().strip()
-            return text or None
-        return (
-            self.core.current_peer_addr
-            or self.core.stored_peer
-            or self.addr_edit.text().strip()
-            or None
-        )
+        if self._active_group_id:
+            return None
+        r = self._resolved_peer_addr_for_actions()
+        return r or None
 
     def _compose_peer_key_from_ui(self) -> Optional[str]:
+        if self._active_group_id:
+            return make_group_conversation_key(self._active_group_id)
         peer = self._current_history_peer()
         if not peer:
             return None
@@ -9325,6 +10934,15 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
         self._refresh_offline_history_display()
 
+    @QtCore.pyqtSlot(str)
+    def _on_addr_text_edited(self, _text: str) -> None:
+        if not self._clear_active_group_selection():
+            return
+        self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
+        self._refresh_offline_history_display()
+        self.refresh_status_label()
+        self._refresh_connection_buttons()
+
     def _sync_compose_draft_to_peer_key(self, new_key: Optional[str]) -> None:
         if new_key == self._compose_draft_active_key:
             return
@@ -9354,14 +10972,143 @@ class ChatWindow(QtWidgets.QMainWindow):
                 return True
         return False
 
+    def _append_group_history_entry_to_chat(self, entry: object) -> None:
+        content_type = getattr(entry, "content_type", None)
+        timestamp = getattr(entry, "created_at", None)
+        ts_display = ""
+        if isinstance(timestamp, datetime):
+            ts_display = timestamp.strftime("%H:%M:%S")
+
+        if str(content_type) == "GROUP_CONTROL":
+            actor_label = "You" if getattr(entry, "kind", "") == "me" else self._group_member_label(
+                getattr(entry, "sender_id", None)
+            )
+            payload = getattr(entry, "payload", None)
+            self._append_item(
+                ChatItem(
+                    kind="system",
+                    timestamp=ts_display,
+                    sender="SYSTEM",
+                    text=render_group_control_text(
+                        payload if isinstance(payload, dict) else None,
+                        actor_label=actor_label,
+                    ),
+                    message_id=getattr(entry, "msg_id", None),
+                )
+            )
+            return
+
+        plain_text = str(getattr(entry, "text", "") or "")
+        sender_id = getattr(entry, "sender_id", None)
+        kind = getattr(entry, "kind", "peer")
+        sender = "Me" if kind == "me" else self._group_member_label(sender_id)
+        visible_text = plain_text if kind == "me" else f"{sender}: {plain_text}"
+        self._append_item(
+            ChatItem(
+                kind=kind,
+                timestamp=ts_display,
+                sender=sender,
+                text=visible_text,
+                message_id=getattr(entry, "msg_id", None),
+            )
+        )
+
+    def _refresh_group_conversation_display(
+        self,
+        *,
+        force: bool = False,
+        clear_unread: bool = True,
+    ) -> None:
+        if self.core is None or not self._active_group_id:
+            self._loaded_group_history_id = None
+            return
+        group_id = self._active_group_id
+        if not force and self._loaded_group_history_id == group_id:
+            return
+        conversation = self.core.load_group(group_id)
+        if conversation is None:
+            self._clear_active_group_selection()
+            self.handle_error(f"Group not found: {group_id}")
+            return
+
+        self._save_history_if_needed()
+        self._history_flush_timer.stop()
+        self._history_loaded_for_peer = None
+        self._history_entries = []
+        self._history_dirty = False
+        self.chat_model.clear_items()
+
+        header_text = self._group_display_name(
+            conversation.state.group_id,
+            title=conversation.state.title,
+        )
+        self._chat_search_sync_suppressed = True
+        try:
+            self._append_item(
+                ChatItem(
+                    kind="system",
+                    timestamp="",
+                    sender="SYSTEM",
+                    text=f'--- Group: {header_text} ---',
+                )
+            )
+            if not conversation.history:
+                self._append_item(
+                    ChatItem(
+                        kind="system",
+                        timestamp="",
+                        sender="SYSTEM",
+                        text="No local group messages yet.",
+                    )
+                )
+            else:
+                for entry in conversation.history:
+                    self._append_group_history_entry_to_chat(entry)
+            self._append_item(
+                ChatItem(
+                    kind="system",
+                    timestamp="",
+                    sender="SYSTEM",
+                    text="--- end of group history ---",
+                )
+            )
+        finally:
+            self._chat_search_sync_suppressed = False
+        self._sync_chat_search_after_model_change()
+        self._loaded_group_history_id = group_id
+        if clear_unread:
+            clear_unread_for_peer(
+                self._unread_by_peer,
+                make_group_conversation_key(group_id),
+            )
+        self._update_unread_chrome()
+        self._refresh_groups_list()
+
     def _refresh_offline_history_display(self, _identity_retry: int = 0) -> None:
         """Показать сохранённую историю для выбранного пира до подключения (если SAM уже выдал ключ)."""
+        if self._active_group_id:
+            self._refresh_group_conversation_display(
+                force=self._loaded_group_history_id != self._active_group_id
+            )
+            return
         if not self._history_enabled:
             return
         if self.core is None:
             return
-        if self.core.conn is not None:
-            return
+        # Раньше при любом live-стриме выходили — после группы лента не переключалась на пира.
+        # Пропуск только если для выбранного в UI пира уже показан офлайн-блок или идёт live без блока
+        # (не дублировать); при смене контекста на пира без сессии — грузим историю даже при других live.
+        if self.core.any_live_stream():
+            raw_chk = (self._current_history_peer() or "").strip()
+            if not raw_chk:
+                return
+            peer_key_chk = normalize_peer_addr(raw_chk)
+            loaded = self._history_loaded_for_peer
+            if self.core.has_active_live_session(peer_key_chk):
+                if loaded is not None and normalize_peer_addr(loaded) == peer_key_chk:
+                    return
+                if loaded is None and self.chat_model.rowCount() > 0:
+                    return
         raw = (self._current_history_peer() or "").strip()
         if not raw:
             self._save_history_if_needed()
@@ -9400,6 +11147,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._try_load_history()
 
     def _try_load_history(self) -> None:
+        if self._active_group_id:
+            self._refresh_group_conversation_display(
+                force=self._loaded_group_history_id != self._active_group_id
+            )
+            return
         if not self._history_enabled:
             return
         if self.core is None:
@@ -9624,9 +11376,13 @@ class ChatWindow(QtWidgets.QMainWindow):
             if not ok:
                 self.handle_error(err or "Invalid image file")
                 return
-            asyncio.create_task(self.core.send_image(path))
+            asyncio.create_task(
+                self.core.send_image(path, peer_address=self._outbound_peer_arg())
+            )
             return
-        asyncio.create_task(self.core.send_file(path))
+        asyncio.create_task(
+            self.core.send_file(path, peer_address=self._outbound_peer_arg())
+        )
 
     @QtCore.pyqtSlot()
     def _export_profile_backup(self) -> None:
@@ -9772,9 +11528,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         save_history_enabled(self._history_enabled)
         self._history_toggle_btn.setText(self._history_toggle_label())
         if self._history_enabled:
-            if self.core.conn is None:
+            if not self.core.any_live_stream():
                 self._refresh_offline_history_display()
-            elif self.core.handshake_complete:
+            elif self.core.is_current_peer_secure():
                 self._try_load_history()
             self.handle_system("Chat history saving enabled.")
         else:
@@ -9789,7 +11545,7 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _on_clear_history_clicked(self) -> None:
         peer = (
             self.core.current_peer_addr
-            or self.core.stored_peer
+            or (self._contact_book.last_active_peer or "").strip()
             or self.addr_edit.text().strip()
         )
         if not peer:
@@ -9845,7 +11601,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             selected_peer = (
                 self.addr_edit.text().strip()
                 or self.core.current_peer_addr
-                or self.core.stored_peer
+                or (self._contact_book.last_active_peer or "").strip()
                 or ""
             )
             summary.setPlainText(
@@ -10232,7 +11988,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         peer_addr = (
             self.addr_edit.text().strip()
             or (self.core.current_peer_addr or "").strip()
-            or (self.core.stored_peer or "").strip()
+            or (self._contact_book.last_active_peer or "").strip()
         )
         if not peer_addr:
             QtWidgets.QMessageBox.warning(
@@ -10319,8 +12075,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         try:
             self._load_contacts_book()
             self._ensure_stored_peer_in_contact_book()
-            self._refresh_contacts_list()
-            self._sync_contacts_list_selection()
+            self._refresh_contacts_sidebar_list()
+            self._sync_sidebar_list_selection()
             self._update_peer_lock_indicator()
         except Exception:
             logger.exception("deferred saved peers refresh after profile switch")
@@ -10339,6 +12095,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._history_flush_timer.stop()
         await self.core.shutdown()
         self._history_loaded_for_peer = None
+        self._loaded_group_history_id = None
+        self._active_group_id = None
         self._history_entries = []
         self._history_dirty = False
         self.chat_model.clear_items()
@@ -10361,11 +12119,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         # После init — снова с диска (возможны записи книги во время длинной инициализации).
         self._load_contacts_book()
         self._ensure_stored_peer_in_contact_book()
+        self._refresh_contacts_sidebar_list()
         self._apply_peer_address_after_profile_switch()
         self._sync_compose_draft_to_peer_key(self._compose_peer_key_from_ui())
-        self._refresh_contacts_list()
         self._apply_contacts_sidebar_startup_state()
-        self._sync_contacts_list_selection()
+        self._sync_sidebar_list_selection()
         self._update_peer_lock_indicator()
         self.refresh_status_label()
         self._refresh_connection_buttons()
@@ -10380,7 +12138,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         if not path:
             return
-        asyncio.create_task(self.core.send_file(path))
+        asyncio.create_task(
+            self.core.send_file(path, peer_address=self._outbound_peer_arg())
+        )
 
     @QtCore.pyqtSlot()
     def on_send_pic_clicked(self) -> None:
@@ -10392,7 +12152,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         if not path:
             return
-        asyncio.create_task(self.core.send_image(path))
+        asyncio.create_task(
+            self.core.send_image(path, peer_address=self._outbound_peer_arg())
+        )
 
     @QtCore.pyqtSlot(str)
     def on_clipboard_image_ready(self, path: str) -> None:
@@ -10408,7 +12170,9 @@ class ChatWindow(QtWidgets.QMainWindow):
                     pass
             self.handle_error(err or "Invalid image from clipboard")
             return
-        asyncio.create_task(self.core.send_image(path))
+        asyncio.create_task(
+            self.core.send_image(path, peer_address=self._outbound_peer_arg())
+        )
 
     @QtCore.pyqtSlot(str)
     def _on_reply_requested(self, block: str) -> None:
@@ -10430,11 +12194,21 @@ class ChatWindow(QtWidgets.QMainWindow):
             return
         if item.retry_kind == "file" and item.retry_source_path:
             self._remove_item(row)
-            asyncio.create_task(self.core.send_file(item.retry_source_path))
+            asyncio.create_task(
+                self.core.send_file(
+                    item.retry_source_path,
+                    peer_address=self._outbound_peer_arg(),
+                )
+            )
             return
         if item.retry_kind == "image" and item.retry_source_path:
             self._remove_item(row)
-            asyncio.create_task(self.core.send_image(item.retry_source_path))
+            asyncio.create_task(
+                self.core.send_image(
+                    item.retry_source_path,
+                    peer_address=self._outbound_peer_arg(),
+                )
+            )
 
     @QtCore.pyqtSlot(str)
     def on_image_open_requested(self, path: str) -> None:
@@ -10468,7 +12242,11 @@ class ChatWindow(QtWidgets.QMainWindow):
                 text=art,
             )
         )
-        asyncio.create_task(self.core.send_image_lines(lines))
+        asyncio.create_task(
+            self.core.send_image_lines(
+                lines, peer_address=self._outbound_peer_arg()
+            )
+        )
 
     @QtCore.pyqtSlot()
     def on_send_img_bw_clicked(self) -> None:
@@ -10487,7 +12265,11 @@ class ChatWindow(QtWidgets.QMainWindow):
                 text=art,
             )
         )
-        asyncio.create_task(self.core.send_image_lines(lines))
+        asyncio.create_task(
+            self.core.send_image_lines(
+                lines, peer_address=self._outbound_peer_arg()
+            )
+        )
 
     async def start_core(self) -> None:
         try:
@@ -10722,6 +12504,9 @@ class ChatWindow(QtWidgets.QMainWindow):
 
 def main() -> None:
     """Точка входа без qasync.run, чтобы избежать падений при завершении."""
+    from i2pchat.logging_setup import configure_i2pchat_logging_from_env
+
+    configure_i2pchat_logging_from_env()
     # Сразу убираем плоскую раскладку для всех профилей с `<имя>.dat` в корне —
     # не только для того, который откроют в этой сессии.
     migrate_all_legacy_profiles_if_needed()
