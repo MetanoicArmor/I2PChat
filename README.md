@@ -287,7 +287,7 @@ sudo apt install libxcb-cursor0
 
 ```bash
 uv sync --python 3.14
-uv run python -m i2pchat.gui.main_qt   # GUI; optional profile name as first arg
+uv run python -m i2pchat.gui.main_qt    # GUI; optional profile name as first arg
 uv run python -m i2pchat.tui            # terminal (TUI)
 ```
 
@@ -464,7 +464,7 @@ Full zip layouts, **winget**, **`.deb`**, **Flatpak** notes → [**docs/INSTALL.
 
 ```powershell
 winget install MetanoicArmor.I2PChat       # GUI
-winget install MetanoicArmor.I2PChat.TUI  # TUI only
+winget install MetanoicArmor.I2PChat.TUI   # TUI only
 ```
 
 If the catalog lags behind a fresh release merge, **`winget show MetanoicArmor.I2PChat`** lists available versions; use **`--version x.y.z`** only when you need to pin one.
