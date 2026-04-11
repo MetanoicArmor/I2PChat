@@ -309,12 +309,10 @@ PyInstaller builds use [`i2pchat/run_gui.py`](i2pchat/run_gui.py) as the GUI ent
 
 **Developer note (BlindBox):** [`i2pchat/blindbox/blindbox_server_example.py`](i2pchat/blindbox/blindbox_server_example.py) is the hardened service implementation, while the **production-oriented package entrypoint** is `python -m i2pchat.blindbox.daemon`. The repo now also ships package-local `systemd`, env, install/bundle helper scripts, a one-shot `install.sh`, and fail2ban assets under [`i2pchat/blindbox/daemon/`](i2pchat/blindbox/daemon/) and [`i2pchat/blindbox/fail2ban/`](i2pchat/blindbox/fail2ban/). Public replicas behind an I2P tunnel may keep replica auth empty; raw TCP / loopback exposure should still keep a token. See **§4.9** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md).
 
-### Cross-platform builds
+### 🔧  Cross-platform builds
 
 The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  
 Everywhere, the recommended/runtime version is **Python 3.14+**. SAM transport is implemented in **`i2pchat.sam`** (PyPI **`i2plib`** is not a runtime dependency).
-
-<img src="docs/icons/icons8-linux-48.png" alt="Linux" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-arch-linux-48.png" alt="Arch Linux" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" />
 
 #### Linux (GUI AppImage)
 
