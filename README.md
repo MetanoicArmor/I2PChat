@@ -272,7 +272,7 @@ Dependencies and versions are locked in **`uv.lock`**; declared in **`pyproject.
 
 Quick run commands (from repo root). **uv** keeps the project environment in **`.venv`** (default); the commands below are enough.
 
-**  Linux (Debian/Ubuntu)** — system packages you may need:
+<img src="docs/icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" /> Linux (Debian/Ubuntu) — system packages you may need:
 
 ```bash
 # Python 3.14 (if missing)
@@ -283,7 +283,7 @@ sudo apt install python3.14 python3.14-venv
 sudo apt install libxcb-cursor0
 ```
 
-** <img src="docs/icons/icons8-macos-48.png" alt="macOS" width="28" height="28" align="middle" /> macOS / <img src="docs/icons/icons8-linux-48.png" alt="Linux" width="28" height="28" align="middle" /> Linux**
+<img src="docs/icons/icons8-macos-48.png" alt="macOS" width="28" height="28" align="middle" /><img src="docs/icons/icons8-linux-48.png" alt="Linux" width="28" height="28" align="middle" /> macOS /  Linux
 
 ```bash
 uv sync --python 3.14
@@ -291,7 +291,7 @@ uv run python -m i2pchat.gui.main_qt   # GUI; optional profile name as first arg
 uv run python -m i2pchat.tui            # terminal (TUI)
 ```
 
-**Windows (PowerShell)**
+<img src="docs/icons/icons8-windows-48.png" alt="Windows" width="28" height="28" align="middle" /> Windows (PowerShell)
 
 ```powershell
 uv sync --python 3.14
