@@ -38,7 +38,7 @@
 - [📬 BlindBox in short](#-blindbox-in-short)
 - [📸 Screenshots](#-screenshots)
 - [🛠 Running from source](#-running-from-source)
-- [🔧 Cross‑platform builds](#-crossplatform-builds)
+- [Cross‑platform builds](#cross-platform-builds)
 - [📄 License](#-license)
 - [☕ Buy me a coffee](#-buy-me-a-coffee)
 - [🚀 Quick Start](#-quick-start) — downloads, package managers, **INSTALL.md**
@@ -309,14 +309,14 @@ PyInstaller builds use [`i2pchat/run_gui.py`](i2pchat/run_gui.py) as the GUI ent
 
 **Developer note (BlindBox):** [`i2pchat/blindbox/blindbox_server_example.py`](i2pchat/blindbox/blindbox_server_example.py) is the hardened service implementation, while the **production-oriented package entrypoint** is `python -m i2pchat.blindbox.daemon`. The repo now also ships package-local `systemd`, env, install/bundle helper scripts, a one-shot `install.sh`, and fail2ban assets under [`i2pchat/blindbox/daemon/`](i2pchat/blindbox/daemon/) and [`i2pchat/blindbox/fail2ban/`](i2pchat/blindbox/fail2ban/). Public replicas behind an I2P tunnel may keep replica auth empty; raw TCP / loopback exposure should still keep a token. See **§4.9** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md).
 
-### 🔧 Cross‑platform builds
+### Cross-platform builds
 
 The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  
 Everywhere, the recommended/runtime version is **Python 3.14+**. SAM transport is implemented in **`i2pchat.sam`** (PyPI **`i2plib`** is not a runtime dependency).
 
 <img src="docs/icons/icons8-linux-48.png" alt="Linux" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-arch-linux-48.png" alt="Arch Linux" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" />
 
-#### 🐧 Linux (GUI AppImage)
+#### Linux (GUI AppImage)
 
 ```bash
 ./build-linux.sh
@@ -332,7 +332,7 @@ This script:
 
 <img src="docs/icons/icons8-macos-48.png" alt="macOS" width="28" height="28" align="middle" />
 
-#### 🍎 macOS (GUI .app bundle)
+#### macOS (GUI .app bundle)
 
 ```bash
 ./build-macos.sh
@@ -343,7 +343,7 @@ This script:
 
 <img src="docs/icons/icons8-windows-48.png" alt="Windows" width="28" height="28" align="middle" />
 
-### 🪟 Windows build (GUI)
+### Windows build (GUI)
 
 For reproducible Windows builds there is a PowerShell script:
 
