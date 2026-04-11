@@ -11,6 +11,7 @@ from .models import GroupState, normalize_member_id
 class GroupTopologyLinkState(StrEnum):
     LIVE = "live"
     HANDSHAKING = "handshaking"
+    AWAIT_ROOT = "await-root"
     BLINDBOX = "blindbox"
     DEGRADED = "degraded"
     FAILED = "failed"
@@ -50,6 +51,8 @@ class GroupTopologySnapshot:
     observed_only: bool
     nodes: tuple[GroupTopologyNode, ...]
     edges: tuple[GroupTopologyEdge, ...]
+    group_blindbox_ready: bool = False
+    await_group_root: bool = False
 
 
 def _short_member_label(member_id: str, *, fallback: str = "Peer") -> str:
@@ -72,6 +75,7 @@ def _link_state_for_member(
     peer_state: str,
     live_ready: bool,
     blindbox_ready: bool,
+    await_group_root: bool,
 ) -> GroupTopologyLinkState:
     if live_ready:
         return GroupTopologyLinkState.LIVE
@@ -83,6 +87,8 @@ def _link_state_for_member(
         return GroupTopologyLinkState.DEGRADED
     if blindbox_ready:
         return GroupTopologyLinkState.BLINDBOX
+    if await_group_root:
+        return GroupTopologyLinkState.AWAIT_ROOT
     return GroupTopologyLinkState.IDLE
 
 
@@ -106,6 +112,8 @@ def build_observed_group_topology(
     local_member_id: str,
     live_by_member: Mapping[str, bool],
     peer_state_by_member: Mapping[str, str],
+    group_blindbox_ready: bool = False,
+    await_group_root: bool = False,
     blindbox_ready_by_member: Mapping[str, bool] | None = None,
     delivery_status_by_member: Mapping[str, str] | None = None,
     delivery_reason_by_member: Mapping[str, str] | None = None,
@@ -158,6 +166,7 @@ def build_observed_group_topology(
             peer_state=peer_state,
             live_ready=live_ready,
             blindbox_ready=blindbox_ready,
+            await_group_root=bool(await_group_root),
         )
         edges.append(
             GroupTopologyEdge(
@@ -182,6 +191,8 @@ def build_observed_group_topology(
         title=state.title,
         local_member_id=normalized_local,
         observed_only=True,
+        group_blindbox_ready=bool(group_blindbox_ready),
+        await_group_root=bool(await_group_root),
         nodes=tuple(nodes),
         edges=tuple(edges),
     )
@@ -192,6 +203,10 @@ def render_group_topology_ascii(snapshot: GroupTopologySnapshot) -> str:
     lines = [f"Observed group topology: {title} [{snapshot.group_id}]"]
     if snapshot.observed_only:
         lines.append("Scope: local node view only")
+    if snapshot.group_blindbox_ready:
+        lines.append("Group blindbox: ready")
+    elif snapshot.await_group_root:
+        lines.append("Group blindbox: await-root")
     local_node = next((node for node in snapshot.nodes if node.is_local), None)
     if local_node is not None:
         lines.append(f"Local: {local_node.label}")
@@ -239,6 +254,10 @@ def _mermaid_node_label(node: GroupTopologyNode) -> str:
 
 def render_group_topology_mermaid(snapshot: GroupTopologySnapshot) -> str:
     lines = ["graph TD"]
+    if snapshot.group_blindbox_ready:
+        lines.append('  group_blindbox_state["Group blindbox\\nready"]')
+    elif snapshot.await_group_root:
+        lines.append('  group_blindbox_state["Group blindbox\\nawait-root"]')
     for node in snapshot.nodes:
         node_id = _mermaid_node_id(node.member_id)
         lines.append(f'  {node_id}["{_mermaid_node_label(node)}"]')

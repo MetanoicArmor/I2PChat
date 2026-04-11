@@ -131,6 +131,48 @@ class GroupMeshBackgroundConnectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(core.active_live_peer_id, None)
         self.assertTrue(bytes(writer.buffer).startswith(b"DEST_B64\n"))
 
+    async def test_silent_connect_failure_suppresses_ui_error(self) -> None:
+        errors: list[str] = []
+        systems: list[str] = []
+        core = I2PChatCore(
+            profile="alice",
+            on_error=errors.append,
+            on_system=systems.append,
+        )
+
+        import i2pchat.core.i2p_chat_core as core_module
+
+        with patch.object(core_module.crypto, "NACL_AVAILABLE", True):
+            with patch.object(
+                core_module.i2plib,
+                "stream_connect",
+                new=AsyncMock(
+                    side_effect=[
+                        core_module.i2plib.CantReachPeer(
+                            message="offline",
+                            result="CANT_REACH_PEER",
+                        ),
+                        core_module.i2plib.CantReachPeer(
+                            message="offline",
+                            result="CANT_REACH_PEER",
+                        ),
+                    ]
+                ),
+            ):
+                with patch.object(
+                    core_module.asyncio,
+                    "sleep",
+                    new=AsyncMock(return_value=None),
+                ):
+                    await core.connect_to_peer(
+                        PEER_B,
+                        activate_as_current=True,
+                        announce_to_ui=False,
+                    )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(systems, [])
+
 
 if __name__ == "__main__":
     unittest.main()

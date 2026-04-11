@@ -17,6 +17,8 @@ from .models import (
 
 GROUP_TRANSPORT_PREFIX = "__I2PCHAT_GROUP__:"
 GROUP_TRANSPORT_VERSION = 1
+GROUP_TRANSPORT_VERSION_V2 = 2
+GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX = "group_blindbox"
 
 
 def _required_text_field(payload: dict[str, Any], key: str) -> str:
@@ -55,6 +57,8 @@ class DecodedGroupTransportMessage:
     envelope: GroupEnvelope
     recipient_id: str | None = None
     delivery_id: str | None = None
+    version: int = GROUP_TRANSPORT_VERSION
+    delivery_scope: str = "recipient"
 
 
 def encode_group_transport_text(
@@ -86,18 +90,34 @@ def encode_group_transport_text(
     )
 
 
-def decode_group_transport_text(text: str) -> DecodedGroupTransportMessage | None:
-    raw = str(text or "")
-    if not raw.startswith(GROUP_TRANSPORT_PREFIX):
-        return None
-    payload = json.loads(raw[len(GROUP_TRANSPORT_PREFIX) :])
-    if not isinstance(payload, dict):
-        raise ValueError("Group transport payload must be a JSON object")
-    if payload.get("transport") != "group":
-        raise ValueError("Unsupported group transport payload")
-    if int(payload.get("version", 0)) != GROUP_TRANSPORT_VERSION:
-        raise ValueError("Unsupported group transport version")
+def encode_group_transport_text_v2(
+    state: GroupState,
+    envelope: GroupEnvelope,
+) -> str:
+    payload = {
+        "transport": "group",
+        "version": GROUP_TRANSPORT_VERSION_V2,
+        "delivery_scope": GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX,
+        "group_id": state.group_id,
+        "group_title": state.title,
+        "members": list(state.members),
+        "epoch": int(envelope.epoch),
+        "msg_id": envelope.msg_id,
+        "sender_id": envelope.sender_id,
+        "group_seq": int(envelope.group_seq),
+        "content_type": str(envelope.content_type),
+        "payload": envelope.payload,
+        "created_at": _to_iso8601(envelope.created_at),
+    }
+    return GROUP_TRANSPORT_PREFIX + json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
+
+def _decode_group_transport_v1(payload: dict[str, Any]) -> DecodedGroupTransportMessage:
     content_type = GroupContentType(_required_text_field(payload, "content_type"))
     group_id = _required_text_field(payload, "group_id")
     msg_id = _required_text_field(payload, "msg_id")
@@ -149,6 +169,77 @@ def decode_group_transport_text(text: str) -> DecodedGroupTransportMessage | Non
     return DecodedGroupTransportMessage(
         state=state,
         envelope=envelope,
-        recipient_id=recipient_id or None,
-        delivery_id=delivery_id or None,
+        recipient_id=recipient_id,
+        delivery_id=delivery_id,
+        version=GROUP_TRANSPORT_VERSION,
+        delivery_scope="recipient",
     )
+
+
+def _decode_group_transport_v2(payload: dict[str, Any]) -> DecodedGroupTransportMessage:
+    if (
+        str(payload.get("delivery_scope") or "").strip().lower()
+        != GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX
+    ):
+        raise ValueError("Unsupported group transport delivery scope")
+    if "recipient_id" in payload or "delivery_id" in payload:
+        raise ValueError("Group blindbox transport must not include recipient metadata")
+    content_type = GroupContentType(_required_text_field(payload, "content_type"))
+    group_id = _required_text_field(payload, "group_id")
+    msg_id = _required_text_field(payload, "msg_id")
+    sender_id = normalize_member_id(_required_text_field(payload, "sender_id"))
+    if not sender_id:
+        raise ValueError("Missing required group transport field: sender_id")
+    created_at = _parse_datetime(_required_text_field(payload, "created_at"))
+    members_raw = payload.get("members", [])
+    if not isinstance(members_raw, list):
+        raise ValueError("Invalid group transport field: members")
+    if content_type == GroupContentType.GROUP_TEXT and not isinstance(payload.get("payload"), str):
+        raise ValueError("GROUP_TEXT payload must be a string")
+    if content_type == GroupContentType.GROUP_CONTROL and not isinstance(payload.get("payload"), dict):
+        raise ValueError("GROUP_CONTROL payload must be an object")
+    state = GroupState(
+        group_id=group_id,
+        epoch=_required_int_field(payload, "epoch", minimum=0),
+        members=tuple(str(member) for member in members_raw),
+        title=str(payload.get("group_title") or "").strip() or None,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    if not state.members:
+        raise ValueError("Group transport must include at least one member")
+    if not any(same_i2p_destination(sender_id, m) for m in state.members if m):
+        raise ValueError("Group transport sender is not a group member")
+    envelope = GroupEnvelope(
+        group_id=state.group_id,
+        epoch=state.epoch,
+        msg_id=msg_id,
+        sender_id=sender_id,
+        group_seq=_required_int_field(payload, "group_seq", minimum=1),
+        content_type=content_type,
+        payload=payload.get("payload"),
+        created_at=created_at,
+    )
+    return DecodedGroupTransportMessage(
+        state=state,
+        envelope=envelope,
+        version=GROUP_TRANSPORT_VERSION_V2,
+        delivery_scope=GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX,
+    )
+
+
+def decode_group_transport_text(text: str) -> DecodedGroupTransportMessage | None:
+    raw = str(text or "")
+    if not raw.startswith(GROUP_TRANSPORT_PREFIX):
+        return None
+    payload = json.loads(raw[len(GROUP_TRANSPORT_PREFIX) :])
+    if not isinstance(payload, dict):
+        raise ValueError("Group transport payload must be a JSON object")
+    if payload.get("transport") != "group":
+        raise ValueError("Unsupported group transport payload")
+    version = int(payload.get("version", 0))
+    if version == GROUP_TRANSPORT_VERSION:
+        return _decode_group_transport_v1(payload)
+    if version == GROUP_TRANSPORT_VERSION_V2:
+        return _decode_group_transport_v2(payload)
+    raise ValueError("Unsupported group transport version")

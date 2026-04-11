@@ -5,7 +5,7 @@ import os
 from types import SimpleNamespace
 from dataclasses import replace
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -13,7 +13,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PyQt6.QtWidgets", exc_type=ImportError)
 
-from PyQt6.QtWidgets import QApplication, QDialog, QWidget
+from PyQt6 import QtCore
+from PyQt6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDialogButtonBox,
+    QLineEdit,
+    QListWidget,
+    QPlainTextEdit,
+    QWidget,
+)
 
 from i2pchat.core.i2p_chat_core import ChatMessage
 from i2pchat.core.live_peer_session import LivePeerSession
@@ -127,6 +136,140 @@ def test_create_group_from_values_creates_entry_and_opens_conversation(
     ) == 1
     assert "--- Group: Study Group ---" in _conversation_items(window)
     assert "No local group messages yet." in _conversation_items(window)
+
+
+def test_group_editor_dialog_uses_saved_peers_picker(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    window._contact_book = ContactBook(
+        contacts=[
+            ContactRecord(addr=PEER_A, display_name="Alice"),
+            ContactRecord(addr=PEER_B, display_name="Bob"),
+        ]
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_exec(dialog: QDialog) -> int:
+        members_list = dialog.findChild(QListWidget, "GroupMembersSavedPeersList")
+        members_filter = dialog.findChild(QLineEdit, "GroupMembersFilterEdit")
+        captured["has_plain_text_edit"] = dialog.findChild(QPlainTextEdit) is not None
+        captured["has_members_list"] = members_list is not None
+        captured["filter_placeholder"] = (
+            members_filter.placeholderText() if members_filter is not None else ""
+        )
+        captured["members"] = [
+            str(members_list.item(row).data(QtCore.Qt.ItemDataRole.UserRole))
+            for row in range(members_list.count())
+        ] if members_list is not None else []
+        captured["all_checkable"] = all(
+            bool(
+                members_list.item(row).flags()
+                & QtCore.Qt.ItemFlag.ItemIsUserCheckable
+            )
+            for row in range(members_list.count())
+        ) if members_list is not None else False
+        return int(QDialog.DialogCode.Rejected)
+
+    monkeypatch.setattr(QDialog, "exec", _fake_exec, raising=False)
+
+    window._show_create_group_dialog()
+
+    assert captured["has_plain_text_edit"] is False
+    assert captured["has_members_list"] is True
+    assert captured["filter_placeholder"] == "Filter Saved peers"
+    assert set(captured["members"]) == {PEER_A, PEER_B}
+    assert captured["all_checkable"] is True
+
+
+def test_create_group_dialog_saves_checked_saved_peers(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    window._contact_book = ContactBook(
+        contacts=[
+            ContactRecord(addr=PEER_A, display_name="Alice"),
+            ContactRecord(addr=PEER_B, display_name="Bob"),
+        ]
+    )
+    created_at = datetime(2026, 4, 9, 12, 0, tzinfo=timezone.utc)
+    created_state = GroupState(
+        group_id="group-picker-1",
+        epoch=0,
+        members=(LOCAL_MEMBER, PEER_B),
+        title="Picker Group",
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    window.core.create_group = MagicMock(return_value=created_state)  # type: ignore[method-assign]
+    window._refresh_groups_list = MagicMock()  # type: ignore[method-assign]
+    window._set_active_group = MagicMock(return_value=True)  # type: ignore[method-assign]
+
+    def _fake_exec(dialog: QDialog) -> int:
+        title_edit = dialog.findChild(QLineEdit, "GroupTitleEdit")
+        members_list = dialog.findChild(QListWidget, "GroupMembersSavedPeersList")
+        buttons = dialog.findChild(QDialogButtonBox)
+        assert title_edit is not None
+        assert members_list is not None
+        assert buttons is not None
+        title_edit.setText("Weekend plans")
+        for row in range(members_list.count()):
+            item = members_list.item(row)
+            if str(item.data(QtCore.Qt.ItemDataRole.UserRole)) == PEER_B:
+                item.setCheckState(QtCore.Qt.CheckState.Checked)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).click()
+        return int(QDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(QDialog, "exec", _fake_exec, raising=False)
+
+    window._show_create_group_dialog()
+
+    window.core.create_group.assert_called_once_with(  # type: ignore[attr-defined]
+        title="Weekend plans",
+        members=[PEER_B],
+    )
+
+
+def test_group_editor_dialog_prechecks_existing_members(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    window._contact_book = ContactBook(
+        contacts=[
+            ContactRecord(addr=PEER_A, display_name="Alice"),
+            ContactRecord(addr=PEER_B, display_name="Bob"),
+        ]
+    )
+    created_at = datetime(2026, 4, 9, 12, 0, tzinfo=timezone.utc)
+    state = GroupState(
+        group_id="group-edit-1",
+        epoch=1,
+        members=(LOCAL_MEMBER, PEER_B),
+        title="Edit Me",
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    store = {
+        state.group_id: StoredGroupConversation(state=state, next_group_seq=1, history=())
+    }
+    _install_group_store(window, store)
+    captured: dict[str, object] = {}
+
+    def _fake_exec(dialog: QDialog) -> int:
+        members_list = dialog.findChild(QListWidget, "GroupMembersSavedPeersList")
+        assert members_list is not None
+        captured["checked"] = {
+            str(members_list.item(row).data(QtCore.Qt.ItemDataRole.UserRole))
+            for row in range(members_list.count())
+            if members_list.item(row).checkState() == QtCore.Qt.CheckState.Checked
+        }
+        return int(QDialog.DialogCode.Rejected)
+
+    monkeypatch.setattr(QDialog, "exec", _fake_exec, raising=False)
+
+    window._show_group_editor_dialog(existing_group_id="group-edit-1")
+
+    assert captured["checked"] == {PEER_B}
 
 
 def test_group_map_dialog_opens_with_overview_and_mermaid_tabs(
@@ -315,8 +458,19 @@ def test_group_send_flow_routes_via_core_and_refreshes_without_delivery_banner(
     _install_group_store(window, store)
     window._set_active_group("group-1")
     window._peer_chat_is_foreground = lambda: True  # type: ignore[method-assign]
+    window.core.get_group_send_ui_hints = MagicMock(  # type: ignore[method-assign]
+        return_value={
+            "can_send": True,
+            "show_offline_button": False,
+            "any_live_to_member": False,
+            "reason": "ok",
+            "live_by_recipient": {},
+        }
+    )
 
-    async def _send_group_text(group_id: str, text: str) -> GroupSendResult:
+    async def _send_group_text(
+        group_id: str, text: str, *, route: str = "auto"
+    ) -> GroupSendResult:
         _replace_group_conversation(
             store,
             group_id,
@@ -379,7 +533,9 @@ def test_group_send_flow_routes_via_core_and_refreshes_without_delivery_banner(
 
     asyncio.run(window._send_text_ui_flow("hello group"))
 
-    window.core.send_group_text.assert_awaited_once_with("group-1", "hello group")  # type: ignore[attr-defined]
+    window.core.send_group_text.assert_awaited_once_with(
+        "group-1", "hello group", route="auto"
+    )  # type: ignore[attr-defined]
     assert window.input_edit.plainTextForSend() == ""
     texts = _conversation_items(window)
     assert "hello group" in texts

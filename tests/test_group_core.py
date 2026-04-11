@@ -21,7 +21,10 @@ if "PIL" not in sys.modules:
 from i2pchat import crypto
 from i2pchat.core.i2p_chat_core import I2PChatCore, _BlindBoxPeerSnapshot
 from i2pchat.blindbox.blindbox_blob import encrypt_blindbox_blob
-from i2pchat.blindbox.blindbox_key_schedule import derive_blindbox_message_keys
+from i2pchat.blindbox.blindbox_key_schedule import (
+    derive_blindbox_message_keys,
+    derive_group_blindbox_message_keys,
+)
 
 from tests.live_session_helpers import attach_mock_live_session
 from i2pchat.groups import (
@@ -33,8 +36,12 @@ from i2pchat.groups import (
     GroupState,
     GroupTransportOutcome,
 )
-from i2pchat.groups.wire import encode_group_transport_text
+from i2pchat.groups.wire import (
+    encode_group_transport_text,
+    encode_group_transport_text_v2,
+)
 from i2pchat.storage.blindbox_state import BlindBoxState
+from i2pchat.storage.group_store import GroupBlindBoxChannel
 
 ALICE_BARE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 BOB_BARE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -276,7 +283,7 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(group_state.group_id, "core-group-empty")
             self.assertEqual(core.load_group_history(group_state.group_id), [])
 
-    async def test_send_group_text_from_core_through_group_manager(self) -> None:
+    async def test_send_group_text_from_core_routes_live_and_group_blindbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             core = I2PChatCore(profile="alice")
             core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
@@ -288,18 +295,18 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 group_id="core-group-1",
                 epoch=7,
             )
-            core.group_manager._send_live = AsyncMock(  # type: ignore[attr-defined]
+            core._send_group_envelope_live = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="live-session",
                     transport_message_id="live-bob",
                 )
             )
-            core.group_manager._send_offline = AsyncMock(  # type: ignore[attr-defined]
+            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="blindbox-ready",
-                    transport_message_id="queue-carol",
+                    transport_message_id="queue-offline",
                 )
             )
 
@@ -323,7 +330,7 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(history[0].group_seq, result.envelope.group_seq)
             self.assertEqual(reloaded_state.epoch, 7)
 
-    async def test_group_blindbox_poll_imports_message_from_non_current_peer_snapshot(self) -> None:
+    async def test_group_blindbox_poll_imports_same_message_for_two_members(self) -> None:
         with patch.dict(
             os.environ,
             {
@@ -333,67 +340,40 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             clear=False,
         ):
             with tempfile.TemporaryDirectory() as tmpdir:
-                core = I2PChatCore(profile="alice")
-                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
-                core._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
-                    tmpdir, filename
-                )
-                core.my_dest = _DummyDest(ALICE_BARE)
-                core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
-
-                group_state = core.create_group(
-                    title="Offline group",
-                    members=[BOB_BARE],
+                seed_core = I2PChatCore(profile="seed")
+                group_state = GroupState(
                     group_id="core-group-offline-blindbox",
                     epoch=3,
+                    members=(ALICE_BARE, BOB_BARE, CAROL_BARE),
+                    title="Offline group",
                 )
-                core.current_peer_addr = CAROL_BARE
-
                 root_secret = b"r" * 32
-                peer_snapshot = _BlindBoxPeerSnapshot(
-                    peer_addr=BOB_BARE,
-                    peer_id=BOB_BARE,
-                    state=BlindBoxState(),
-                    root_secret=root_secret,
-                    root_epoch=2,
-                )
-                core._save_blindbox_peer_snapshot(peer_snapshot)
-
                 incoming_envelope = GroupEnvelope(
                     group_id=group_state.group_id,
                     epoch=3,
-                    msg_id="offline-group-msg-1",
-                    sender_id=BOB_BARE,
+                    msg_id="offline-group-msg-v2",
+                    sender_id=ALICE_BARE,
                     group_seq=1,
                     content_type=GroupContentType.GROUP_TEXT,
-                    payload="offline from bob",
+                    payload="offline to both",
                 )
-                incoming_wire = encode_group_transport_text(
-                    GroupState(
-                        group_id=group_state.group_id,
-                        epoch=3,
-                        members=(ALICE_BARE, BOB_BARE),
-                        title="Offline group",
-                    ),
+                incoming_wire = encode_group_transport_text_v2(
+                    group_state,
                     incoming_envelope,
-                    GroupRecipientDeliveryMetadata(
-                        recipient_id=ALICE_BARE,
-                        delivery_id="offline-group-msg-1:alice",
-                    ),
                 )
-                frame = core._codec.encode(
+                frame = seed_core._codec.encode(
                     "U",
                     incoming_wire.encode("utf-8"),
                     msg_id=77,
                     flags=0,
                 )
-                send_keys = derive_blindbox_message_keys(
+                send_keys = derive_group_blindbox_message_keys(
                     root_secret,
-                    BOB_BARE,
-                    ALICE_BARE,
+                    group_state.group_id,
                     "send",
                     0,
-                    epoch=2,
+                    group_epoch=3,
+                    root_epoch=2,
                 )
                 blob = encrypt_blindbox_blob(
                     frame,
@@ -401,24 +381,50 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     "send",
                     0,
                     send_keys.state_tag,
-                    padding_bucket=core._blindbox_padding_bucket,
-                )
-                core._blindbox_client = _FakeBlindBoxPollClient(
-                    {send_keys.lookup_token: [blob]}
+                    padding_bucket=seed_core._blindbox_padding_bucket,
                 )
 
-                async def _stop_after_first_sleep() -> None:
-                    raise asyncio.CancelledError()
+                for profile, local_member in (("bob", BOB_BARE), ("carol", CAROL_BARE)):
+                    core = I2PChatCore(profile=profile)
+                    profile_dir = os.path.join(tmpdir, profile)
+                    os.makedirs(profile_dir, exist_ok=True)
+                    core.get_profile_data_dir = (  # type: ignore[method-assign]
+                        lambda create=True, _profile_dir=profile_dir: _profile_dir
+                    )
+                    core.my_dest = _DummyDest(local_member)
+                    core.my_signing_seed, core.my_signing_public = (
+                        crypto.generate_signing_keypair()
+                    )
+                    core.save_group_state(group_state)
+                    core._save_group_blindbox_channel(
+                        group_state.group_id,
+                        GroupBlindBoxChannel(
+                            channel_id=f"group:{group_state.group_id}",
+                            group_epoch=3,
+                            state=BlindBoxState(),
+                            root_secret_enc=core._group_blindbox_encrypt_root_secret(
+                                root_secret,
+                                group_state.group_id,
+                            ),
+                            root_epoch=2,
+                        ),
+                    )
+                    core._blindbox_client = _FakeBlindBoxPollClient(
+                        {send_keys.lookup_token: [blob]}
+                    )
 
-                core._blindbox_poll_sleep = _stop_after_first_sleep  # type: ignore[method-assign]
+                    async def _stop_after_first_sleep() -> None:
+                        raise asyncio.CancelledError()
 
-                with self.assertRaises(asyncio.CancelledError):
-                    await core._blindbox_poll_loop()
+                    core._blindbox_poll_sleep = _stop_after_first_sleep  # type: ignore[method-assign]
 
-                history = core.load_group_history(group_state.group_id)
-                self.assertEqual(len(history), 1)
-                self.assertEqual(history[0].text, "offline from bob")
-                self.assertEqual(history[0].source_peer, BOB_BARE)
+                    with self.assertRaises(asyncio.CancelledError):
+                        await core._blindbox_poll_loop()
+
+                    history = core.load_group_history(group_state.group_id)
+                    self.assertEqual(len(history), 1)
+                    self.assertEqual(history[0].text, "offline to both")
+                    self.assertEqual(history[0].source_peer, ALICE_BARE)
 
     async def test_group_blindbox_send_retries_on_slot_conflict_and_advances_index(self) -> None:
         with patch.dict(
@@ -449,14 +455,19 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     epoch=2,
                 )
                 root_secret = b"s" * 32
-                peer_snapshot = _BlindBoxPeerSnapshot(
-                    peer_addr=BOB_BARE,
-                    peer_id=BOB_BARE,
-                    state=BlindBoxState(send_index=0),
-                    root_secret=root_secret,
-                    root_epoch=4,
+                core._save_group_blindbox_channel(
+                    group_state.group_id,
+                    GroupBlindBoxChannel(
+                        channel_id=f"group:{group_state.group_id}",
+                        group_epoch=2,
+                        state=BlindBoxState(send_index=0),
+                        root_secret_enc=core._group_blindbox_encrypt_root_secret(
+                            root_secret,
+                            group_state.group_id,
+                        ),
+                        root_epoch=4,
+                    ),
                 )
-                core._save_blindbox_peer_snapshot(peer_snapshot)
 
                 envelope = GroupEnvelope(
                     group_id=group_state.group_id,
@@ -467,23 +478,251 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     content_type=GroupContentType.GROUP_TEXT,
                     payload="retry me",
                 )
-                metadata = GroupRecipientDeliveryMetadata(
-                    recipient_id=BOB_BARE,
-                    delivery_id="retry-group-msg-1:bob",
-                )
-
-                result = await core._send_group_envelope_via_blindbox(
-                    BOB_BARE,
+                result = await core._send_group_envelope_via_group_blindbox(
+                    group_state.group_id,
                     envelope,
-                    metadata,
                 )
 
                 self.assertTrue(result.accepted)
                 self.assertEqual(result.reason, "blindbox-ready")
                 self.assertEqual(retry_client.calls, 2)
                 self.assertEqual(len(set(retry_client.tokens)), 2)
-                saved_snapshot = core._load_blindbox_peer_snapshot(BOB_BARE)
-                self.assertEqual(saved_snapshot.state.send_index, 2)
+                snapshot_bundle = core._group_blindbox_runtime_snapshot(
+                    group_state.group_id
+                )
+                assert snapshot_bundle is not None
+                snapshot, _save_state = snapshot_bundle
+                self.assertEqual(snapshot.state.send_index, 2)
+
+    async def test_group_blindbox_send_uses_single_put_for_offline_subset(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = I2PChatCore(profile="alice")
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                core._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                    tmpdir, filename
+                )
+                core.my_dest = _DummyDest(ALICE_BARE)
+                core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
+                core._ensure_blindbox_runtime_started = AsyncMock(return_value=None)  # type: ignore[method-assign]
+                core._blindbox_client = _FakeBlindBoxPollClient({})
+
+                put_calls: list[str] = []
+
+                async def fake_put(
+                    *,
+                    group_id: str,
+                    **kwargs: object,
+                ) -> None:
+                    del kwargs
+                    put_calls.append(group_id)
+
+                core._put_group_blindbox_frame_with_slot_retry = fake_put  # type: ignore[method-assign]
+
+                root_secret = b"x" * 32
+                group_state = core.create_group(
+                    title="Fanout",
+                    members=[BOB_BARE, CAROL_BARE],
+                    group_id="core-group-offline-fanout",
+                    epoch=1,
+                )
+                core._save_group_blindbox_channel(
+                    group_state.group_id,
+                    GroupBlindBoxChannel(
+                        channel_id=f"group:{group_state.group_id}",
+                        group_epoch=1,
+                        state=BlindBoxState(send_index=0),
+                        root_secret_enc=core._group_blindbox_encrypt_root_secret(
+                            root_secret,
+                            group_state.group_id,
+                        ),
+                        root_epoch=1,
+                    ),
+                )
+                core._send_group_envelope_live = AsyncMock(  # type: ignore[method-assign]
+                    side_effect=lambda *_args, **_kwargs: GroupTransportOutcome(
+                        accepted=False,
+                        reason="needs-live-session",
+                    )
+                )
+
+                await core.send_group_text(
+                    group_state.group_id,
+                    "hi all",
+                    route="offline",
+                )
+
+                self.assertEqual(put_calls, [group_state.group_id])
+
+    async def test_group_send_queues_pending_when_group_root_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_BARE)
+            group_state = core.create_group(
+                title="Pending group",
+                members=[BOB_BARE, CAROL_BARE],
+                group_id="core-group-pending-route",
+                epoch=2,
+            )
+            core._send_group_envelope_live = AsyncMock(  # type: ignore[method-assign]
+                return_value=GroupTransportOutcome(
+                    accepted=False,
+                    reason="needs-live-session",
+                )
+            )
+            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
+                return_value=GroupTransportOutcome(
+                    accepted=False,
+                    reason="blindbox-await-group-root",
+                )
+            )
+
+            result = await core.send_group_text(group_state.group_id, "queue me")
+            conversation = core.load_group(group_state.group_id)
+
+            assert conversation is not None
+            self.assertEqual(len(conversation.pending_group_blindbox_messages), 1)
+            pending = conversation.pending_group_blindbox_messages[0]
+            self.assertEqual(pending.group_id, group_state.group_id)
+            self.assertEqual(pending.group_title, "Pending group")
+            self.assertEqual(pending.group_members, (ALICE_BARE, BOB_BARE, CAROL_BARE))
+            self.assertEqual(pending.sender_id, ALICE_BARE)
+            self.assertEqual(pending.msg_id, result.envelope.msg_id)
+            self.assertEqual(pending.group_seq, result.envelope.group_seq)
+            self.assertEqual(pending.epoch, result.envelope.epoch)
+            self.assertEqual(pending.content_type, GroupContentType.GROUP_TEXT)
+            self.assertEqual(pending.payload, "queue me")
+            self.assertEqual(
+                conversation.history[-1].delivery_results,
+                {
+                    BOB_BARE: GroupDeliveryStatus.QUEUED_OFFLINE.value,
+                    CAROL_BARE: GroupDeliveryStatus.QUEUED_OFFLINE.value,
+                },
+            )
+            self.assertEqual(
+                conversation.history[-1].delivery_reasons,
+                {
+                    BOB_BARE: "blindbox-await-group-root",
+                    CAROL_BARE: "blindbox-await-group-root",
+                },
+            )
+
+    async def test_group_blindbox_pending_flush_sends_once_after_root_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_BARE)
+            group_state = core.create_group(
+                title="Pending flush",
+                members=[BOB_BARE, CAROL_BARE],
+                group_id="core-group-pending-flush",
+                epoch=2,
+            )
+            core._send_group_envelope_live = AsyncMock(  # type: ignore[method-assign]
+                return_value=GroupTransportOutcome(
+                    accepted=False,
+                    reason="needs-live-session",
+                )
+            )
+            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
+                return_value=GroupTransportOutcome(
+                    accepted=False,
+                    reason="blindbox-await-group-root",
+                )
+            )
+
+            await core.send_group_text(group_state.group_id, "deliver later")
+
+            async def _flush_group_offline(
+                group_id: str,
+                envelope: GroupEnvelope,
+                *,
+                state_snapshot: GroupState | None = None,
+            ) -> GroupTransportOutcome:
+                self.assertEqual(group_id, group_state.group_id)
+                self.assertEqual(envelope.payload, "deliver later")
+                assert state_snapshot is not None
+                self.assertEqual(state_snapshot.title, "Pending flush")
+                self.assertEqual(state_snapshot.members, (ALICE_BARE, BOB_BARE, CAROL_BARE))
+                return GroupTransportOutcome(
+                    accepted=True,
+                    reason="blindbox-ready",
+                    transport_message_id="queued-group",
+                )
+
+            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
+                side_effect=_flush_group_offline
+            )
+
+            flushed = await core._flush_pending_group_blindbox_messages_for_group(
+                group_state.group_id
+            )
+            conversation = core.load_group(group_state.group_id)
+
+            self.assertEqual(flushed, 1)
+            assert conversation is not None
+            self.assertEqual(conversation.pending_group_blindbox_messages, ())
+            self.assertEqual(
+                conversation.history[-1].delivery_results,
+                {
+                    BOB_BARE: GroupDeliveryStatus.QUEUED_OFFLINE.value,
+                    CAROL_BARE: GroupDeliveryStatus.QUEUED_OFFLINE.value,
+                },
+            )
+            self.assertEqual(conversation.history[-1].delivery_reasons, {})
+
+    def test_group_blindbox_membership_change_requires_root_rotate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_BARE)
+            core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
+            group_state = core.create_group(
+                title="Rotate me",
+                members=[BOB_BARE],
+                group_id="core-group-rotate-required",
+                epoch=4,
+            )
+            root_secret = b"z" * 32
+            core._save_group_blindbox_channel(
+                group_state.group_id,
+                GroupBlindBoxChannel(
+                    channel_id=f"group:{group_state.group_id}",
+                    group_epoch=4,
+                    state=BlindBoxState(send_index=3),
+                    root_secret_enc=core._group_blindbox_encrypt_root_secret(
+                        root_secret,
+                        group_state.group_id,
+                    ),
+                    root_epoch=2,
+                ),
+            )
+
+            updated = core.update_group(
+                group_state.group_id,
+                title="Rotate me",
+                members=[BOB_BARE, CAROL_BARE],
+            )
+            snapshot_bundle = core._group_blindbox_runtime_snapshot(updated.group_id)
+
+            assert snapshot_bundle is not None
+            snapshot, _save_state = snapshot_bundle
+            self.assertEqual(snapshot.group_epoch, updated.epoch)
+            self.assertIsNone(snapshot.root_secret)
+            self.assertEqual(snapshot.root_epoch, 0)
+            self.assertEqual(snapshot.pending_root_secret, None)
+            self.assertTrue(snapshot.prev_roots)
+            self.assertEqual(snapshot.prev_roots[0]["group_epoch"], 4)
+            self.assertEqual(snapshot.prev_roots[0]["root_epoch"], 2)
+            self.assertEqual(snapshot.prev_roots[0]["secret"], root_secret)
 
     async def test_group_next_sequence_survives_create_send_and_import_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -496,14 +735,15 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 group_id="core-group-seq",
                 epoch=8,
             )
-            core.group_manager._send_live = AsyncMock(  # type: ignore[attr-defined]
+            core.group_manager.prime_group_sequence(group_state.group_id, next_group_seq=1)
+            core._send_group_envelope_live = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="live-session",
                     transport_message_id="live-bob",
                 )
             )
-            core.group_manager._send_offline = AsyncMock(  # type: ignore[attr-defined]
+            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="blindbox-ready",
@@ -566,14 +806,15 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 group_id="core-group-reload-seq",
                 epoch=5,
             )
-            core.group_manager._send_live = AsyncMock(  # type: ignore[attr-defined]
+            core.session_manager.set_peer_handshake_complete(BOB_BARE)
+            core._send_group_envelope_live = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="live-session",
                     transport_message_id="live-bob",
                 )
             )
-            core.group_manager._send_offline = AsyncMock(  # type: ignore[attr-defined]
+            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="blindbox-ready",
@@ -612,14 +853,15 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 group_id="core-group-shape",
                 epoch=6,
             )
-            core.group_manager._send_live = AsyncMock(  # type: ignore[attr-defined]
+            core.session_manager.set_peer_handshake_complete(BOB_BARE)
+            core._send_group_envelope_live = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="live-session",
                     transport_message_id="live-bob",
                 )
             )
-            core.group_manager._send_offline = AsyncMock(  # type: ignore[attr-defined]
+            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="blindbox-ready",
@@ -900,14 +1142,15 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 group_id="core-group-4",
                 epoch=3,
             )
-            core.group_manager._send_live = AsyncMock(  # type: ignore[attr-defined]
+            core.session_manager.set_peer_handshake_complete(BOB_BARE)
+            core._send_group_envelope_live = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="live-session",
                     transport_message_id="live-bob",
                 )
             )
-            core.group_manager._send_offline = AsyncMock(  # type: ignore[attr-defined]
+            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="blindbox-ready",

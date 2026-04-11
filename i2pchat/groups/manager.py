@@ -231,3 +231,18 @@ class GroupManager:
             transport_message_id=offline_result.transport_message_id,
             delivery_id=metadata.delivery_id,
         )
+
+    async def retry_delivery(
+        self,
+        recipient_id: str,
+        envelope: GroupEnvelope,
+        metadata: GroupRecipientDeliveryMetadata,
+        *,
+        requested_route: str = "auto",
+    ) -> GroupMemberDeliveryResult:
+        return await self._deliver_to_member(
+            recipient_id=recipient_id,
+            envelope=envelope,
+            metadata=metadata,
+            requested_route=requested_route,
+        )

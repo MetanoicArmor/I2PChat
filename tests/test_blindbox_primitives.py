@@ -4,7 +4,10 @@ import unittest
 
 from i2pchat import crypto
 from i2pchat.blindbox.blindbox_blob import decrypt_blindbox_blob, encrypt_blindbox_blob
-from i2pchat.blindbox.blindbox_key_schedule import derive_blindbox_message_keys
+from i2pchat.blindbox.blindbox_key_schedule import (
+    derive_blindbox_message_keys,
+    derive_group_blindbox_message_keys,
+)
 from i2pchat.storage.blindbox_state import BlindBoxState, load_blindbox_state, save_blindbox_state
 
 
@@ -50,6 +53,73 @@ class BlindBoxKeyScheduleTests(unittest.TestCase):
         self.assertNotEqual(epoch0.blob_key, epoch1.blob_key)
         self.assertNotEqual(epoch0.state_tag, epoch1.state_tag)
 
+    def test_group_message_keys_are_deterministic(self) -> None:
+        root_secret = b"g" * 32
+        first = derive_group_blindbox_message_keys(
+            root_secret,
+            "group-1",
+            "send",
+            4,
+            group_epoch=2,
+            root_epoch=7,
+        )
+        second = derive_group_blindbox_message_keys(
+            root_secret,
+            "group-1",
+            "send",
+            4,
+            group_epoch=2,
+            root_epoch=7,
+        )
+        self.assertEqual(first.lookup_token, second.lookup_token)
+        self.assertEqual(first.lookup_key, second.lookup_key)
+        self.assertEqual(first.blob_key, second.blob_key)
+        self.assertEqual(first.state_tag, second.state_tag)
+
+    def test_group_epoch_changes_derived_material(self) -> None:
+        root_secret = b"g" * 32
+        epoch2 = derive_group_blindbox_message_keys(
+            root_secret,
+            "group-1",
+            "send",
+            1,
+            group_epoch=2,
+            root_epoch=1,
+        )
+        epoch3 = derive_group_blindbox_message_keys(
+            root_secret,
+            "group-1",
+            "send",
+            1,
+            group_epoch=3,
+            root_epoch=1,
+        )
+        self.assertNotEqual(epoch2.lookup_token, epoch3.lookup_token)
+        self.assertNotEqual(epoch2.blob_key, epoch3.blob_key)
+        self.assertNotEqual(epoch2.state_tag, epoch3.state_tag)
+
+    def test_group_root_epoch_changes_derived_material(self) -> None:
+        root_secret = b"g" * 32
+        root1 = derive_group_blindbox_message_keys(
+            root_secret,
+            "group-1",
+            "send",
+            1,
+            group_epoch=2,
+            root_epoch=1,
+        )
+        root2 = derive_group_blindbox_message_keys(
+            root_secret,
+            "group-1",
+            "send",
+            1,
+            group_epoch=2,
+            root_epoch=2,
+        )
+        self.assertNotEqual(root1.lookup_token, root2.lookup_token)
+        self.assertNotEqual(root1.blob_key, root2.blob_key)
+        self.assertNotEqual(root1.state_tag, root2.state_tag)
+
 
 @unittest.skipUnless(crypto.NACL_AVAILABLE, "PyNaCl is required")
 class BlindBoxBlobTests(unittest.TestCase):
@@ -94,6 +164,32 @@ class BlindBoxBlobTests(unittest.TestCase):
                 expected_index=5,
                 expected_state_tag=b"\x00" * 16,
             )
+
+    def test_group_blob_roundtrip_and_validation(self) -> None:
+        keys = derive_group_blindbox_message_keys(
+            b"s" * 32,
+            "group-blob",
+            "send",
+            9,
+            group_epoch=5,
+            root_epoch=2,
+        )
+        blob = encrypt_blindbox_blob(
+            b"group-payload",
+            keys.blob_key,
+            "send",
+            9,
+            keys.state_tag,
+            padding_bucket=128,
+        )
+        parsed = decrypt_blindbox_blob(
+            blob,
+            keys.blob_key,
+            expected_direction="send",
+            expected_index=9,
+            expected_state_tag=keys.state_tag,
+        )
+        self.assertEqual(parsed, b"group-payload")
 
 
 class BlindBoxStateTests(unittest.TestCase):

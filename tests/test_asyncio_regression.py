@@ -21,6 +21,9 @@ if "PIL" not in sys.modules:
 from i2pchat.core.i2p_chat_core import I2PChatCore, _BlindBoxPeerSnapshot
 from i2pchat.core.live_peer_session import LivePeerSession
 from i2pchat.protocol.protocol_codec import ProtocolCodec
+from i2pchat.groups import GroupState
+from i2pchat.storage.blindbox_state import BlindBoxState
+from i2pchat.storage.group_store import GroupBlindBoxChannel
 
 from tests.live_session_helpers import attach_mock_live_session
 
@@ -742,6 +745,300 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(core._blindbox_prev_roots[0]["epoch"], 7)
             self.assertEqual(core._blindbox_prev_roots[0]["secret"], b"\x11" * 32)
             self.assertIsNone(core._blindbox_pending_root_secret)
+
+    async def test_group_blindbox_root_sender_waits_for_all_acks_before_commit(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = self._make_blindbox_core()
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                group_state = GroupState(
+                    group_id="group-root-wait-all",
+                    epoch=3,
+                    members=(LOCAL_BARE, PEER_BARE, OTHER_BARE),
+                    title="Wait all",
+                )
+                core.save_group_state(group_state)
+                writer = _FakeWriter()
+
+                await core._send_group_blindbox_root_if_needed(
+                    writer,
+                    group_state.group_id,
+                    peer_id=PEER_BARE,
+                )
+
+                snapshot_bundle = core._group_blindbox_runtime_snapshot(
+                    group_state.group_id
+                )
+                assert snapshot_bundle is not None
+                snapshot, _save_state = snapshot_bundle
+                self.assertIsNone(snapshot.root_secret)
+                self.assertIsNotNone(snapshot.pending_root_secret)
+                self.assertEqual(
+                    snapshot.pending_root_target_members,
+                    (PEER_BARE, OTHER_BARE),
+                )
+
+                core._handle_group_blindbox_root_ack_signal(
+                    "__SIGNAL__:GROUP_BLINDBOX_ROOT_ACK|group-root-wait-all|3|1",
+                    peer_id=PEER_BARE,
+                )
+                snapshot_bundle = core._group_blindbox_runtime_snapshot(
+                    group_state.group_id
+                )
+                assert snapshot_bundle is not None
+                snapshot, _save_state = snapshot_bundle
+                self.assertIsNone(snapshot.root_secret)
+                self.assertEqual(snapshot.pending_root_acked_members, {PEER_BARE})
+
+                core._handle_group_blindbox_root_ack_signal(
+                    "__SIGNAL__:GROUP_BLINDBOX_ROOT_ACK|group-root-wait-all|3|1",
+                    peer_id=OTHER_BARE,
+                )
+                snapshot_bundle = core._group_blindbox_runtime_snapshot(
+                    group_state.group_id
+                )
+                assert snapshot_bundle is not None
+                snapshot, _save_state = snapshot_bundle
+                self.assertIsNotNone(snapshot.root_secret)
+                self.assertIsNone(snapshot.pending_root_secret)
+
+    async def test_group_blindbox_root_bootstrap_is_allowed_for_non_coordinator(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = I2PChatCore(profile="alice")
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                core.my_signing_seed = b"D" * 32
+                core.my_dest = SimpleNamespace(base32=OTHER_BARE)
+                core.current_peer_addr = LOCAL_BARE
+                core.handshake_complete = True
+                core.peer_identity_binding_verified = True
+                core.peer_in_saved_contacts = lambda _addr: True  # type: ignore[method-assign]
+                attach_mock_live_session(
+                    core,
+                    LOCAL_BARE,
+                    (_FakeReader(b""), _FakeWriter()),
+                    handshake_complete=True,
+                    use_encryption=False,
+                )
+                group_state = GroupState(
+                    group_id="group-root-bootstrap-non-coordinator",
+                    epoch=1,
+                    members=(LOCAL_BARE, OTHER_BARE),
+                    title="Bootstrap",
+                )
+                core.save_group_state(group_state)
+                writer = _FakeWriter()
+
+                await core._send_group_blindbox_root_if_needed(
+                    writer,
+                    group_state.group_id,
+                    peer_id=LOCAL_BARE,
+                )
+
+                self.assertNotEqual(writer.buffer, bytearray())
+                snapshot_bundle = core._group_blindbox_runtime_snapshot(
+                    group_state.group_id
+                )
+                assert snapshot_bundle is not None
+                snapshot, _save_state = snapshot_bundle
+                self.assertIsNone(snapshot.root_secret)
+                self.assertIsNotNone(snapshot.pending_root_secret)
+                self.assertEqual(snapshot.pending_root_epoch, 1)
+
+    async def test_group_blindbox_root_receiver_applies_root_for_group(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                receiver = self._make_blindbox_core()
+                receiver.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                group_state = GroupState(
+                    group_id="group-root-recv",
+                    epoch=4,
+                    members=(LOCAL_BARE, PEER_BARE),
+                    title="Recv",
+                )
+                receiver.save_group_state(group_state)
+                writer = _FakeWriter()
+                root_secret = b"\x66" * 32
+
+                await receiver._handle_incoming_group_blindbox_root_signal(
+                    "__SIGNAL__:GROUP_BLINDBOX_ROOT|group-root-recv|4|2|"
+                    + root_secret.hex(),
+                    writer,
+                    peer_id=PEER_BARE,
+                )
+
+                snapshot_bundle = receiver._group_blindbox_runtime_snapshot(
+                    group_state.group_id
+                )
+                assert snapshot_bundle is not None
+                snapshot, _save_state = snapshot_bundle
+                self.assertEqual(snapshot.root_secret, root_secret)
+                self.assertEqual(snapshot.root_epoch, 2)
+                frame = await self._decode_frame(bytes(writer.buffer))
+                self.assertEqual(frame.msg_type, "S")
+                self.assertEqual(
+                    frame.payload.decode("utf-8"),
+                    "__SIGNAL__:GROUP_BLINDBOX_ROOT_ACK|group-root-recv|4|2",
+                )
+
+    async def test_group_blindbox_root_receiver_accepts_newer_epoch_than_local_state(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                receiver = self._make_blindbox_core()
+                receiver.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                group_state = GroupState(
+                    group_id="group-root-recv-newer-epoch",
+                    epoch=3,
+                    members=(LOCAL_BARE, PEER_BARE),
+                    title="Recv newer epoch",
+                )
+                receiver.save_group_state(group_state)
+                writer = _FakeWriter()
+                root_secret = b"\x67" * 32
+
+                await receiver._handle_incoming_group_blindbox_root_signal(
+                    "__SIGNAL__:GROUP_BLINDBOX_ROOT|group-root-recv-newer-epoch|4|2|"
+                    + root_secret.hex(),
+                    writer,
+                    peer_id=PEER_BARE,
+                )
+
+                snapshot_bundle = receiver._group_blindbox_runtime_snapshot(
+                    group_state.group_id
+                )
+                assert snapshot_bundle is not None
+                snapshot, _save_state = snapshot_bundle
+                self.assertEqual(snapshot.group_epoch, 4)
+                self.assertEqual(snapshot.root_secret, root_secret)
+                self.assertEqual(snapshot.root_epoch, 2)
+                frame = await self._decode_frame(bytes(writer.buffer))
+                self.assertEqual(
+                    frame.payload.decode("utf-8"),
+                    "__SIGNAL__:GROUP_BLINDBOX_ROOT_ACK|group-root-recv-newer-epoch|4|2",
+                )
+
+    async def test_group_blindbox_root_ack_from_nonmember_is_ignored(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = self._make_blindbox_core()
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                group_state = GroupState(
+                    group_id="group-root-ignore-nonmember",
+                    epoch=2,
+                    members=(LOCAL_BARE, PEER_BARE),
+                    title="Ignore",
+                )
+                core.save_group_state(group_state)
+                writer = _FakeWriter()
+
+                await core._send_group_blindbox_root_if_needed(
+                    writer,
+                    group_state.group_id,
+                    peer_id=PEER_BARE,
+                )
+                core._handle_group_blindbox_root_ack_signal(
+                    "__SIGNAL__:GROUP_BLINDBOX_ROOT_ACK|group-root-ignore-nonmember|2|1",
+                    peer_id=OTHER_BARE,
+                )
+
+                snapshot_bundle = core._group_blindbox_runtime_snapshot(
+                    group_state.group_id
+                )
+                assert snapshot_bundle is not None
+                snapshot, _save_state = snapshot_bundle
+                self.assertIsNone(snapshot.root_secret)
+                self.assertIsNotNone(snapshot.pending_root_secret)
+                self.assertEqual(snapshot.pending_root_acked_members, set())
+
+    async def test_group_blindbox_root_rotation_preserves_previous_root(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = self._make_blindbox_core()
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                group_state = GroupState(
+                    group_id="group-root-rotate",
+                    epoch=5,
+                    members=(LOCAL_BARE, PEER_BARE),
+                    title="Rotate",
+                )
+                core.save_group_state(group_state)
+                core._save_group_blindbox_channel(
+                    group_state.group_id,
+                    GroupBlindBoxChannel(
+                        channel_id=f"group:{group_state.group_id}",
+                        group_epoch=5,
+                        state=BlindBoxState(send_index=3),
+                        root_secret_enc=core._group_blindbox_encrypt_root_secret(
+                            b"\x77" * 32,
+                            group_state.group_id,
+                        ),
+                        root_epoch=7,
+                    ),
+                )
+                writer = _FakeWriter()
+
+                await core._send_group_blindbox_root_if_needed(
+                    writer,
+                    group_state.group_id,
+                    force_rotate=True,
+                    peer_id=PEER_BARE,
+                )
+                core._handle_group_blindbox_root_ack_signal(
+                    "__SIGNAL__:GROUP_BLINDBOX_ROOT_ACK|group-root-rotate|5|8",
+                    peer_id=PEER_BARE,
+                )
+
+                snapshot_bundle = core._group_blindbox_runtime_snapshot(
+                    group_state.group_id
+                )
+                assert snapshot_bundle is not None
+                snapshot, _save_state = snapshot_bundle
+                self.assertEqual(snapshot.root_epoch, 8)
+                self.assertTrue(snapshot.prev_roots)
+                self.assertEqual(snapshot.prev_roots[0]["root_epoch"], 7)
+                self.assertEqual(snapshot.prev_roots[0]["secret"], b"\x77" * 32)
 
     async def test_blindbox_root_receiver_for_explicit_peer_updates_that_peer_snapshot(self) -> None:
         with patch.dict(

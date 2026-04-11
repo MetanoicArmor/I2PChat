@@ -12,7 +12,7 @@ from i2pchat.groups import (
 
 
 class GroupManagerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_group_text_fans_out_to_all_members_except_sender(self) -> None:
+    async def test_group_text_builds_per_member_metadata_for_all_recipients(self) -> None:
         session_manager = SessionManager()
         live_sender = AsyncMock(
             return_value=GroupTransportOutcome(accepted=True, reason="live-session")
@@ -39,7 +39,11 @@ class GroupManagerTests(unittest.IsolatedAsyncioTestCase):
         result = await manager.send_text(state, sender_id="alice", text="hello group")
 
         self.assertEqual(set(result.delivery_results), {"bob", "carol"})
+        self.assertEqual(set(result.envelope.member_metadata), {"bob", "carol"})
+        self.assertEqual(result.envelope.member_metadata["bob"].delivery_id, f"{result.envelope.msg_id}:bob")
+        self.assertEqual(result.envelope.member_metadata["carol"].delivery_id, f"{result.envelope.msg_id}:carol")
         live_sender.assert_not_awaited()
+        # GroupManager remains peer-scoped; single-shot group BlindBox batching is owned by core.
         self.assertEqual(offline_sender.await_count, 2)
 
     async def test_online_members_get_live_delivery(self) -> None:
@@ -70,7 +74,7 @@ class GroupManagerTests(unittest.IsolatedAsyncioTestCase):
         live_sender.assert_awaited_once()
         offline_sender.assert_not_awaited()
 
-    async def test_offline_members_get_offline_queued_delivery(self) -> None:
+    async def test_offline_members_get_offline_queued_delivery_status(self) -> None:
         session_manager = SessionManager()
         live_sender = AsyncMock(
             return_value=GroupTransportOutcome(accepted=True, reason="live-session")
@@ -146,6 +150,8 @@ class GroupManagerTests(unittest.IsolatedAsyncioTestCase):
                 "carol": GroupDeliveryStatus.QUEUED_OFFLINE,
             },
         )
+        # GroupManager only decides per-member outcomes; core may collapse offline subset to one upload.
+        self.assertEqual(set(result.envelope.member_metadata), {"bob", "carol"})
 
     async def test_group_epoch_is_preserved_in_envelope(self) -> None:
         session_manager = SessionManager()

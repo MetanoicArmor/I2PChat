@@ -15,6 +15,9 @@ from i2pchat import crypto
 BLINDBOX_LOOKUP_V1 = b"BLINDBOX_LOOKUP_V1"
 BLINDBOX_BLOB_V1 = b"BLINDBOX_BLOB_V1"
 BLINDBOX_STATE_V1 = b"BLINDBOX_STATE_V1"
+BLINDBOX_GROUP_LOOKUP_V1 = b"BLINDBOX_GROUP_LOOKUP_V1"
+BLINDBOX_GROUP_BLOB_V1 = b"BLINDBOX_GROUP_BLOB_V1"
+BLINDBOX_GROUP_STATE_V1 = b"BLINDBOX_GROUP_STATE_V1"
 
 
 @dataclass(frozen=True)
@@ -28,12 +31,38 @@ class BlindBoxMessageKeys:
     epoch: int
 
 
+@dataclass(frozen=True)
+class GroupBlindBoxMessageKeys:
+    lookup_token: str
+    lookup_key: bytes
+    blob_key: bytes
+    state_tag: bytes
+    direction_label: str
+    index: int
+    group_epoch: int
+    root_epoch: int
+
+
 def _normalize_peer_id(peer_id: str) -> str:
     normalized = (peer_id or "").strip().lower()
     if not normalized:
         raise ValueError("Peer id cannot be empty")
     if normalized.endswith(".b32.i2p"):
         normalized = normalized[: -len(".b32.i2p")]
+    return normalized
+
+
+def _normalize_channel_id(channel_id: str) -> str:
+    normalized = (channel_id or "").strip().lower()
+    if not normalized:
+        raise ValueError("Channel id cannot be empty")
+    return normalized
+
+
+def _normalize_group_direction(direction: str) -> str:
+    normalized = (direction or "").strip().lower()
+    if normalized not in {"send", "recv"}:
+        raise ValueError("direction must be 'send' or 'recv'")
     return normalized
 
 
@@ -109,4 +138,62 @@ def derive_blindbox_message_keys(
         direction_label=direction_label,
         index=index,
         epoch=int(epoch),
+    )
+
+
+def derive_group_blindbox_message_keys(
+    root_secret: bytes,
+    group_id: str,
+    direction: str,
+    index: int,
+    *,
+    group_epoch: int,
+    root_epoch: int,
+) -> GroupBlindBoxMessageKeys:
+    if not isinstance(root_secret, (bytes, bytearray)) or len(root_secret) < 16:
+        raise ValueError("root_secret must be bytes and at least 16 bytes long")
+    if index < 0:
+        raise ValueError("index must be non-negative")
+    if group_epoch < 0:
+        raise ValueError("group_epoch must be non-negative")
+    if root_epoch < 0:
+        raise ValueError("root_epoch must be non-negative")
+
+    normalized_group_id = _normalize_channel_id(group_id)
+    normalized_direction = _normalize_group_direction(direction)
+    direction_label = f"GROUP_{normalized_direction.upper()}"
+    index_bytes = int(index).to_bytes(8, "big", signed=False)
+
+    salt = hashlib.sha256(
+        b"BLINDBOX-GROUP-SALT-V1|" + normalized_group_id.encode("utf-8")
+    ).digest()
+    prk = crypto.hkdf_extract(salt, bytes(root_secret))
+    context = b"|".join(
+        [
+            normalized_group_id.encode("utf-8"),
+            direction_label.encode("ascii"),
+            index_bytes.hex().encode("ascii"),
+            f"group_epoch={int(group_epoch)}".encode("ascii"),
+            f"root_epoch={int(root_epoch)}".encode("ascii"),
+        ]
+    )
+    lookup_key = crypto.hkdf_expand(
+        prk, BLINDBOX_GROUP_LOOKUP_V1 + b"|" + context, 32
+    )
+    blob_key = crypto.hkdf_expand(
+        prk, BLINDBOX_GROUP_BLOB_V1 + b"|" + context, 32
+    )
+    state_tag = crypto.hkdf_expand(
+        prk, BLINDBOX_GROUP_STATE_V1 + b"|" + context, 16
+    )
+    lookup_token = hashlib.sha256(lookup_key).hexdigest()
+    return GroupBlindBoxMessageKeys(
+        lookup_token=lookup_token,
+        lookup_key=lookup_key,
+        blob_key=blob_key,
+        state_tag=state_tag,
+        direction_label=direction_label,
+        index=index,
+        group_epoch=int(group_epoch),
+        root_epoch=int(root_epoch),
     )

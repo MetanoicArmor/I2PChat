@@ -7,12 +7,18 @@ import unittest
 from datetime import datetime, timezone
 
 from i2pchat.groups import GroupContentType, GroupState
+from i2pchat.storage.blindbox_state import BlindBoxState
 from i2pchat.storage.group_store import (
+    GroupBlindBoxChannel,
     GroupHistoryEntry,
+    GroupPendingBlindBoxMessage,
+    GroupPendingDelivery,
+    StoredGroupConversation,
     append_group_history_entry,
     delete_group_record,
     load_group_conversation,
     load_group_state,
+    save_group_conversation,
     upsert_group_state,
 )
 
@@ -339,6 +345,180 @@ class GroupStoreTests(unittest.TestCase):
                 entry.delivery_reasons,
                 {"bob.b32.i2p": "blindbox-await-root"},
             )
+
+    def test_group_pending_deliveries_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="group-store-pending",
+                epoch=4,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="Pending",
+            )
+            conversation = StoredGroupConversation(
+                state=state,
+                next_group_seq=7,
+                pending_deliveries=(
+                    GroupPendingDelivery(
+                        group_id=state.group_id,
+                        group_title=state.title,
+                        group_members=state.members,
+                        sender_id="alice.b32.i2p",
+                        recipient_id="bob.b32.i2p",
+                        delivery_id="msg-pending-1:bob",
+                        msg_id="msg-pending-1",
+                        group_seq=6,
+                        epoch=4,
+                        content_type=GroupContentType.GROUP_TEXT,
+                        payload="queued hello",
+                    ),
+                ),
+            )
+
+            save_group_conversation(tmpdir, "alice", conversation)
+            loaded = load_group_conversation(tmpdir, "alice", state.group_id)
+
+            assert loaded is not None
+            self.assertEqual(loaded.next_group_seq, 7)
+            self.assertEqual(len(loaded.pending_deliveries), 1)
+            pending = loaded.pending_deliveries[0]
+            self.assertEqual(pending.group_id, state.group_id)
+            self.assertEqual(pending.group_title, "Pending")
+            self.assertEqual(
+                pending.group_members,
+                ("alice.b32.i2p", "bob.b32.i2p"),
+            )
+            self.assertEqual(pending.sender_id, "alice.b32.i2p")
+            self.assertEqual(pending.recipient_id, "bob.b32.i2p")
+            self.assertEqual(pending.delivery_id, "msg-pending-1:bob")
+            self.assertEqual(pending.msg_id, "msg-pending-1")
+            self.assertEqual(pending.group_seq, 6)
+            self.assertEqual(pending.epoch, 4)
+            self.assertEqual(pending.content_type, GroupContentType.GROUP_TEXT)
+            self.assertEqual(pending.payload, "queued hello")
+
+    def test_group_blindbox_channel_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="group-store-blindbox-channel",
+                epoch=9,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="BlindBox channel",
+            )
+            conversation = StoredGroupConversation(
+                state=state,
+                blindbox_channel=GroupBlindBoxChannel(
+                    channel_id="group:group-store-blindbox-channel",
+                    group_epoch=9,
+                    state=BlindBoxState(send_index=5, recv_base=2, recv_window=16),
+                    root_secret_enc="aa11",
+                    root_epoch=4,
+                    root_created_at=123,
+                    root_send_index_base=3,
+                    pending_root_secret_enc="bb22",
+                    pending_root_epoch=5,
+                    pending_root_created_at=456,
+                    pending_root_send_index_base=7,
+                    pending_root_target_members=("bob.b32.i2p",),
+                    pending_root_acked_members=("bob.b32.i2p",),
+                    prev_roots=(
+                        {
+                            "group_epoch": 8,
+                            "root_epoch": 3,
+                            "expires_at": 999,
+                            "secret_enc": "cc33",
+                        },
+                    ),
+                ),
+            )
+
+            save_group_conversation(tmpdir, "alice", conversation)
+            loaded = load_group_conversation(tmpdir, "alice", state.group_id)
+
+            assert loaded is not None
+            assert loaded.blindbox_channel is not None
+            channel = loaded.blindbox_channel
+            self.assertEqual(channel.channel_id, "group:group-store-blindbox-channel")
+            self.assertEqual(channel.group_epoch, 9)
+            self.assertEqual(channel.state.send_index, 5)
+            self.assertEqual(channel.root_secret_enc, "aa11")
+            self.assertEqual(channel.root_epoch, 4)
+            self.assertEqual(channel.pending_root_secret_enc, "bb22")
+            self.assertEqual(channel.pending_root_epoch, 5)
+            self.assertEqual(channel.pending_root_target_members, ("bob.b32.i2p",))
+            self.assertEqual(channel.pending_root_acked_members, ("bob.b32.i2p",))
+            self.assertEqual(channel.prev_roots[0]["root_epoch"], 3)
+            self.assertEqual(channel.prev_roots[0]["secret_enc"], "cc33")
+
+    def test_pending_group_blindbox_messages_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="group-store-pending-group-blindbox",
+                epoch=6,
+                members=("alice.b32.i2p", "bob.b32.i2p", "carol.b32.i2p"),
+                title="Pending group blindbox",
+            )
+            conversation = StoredGroupConversation(
+                state=state,
+                pending_group_blindbox_messages=(
+                    GroupPendingBlindBoxMessage(
+                        group_id=state.group_id,
+                        group_title=state.title,
+                        group_members=state.members,
+                        sender_id="alice.b32.i2p",
+                        msg_id="queued-group-msg-1",
+                        group_seq=4,
+                        epoch=6,
+                        content_type=GroupContentType.GROUP_TEXT,
+                        payload="group queued hello",
+                    ),
+                ),
+            )
+
+            save_group_conversation(tmpdir, "alice", conversation)
+            loaded = load_group_conversation(tmpdir, "alice", state.group_id)
+
+            assert loaded is not None
+            self.assertEqual(len(loaded.pending_group_blindbox_messages), 1)
+            pending = loaded.pending_group_blindbox_messages[0]
+            self.assertEqual(pending.group_id, state.group_id)
+            self.assertEqual(pending.group_title, state.title)
+            self.assertEqual(pending.group_members, state.members)
+            self.assertEqual(pending.sender_id, "alice.b32.i2p")
+            self.assertEqual(pending.msg_id, "queued-group-msg-1")
+            self.assertEqual(pending.group_seq, 4)
+            self.assertEqual(pending.epoch, 6)
+            self.assertEqual(pending.payload, "group queued hello")
+
+    def test_legacy_group_record_without_blindbox_channel_still_loads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="group-store-legacy-no-blindbox",
+                epoch=2,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="Legacy blindboxless",
+            )
+            upsert_group_state(tmpdir, "alice", state, next_group_seq=3)
+            record_path = os.path.join(
+                tmpdir,
+                next(name for name in os.listdir(tmpdir) if name.startswith("alice.group.")),
+            )
+            with open(record_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            payload.pop("blindbox_channel", None)
+            payload.pop("pending_group_blindbox_messages", None)
+            with open(record_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+
+            conversation = load_group_conversation(
+                tmpdir,
+                "alice",
+                "group-store-legacy-no-blindbox",
+            )
+
+            assert conversation is not None
+            self.assertIsNone(conversation.blindbox_channel)
+            self.assertEqual(conversation.pending_group_blindbox_messages, ())
+            self.assertEqual(conversation.next_group_seq, 3)
 
     def test_delete_group_record_removes_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -13,7 +13,7 @@ import time
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, replace
-from typing import Callable, List, Optional
+from typing import Callable, List, Literal, Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
@@ -4399,6 +4399,7 @@ class _GroupTopologyMapWidget(QtWidgets.QWidget):
             "accent": QtGui.QColor("#4ca1ff" if night else "#2076e6"),
             "live": QtGui.QColor("#2fb36c"),
             "handshaking": QtGui.QColor("#f0a128"),
+            "await-root": QtGui.QColor("#f0a128"),
             "blindbox": QtGui.QColor("#6c63ff"),
             "degraded": QtGui.QColor("#d87a2f"),
             "failed": QtGui.QColor("#de4f4f"),
@@ -4426,6 +4427,11 @@ class _GroupTopologyMapWidget(QtWidgets.QWidget):
         peer_state = str(getattr(node, "peer_state", "") or "").strip().lower()
         if peer_state in {"connecting", "handshaking"}:
             return "handshaking"
+        if (
+            getattr(self._snapshot, "await_group_root", False)
+            and not getattr(node, "blindbox_ready", False)
+        ):
+            return "await-root"
         if peer_state == "stale":
             return "degraded"
         if peer_state == "failed":
@@ -4438,6 +4444,7 @@ class _GroupTopologyMapWidget(QtWidgets.QWidget):
         return {
             "live": "Live secure",
             "handshaking": "Secure intro in progress",
+            "await-root": "Awaiting group BlindBox root",
             "blindbox": "Offline route ready",
             "degraded": "Needs refresh",
             "failed": "Last connect failed",
@@ -4448,6 +4455,7 @@ class _GroupTopologyMapWidget(QtWidgets.QWidget):
         return {
             "live": "LIVE",
             "handshaking": "INTRO",
+            "await-root": "ROOT",
             "blindbox": "BLINDBOX",
             "degraded": "STALE",
             "failed": "FAILED",
@@ -4568,7 +4576,18 @@ class _GroupTopologyMapWidget(QtWidgets.QWidget):
         if peer_state:
             lines.append(f"Peer state: {peer_state}")
         lines.append(
-            "BlindBox: ready" if getattr(node, "blindbox_ready", False) else "BlindBox: not ready"
+            (
+                "BlindBox: awaiting group root"
+                if (
+                    getattr(self._snapshot, "await_group_root", False)
+                    and not getattr(node, "blindbox_ready", False)
+                )
+                else (
+                    "BlindBox: ready"
+                    if getattr(node, "blindbox_ready", False)
+                    else "BlindBox: not ready"
+                )
+            )
         )
         last_delivery = str(getattr(node, "last_delivery_status", "") or "").strip()
         if last_delivery:
@@ -7199,15 +7218,93 @@ class ChatWindow(QtWidgets.QMainWindow):
             raise ValueError("Add at least one member address.")
         return members
 
-    def _create_group_from_values(self, *, title: str, members_text: str) -> str:
+    def _saved_group_member_records(self) -> list[ContactRecord]:
+        local_member = ""
+        if self.core is not None and self.core.my_dest is not None:
+            local_member = normalize_peer_address(str(self.core.my_dest.base32)) or ""
+
+        records: list[ContactRecord] = []
+        seen: set[str] = set()
+        for record in self._contact_book.contacts:
+            normalized = normalize_peer_address(record.addr)
+            if not normalized or normalized in seen:
+                continue
+            if local_member and same_i2p_destination(normalized, local_member):
+                continue
+            seen.add(normalized)
+            records.append(record)
+        return records
+
+    def _normalize_group_member_selection(
+        self,
+        selected_members: list[str],
+        *,
+        allowed_members: Optional[set[str]] = None,
+    ) -> list[str]:
+        members: list[str] = []
+        invalid: list[str] = []
+        allowed = {
+            normalized
+            for normalized in (
+                normalize_peer_address(addr) for addr in (allowed_members or set())
+            )
+            if normalized
+        }
+        for raw in selected_members:
+            normalized = normalize_peer_address(raw)
+            if not normalized:
+                invalid.append(raw)
+                continue
+            if allowed and normalized not in allowed:
+                invalid.append(raw)
+                continue
+            if normalized not in members:
+                members.append(normalized)
+        if invalid:
+            raise ValueError("Members can only be chosen from the list.")
+        if not members:
+            raise ValueError("Select at least one member from Saved peers.")
+        return members
+
+    def _group_member_picker_label(
+        self,
+        record: ContactRecord,
+        *,
+        in_saved_peers: bool,
+    ) -> str:
+        name = (record.display_name or "").strip()
+        short_addr = _contact_row_address_title(record.addr)
+        if name:
+            label = f"{name} ({short_addr})"
+        else:
+            label = short_addr
+        if not in_saved_peers:
+            label += " [Current member]"
+        return label
+
+    def _create_group_from_values(
+        self,
+        *,
+        title: str,
+        members_text: str = "",
+        selected_members: Optional[list[str]] = None,
+        allowed_members: Optional[set[str]] = None,
+    ) -> str:
         if self.core is None:
             raise RuntimeError("I2P session is not ready yet.")
         clean_title = title.strip()
         if not clean_title:
             raise ValueError("Group title is required.")
+        if selected_members is None:
+            members = self._normalize_group_member_list(members_text)
+        else:
+            members = self._normalize_group_member_selection(
+                selected_members,
+                allowed_members=allowed_members,
+            )
         created = self.core.create_group(
             title=clean_title,
-            members=self._normalize_group_member_list(members_text),
+            members=members,
         )
         self._refresh_groups_list()
         self._set_active_group(created.group_id)
@@ -7227,7 +7324,7 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         editing = bool(existing_group_id)
         initial_title = ""
-        initial_members = ""
+        initial_members: list[str] = []
         if editing:
             st = self.core.load_group_state(existing_group_id or "")
             if st is None:
@@ -7238,9 +7335,27 @@ class ChatWindow(QtWidgets.QMainWindow):
                 )
                 return
             initial_title = (st.title or "").strip()
-            initial_members = (
-                "\n".join(st.members[1:]) if len(st.members) > 1 else ""
-            )
+            initial_members = list(st.members[1:]) if len(st.members) > 1 else []
+
+        saved_member_records = self._saved_group_member_records()
+        saved_member_addrs = {
+            normalize_peer_address(record.addr) or "" for record in saved_member_records
+        }
+        picker_records = list(saved_member_records)
+        for member in initial_members:
+            normalized = normalize_peer_address(member)
+            if not normalized or normalized in saved_member_addrs:
+                continue
+            picker_records.append(ContactRecord(addr=normalized))
+
+        allowed_members = {
+            normalize_peer_address(record.addr) or "" for record in picker_records
+        }
+        allowed_members.discard("")
+        initial_member_set = {
+            normalize_peer_address(member) or "" for member in initial_members
+        }
+        initial_member_set.discard("")
 
         dialog = QtWidgets.QDialog(self)
         _apply_dialog_theme_sheet(dialog, self.theme_id)
@@ -7252,16 +7367,71 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         title_label = QtWidgets.QLabel("Title", dialog)
         title_edit = QtWidgets.QLineEdit(dialog)
+        title_edit.setObjectName("GroupTitleEdit")
         title_edit.setPlaceholderText("Weekend plans")
         title_edit.setText(initial_title)
-        members_label = QtWidgets.QLabel("Members", dialog)
-        members_edit = QtWidgets.QPlainTextEdit(dialog)
-        members_edit.setPlaceholderText(
-            "One peer base32 id per line (…b32.i2p accepted), or separate with commas."
+        members_label = QtWidgets.QLabel("Members from Saved peers", dialog)
+        members_help = QtWidgets.QLabel(
+            "Choose one or more peers from Saved peers for this group.",
+            dialog,
         )
-        members_edit.setPlainText(initial_members)
-        # Long .b32.i2p lines wrap; need enough height to scan several members without constant scrolling.
-        members_edit.setMinimumHeight(200)
+        members_help.setWordWrap(True)
+        members_filter = QtWidgets.QLineEdit(dialog)
+        members_filter.setObjectName("GroupMembersFilterEdit")
+        members_filter.setPlaceholderText("Filter Saved peers")
+        members_list = QtWidgets.QListWidget(dialog)
+        members_list.setObjectName("GroupMembersSavedPeersList")
+        members_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        members_list.setMinimumHeight(220)
+        members_list.setUniformItemSizes(True)
+        empty_filter_hint = QtWidgets.QLabel("No saved peers match this filter.", dialog)
+        empty_filter_hint.setObjectName("GroupMembersEmptyFilterHint")
+        empty_filter_hint.setWordWrap(True)
+        empty_filter_hint.hide()
+        members_count = QtWidgets.QLabel(dialog)
+        members_count.setObjectName("GroupMembersCountLabel")
+
+        extra_member_count = max(0, len(picker_records) - len(saved_member_records))
+        if extra_member_count:
+            members_help.setText(
+                "Choose members from Saved peers. Current group members that are not in "
+                "Saved peers stay available here until you remove them."
+            )
+
+        for record in picker_records:
+            normalized = normalize_peer_address(record.addr) or ""
+            in_saved_peers = normalized in saved_member_addrs
+            item = QtWidgets.QListWidgetItem(
+                self._group_member_picker_label(record, in_saved_peers=in_saved_peers),
+                members_list,
+            )
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, normalized)
+            search_parts = [
+                normalized,
+                (record.display_name or "").strip(),
+                (record.note or "").strip(),
+                "saved peers" if in_saved_peers else "current member",
+            ]
+            item.setData(
+                QtCore.Qt.ItemDataRole.UserRole + 1,
+                " ".join(part for part in search_parts if part).lower(),
+            )
+            item.setToolTip(
+                normalized
+                if in_saved_peers
+                else f"{normalized}\nCurrent group member not in Saved peers."
+            )
+            item.setFlags(
+                item.flags()
+                | QtCore.Qt.ItemFlag.ItemIsEnabled
+                | QtCore.Qt.ItemFlag.ItemIsUserCheckable
+            )
+            item.setCheckState(
+                QtCore.Qt.CheckState.Checked
+                if normalized in initial_member_set
+                else QtCore.Qt.CheckState.Unchecked
+            )
+
         hint = QtWidgets.QLabel(
             "Files, images, voice, invites, and roles are not part of this first group flow.",
             dialog,
@@ -7270,7 +7440,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         layout.addWidget(title_label)
         layout.addWidget(title_edit)
         layout.addWidget(members_label)
-        layout.addWidget(members_edit, 1)
+        layout.addWidget(members_help)
+        layout.addWidget(members_filter)
+        layout.addWidget(members_list, 1)
+        layout.addWidget(empty_filter_hint)
+        layout.addWidget(members_count)
         layout.addWidget(hint)
 
         buttons = QtWidgets.QDialogButtonBox(
@@ -7282,6 +7456,69 @@ class ChatWindow(QtWidgets.QMainWindow):
         ok_btn.setText("Save" if editing else "Create")
         layout.addWidget(buttons)
 
+        def _checked_members() -> list[str]:
+            selected: list[str] = []
+            for row in range(members_list.count()):
+                item = members_list.item(row)
+                if item.checkState() == QtCore.Qt.CheckState.Checked:
+                    addr = normalize_peer_address(
+                        str(item.data(QtCore.Qt.ItemDataRole.UserRole) or "")
+                    )
+                    if addr and addr not in selected:
+                        selected.append(addr)
+            return selected
+
+        def _sync_members_filter() -> None:
+            query = members_filter.text().strip().lower()
+            visible_count = 0
+            for row in range(members_list.count()):
+                item = members_list.item(row)
+                haystack = str(
+                    item.data(QtCore.Qt.ItemDataRole.UserRole + 1) or ""
+                ).lower()
+                is_hidden = bool(query) and query not in haystack
+                item.setHidden(is_hidden)
+                if not is_hidden:
+                    visible_count += 1
+            empty_filter_hint.setVisible(bool(picker_records) and visible_count == 0)
+
+        def _sync_members_summary() -> None:
+            selected_count = len(_checked_members())
+            total_count = len(allowed_members)
+            visible_count = sum(
+                1
+                for row in range(members_list.count())
+                if not members_list.item(row).isHidden()
+            )
+            if not picker_records:
+                members_count.setText("No group members are available yet.")
+            elif visible_count != total_count:
+                members_count.setText(
+                    f"Selected {selected_count} of {total_count} members "
+                    f"({visible_count} visible)"
+                )
+            else:
+                members_count.setText(
+                    f"Selected {selected_count} of {total_count} members"
+                )
+            ok_btn.setEnabled(bool(picker_records) and selected_count > 0)
+
+        _sync_members_filter()
+        _sync_members_summary()
+
+        members_filter.textChanged.connect(
+            lambda _text: (_sync_members_filter(), _sync_members_summary())
+        )
+        members_list.itemChanged.connect(lambda _item: _sync_members_summary())
+
+        if not picker_records:
+            members_help.setText(
+                "No Saved peers yet. Add peers to Saved peers first, then create the group."
+            )
+            members_filter.setEnabled(False)
+            members_list.setEnabled(False)
+            ok_btn.setEnabled(False)
+
         def _accept() -> None:
             try:
                 if editing:
@@ -7289,8 +7526,9 @@ class ChatWindow(QtWidgets.QMainWindow):
                     self.core.update_group(
                         existing_group_id,
                         title=title_edit.text(),
-                        members=self._normalize_group_member_list(
-                            members_edit.toPlainText()
+                        members=self._normalize_group_member_selection(
+                            _checked_members(),
+                            allowed_members=allowed_members,
                         ),
                     )
                     self._refresh_groups_list()
@@ -7301,7 +7539,8 @@ class ChatWindow(QtWidgets.QMainWindow):
                 else:
                     group_id = self._create_group_from_values(
                         title=title_edit.text(),
-                        members_text=members_edit.toPlainText(),
+                        selected_members=_checked_members(),
+                        allowed_members=allowed_members,
                     )
                     self.handle_system(f"Created group: {group_id}")
             except Exception as exc:
@@ -8164,7 +8403,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             elif hints.get("any_live_to_member"):
                 send_tip = (
                     f"Send text to {group_name}. At least one member has a live session; "
-                    "others use BlindBox when no live path is available."
+                    "others use BlindBox when no live path is available.\n"
+                    "Hold Shift while sending to queue BlindBox for every member "
+                    "(not only those without live)."
                 )
             else:
                 send_tip = (
@@ -10382,7 +10623,18 @@ class ChatWindow(QtWidgets.QMainWindow):
             if self._active_group_id:
                 active_group_id = self._active_group_id
                 try:
-                    grp_result = await self.core.send_group_text(active_group_id, text)
+                    hints = self.core.get_group_send_ui_hints(active_group_id)
+                    mods = QtWidgets.QApplication.keyboardModifiers()
+                    shift_down = bool(mods & QtCore.Qt.KeyboardModifier.ShiftModifier)
+                    if hints.get("show_offline_button") or (
+                        shift_down and hints.get("any_live_to_member")
+                    ):
+                        group_route: Literal["auto", "live", "offline"] = "offline"
+                    else:
+                        group_route = "auto"
+                    grp_result = await self.core.send_group_text(
+                        active_group_id, text, route=group_route
+                    )
                 except Exception as exc:
                     self.handle_error(str(exc).strip() or type(exc).__name__)
                     return

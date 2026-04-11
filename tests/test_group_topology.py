@@ -26,6 +26,7 @@ from i2pchat.groups import (
     render_group_topology_mermaid,
 )
 from i2pchat.storage.blindbox_state import BlindBoxState
+from i2pchat.storage.group_store import GroupBlindBoxChannel
 
 
 ALICE_BARE = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -54,6 +55,7 @@ class GroupTopologyRendererTests(unittest.TestCase):
                 BOB_BARE: "secure",
                 CAROL_BARE: "disconnected",
             },
+            group_blindbox_ready=True,
             blindbox_ready_by_member={CAROL_BARE: True},
             delivery_status_by_member={
                 BOB_BARE: GroupDeliveryStatus.DELIVERED_LIVE.value,
@@ -67,6 +69,7 @@ class GroupTopologyRendererTests(unittest.TestCase):
 
         self.assertIn("Observed group topology: Mesh [group-topology]", ascii_map)
         self.assertIn("Local: You", ascii_map)
+        self.assertIn("Group blindbox: ready", ascii_map)
         self.assertIn("live", ascii_map)
         self.assertIn("blindbox-ready", ascii_map)
         self.assertIn("last=queued_offline", ascii_map)
@@ -75,6 +78,32 @@ class GroupTopologyRendererTests(unittest.TestCase):
         self.assertIn("graph TD", mermaid_map)
         self.assertIn('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa["You"]', mermaid_map)
         self.assertIn("last=queued_offline", mermaid_map)
+
+    def test_observed_topology_marks_await_root_when_group_channel_missing(self) -> None:
+        state = GroupState(
+            group_id="group-topology-await-root",
+            epoch=2,
+            members=(ALICE_BARE, BOB_BARE),
+            title="Await root",
+        )
+        snapshot = build_observed_group_topology(
+            state,
+            local_member_id=ALICE_BARE,
+            live_by_member={BOB_BARE: False},
+            peer_state_by_member={BOB_BARE: "disconnected"},
+            await_group_root=True,
+            delivery_status_by_member={
+                BOB_BARE: GroupDeliveryStatus.QUEUED_OFFLINE.value,
+            },
+            delivery_reason_by_member={
+                BOB_BARE: "blindbox-await-group-root",
+            },
+        )
+
+        self.assertEqual(snapshot.edges[0].state.value, "await-root")
+        ascii_map = render_group_topology_ascii(snapshot)
+        self.assertIn("Group blindbox: await-root", ascii_map)
+        self.assertIn("await-root", ascii_map)
 
 
 class GroupTopologyCoreTests(unittest.IsolatedAsyncioTestCase):
@@ -96,24 +125,28 @@ class GroupTopologyCoreTests(unittest.IsolatedAsyncioTestCase):
             )
 
             core.session_manager.set_peer_handshake_complete(BOB_BARE)
-            core._save_blindbox_peer_snapshot(
-                _BlindBoxPeerSnapshot(
-                    peer_addr=CAROL_BARE,
-                    peer_id=CAROL_BARE,
+            core._save_group_blindbox_channel(
+                group_state.group_id,
+                GroupBlindBoxChannel(
+                    channel_id=f"group:{group_state.group_id}",
+                    group_epoch=1,
                     state=BlindBoxState(),
-                    root_secret=b"x" * 32,
+                    root_secret_enc=core._group_blindbox_encrypt_root_secret(
+                        b"x" * 32,
+                        group_state.group_id,
+                    ),
                     root_epoch=2,
-                )
+                ),
             )
 
-            core.group_manager._send_live = AsyncMock(  # type: ignore[attr-defined]
+            core._send_group_envelope_live = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="live-session",
                     transport_message_id="101",
                 )
             )
-            core.group_manager._send_offline = AsyncMock(  # type: ignore[attr-defined]
+            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="blindbox-ready",
@@ -127,6 +160,8 @@ class GroupTopologyCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(snapshot)
             assert snapshot is not None
             self.assertEqual(snapshot.group_id, group_state.group_id)
+            self.assertTrue(snapshot.group_blindbox_ready)
+            self.assertFalse(snapshot.await_group_root)
 
             nodes = {node.member_id: node for node in snapshot.nodes}
             edges = {edge.target_id: edge for edge in snapshot.edges}
@@ -154,6 +189,7 @@ class GroupTopologyCoreTests(unittest.IsolatedAsyncioTestCase):
             ascii_map = core.get_group_topology_ascii(group_state.group_id)
             mermaid_map = core.get_group_topology_mermaid(group_state.group_id)
             self.assertIn("Observed group topology: Observed mesh [group-topology-core]", ascii_map)
+            self.assertIn("Group blindbox: ready", ascii_map)
             self.assertIn("blindbox-ready", ascii_map)
             self.assertIn("last=queued_offline", ascii_map)
             self.assertIn("graph TD", mermaid_map)
