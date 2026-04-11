@@ -10,6 +10,15 @@
 
 Python is **not** required on the target machine (PyInstaller bundle).
 
+**winget** (cmd / PowerShell; elevation may be required by policy):
+
+```powershell
+winget install MetanoicArmor.I2PChat       # GUI — *-winget-* zip (no embedded i2pd)
+winget install MetanoicArmor.I2PChat.TUI  # TUI only
+```
+
+If **`winget show`** does not list the latest version yet, the catalog may still be updating after a [winget-pkgs](https://github.com/microsoft/winget-pkgs) merge — run **`winget source update`** and retry, or pin **`--version x.y.z`** when needed.
+
 **TUI-only zip:** **`I2PChat-windows-tui-x64-v<version>.zip`** contains the `I2PChat` folder with **`I2PChat-tui.exe`**, `_internal`, and `vendor` only (no GUI exe). Use this with **`MetanoicArmor.I2PChat.TUI`** on winget and similar `-tui` packages.
 
 ## macOS (Apple Silicon / arm64)

@@ -460,6 +460,15 @@ Full zip layouts, **winget**, **`.deb`**, **Flatpak** notes → [**docs/INSTALL.
 
 ### 📦 Package managers
 
+**Windows (x64) — [winget](https://learn.microsoft.com/windows/package-manager/winget/)** (community manifests in [winget-pkgs](https://github.com/microsoft/winget-pkgs); ships the **`*-winget-*`** zip **without** embedded `i2pd`. For a bundled router, use the full **`*-windows-x64-v*.zip`** from [Releases](https://github.com/MetanoicArmor/I2PChat/releases).)
+
+```powershell
+winget install MetanoicArmor.I2PChat       # GUI
+winget install MetanoicArmor.I2PChat.TUI  # TUI only
+```
+
+If the catalog lags behind a fresh release merge, **`winget show MetanoicArmor.I2PChat`** lists available versions; use **`--version x.y.z`** only when you need to pin one.
+
 **macOS (arm64) — [Homebrew](https://brew.sh)** ([tap](https://github.com/MetanoicArmor/homebrew-i2pchat))
 
 ```bash
