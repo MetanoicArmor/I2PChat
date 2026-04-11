@@ -314,6 +314,8 @@ PyInstaller builds use [`i2pchat/run_gui.py`](i2pchat/run_gui.py) as the GUI ent
 The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  
 Everywhere, the recommended/runtime version is **Python 3.14+**. SAM transport is implemented in **`i2pchat.sam`** (PyPI **`i2plib`** is not a runtime dependency).
 
+<img src="docs/icons/icons8-linux-48.png" alt="Linux" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-arch-linux-48.png" alt="Arch Linux" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" />
+
 #### 🐧 Linux (GUI AppImage)
 
 ```bash
@@ -328,6 +330,8 @@ This script:
 - Creates release archive `I2PChat-linux-<arch>-v<version>.zip` (contains `I2PChat.AppImage`); **`arch`** is **`x86_64`** or **`aarch64`** depending on the host. CI publishes matching **`I2PChat-linux-aarch64-v*.zip`** and may attach **`SHA256SUMS.linux-aarch64`** separately from the amd64 checksum file.
 - **Bundled `i2pd`:** before PyInstaller, [`scripts/ensure_bundled_i2pd.sh`](scripts/ensure_bundled_i2pd.sh) stages binaries under `vendor/i2pd/`. If that tree is empty, it **clones by default** [github.com/MetanoicArmor/i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd) into `.cache/bundled-i2pd-source/` (override with **`I2PCHAT_BUNDLED_I2PD_GIT_URL`**, disable git fetch with **`I2PCHAT_SKIP_BUNDLED_I2PD_GIT=1`** or **`I2PCHAT_BUNDLED_I2PD_GIT_URL=`**). See [`docs/BUILD.md`](docs/BUILD.md).
 
+<img src="docs/icons/icons8-macos-48.png" alt="macOS" width="28" height="28" align="middle" />
+
 #### 🍎 macOS (GUI .app bundle)
 
 ```bash
@@ -336,6 +340,8 @@ This script:
 
 - Uses Python 3.14+ (from PATH or Homebrew).
 - Builds `dist/I2PChat.app` via PyInstaller.
+
+<img src="docs/icons/icons8-windows-48.png" alt="Windows" width="28" height="28" align="middle" />
 
 ### 🪟 Windows build (GUI)
 
@@ -409,6 +415,8 @@ I2PCHAT_PADDING_PROFILE=off python -m i2pchat.gui
 ```
 
 Trade-off: stronger padding reduces length correlation but increases bandwidth.
+
+<img src="docs/icons/icons8-linux-48.png" alt="Linux" width="28" height="28" align="middle" />
 
 #### ❄️ NixOS
 
