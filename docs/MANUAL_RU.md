@@ -1,6 +1,6 @@
 ## Руководство по кнопкам GUI I2PChat
 
-Документ актуален для **I2PChat 1.2.6** (номер версии в корне репозитория: [`VERSION`](../VERSION)). Про слой транспорта в этой линейке версий см. [**ARCHITECTURE.md**](ARCHITECTURE.md) и [**releases/RELEASE_1.2.6.md**](releases/RELEASE_1.2.6.md).
+Документ актуален для **I2PChat 1.3.0** (номер версии в корне репозитория: [`VERSION`](../VERSION)). Заметки к релизу: [**releases/RELEASE_1.3.0.md**](releases/RELEASE_1.3.0.md). Про **`SessionManager`** (транспорт с v1.2.6): [**ARCHITECTURE.md**](ARCHITECTURE.md) и [**releases/RELEASE_1.2.6.md**](releases/RELEASE_1.2.6.md).
 
 ### Окно выбора профиля
 
@@ -630,7 +630,7 @@ I2PCHAT_PADDING_PROFILE=off python3 -m i2pchat.gui
 
 #### 8.1 Устройство ядра (для сопровождения)
 
-Схема **`I2PChatCore`**, **`SessionManager`** (состояние транспорта по пиру, политика исходящей отправки, потоки, reconnect) и связь со строкой статуса и маршрутом **Send** — в [**ARCHITECTURE.md**](ARCHITECTURE.md). Заметки к релизу v1.2.6: [**releases/RELEASE_1.2.6.md**](releases/RELEASE_1.2.6.md).
+Схема **`I2PChatCore`**, **`SessionManager`** (состояние транспорта по пиру, политика исходящей отправки, потоки, reconnect) и связь со строкой статуса и маршрутом **Send** — в [**ARCHITECTURE.md**](ARCHITECTURE.md). Текущий релиз: [**releases/RELEASE_1.3.0.md**](releases/RELEASE_1.3.0.md). Рефакторинг транспорта (v1.2.6): [**releases/RELEASE_1.2.6.md**](releases/RELEASE_1.2.6.md).
 
 ### 9. Резюме
 

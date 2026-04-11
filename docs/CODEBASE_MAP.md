@@ -15,7 +15,10 @@ The canonical implementation lives under `i2pchat/`.
 Runtime orchestration and session logic.
 
 - `i2pchat/core/i2p_chat_core.py` — main chat runtime, SAM session handling, handshake,
-  delivery orchestration, file/image flows, BlindBox root exchange
+  delivery orchestration, file/image flows, BlindBox root exchange, **`GroupManager`** integration
+- `i2pchat/core/session_manager.py` — per-peer transport lifecycle, outbound policy, telemetry (v1.2.6+)
+- `i2pchat/core/live_peer_session.py` — live stream + crypto context for one peer connection
+- `i2pchat/core/transient_profile.py` — transient / `random_address` profile helpers
 - `i2pchat/core/send_retry_policy.py` — retry policy helpers used by the GUI
 - `i2pchat/core/transfer_retry.py` — file/media transfer retry policy and UX labels
 
@@ -25,6 +28,7 @@ Wire-format and delivery semantics.
 
 - `i2pchat/protocol/protocol_codec.py` — vNext framing codec, header parsing, legacy opt-in mode
 - `i2pchat/protocol/message_delivery.py` — delivery states and related helper logic
+- `i2pchat/protocol/chat_text_chunking.py` — long-message chunking for the live path
 
 ### `i2pchat/sam`
 
@@ -47,6 +51,8 @@ Persistent local state.
 - `i2pchat/storage/blindbox_state.py` — atomic write helpers and BlindBox state persistence
 - `i2pchat/storage/history_export.py` — encrypted per-peer history export/import (`.i2hx`)
 - `i2pchat/storage/history_retention.py` — retention policy enforcement
+- `i2pchat/storage/group_store.py` — persisted group state and group chat history
+- `i2pchat/storage/profile_blindbox_replicas.py` — per-profile BlindBox replica preferences
 
 ### `i2pchat/blindbox`
 
@@ -57,6 +63,26 @@ Offline / delayed delivery subsystem.
 - `i2pchat/blindbox/blindbox_key_schedule.py` — key derivation for offline delivery
 - `i2pchat/blindbox/blindbox_local_replica.py` — local BlindBox replica support
 - `i2pchat/blindbox/blindbox_diagnostics.py` — user-facing diagnostics text helpers
+- `i2pchat/blindbox/blindbox_service_standalone.py` — optional standalone replica helper
+- `i2pchat/blindbox/local_server_example.py` — local loopback replica example
+
+### `i2pchat/groups`
+
+Multi-member **text groups** (application layer on top of vNext + BlindBox).
+
+- `i2pchat/groups/manager.py` — `GroupManager`: orchestration, live + offline sends
+- `i2pchat/groups/models.py`, `wire.py`, `topology.py`, `mesh.py` — envelopes, IDs, topology helpers
+
+### `i2pchat/router`
+
+Bundled **i2pd** sidecar and router preferences (GUI **I2P router…** dialog).
+
+- `i2pchat/router/bundled_i2pd.py` — spawn and supervise bundled `i2pd`
+- `i2pchat/router/settings.py`, `runtime.py` — persisted backend choice and process hooks
+
+### `i2pchat/updates`
+
+- `i2pchat/updates/release_index.py` — release / update-check metadata helpers
 
 ### `i2pchat/gui`
 
@@ -80,6 +106,7 @@ UI-independent presentation helpers.
 - `i2pchat/presentation/unread_counters.py`
 - `i2pchat/presentation/privacy_mode.py` — privacy toggle / lock-pin logic (no Qt)
 - `i2pchat/presentation/drag_drop.py` — drag-drop validation (no Qt)
+- `i2pchat/presentation/group_conversations.py` — group chat line rendering helpers (no Qt)
 
 ### `i2pchat/platform`
 
@@ -91,6 +118,10 @@ OS/platform integration helpers.
 
 Shared cryptographic primitives used across live protocol, history, and backup
 flows.
+
+### `i2pchat/logging_setup.py`
+
+Central logging configuration for GUI/TUI entrypoints.
 
 ## Recommended entrypoints
 
@@ -123,7 +154,9 @@ If you want to understand the system with minimal context switching:
 
 1. `docs/PROTOCOL.md`
 2. `i2pchat/core/i2p_chat_core.py`
-3. `i2pchat/protocol/protocol_codec.py`
-4. `i2pchat/gui/main_qt.py`
-5. `i2pchat/storage/chat_history.py`
-6. `i2pchat/blindbox/`
+3. `i2pchat/core/session_manager.py`
+4. `i2pchat/protocol/protocol_codec.py`
+5. `i2pchat/gui/main_qt.py`
+6. `i2pchat/storage/chat_history.py`
+7. `i2pchat/groups/` (text groups)
+8. `i2pchat/blindbox/`

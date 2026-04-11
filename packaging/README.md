@@ -2,11 +2,11 @@
 
 Здесь лежат **шаблоны и инструкции** для Homebrew (cask), winget, AUR, **`.deb` (Debian/Ubuntu)** и **RPM/COPR (Fedora)**. Исходники приложения не обязаны жить в этих форматах — достаточно стабильных **GitHub Releases** с zip/AppImage.
 
-## Статус публикации (v1.2.5, 2026-04)
+## Статус публикации (v1.3.0, 2026-04)
 
 | Канал | Состояние |
 |-------|-----------|
-| **winget** | Манифесты **1.2.5** в репо: [`winget/1.2.5/`](winget/1.2.5/), [`winget-tui/.../TUI/1.2.5/`](winget-tui/manifests/m/MetanoicArmor/I2PChat/TUI/1.2.5/). PR в [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs): **MetanoicArmor.I2PChat** [#356552](https://github.com/microsoft/winget-pkgs/pull/356552), **MetanoicArmor.I2PChat.TUI** [#356553](https://github.com/microsoft/winget-pkgs/pull/356553). (Старые PR на 1.2.4 закрыты без merge.) |
+| **winget** | Манифесты **1.3.0** в репо: [`winget/1.3.0/`](winget/1.3.0/), [`winget-tui/.../TUI/1.3.0/`](winget-tui/manifests/m/MetanoicArmor/I2PChat/TUI/1.3.0/). Подставьте **InstallerSha256** после загрузки `*-winget-*.zip` на релиз (`refresh-checksums.sh 1.3.0`). PR в [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs): **MetanoicArmor.I2PChat** [#356552](https://github.com/microsoft/winget-pkgs/pull/356552), **MetanoicArmor.I2PChat.TUI** [#356553](https://github.com/microsoft/winget-pkgs/pull/356553). |
 | **Homebrew tap** | Репозиторий [MetanoicArmor/homebrew-i2pchat](https://github.com/MetanoicArmor/homebrew-i2pchat): `brew tap MetanoicArmor/i2pchat`. |
 | **AUR** | **Опубликовано:** [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Установка (например **yay**): `yay -S i2pchat-bin`, `yay -S i2pchat-tui-bin`. Шаблоны в репо: [`aur/i2pchat-bin/`](aur/i2pchat-bin/), [`aur/i2pchat-tui-bin/`](aur/i2pchat-tui-bin/); обновление пакетов на AUR — см. [aur/README.md](aur/README.md). |
 | **Flatpak / COPR** | Flatpak — шаблоны в репо ([flatpak/README.md](flatpak/README.md)). COPR — по желанию мейнтейнера ([fedora/i2pchat.spec](fedora/i2pchat.spec)). |
@@ -30,7 +30,7 @@
 
 ```bash
 ./packaging/refresh-checksums.sh          # latest release
-./packaging/refresh-checksums.sh 1.2.5   # конкретный тег (без v)
+./packaging/refresh-checksums.sh 1.3.0   # конкретный тег (без v)
 ```
 
 выводит SHA256 для **шести** релизных zip (GUI + TUI на каждой ОС) и для `icon.png`, плюс строки для cask.
@@ -38,8 +38,8 @@
 Если на релизе **вручную заменили только Linux zip**, обновите **`SHA256SUMS`** (два ряда, как после `build-linux.sh`):
 
 ```bash
-./packaging/refresh-linux-sha256sums.sh v1.2.3   # качает с GitHub: `dist/SHA256SUMS` (x86_64) и при наличии файлов — `dist/SHA256SUMS.linux-aarch64`
-gh release upload v1.2.3 dist/SHA256SUMS --clobber
+./packaging/refresh-linux-sha256sums.sh v1.3.0   # качает с GitHub: `dist/SHA256SUMS` (x86_64) и при наличии файлов — `dist/SHA256SUMS.linux-aarch64`
+gh release upload v1.3.0 dist/SHA256SUMS --clobber
 ```
 
 При публикации **`SHA256SUMS.asc`** пересоздайте подпись от нового файла.

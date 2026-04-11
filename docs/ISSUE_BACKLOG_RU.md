@@ -1,5 +1,7 @@
 # I2PChat: backlog задач
 
+**Версия roadmap:** `1.3.0` — см. [`ROADMAP_RU.md`](ROADMAP_RU.md) и [`VERSION`](../VERSION).
+
 Этот документ содержит backlog уровня issue, согласованный с
 [`ROADMAP.md`](ROADMAP.md) и русской версией roadmap:
 [`ROADMAP_RU.md`](ROADMAP_RU.md).

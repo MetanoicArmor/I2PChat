@@ -1,6 +1,6 @@
 ## I2PChat GUI Buttons Guide
 
-This guide matches **I2PChat 1.2.6** (see [`VERSION`](../VERSION) at the repository root). For the transport-layer refactor in this line, see [**ARCHITECTURE.md**](ARCHITECTURE.md) and [**releases/RELEASE_1.2.6.md**](releases/RELEASE_1.2.6.md).
+This guide matches **I2PChat 1.3.0** (see [`VERSION`](../VERSION) at the repository root). Release notes: [**releases/RELEASE_1.3.0.md**](releases/RELEASE_1.3.0.md). For **`SessionManager`** (transport layer since v1.2.6), see [**ARCHITECTURE.md**](ARCHITECTURE.md) and [**releases/RELEASE_1.2.6.md**](releases/RELEASE_1.2.6.md).
 
 ### Profile selection dialog
 
@@ -631,7 +631,7 @@ Trade-off: more padding lowers metadata correlation but increases bandwidth use.
 
 #### 8.1 Core layout (maintainers)
 
-For a map of **`I2PChatCore`**, **`SessionManager`** (per-peer transport state, outbound send policy, streams, reconnect bookkeeping), and how this ties to the status row and **Send** routing, see [**ARCHITECTURE.md**](ARCHITECTURE.md). Release notes for the v1.2.6 transport work: [**releases/RELEASE_1.2.6.md**](releases/RELEASE_1.2.6.md).
+For a map of **`I2PChatCore`**, **`SessionManager`** (per-peer transport state, outbound send policy, streams, reconnect bookkeeping), and how this ties to the status row and **Send** routing, see [**ARCHITECTURE.md**](ARCHITECTURE.md). Current release: [**releases/RELEASE_1.3.0.md**](releases/RELEASE_1.3.0.md). SessionManager transport refactor (v1.2.6): [**releases/RELEASE_1.2.6.md**](releases/RELEASE_1.2.6.md).
 
 ### 9. Summary
 

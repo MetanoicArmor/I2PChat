@@ -4,6 +4,7 @@ Versioned release write-ups for I2PChat live in this directory (`docs/releases/`
 
 | Version | Notes |
 |--------|--------|
+| **1.3.0** | [RELEASE_1.3.0.md](RELEASE_1.3.0.md) — **Text groups** (live + BlindBox fan-out); **Saved peers** inbound; parallel **live sessions**; `activate_peer_context`; router/UI polish; docs |
 | **1.2.6** | [RELEASE_1.2.6.md](RELEASE_1.2.6.md) — **SessionManager** per-peer transport lifecycle; core delegation; outbound policy; shutdown/ACK hooks; Qt Send label after handshake |
 | **1.2.5** | [RELEASE_1.2.5.md](RELEASE_1.2.5.md) — GUI does not crash when **I2P session fails** (**`self.core is None`**); status/connect/send/lock UI guarded |
 | **1.2.4** | [RELEASE_1.2.4.md](RELEASE_1.2.4.md) — internal **`i2pchat.sam`** (no PyPI i2plib); **uv** + **`uv.lock`**; BlindBox SESSION parsing vs i2pd |
