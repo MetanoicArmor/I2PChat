@@ -1694,8 +1694,9 @@ _TOOLTIP_THEME_COLORS: dict[str, tuple[str, str]] = {
 
 def _dialog_checkbox_indicator_qss(theme_tid: str) -> str:
     """
-    Полная отрисовка QCheckBox::indicator в диалогах: на macOS при одном лишь width/height
-    индикатор часто превращается в чёрный квадрат без видимой галочки на светлом фоне.
+    Полная отрисовка индикаторов в диалогах: на macOS «голый» QCheckBox::indicator и
+    QAbstractItemView::indicator (чекбоксы у QListWidgetItem) часто дают чёрный квадрат
+    и нечитаемую галочку на светлом фоне — те же правила, что для QCheckBox.
     """
     svg_path = _resolve_path_under_gui("assets", "dialog_checkbox_check.svg")
     image_clause = ""
@@ -1715,22 +1716,26 @@ def _dialog_checkbox_indicator_qss(theme_tid: str) -> str:
         disabled_bg = "#1f1f23"
         disabled_border = "#4a505c"
     return f"""
-            QCheckBox::indicator {{
+            QCheckBox::indicator,
+            QAbstractItemView::indicator {{
                 width: 18px;
                 height: 18px;
                 border-radius: 4px;
                 border: 2px solid {unchecked_border};
                 background-color: {unchecked_bg};
             }}
-            QCheckBox::indicator:hover {{
+            QCheckBox::indicator:hover,
+            QAbstractItemView::indicator:hover {{
                 border: 2px solid {hover_border};
             }}
-            QCheckBox::indicator:checked {{
+            QCheckBox::indicator:checked,
+            QAbstractItemView::indicator:checked {{
                 background-color: #0a84ff;
                 border: 2px solid #0a84ff;
                 {image_clause}
             }}
-            QCheckBox::indicator:disabled {{
+            QCheckBox::indicator:disabled,
+            QAbstractItemView::indicator:disabled {{
                 background-color: {disabled_bg};
                 border: 2px solid {disabled_border};
             }}
@@ -7384,6 +7389,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         members_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
         members_list.setMinimumHeight(220)
         members_list.setUniformItemSizes(True)
+        member_checkboxes: dict[str, QtWidgets.QCheckBox] = {}
+        member_checked_role = QtCore.Qt.ItemDataRole.UserRole + 2
         empty_filter_hint = QtWidgets.QLabel("No saved peers match this filter.", dialog)
         empty_filter_hint.setObjectName("GroupMembersEmptyFilterHint")
         empty_filter_hint.setWordWrap(True)
@@ -7398,13 +7405,41 @@ class ChatWindow(QtWidgets.QMainWindow):
                 "Saved peers stay available here until you remove them."
             )
 
+        def _is_member_checked(item: QtWidgets.QListWidgetItem) -> bool:
+            return bool(item.data(member_checked_role))
+
+        def _set_member_checked(
+            item: QtWidgets.QListWidgetItem,
+            checked: bool,
+        ) -> None:
+            if _is_member_checked(item) == checked:
+                return
+            item.setData(member_checked_role, checked)
+
+        def _sync_member_checkbox(item: QtWidgets.QListWidgetItem) -> None:
+            addr = normalize_peer_address(
+                str(item.data(QtCore.Qt.ItemDataRole.UserRole) or "")
+            )
+            if not addr:
+                return
+            checkbox = member_checkboxes.get(addr)
+            if checkbox is None:
+                return
+            checked = _is_member_checked(item)
+            if checkbox.isChecked() == checked:
+                return
+            blocker = QtCore.QSignalBlocker(checkbox)
+            checkbox.setChecked(checked)
+            del blocker
+
         for record in picker_records:
             normalized = normalize_peer_address(record.addr) or ""
             in_saved_peers = normalized in saved_member_addrs
-            item = QtWidgets.QListWidgetItem(
-                self._group_member_picker_label(record, in_saved_peers=in_saved_peers),
-                members_list,
+            label = self._group_member_picker_label(
+                record,
+                in_saved_peers=in_saved_peers,
             )
+            item = QtWidgets.QListWidgetItem(members_list)
             item.setData(QtCore.Qt.ItemDataRole.UserRole, normalized)
             search_parts = [
                 normalized,
@@ -7421,15 +7456,30 @@ class ChatWindow(QtWidgets.QMainWindow):
                 if in_saved_peers
                 else f"{normalized}\nCurrent group member not in Saved peers."
             )
-            item.setFlags(
-                item.flags()
-                | QtCore.Qt.ItemFlag.ItemIsEnabled
-                | QtCore.Qt.ItemFlag.ItemIsUserCheckable
+            item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            item.setData(member_checked_role, normalized in initial_member_set)
+
+            row_widget = QtWidgets.QWidget(members_list)
+            row_layout = QtWidgets.QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(12, 6, 12, 6)
+            row_layout.setSpacing(0)
+            checkbox = QtWidgets.QCheckBox(label, row_widget)
+            checkbox.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            checkbox.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+            checkbox.setToolTip(item.toolTip())
+            checkbox.setChecked(_is_member_checked(item))
+            row_layout.addWidget(checkbox, 1)
+            row_widget.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
             )
-            item.setCheckState(
-                QtCore.Qt.CheckState.Checked
-                if normalized in initial_member_set
-                else QtCore.Qt.CheckState.Unchecked
+            row_widget.setMinimumHeight(max(34, checkbox.sizeHint().height() + 12))
+            item.setSizeHint(row_widget.sizeHint())
+            members_list.setItemWidget(item, row_widget)
+            member_checkboxes[normalized] = checkbox
+
+            checkbox.toggled.connect(
+                lambda checked, it=item: _set_member_checked(it, checked)
             )
 
         hint = QtWidgets.QLabel(
@@ -7460,7 +7510,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             selected: list[str] = []
             for row in range(members_list.count()):
                 item = members_list.item(row)
-                if item.checkState() == QtCore.Qt.CheckState.Checked:
+                if _is_member_checked(item):
                     addr = normalize_peer_address(
                         str(item.data(QtCore.Qt.ItemDataRole.UserRole) or "")
                     )
@@ -7509,7 +7559,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         members_filter.textChanged.connect(
             lambda _text: (_sync_members_filter(), _sync_members_summary())
         )
-        members_list.itemChanged.connect(lambda _item: _sync_members_summary())
+        members_list.itemChanged.connect(
+            lambda item: (_sync_member_checkbox(item), _sync_members_summary())
+        )
 
         if not picker_records:
             members_help.setText(

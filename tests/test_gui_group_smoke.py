@@ -16,6 +16,7 @@ pytest.importorskip("PyQt6.QtWidgets", exc_type=ImportError)
 from PyQt6 import QtCore
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QLineEdit,
@@ -162,10 +163,21 @@ def test_group_editor_dialog_uses_saved_peers_picker(
             str(members_list.item(row).data(QtCore.Qt.ItemDataRole.UserRole))
             for row in range(members_list.count())
         ] if members_list is not None else []
-        captured["all_checkable"] = all(
-            bool(
+        captured["no_native_item_checkboxes"] = all(
+            not bool(
                 members_list.item(row).flags()
                 & QtCore.Qt.ItemFlag.ItemIsUserCheckable
+            )
+            for row in range(members_list.count())
+        ) if members_list is not None else False
+        captured["all_rows_have_checkbox_widgets"] = all(
+            isinstance(
+                (
+                    members_list.itemWidget(members_list.item(row)).findChild(QCheckBox)
+                    if members_list.itemWidget(members_list.item(row)) is not None
+                    else None
+                ),
+                QCheckBox,
             )
             for row in range(members_list.count())
         ) if members_list is not None else False
@@ -179,7 +191,8 @@ def test_group_editor_dialog_uses_saved_peers_picker(
     assert captured["has_members_list"] is True
     assert captured["filter_placeholder"] == "Filter Saved peers"
     assert set(captured["members"]) == {PEER_A, PEER_B}
-    assert captured["all_checkable"] is True
+    assert captured["no_native_item_checkboxes"] is True
+    assert captured["all_rows_have_checkbox_widgets"] is True
 
 
 def test_create_group_dialog_saves_checked_saved_peers(
@@ -216,7 +229,11 @@ def test_create_group_dialog_saves_checked_saved_peers(
         for row in range(members_list.count()):
             item = members_list.item(row)
             if str(item.data(QtCore.Qt.ItemDataRole.UserRole)) == PEER_B:
-                item.setCheckState(QtCore.Qt.CheckState.Checked)
+                row_widget = members_list.itemWidget(item)
+                assert row_widget is not None
+                checkbox = row_widget.findChild(QCheckBox)
+                assert checkbox is not None
+                checkbox.setChecked(True)
         buttons.button(QDialogButtonBox.StandardButton.Ok).click()
         return int(QDialog.DialogCode.Accepted)
 
@@ -261,7 +278,11 @@ def test_group_editor_dialog_prechecks_existing_members(
         captured["checked"] = {
             str(members_list.item(row).data(QtCore.Qt.ItemDataRole.UserRole))
             for row in range(members_list.count())
-            if members_list.item(row).checkState() == QtCore.Qt.CheckState.Checked
+            if (
+                (row_widget := members_list.itemWidget(members_list.item(row))) is not None
+                and (checkbox := row_widget.findChild(QCheckBox)) is not None
+                and checkbox.isChecked()
+            )
         }
         return int(QDialog.DialogCode.Rejected)
 
@@ -270,6 +291,47 @@ def test_group_editor_dialog_prechecks_existing_members(
     window._show_group_editor_dialog(existing_group_id="group-edit-1")
 
     assert captured["checked"] == {PEER_B}
+
+
+def test_group_editor_dialog_keeps_checkbox_widgets_in_sync_with_item_state(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    window._contact_book = ContactBook(
+        contacts=[
+            ContactRecord(addr=PEER_A, display_name="Alice"),
+            ContactRecord(addr=PEER_B, display_name="Bob"),
+        ]
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_exec(dialog: QDialog) -> int:
+        members_list = dialog.findChild(QListWidget, "GroupMembersSavedPeersList")
+        assert members_list is not None
+        target_item = next(
+            members_list.item(row)
+            for row in range(members_list.count())
+            if str(members_list.item(row).data(QtCore.Qt.ItemDataRole.UserRole)) == PEER_B
+        )
+        row_widget = members_list.itemWidget(target_item)
+        assert row_widget is not None
+        checkbox = row_widget.findChild(QCheckBox)
+        assert checkbox is not None
+        checked_role = QtCore.Qt.ItemDataRole.UserRole + 2
+        target_item.setData(checked_role, True)
+        captured["checked_after_item_update"] = checkbox.isChecked()
+        checkbox.setChecked(False)
+        captured["item_unchecked_after_widget_update"] = not bool(
+            target_item.data(checked_role)
+        )
+        return int(QDialog.DialogCode.Rejected)
+
+    monkeypatch.setattr(QDialog, "exec", _fake_exec, raising=False)
+
+    window._show_create_group_dialog()
+
+    assert captured["checked_after_item_update"] is True
+    assert captured["item_unchecked_after_widget_update"] is True
 
 
 def test_group_map_dialog_opens_with_overview_and_mermaid_tabs(
