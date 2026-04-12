@@ -6239,7 +6239,7 @@ class I2PChatCore:
     ) -> Optional[int]:
         if not self._blindbox_ready():
             return None
-        if not self.my_dest or self._blindbox_client is None:
+        if not self.my_dest or not self._blindbox_client_runtime_ready(self._blindbox_client):
             return None
         target_peer = self._blindbox_peer_id_for_peer(
             peer_address or self.current_peer_addr or self._last_active_peer_for_telemetry()
@@ -6875,15 +6875,21 @@ class I2PChatCore:
         if offline_recipients:
             # Group offline delivery remains per-recipient: each member uses the
             # same pairwise BlindBox channel as direct chat with that peer.
-            for recipient_id in offline_recipients:
-                metadata = envelope.member_metadata[recipient_id]
-                delivery_results[recipient_id] = await self._deliver_group_envelope_to_member(
+            # Fan-out runs concurrently — pre-lock work (policy, live attempt,
+            # snapshot load) overlaps; actual PUTs serialize via _blindbox_send_lock.
+            offline_tasks = [
+                self._deliver_group_envelope_to_member(
                     recipient_id,
                     envelope,
-                    metadata,
+                    envelope.member_metadata[recipient_id],
                     requested_route=requested_route,
                     state_snapshot=state,
                 )
+                for recipient_id in offline_recipients
+            ]
+            offline_results = await asyncio.gather(*offline_tasks)
+            for recipient_id, result in zip(offline_recipients, offline_results):
+                delivery_results[recipient_id] = result
 
         return (
             GroupSendResult(
