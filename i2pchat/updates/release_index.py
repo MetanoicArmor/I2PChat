@@ -106,7 +106,7 @@ def expected_artifact_prefix() -> Optional[str]:
         if machine == "arm64":
             return "I2PChat-macOS-arm64"
         if machine == "x86_64":
-            return "I2PChat-macOS-x86_64"
+            return "I2PChat-macOS-x64"
         return None
     if plat == "win32":
         if machine in ("amd64", "x86_64", "arm64"):

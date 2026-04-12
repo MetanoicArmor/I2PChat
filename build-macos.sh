@@ -17,10 +17,11 @@ if [ -z "${RELEASE_VERSION}" ]; then
   exit 1
 fi
 
-# Определяем архитектуру
+# Определяем архитектуру (i2pd кладём в vendor/i2pd/darwin-x64 или darwin-arm64)
 ARCH=$(uname -m)
+I2PD_DARWIN_VENDOR_SUB="darwin-arm64"
 case "$ARCH" in
-  x86_64) ARCH_SUFFIX="x64" ;;
+  x86_64) ARCH_SUFFIX="x64" ; I2PD_DARWIN_VENDOR_SUB="darwin-x64" ;;
   arm64)  ARCH_SUFFIX="arm64" ;;
   *)      ARCH_SUFFIX="$ARCH" ;;
 esac
@@ -33,8 +34,8 @@ fi
 
 echo "==> Checking optional bundled i2pd source"
 "$(pwd)/scripts/ensure_bundled_i2pd.sh"
-if [ ! -f "vendor/i2pd/darwin-arm64/i2pd" ]; then
-  echo "WARN: нет vendor/i2pd/darwin-arm64/i2pd — .app будет без встроенного i2pd (см. build-linux.sh / docs/BUILD.md)." >&2
+if [ ! -f "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" ]; then
+  echo "WARN: нет vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd — .app будет без встроенного i2pd (см. build-linux.sh / docs/BUILD.md)." >&2
 fi
 
 if command -v python3.14 >/dev/null 2>&1; then
@@ -79,11 +80,11 @@ echo "==> Собираю I2PChat.app"
 rm -rf "dist/${APP_NAME}.app"
 mkdir -p "dist/${APP_NAME}.app/Contents/MacOS" "dist/${APP_NAME}.app/Contents/Resources"
 cp -R "dist/${APP_NAME}" "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}"
-if [ -f "vendor/i2pd/darwin-arm64/i2pd" ]; then
-  mkdir -p "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/darwin-arm64"
-  cp "vendor/i2pd/darwin-arm64/i2pd" \
-    "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/darwin-arm64/i2pd"
-  chmod +x "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/darwin-arm64/i2pd"
+if [ -f "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" ]; then
+  mkdir -p "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}"
+  cp "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" \
+    "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd"
+  chmod +x "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd"
 else
   echo "==> No local bundled macOS i2pd found (ensure_bundled_i2pd clones https://github.com/MetanoicArmor/i2pchat-bundled-i2pd by default, or run ./scripts/fetch_bundled_i2pd.sh --from …)"
 fi

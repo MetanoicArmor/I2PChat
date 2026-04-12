@@ -22,6 +22,7 @@ Accepted source layouts:
 
   /path/to/binaries/
     darwin-arm64/i2pd
+    darwin-x64/i2pd
     linux-aarch64/i2pd
     linux-x86_64/i2pd
     windows-x64/i2pd.exe
@@ -30,6 +31,7 @@ or flat names:
 
   /path/to/binaries/
     i2pd-darwin-arm64
+    i2pd-darwin-x64
     i2pd-linux-aarch64
     i2pd-linux-x86_64
     i2pd-windows-x64.exe
@@ -37,6 +39,7 @@ or flat names:
 Optional URL env vars are also supported:
 
   I2PCHAT_I2PD_DARWIN_ARM64_URL
+  I2PCHAT_I2PD_DARWIN_X64_URL
   I2PCHAT_I2PD_LINUX_AARCH64_URL
   I2PCHAT_I2PD_LINUX_X86_64_URL
   I2PCHAT_I2PD_WINDOWS_X64_URL
@@ -120,6 +123,11 @@ copy_from_dir() {
     found=1
     copy_extra_libs_from_subdir "$source_dir" "darwin-arm64" "*.dylib"
   fi
+  if src="$(find_source_file "${source_dir}" "darwin-x64/i2pd" "i2pd-darwin-x64")"; then
+    copy_one "$src" "${TARGET_ROOT}/darwin-x64/i2pd"
+    found=1
+    copy_extra_libs_from_subdir "$source_dir" "darwin-x64" "*.dylib"
+  fi
   if src="$(find_source_file "${source_dir}" "linux-aarch64/i2pd" "i2pd-linux-aarch64")"; then
     copy_one "$src" "${TARGET_ROOT}/linux-aarch64/i2pd"
     found=1
@@ -145,6 +153,10 @@ copy_from_urls() {
   local found=0
   if [[ -n "${I2PCHAT_I2PD_DARWIN_ARM64_URL:-}" ]]; then
     download_one "${I2PCHAT_I2PD_DARWIN_ARM64_URL}" "${TARGET_ROOT}/darwin-arm64/i2pd"
+    found=1
+  fi
+  if [[ -n "${I2PCHAT_I2PD_DARWIN_X64_URL:-}" ]]; then
+    download_one "${I2PCHAT_I2PD_DARWIN_X64_URL}" "${TARGET_ROOT}/darwin-x64/i2pd"
     found=1
   fi
   if [[ -n "${I2PCHAT_I2PD_LINUX_AARCH64_URL:-}" ]]; then

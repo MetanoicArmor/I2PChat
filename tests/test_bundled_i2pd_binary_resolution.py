@@ -24,6 +24,23 @@ class BundledI2pdBinaryResolutionTests(unittest.TestCase):
                 got = bundled_i2pd.resolve_bundled_i2pd_binary()
             self.assertEqual(got, str(binary))
 
+    def test_prefers_darwin_x64_path(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            rel = root / "vendor" / "i2pd" / "darwin-x64"
+            rel.mkdir(parents=True, exist_ok=True)
+            binary = rel / "i2pd"
+            binary.write_text("x", encoding="utf-8")
+            with mock.patch.object(bundled_i2pd.sys, "platform", "darwin"), \
+                    mock.patch("platform.machine", return_value="x86_64"), \
+                    mock.patch.object(
+                        bundled_i2pd.Path,
+                        "resolve",
+                        return_value=root / "i2pchat" / "router" / "bundled_i2pd.py",
+                    ):
+                got = bundled_i2pd.resolve_bundled_i2pd_binary()
+            self.assertEqual(got, str(binary))
+
     def test_uses_meipass_when_repo_binary_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             meipass = Path(td)

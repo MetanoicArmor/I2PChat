@@ -159,6 +159,10 @@ def _unix_find_i2pd_pids_for_runtime(
 
 def _bundled_i2pd_rel_parts() -> tuple[str, ...]:
     if sys.platform == "darwin":
+        import platform as _plat
+
+        if _plat.machine() == "x86_64":
+            return ("vendor", "i2pd", "darwin-x64", "i2pd")
         return ("vendor", "i2pd", "darwin-arm64", "i2pd")
     if sys.platform == "win32":
         return ("vendor", "i2pd", "windows-x64", "i2pd.exe")

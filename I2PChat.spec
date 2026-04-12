@@ -15,9 +15,16 @@ _icon_file = 'i2pchat.ico' if sys.platform == 'win32' else 'icon.png'
 
 _i2pd_binaries = []
 if sys.platform == 'darwin':
-    _i2pd_path = os.path.join('vendor', 'i2pd', 'darwin-arm64', 'i2pd')
+    import platform as _platform
+
+    _i2pd_sub = 'darwin-x64' if _platform.machine() == 'x86_64' else 'darwin-arm64'
+    _i2pd_dir = os.path.join('vendor', 'i2pd', _i2pd_sub)
+    _i2pd_path = os.path.join(_i2pd_dir, 'i2pd')
     if os.path.isfile(_i2pd_path):
-        _i2pd_binaries.append((_i2pd_path, os.path.join('vendor', 'i2pd', 'darwin-arm64')))
+        _i2pd_binaries.append((_i2pd_path, _i2pd_dir))
+        _i2pd_binaries.extend(
+            (dy, _i2pd_dir) for dy in glob.glob(os.path.join(_i2pd_dir, '*.dylib'))
+        )
 elif sys.platform == 'win32':
     _i2pd_path = os.path.join('vendor', 'i2pd', 'windows-x64', 'i2pd.exe')
     if os.path.isfile(_i2pd_path):
