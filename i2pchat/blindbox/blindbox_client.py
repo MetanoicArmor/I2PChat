@@ -158,6 +158,14 @@ class BlindBoxClient:
         # Throttle identical Blind Box failure logs (poller hammers GET).
         self._box_warn_next: dict[str, float] = {}
 
+    async def _reset_ctrl_connection(self) -> None:
+        writer = self._ctrl_writer
+        self._ctrl_writer = None
+        self._ctrl_reader = None
+        self._started = False
+        if writer is not None:
+            await self._safe_close(writer)
+
     @staticmethod
     def _validate_blindbox_key(key: str) -> str:
         token = str(key or "").strip()
@@ -202,20 +210,18 @@ class BlindBoxClient:
                     self._ctrl_reader, self._ctrl_writer, line_timeout=t_sess
                 )
             except asyncio.TimeoutError as exc:
-                writer = self._ctrl_writer
-                self._ctrl_writer = None
-                self._ctrl_reader = None
-                if writer is not None:
-                    try:
-                        writer.close()
-                        await writer.wait_closed()
-                    except Exception:
-                        pass
+                await self._reset_ctrl_connection()
                 raise RuntimeError(
                     f"SAM timed out ({t_sess:g}s) waiting for HELLO reply "
                     f"({self.sam_host}:{self.sam_port}). "
                     "Is I2P running? Increase I2PCHAT_BLINDBOX_SAM_SESSION_TIMEOUT if needed."
                 ) from exc
+            except Exception as exc:
+                await self._reset_ctrl_connection()
+                if isinstance(exc, RuntimeError):
+                    raise
+                detail = str(exc).strip() or type(exc).__name__
+                raise RuntimeError(f"Blind Box SAM startup failed: {detail}") from exc
 
             self._active_sam_id = f"{self.session_id}_{secrets.token_hex(4)}"
             cmd = sam_protocol.session_create(
@@ -225,41 +231,29 @@ class BlindBoxClient:
                 options=self.sam_options,
                 sig_type=7,
             )
-            self._ctrl_writer.write(cmd)
-            await self._ctrl_writer.drain()
             try:
+                self._ctrl_writer.write(cmd)
+                await self._ctrl_writer.drain()
                 response = await asyncio.wait_for(
                     self._ctrl_reader.readline(), timeout=t_sess
                 )
             except asyncio.TimeoutError as exc:
-                writer = self._ctrl_writer
-                self._ctrl_writer = None
-                self._ctrl_reader = None
-                if writer is not None:
-                    try:
-                        writer.close()
-                        await writer.wait_closed()
-                    except Exception:
-                        pass
+                await self._reset_ctrl_connection()
                 raise RuntimeError(
                     f"SAM timed out ({t_sess:g}s) during Blind Box SESSION CREATE "
                     f"({self.sam_host}:{self.sam_port}). "
                     "I2P may still be building tunnels — wait and retry, or increase "
                     "I2PCHAT_BLINDBOX_SAM_SESSION_TIMEOUT."
                 ) from exc
+            except Exception as exc:
+                await self._reset_ctrl_connection()
+                detail = str(exc).strip() or type(exc).__name__
+                raise RuntimeError(f"SAM session create failed: {detail}") from exc
             try:
                 _expect_sam_line_ok(response)
             except RuntimeError as exc:
                 # Drop half-open ctrl connection so a retry can open a fresh socket.
-                writer = self._ctrl_writer
-                self._ctrl_writer = None
-                self._ctrl_reader = None
-                if writer is not None:
-                    try:
-                        writer.close()
-                        await writer.wait_closed()
-                    except Exception:
-                        pass
+                await self._reset_ctrl_connection()
                 inner = str(exc)
                 if inner == "(no response / disconnected)":
                     detail = (
@@ -276,16 +270,7 @@ class BlindBoxClient:
         return self._started
 
     async def close(self) -> None:
-        writer = self._ctrl_writer
-        self._ctrl_writer = None
-        self._ctrl_reader = None
-        self._started = False
-        if writer is not None:
-            try:
-                writer.close()
-                await writer.wait_closed()
-            except Exception:
-                pass
+        await self._reset_ctrl_connection()
 
     async def put(self, key: str, blob: bytes) -> list[BlindBoxPutResult]:
         if not self._started:

@@ -558,6 +558,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "I2PCHAT_BLINDBOX_ENABLED": "1",
                 "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+                "I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX": "1",
             },
             clear=False,
         ):
@@ -577,6 +578,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "I2PCHAT_BLINDBOX_ENABLED": "1",
                 "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+                "I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX": "1",
             },
             clear=False,
         ):
@@ -604,6 +606,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "I2PCHAT_BLINDBOX_ENABLED": "1",
                 "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+                "I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX": "1",
             },
             clear=False,
         ):
@@ -639,6 +642,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "I2PCHAT_BLINDBOX_ENABLED": "1",
                 "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+                "I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX": "1",
             },
             clear=False,
         ):
@@ -660,6 +664,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "I2PCHAT_BLINDBOX_ENABLED": "1",
                 "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+                "I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX": "1",
             },
             clear=False,
         ):
@@ -681,6 +686,7 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
             {
                 "I2PCHAT_BLINDBOX_ENABLED": "1",
                 "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+                "I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX": "1",
             },
             clear=False,
         ):

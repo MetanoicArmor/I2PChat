@@ -104,6 +104,9 @@ class _RetrySlotBlindBoxClient:
         self.calls = 0
         self.tokens: list[str] = []
 
+    def is_runtime_ready(self) -> bool:
+        return True
+
     async def put(self, key: str, blob: bytes) -> list[object]:
         del blob
         self.calls += 1
@@ -113,6 +116,29 @@ class _RetrySlotBlindBoxClient:
                 "Blind Box PUT quorum not reached: 0/1 (first failure: PUT EXISTS verification mismatch)"
             )
         return []
+
+
+class _FailingBlindBoxRuntimeClient:
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        self.start_calls = 0
+        self.close_calls = 0
+        self.put_calls = 0
+
+    async def start(self) -> None:
+        self.start_calls += 1
+        raise RuntimeError(self.detail)
+
+    async def close(self) -> None:
+        self.close_calls += 1
+
+    def is_runtime_ready(self) -> bool:
+        return False
+
+    async def put(self, key: str, blob: bytes) -> list[object]:
+        del key, blob
+        self.put_calls += 1
+        raise AssertionError("put() should not be reached while runtime is unavailable")
 
 
 class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
@@ -182,12 +208,16 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertFalse(core.delete_group(created_state.group_id))
 
-    def test_get_group_send_ui_hints_matches_live_vs_offline_ready(self) -> None:
-        """Group Send vs Send offline: aggregate any-member live path and global BlindBox readiness."""
+    def test_get_group_send_ui_hints_reflects_pairwise_blindbox_readiness(self) -> None:
+        """Group Send hints should track pairwise BlindBox roots for offline members."""
         with tempfile.TemporaryDirectory() as tmpdir:
             core = I2PChatCore(profile="alice")
             core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                tmpdir, filename
+            )
             core.my_dest = _DummyDest(ALICE_BARE)
+            core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
             core.create_group(title="g", members=[BOB_BARE], group_id="g-ui-hints", epoch=1)
             core.get_delivery_telemetry = lambda: {  # type: ignore[method-assign]
                 "blindbox_enabled": True,
@@ -204,6 +234,25 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(h["show_offline_button"])
             self.assertFalse(h["any_live_to_member"])
             self.assertEqual(h.get("live_by_recipient"), {BOB_BARE: False})
+            self.assertEqual(h.get("blindbox_ready_by_recipient"), {BOB_BARE: False})
+            self.assertFalse(h["group_blindbox_ready"])
+            self.assertTrue(h["await_group_root"])
+            self.assertEqual(h["reason"], "await-group-root")
+
+            core._save_blindbox_peer_snapshot(
+                _BlindBoxPeerSnapshot(
+                    peer_addr=BOB_BARE,
+                    peer_id=BOB_BARE,
+                    state=BlindBoxState(send_index=0),
+                    root_secret=b"b" * 32,
+                    root_epoch=1,
+                )
+            )
+            h_ready = core.get_group_send_ui_hints("g-ui-hints")
+            self.assertEqual(h_ready.get("blindbox_ready_by_recipient"), {BOB_BARE: True})
+            self.assertTrue(h_ready["group_blindbox_ready"])
+            self.assertFalse(h_ready["await_group_root"])
+            self.assertEqual(h_ready["reason"], "ok")
 
             def _bob_live(*_a: object, peer_id: str | None = None, **_k: object) -> bool:
                 return peer_id == BOB_BARE
@@ -283,7 +332,9 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(group_state.group_id, "core-group-empty")
             self.assertEqual(core.load_group_history(group_state.group_id), [])
 
-    async def test_send_group_text_from_core_routes_live_and_group_blindbox(self) -> None:
+    async def test_send_group_text_from_core_routes_live_and_pairwise_blindbox(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             core = I2PChatCore(profile="alice")
             core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
@@ -302,13 +353,14 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     transport_message_id="live-bob",
                 )
             )
-            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
+            core._send_group_envelope_via_blindbox = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=True,
                     reason="blindbox-ready",
                     transport_message_id="queue-offline",
                 )
             )
+            core._send_group_envelope_via_group_blindbox = AsyncMock()  # type: ignore[method-assign]
 
             result = await core.send_group_text(group_state.group_id, "hello group")
             history = core.load_group_history(group_state.group_id)
@@ -324,6 +376,8 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 result.delivery_results[CAROL_BARE].status,
                 GroupDeliveryStatus.QUEUED_OFFLINE,
             )
+            core._send_group_envelope_via_blindbox.assert_awaited_once()
+            core._send_group_envelope_via_group_blindbox.assert_not_awaited()
             self.assertEqual(len(history), 1)
             self.assertEqual(history[0].text, "hello group")
             self.assertEqual(history[0].epoch, 7)
@@ -494,7 +548,116 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 snapshot, _save_state = snapshot_bundle
                 self.assertEqual(snapshot.state.send_index, 2)
 
-    async def test_group_blindbox_send_uses_single_put_for_offline_subset(self) -> None:
+    async def test_blindbox_runtime_start_failure_sets_retry_cooldown(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = I2PChatCore(profile="alice")
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                core._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                    tmpdir, filename
+                )
+                core.my_dest = _DummyDest(ALICE_BARE)
+                core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
+                core._blindbox_runtime_retry_sec = 60.0
+                failing = _FailingBlindBoxRuntimeClient(
+                    "SAM session create failed: (no response / disconnected — is I2P running and SAM enabled on 127.0.0.1:17656?)"
+                )
+
+                with patch(
+                    "i2pchat.core.i2p_chat_core.BlindBoxClient",
+                    return_value=failing,
+                ):
+                    await core._ensure_blindbox_runtime_started()
+                    assert core._blindbox_task is not None
+                    await core._blindbox_task
+
+                    self.assertEqual(failing.start_calls, 1)
+                    self.assertEqual(failing.close_calls, 1)
+                    self.assertIsNone(core._blindbox_client)
+                    self.assertIn(
+                        "SAM session create failed",
+                        core._blindbox_runtime_last_error,
+                    )
+                    self.assertGreater(core._blindbox_runtime_retry_not_before_mono, 0.0)
+
+                    await core._ensure_blindbox_runtime_started()
+                    self.assertEqual(failing.start_calls, 1)
+
+    async def test_group_blindbox_send_returns_runtime_unavailable_without_put_retry(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = I2PChatCore(profile="alice")
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                core._profile_scoped_path = lambda filename: os.path.join(  # type: ignore[method-assign]
+                    tmpdir, filename
+                )
+                core.my_dest = _DummyDest(ALICE_BARE)
+                core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
+                core._ensure_blindbox_runtime_started = AsyncMock(return_value=None)  # type: ignore[method-assign]
+                failing = _FailingBlindBoxRuntimeClient(
+                    "SAM session create failed: (no response / disconnected — is I2P running and SAM enabled on 127.0.0.1:17656?)"
+                )
+                core._blindbox_client = failing
+                core._blindbox_runtime_last_error = failing.detail
+                core._blindbox_runtime_retry_not_before_mono = 10**12
+
+                group_state = core.create_group(
+                    title="Unavailable runtime",
+                    members=[BOB_BARE],
+                    group_id="core-group-runtime-unavailable",
+                    epoch=2,
+                )
+                root_secret = b"r" * 32
+                core._save_group_blindbox_channel(
+                    group_state.group_id,
+                    GroupBlindBoxChannel(
+                        channel_id=f"group:{group_state.group_id}",
+                        group_epoch=2,
+                        state=BlindBoxState(send_index=0),
+                        root_secret_enc=core._group_blindbox_encrypt_root_secret(
+                            root_secret,
+                            group_state.group_id,
+                        ),
+                        root_epoch=3,
+                    ),
+                )
+
+                envelope = GroupEnvelope(
+                    group_id=group_state.group_id,
+                    epoch=2,
+                    msg_id="runtime-down-msg-1",
+                    sender_id=ALICE_BARE,
+                    group_seq=1,
+                    content_type=GroupContentType.GROUP_TEXT,
+                    payload="will not send",
+                )
+                result = await core._send_group_envelope_via_group_blindbox(
+                    group_state.group_id,
+                    envelope,
+                )
+
+                self.assertFalse(result.accepted)
+                self.assertTrue(
+                    result.reason.startswith("BlindBox runtime unavailable:"),
+                    result.reason,
+                )
+                self.assertEqual(failing.put_calls, 0)
+
+    async def test_group_send_uses_pairwise_puts_for_offline_members(self) -> None:
         with patch.dict(
             os.environ,
             {
@@ -518,13 +681,13 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
 
                 async def fake_put(
                     *,
-                    group_id: str,
+                    peer_id: str,
                     **kwargs: object,
                 ) -> None:
                     del kwargs
-                    put_calls.append(group_id)
+                    put_calls.append(peer_id)
 
-                core._put_group_blindbox_frame_with_slot_retry = fake_put  # type: ignore[method-assign]
+                core._put_blindbox_frame_with_slot_retry = fake_put  # type: ignore[method-assign]
 
                 root_secret = b"x" * 32
                 group_state = core.create_group(
@@ -533,16 +696,21 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     group_id="core-group-offline-fanout",
                     epoch=1,
                 )
-                core._save_group_blindbox_channel(
-                    group_state.group_id,
-                    GroupBlindBoxChannel(
-                        channel_id=f"group:{group_state.group_id}",
-                        group_epoch=1,
+                core._save_blindbox_peer_snapshot(
+                    _BlindBoxPeerSnapshot(
+                        peer_addr=BOB_BARE,
+                        peer_id=BOB_BARE,
                         state=BlindBoxState(send_index=0),
-                        root_secret_enc=core._group_blindbox_encrypt_root_secret(
-                            root_secret,
-                            group_state.group_id,
-                        ),
+                        root_secret=root_secret,
+                        root_epoch=1,
+                    )
+                )
+                core._save_blindbox_peer_snapshot(
+                    _BlindBoxPeerSnapshot(
+                        peer_addr=CAROL_BARE,
+                        peer_id=CAROL_BARE,
+                        state=BlindBoxState(send_index=0),
+                        root_secret=root_secret,
                         root_epoch=1,
                     ),
                 )
@@ -559,9 +727,11 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     route="offline",
                 )
 
-                self.assertEqual(put_calls, [group_state.group_id])
+                self.assertCountEqual(put_calls, [BOB_BARE, CAROL_BARE])
 
-    async def test_group_send_queues_pending_when_group_root_missing(self) -> None:
+    async def test_group_send_queues_pairwise_pending_when_peer_root_missing(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             core = I2PChatCore(profile="alice")
             core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
@@ -578,28 +748,24 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     reason="needs-live-session",
                 )
             )
-            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
+            core._send_group_envelope_via_blindbox = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=False,
-                    reason="blindbox-await-group-root",
+                    reason="blindbox-await-root",
                 )
             )
+            core._send_group_envelope_via_group_blindbox = AsyncMock()  # type: ignore[method-assign]
 
             result = await core.send_group_text(group_state.group_id, "queue me")
             conversation = core.load_group(group_state.group_id)
 
             assert conversation is not None
-            self.assertEqual(len(conversation.pending_group_blindbox_messages), 1)
-            pending = conversation.pending_group_blindbox_messages[0]
-            self.assertEqual(pending.group_id, group_state.group_id)
-            self.assertEqual(pending.group_title, "Pending group")
-            self.assertEqual(pending.group_members, (ALICE_BARE, BOB_BARE, CAROL_BARE))
-            self.assertEqual(pending.sender_id, ALICE_BARE)
-            self.assertEqual(pending.msg_id, result.envelope.msg_id)
-            self.assertEqual(pending.group_seq, result.envelope.group_seq)
-            self.assertEqual(pending.epoch, result.envelope.epoch)
-            self.assertEqual(pending.content_type, GroupContentType.GROUP_TEXT)
-            self.assertEqual(pending.payload, "queue me")
+            self.assertEqual(conversation.pending_group_blindbox_messages, ())
+            self.assertEqual(len(conversation.pending_deliveries), 2)
+            self.assertEqual(
+                {item.recipient_id for item in conversation.pending_deliveries},
+                {BOB_BARE, CAROL_BARE},
+            )
             self.assertEqual(
                 conversation.history[-1].delivery_results,
                 {
@@ -610,12 +776,21 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 conversation.history[-1].delivery_reasons,
                 {
-                    BOB_BARE: "blindbox-await-group-root",
-                    CAROL_BARE: "blindbox-await-group-root",
+                    BOB_BARE: "blindbox-await-root",
+                    CAROL_BARE: "blindbox-await-root",
                 },
             )
+            self.assertEqual(
+                result.delivery_results[BOB_BARE].reason,
+                "blindbox-await-root",
+            )
+            self.assertEqual(
+                result.delivery_results[CAROL_BARE].reason,
+                "blindbox-await-root",
+            )
+            core._send_group_envelope_via_group_blindbox.assert_not_awaited()
 
-    async def test_group_blindbox_pending_flush_sends_once_after_root_ready(self) -> None:
+    async def test_group_pending_delivery_flush_sends_after_peer_root_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             core = I2PChatCore(profile="alice")
             core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
@@ -632,22 +807,25 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     reason="needs-live-session",
                 )
             )
-            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
+            core._send_group_envelope_via_blindbox = AsyncMock(  # type: ignore[method-assign]
                 return_value=GroupTransportOutcome(
                     accepted=False,
-                    reason="blindbox-await-group-root",
+                    reason="blindbox-await-root",
                 )
             )
+            core._send_group_envelope_via_group_blindbox = AsyncMock()  # type: ignore[method-assign]
 
             await core.send_group_text(group_state.group_id, "deliver later")
 
-            async def _flush_group_offline(
-                group_id: str,
+            async def _flush_member_offline(
+                recipient_id: str,
                 envelope: GroupEnvelope,
+                metadata: GroupRecipientDeliveryMetadata,
                 *,
                 state_snapshot: GroupState | None = None,
             ) -> GroupTransportOutcome:
-                self.assertEqual(group_id, group_state.group_id)
+                self.assertIn(recipient_id, {BOB_BARE, CAROL_BARE})
+                self.assertEqual(metadata.recipient_id, recipient_id)
                 self.assertEqual(envelope.payload, "deliver later")
                 assert state_snapshot is not None
                 self.assertEqual(state_snapshot.title, "Pending flush")
@@ -655,21 +833,21 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 return GroupTransportOutcome(
                     accepted=True,
                     reason="blindbox-ready",
-                    transport_message_id="queued-group",
+                    transport_message_id=f"queued-{recipient_id}",
                 )
 
-            core._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
-                side_effect=_flush_group_offline
+            core._send_group_envelope_via_blindbox = AsyncMock(  # type: ignore[method-assign]
+                side_effect=_flush_member_offline
             )
 
-            flushed = await core._flush_pending_group_blindbox_messages_for_group(
-                group_state.group_id
-            )
+            flushed_bob = await core._flush_pending_group_deliveries_for_peer(BOB_BARE)
+            flushed_carol = await core._flush_pending_group_deliveries_for_peer(CAROL_BARE)
             conversation = core.load_group(group_state.group_id)
 
-            self.assertEqual(flushed, 1)
+            self.assertEqual(flushed_bob, 1)
+            self.assertEqual(flushed_carol, 1)
             assert conversation is not None
-            self.assertEqual(conversation.pending_group_blindbox_messages, ())
+            self.assertEqual(conversation.pending_deliveries, ())
             self.assertEqual(
                 conversation.history[-1].delivery_results,
                 {
@@ -678,20 +856,71 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
             self.assertEqual(conversation.history[-1].delivery_reasons, {})
+            core._send_group_envelope_via_group_blindbox.assert_not_awaited()
 
     def test_group_blindbox_membership_change_requires_root_rotate(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX": "1"},
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = I2PChatCore(profile="alice")
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                core.my_dest = _DummyDest(ALICE_BARE)
+                core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
+                group_state = core.create_group(
+                    title="Rotate me",
+                    members=[BOB_BARE],
+                    group_id="core-group-rotate-required",
+                    epoch=4,
+                )
+                root_secret = b"z" * 32
+                core._save_group_blindbox_channel(
+                    group_state.group_id,
+                    GroupBlindBoxChannel(
+                        channel_id=f"group:{group_state.group_id}",
+                        group_epoch=4,
+                        state=BlindBoxState(send_index=3),
+                        root_secret_enc=core._group_blindbox_encrypt_root_secret(
+                            root_secret,
+                            group_state.group_id,
+                        ),
+                        root_epoch=2,
+                    ),
+                )
+
+                updated = core.update_group(
+                    group_state.group_id,
+                    title="Rotate me",
+                    members=[BOB_BARE, CAROL_BARE],
+                )
+                snapshot_bundle = core._group_blindbox_runtime_snapshot(updated.group_id)
+
+                assert snapshot_bundle is not None
+                snapshot, _save_state = snapshot_bundle
+                self.assertEqual(snapshot.group_epoch, updated.epoch)
+                self.assertIsNone(snapshot.root_secret)
+                self.assertEqual(snapshot.root_epoch, 0)
+                self.assertEqual(snapshot.pending_root_secret, None)
+                self.assertTrue(snapshot.prev_roots)
+                self.assertEqual(snapshot.prev_roots[0]["group_epoch"], 4)
+                self.assertEqual(snapshot.prev_roots[0]["root_epoch"], 2)
+                self.assertEqual(snapshot.prev_roots[0]["secret"], root_secret)
+
+    def test_group_update_leaves_legacy_group_blindbox_state_untouched_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             core = I2PChatCore(profile="alice")
             core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
             core.my_dest = _DummyDest(ALICE_BARE)
             core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
             group_state = core.create_group(
-                title="Rotate me",
+                title="Legacy idle",
                 members=[BOB_BARE],
-                group_id="core-group-rotate-required",
+                group_id="core-group-legacy-idle",
                 epoch=4,
             )
-            root_secret = b"z" * 32
+            root_secret = b"y" * 32
             core._save_group_blindbox_channel(
                 group_state.group_id,
                 GroupBlindBoxChannel(
@@ -708,21 +937,58 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
 
             updated = core.update_group(
                 group_state.group_id,
-                title="Rotate me",
+                title="Legacy idle",
                 members=[BOB_BARE, CAROL_BARE],
             )
             snapshot_bundle = core._group_blindbox_runtime_snapshot(updated.group_id)
 
             assert snapshot_bundle is not None
             snapshot, _save_state = snapshot_bundle
-            self.assertEqual(snapshot.group_epoch, updated.epoch)
-            self.assertIsNone(snapshot.root_secret)
-            self.assertEqual(snapshot.root_epoch, 0)
-            self.assertEqual(snapshot.pending_root_secret, None)
-            self.assertTrue(snapshot.prev_roots)
-            self.assertEqual(snapshot.prev_roots[0]["group_epoch"], 4)
-            self.assertEqual(snapshot.prev_roots[0]["root_epoch"], 2)
-            self.assertEqual(snapshot.prev_roots[0]["secret"], root_secret)
+            self.assertEqual(snapshot.group_epoch, 4)
+            self.assertEqual(snapshot.root_secret, root_secret)
+            self.assertEqual(snapshot.root_epoch, 2)
+
+    async def test_schedule_group_blindbox_root_push_requires_legacy_opt_in(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "I2PCHAT_BLINDBOX_ENABLED": "1",
+                "I2PCHAT_BLINDBOX_REPLICAS": "r1.b32.i2p",
+            },
+            clear=False,
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                core = I2PChatCore(profile="alice")
+                core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+                core.my_dest = _DummyDest(ALICE_BARE)
+                core.create_group(
+                    title="Legacy push",
+                    members=[BOB_BARE],
+                    group_id="core-group-legacy-push",
+                    epoch=1,
+                )
+                state = core.load_group_state("core-group-legacy-push")
+                assert state is not None
+                core.session_manager.is_live_path_alive = lambda *args, **kwargs: True  # type: ignore[method-assign]
+                core._writer_frame_peer_and_text_acks = lambda *_args, **_kwargs: (  # type: ignore[method-assign]
+                    _DummyWriter(),
+                    BOB_BARE,
+                    {},
+                )
+                core._send_group_blindbox_root_if_needed = AsyncMock()  # type: ignore[method-assign]
+
+                core._schedule_group_blindbox_root_push(state)
+                await asyncio.sleep(0)
+                core._send_group_blindbox_root_if_needed.assert_not_awaited()
+
+                with patch.dict(
+                    os.environ,
+                    {"I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX": "1"},
+                    clear=False,
+                ):
+                    core._schedule_group_blindbox_root_push(state)
+                    await asyncio.sleep(0)
+                core._send_group_blindbox_root_if_needed.assert_awaited_once()
 
     async def test_group_next_sequence_survives_create_send_and_import_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -173,6 +173,41 @@ def _tcp_refusal_in_exception_chain(exc: BaseException) -> bool:
     return False
 
 
+def _blindbox_runtime_transport_error(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(
+            cur,
+            (
+                asyncio.TimeoutError,
+                ConnectionError,
+                ConnectionResetError,
+                BrokenPipeError,
+                asyncio.IncompleteReadError,
+            ),
+        ):
+            return True
+        if _is_tcp_connection_refused(cur) or _tcp_refusal_in_exception_chain(cur):
+            return True
+        text = _exception_user_message(cur).lower()
+        if any(
+            token in text
+            for token in (
+                "connection lost",
+                "no response / disconnected",
+                "sam hello failed",
+                "sam session create failed",
+                "blind box sam startup failed",
+                "timed out",
+            )
+        ):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
 def _sam_unreachable_user_message(sam_address: Tuple[str, int]) -> str:
     host, port = sam_address
     return (
@@ -1551,6 +1586,8 @@ class I2PChatCore:
         self._blindbox_client: Optional[BlindBoxClient] = None
         self._blindbox_task: Optional[asyncio.Task[Any]] = None
         self._blindbox_runtime_lock = asyncio.Lock()
+        self._blindbox_runtime_last_error = ""
+        self._blindbox_runtime_retry_not_before_mono = 0.0
         # Serializes encrypt+PUT+send_index bump: parallel sends reuse the same
         # lookup_token (same index) but ciphertext differs (random nonce/padding)
         # → PUT EXISTS verification mismatch on boxes.
@@ -1612,6 +1649,10 @@ class I2PChatCore:
         )
         self._blindbox_poll_hot_until_mono = 0.0
         self._blindbox_poll_cooldown_until_mono = 0.0
+        self._blindbox_runtime_retry_sec = max(
+            1.0,
+            float(os.environ.get("I2PCHAT_BLINDBOX_RUNTIME_RETRY_SEC", "15")),
+        )
         self._blindbox_poll_wakeup = asyncio.Event()
         self._blindbox_recv_scan_budget = max(
             1,
@@ -2958,11 +2999,12 @@ class I2PChatCore:
         """
         if self.profile == TRANSIENT_PROFILE_NAME:
             return
-        self._on_group_blindbox_membership_changed(
-            previous_members,
-            previous_epoch,
-            new_state,
-        )
+        if self._legacy_group_blindbox_outbound_enabled():
+            self._on_group_blindbox_membership_changed(
+                previous_members,
+                previous_epoch,
+                new_state,
+            )
         try:
             local_member = self._local_group_member_id()
         except Exception:
@@ -3001,7 +3043,8 @@ class I2PChatCore:
                 len(intro),
             )
         self._schedule_group_peer_intros(intro)
-        self._schedule_group_blindbox_root_push(new_state)
+        if self._legacy_group_blindbox_outbound_enabled():
+            self._schedule_group_blindbox_root_push(new_state)
 
     def _on_group_blindbox_membership_changed(
         self,
@@ -3062,6 +3105,8 @@ class I2PChatCore:
         save_state()
 
     def _schedule_group_blindbox_root_push(self, state: GroupState) -> None:
+        if not self._legacy_group_blindbox_outbound_enabled():
+            return
         if not self._should_initiate_group_blindbox_root_exchange(state):
             return
         try:
@@ -4128,6 +4173,21 @@ class I2PChatCore:
             and bool(self.blindbox_replicas)
             and self.my_dest is not None
         )
+
+    def _blindbox_runtime_retry_active(self, *, now_mono: Optional[float] = None) -> bool:
+        now = time.monotonic() if now_mono is None else now_mono
+        return now < self._blindbox_runtime_retry_not_before_mono
+
+    def _blindbox_runtime_unavailable_reason(self) -> str:
+        detail = str(self._blindbox_runtime_last_error or "").strip()
+        if not detail:
+            return ""
+        return f"BlindBox runtime unavailable: {detail}"
+
+    def _legacy_group_blindbox_outbound_enabled(self) -> bool:
+        # Legacy group-wide BlindBox stays available only as an explicit
+        # compatibility lane. The default runtime path is pairwise BlindBox.
+        return _env_truthy("I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX")
 
     def _load_trust_store(self) -> None:
         """Загружает pinning-таблицу peer_addr -> signing_pub_hex."""
@@ -5228,18 +5288,16 @@ class I2PChatCore:
             and d.get("blindbox_ready")
             and d.get("blindbox_runtime_ready")
         )
-        snapshot_bundle = self._group_blindbox_runtime_snapshot(group_id)
-        group_blindbox_ready = False
-        await_group_root = False
-        if snapshot_bundle is not None:
-            snapshot, _save_state = snapshot_bundle
-            group_blindbox_ready = (
-                snapshot.root_secret is not None
-                and int(snapshot.group_epoch) == int(state.epoch)
-            )
-            await_group_root = bool(blindbox_runtime_ok and not group_blindbox_ready)
-        elif blindbox_runtime_ok:
-            await_group_root = True
+        (
+            blindbox_ready_by_recipient,
+            group_blindbox_ready,
+            await_group_root,
+        ) = self._group_pairwise_blindbox_status(
+            state,
+            local_member_id=local,
+            live_by_member=live_by_recipient,
+            blindbox_runtime_ok=blindbox_runtime_ok,
+        )
         can_send = bool(any_live or blindbox_runtime_ok)
         show_offline = bool((not any_live) and blindbox_runtime_ok)
         return {
@@ -5248,6 +5306,7 @@ class I2PChatCore:
             "any_live_to_member": any_live,
             "reason": "await-group-root" if await_group_root and not any_live else "ok",
             "live_by_recipient": live_by_recipient,
+            "blindbox_ready_by_recipient": blindbox_ready_by_recipient,
             "group_blindbox_ready": group_blindbox_ready,
             "await_group_root": await_group_root,
         }
@@ -5266,19 +5325,6 @@ class I2PChatCore:
 
         live_by_member: dict[str, bool] = {}
         peer_state_by_member: dict[str, str] = {}
-        blindbox_ready_by_member: dict[str, bool] = {}
-        snapshot_bundle = self._group_blindbox_runtime_snapshot(group_id)
-        group_blindbox_ready = False
-        await_group_root = False
-        if snapshot_bundle is not None:
-            group_snapshot, _save_state = snapshot_bundle
-            group_blindbox_ready = (
-                group_snapshot.root_secret is not None
-                and int(group_snapshot.group_epoch) == int(state.epoch)
-            )
-            await_group_root = bool(self._blindbox_ready() and not group_blindbox_ready)
-        elif self._blindbox_ready():
-            await_group_root = True
         for member_id in state.members:
             normalized_member = normalize_member_id(member_id)
             if not normalized_member:
@@ -5294,7 +5340,16 @@ class I2PChatCore:
                 if peer_transport is not None
                 else "disconnected"
             )
-            blindbox_ready_by_member[normalized_member] = group_blindbox_ready
+        (
+            blindbox_ready_by_member,
+            group_blindbox_ready,
+            await_group_root,
+        ) = self._group_pairwise_blindbox_status(
+            state,
+            local_member_id=local_member_id,
+            live_by_member=live_by_member,
+            blindbox_runtime_ok=self._blindbox_ready(),
+        )
 
         delivery_status_by_member: dict[str, str] = {}
         delivery_reason_by_member: dict[str, str] = {}
@@ -5319,6 +5374,52 @@ class I2PChatCore:
             delivery_reason_by_member=delivery_reason_by_member,
         )
 
+    def _group_pairwise_blindbox_status(
+        self,
+        state: GroupState,
+        *,
+        local_member_id: str,
+        live_by_member: Mapping[str, bool],
+        blindbox_runtime_ok: bool,
+    ) -> tuple[dict[str, bool], bool, bool]:
+        blindbox_ready_by_member: dict[str, bool] = {}
+        offline_members = 0
+        offline_members_without_root = 0
+
+        for member_id in state.members:
+            normalized_member = normalize_member_id(member_id)
+            if not normalized_member:
+                continue
+            if local_member_id and same_i2p_destination(normalized_member, local_member_id):
+                continue
+
+            root_ready = False
+            if blindbox_runtime_ok:
+                try:
+                    snapshot = self._load_blindbox_peer_snapshot(normalized_member)
+                except Exception:
+                    snapshot = None
+                root_ready = bool(snapshot is not None and snapshot.root_secret is not None)
+            blindbox_ready_by_member[normalized_member] = root_ready
+
+            if live_by_member.get(normalized_member, False):
+                continue
+            offline_members += 1
+            if not root_ready:
+                offline_members_without_root += 1
+
+        group_blindbox_ready = bool(
+            blindbox_runtime_ok
+            and offline_members > 0
+            and offline_members_without_root == 0
+        )
+        await_group_root = bool(
+            blindbox_runtime_ok
+            and offline_members > 0
+            and offline_members_without_root > 0
+        )
+        return blindbox_ready_by_member, group_blindbox_ready, await_group_root
+
     def get_group_topology_ascii(self, group_id: str) -> str:
         snapshot = self.get_group_topology_snapshot(group_id)
         if snapshot is None:
@@ -5334,11 +5435,14 @@ class I2PChatCore:
     def _offline_send_block_feedback(self) -> tuple[str, str]:
         delivery = self.get_delivery_telemetry()
         state = str(delivery.get("state", "unknown"))
+        runtime_unavailable = self._blindbox_runtime_unavailable_reason()
         if not delivery.get("has_target"):
             return (
                 "no-target",
                 "No peer selected. Choose a saved contact or enter a peer address, then send.",
             )
+        if runtime_unavailable:
+            return ("blindbox-runtime-unavailable", runtime_unavailable)
         if state == "blindbox-disabled-transient":
             return (
                 "transient-profile",
@@ -5504,6 +5608,13 @@ class I2PChatCore:
         async with self._blindbox_runtime_lock:
             if not self._blindbox_ready():
                 return
+            now = time.monotonic()
+            client = self._blindbox_client
+            if (
+                self._blindbox_runtime_retry_active(now_mono=now)
+                and (client is None or not client.is_runtime_ready())
+            ):
+                return
             if self._blindbox_client is None:
                 if self._blindbox_replicas_source == "local-auto":
                     try:
@@ -5656,12 +5767,32 @@ class I2PChatCore:
             return
         try:
             await client.start()
+            self._blindbox_runtime_last_error = ""
+            self._blindbox_runtime_retry_not_before_mono = 0.0
             self._emit_system("BlindBox runtime started")
             self._trigger_blindbox_hot_poll("startup")
             self._schedule_group_pending_flush(self._blindbox_poll_peer_ids())
         except Exception as e:
+            now = time.monotonic()
             detail = _exception_user_message(e)
-            logger.exception("BlindBox startup failed: %s", detail)
+            self._blindbox_runtime_last_error = detail
+            self._blindbox_runtime_retry_not_before_mono = (
+                now + self._blindbox_runtime_retry_sec
+            )
+            if _blindbox_runtime_transport_error(e):
+                logger.warning(
+                    "BlindBox startup failed (retry in %.1fs): %s",
+                    self._blindbox_runtime_retry_sec,
+                    detail,
+                )
+            else:
+                logger.exception("BlindBox startup failed: %s", detail)
+            if self._blindbox_client is client:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+                self._blindbox_client = None
             self._emit_error(f"BlindBox startup failed: {detail}")
             return
         try:
@@ -6106,7 +6237,8 @@ class I2PChatCore:
         async with self._blindbox_send_lock:
             if not self._blindbox_ready():
                 return None
-            if not self.my_dest or self._blindbox_client is None:
+            client = self._blindbox_client
+            if not self.my_dest or client is None or not client.is_runtime_ready():
                 return None
             if not target_peer:
                 return None
@@ -6203,7 +6335,11 @@ class I2PChatCore:
                 return last_msg_id
             except Exception as e:
                 detail = _exception_user_message(e)
-                logger.warning("BlindBox send failed: %s", detail, exc_info=True)
+                logger.warning(
+                    "BlindBox send failed: %s",
+                    detail,
+                    exc_info=not _blindbox_runtime_transport_error(e),
+                )
                 self._emit_error(f"BlindBox send failed: {detail}")
                 return None
 
@@ -6502,10 +6638,12 @@ class I2PChatCore:
                 reason="blindbox-starting-local-session",
             )
         await self._ensure_blindbox_runtime_started()
-        if self._blindbox_client is None:
+        client = self._blindbox_client
+        if client is None or not client.is_runtime_ready():
+            runtime_reason = self._blindbox_runtime_unavailable_reason()
             return GroupTransportOutcome(
                 accepted=False,
-                reason="blindbox-starting-local-session",
+                reason=runtime_reason or "blindbox-starting-local-session",
             )
         state = state_snapshot or self.load_group_state(envelope.group_id)
         if state is None:
@@ -6557,7 +6695,11 @@ class I2PChatCore:
                 )
             except Exception as e:
                 detail = _exception_user_message(e)
-                logger.warning("Group BlindBox send failed: %s", detail, exc_info=True)
+                logger.warning(
+                    "Group BlindBox send failed: %s",
+                    detail,
+                    exc_info=not _blindbox_runtime_transport_error(e),
+                )
                 return GroupTransportOutcome(
                     accepted=False,
                     reason=detail or "blindbox-put-failed",
@@ -6578,10 +6720,12 @@ class I2PChatCore:
                 reason="blindbox-starting-local-session",
             )
         await self._ensure_blindbox_runtime_started()
-        if self._blindbox_client is None:
+        client = self._blindbox_client
+        if client is None or not client.is_runtime_ready():
+            runtime_reason = self._blindbox_runtime_unavailable_reason()
             return GroupTransportOutcome(
                 accepted=False,
-                reason="blindbox-starting-local-session",
+                reason=runtime_reason or "blindbox-starting-local-session",
             )
         state = state_snapshot or self.load_group_state(group_id)
         if state is None:
@@ -6716,48 +6860,17 @@ class I2PChatCore:
 
         pending_group_blindbox: tuple[GroupPendingBlindBoxMessage, ...] = ()
         if offline_recipients:
-            offline_result = await self._send_group_envelope_via_group_blindbox(
-                state.group_id,
-                envelope,
-                state_snapshot=state,
-            )
-            if offline_result.accepted:
-                for recipient_id in offline_recipients:
-                    metadata = envelope.member_metadata[recipient_id]
-                    delivery_results[recipient_id] = GroupMemberDeliveryResult(
-                        recipient_id=recipient_id,
-                        status=GroupDeliveryStatus.QUEUED_OFFLINE,
-                        reason=offline_result.reason or "blindbox-ready",
-                        transport_message_id=offline_result.transport_message_id,
-                        delivery_id=metadata.delivery_id,
-                    )
-            elif offline_result.reason == "blindbox-await-group-root":
-                pending_group_blindbox = (
-                    self._build_pending_group_blindbox_message(
-                        state,
-                        envelope,
-                        tuple(offline_recipients),
-                    ),
+            # Group offline delivery remains per-recipient: each member uses the
+            # same pairwise BlindBox channel as direct chat with that peer.
+            for recipient_id in offline_recipients:
+                metadata = envelope.member_metadata[recipient_id]
+                delivery_results[recipient_id] = await self._deliver_group_envelope_to_member(
+                    recipient_id,
+                    envelope,
+                    metadata,
+                    requested_route=requested_route,
+                    state_snapshot=state,
                 )
-                for recipient_id in offline_recipients:
-                    metadata = envelope.member_metadata[recipient_id]
-                    delivery_results[recipient_id] = GroupMemberDeliveryResult(
-                        recipient_id=recipient_id,
-                        status=GroupDeliveryStatus.QUEUED_OFFLINE,
-                        reason="blindbox-await-group-root",
-                        delivery_id=metadata.delivery_id,
-                    )
-                self._schedule_group_blindbox_root_push(state)
-            else:
-                for recipient_id in offline_recipients:
-                    metadata = envelope.member_metadata[recipient_id]
-                    delivery_results[recipient_id] = GroupMemberDeliveryResult(
-                        recipient_id=recipient_id,
-                        status=GroupDeliveryStatus.FAILED,
-                        reason=offline_result.reason or "blindbox-unavailable",
-                        transport_message_id=offline_result.transport_message_id,
-                        delivery_id=metadata.delivery_id,
-                    )
 
         return (
             GroupSendResult(
@@ -9344,7 +9457,10 @@ class I2PChatCore:
                 if peer_addr_norm:
                     self._schedule_group_pending_flush([peer_addr_norm])
                 await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
-                if peer_addr_norm:
+                if (
+                    peer_addr_norm
+                    and self._legacy_group_blindbox_outbound_enabled()
+                ):
                     for group_state in self._group_states_for_member(peer_addr_norm):
                         if self._should_initiate_group_blindbox_root_exchange(
                             group_state
@@ -9429,7 +9545,10 @@ class I2PChatCore:
                 if peer_addr_norm:
                     self._schedule_group_pending_flush([peer_addr_norm])
                 await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
-                if peer_addr_norm:
+                if (
+                    peer_addr_norm
+                    and self._legacy_group_blindbox_outbound_enabled()
+                ):
                     for group_state in self._group_states_for_member(peer_addr_norm):
                         if self._should_initiate_group_blindbox_root_exchange(
                             group_state

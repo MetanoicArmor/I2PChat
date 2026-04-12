@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -156,3 +157,88 @@ def test_compose_placeholder_mentions_platform_shortcuts(
     assert "Ctrl+Enter = send" in main_qt._compose_input_placeholder_text(
         enter_sends=False
     )
+
+
+def test_theme_switch_click_flips_effective_theme_from_auto(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from i2pchat.gui import main_qt
+
+    saved: list[str] = []
+    monkeypatch.setattr(main_qt, "_system_prefers_dark", lambda: False)
+    monkeypatch.setattr(main_qt, "save_theme", lambda pref: saved.append(pref))
+
+    window = main_qt.ChatWindow(
+        profile="default",
+        theme_id=main_qt.THEME_PREF_AUTO,
+    )
+
+    assert window._theme_preference == main_qt.THEME_PREF_AUTO
+    assert window.theme_id == "ligth"
+
+    window.on_theme_switch_clicked()
+    assert window._theme_preference == "night"
+    assert window.theme_id == "night"
+    assert saved[-1] == "night"
+
+    window.on_theme_switch_clicked()
+    assert window._theme_preference == "ligth"
+    assert window.theme_id == "ligth"
+    assert saved[-1] == "ligth"
+
+
+def test_save_theme_round_trips_across_reload(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from i2pchat.gui import main_qt
+
+    stored: dict[str, object] = {}
+    monkeypatch.setattr(main_qt, "_load_ui_prefs", lambda: dict(stored))
+    monkeypatch.setattr(
+        main_qt,
+        "_save_ui_prefs",
+        lambda data: stored.update(dict(data)),
+    )
+
+    main_qt.save_theme("night")
+    assert main_qt.load_saved_theme() == "night"
+
+    main_qt.save_theme(main_qt.THEME_PREF_AUTO)
+    assert main_qt.load_saved_theme() == main_qt.THEME_PREF_AUTO
+
+
+def test_system_prefers_dark_uses_macos_defaults_fallback(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from i2pchat.gui import main_qt
+
+    class _UnknownHints:
+        def colorScheme(self) -> QtCore.Qt.ColorScheme:
+            return QtCore.Qt.ColorScheme.Unknown
+
+    class _DummyApp:
+        def styleHints(self) -> _UnknownHints:
+            return _UnknownHints()
+
+        def palette(self) -> QtGui.QPalette:
+            pal = QtGui.QPalette()
+            pal.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#ffffff"))
+            return pal
+
+    monkeypatch.setattr(main_qt.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        main_qt.QtGui.QGuiApplication,
+        "instance",
+        lambda: _DummyApp(),
+    )
+    monkeypatch.setattr(
+        main_qt.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="Dark\n",
+            stderr="",
+        ),
+    )
+
+    assert main_qt._system_prefers_dark() is True

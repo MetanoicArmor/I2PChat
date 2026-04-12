@@ -2711,24 +2711,7 @@ class I2PChat(App):
             if state is None:
                 self.post("error", f"Group not found: {group_id}")
                 return
-            local_member = ""
-            if self.core.my_dest is not None:
-                local_member = normalize_peer_address(str(self.core.my_dest.base32)) or ""
-            hints = self.core.get_group_send_ui_hints(group_id)
-            live_by = hints.get("live_by_recipient", {}) or {}
-            peer_state_by: dict[str, str] = {}
-            for member in state.members:
-                if isinstance(live_by, dict) and live_by.get(member):
-                    peer_state_by[member] = "live"
-                else:
-                    peer_state_by[member] = "disconnected"
-            snapshot = build_observed_group_topology(
-                state,
-                local_member_id=local_member,
-                live_by_member=live_by if isinstance(live_by, dict) else {},
-                peer_state_by_member=peer_state_by,
-            )
-            ascii_text = render_group_topology_ascii(snapshot)
+            ascii_text = self.core.get_group_topology_ascii(group_id)
             self.post_panel("Group topology", ascii_text, border_style="yellow")
 
         elif sub == "send":

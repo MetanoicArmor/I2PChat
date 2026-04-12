@@ -1645,7 +1645,6 @@ THEMES: dict[str, dict[str, object]] = {
 
 # Stored in ui_prefs.json; maps to ligth/night via effective_theme_id().
 THEME_PREF_AUTO = "auto"
-THEME_PREFERENCE_CYCLE: tuple[str, ...] = ("ligth", "night", THEME_PREF_AUTO)
 
 
 def _normalize_theme_preference(theme_id: Optional[str]) -> str:
@@ -1659,15 +1658,40 @@ def _normalize_theme_preference(theme_id: Optional[str]) -> str:
     return THEME_DEFAULT
 
 
+def _macos_prefers_dark() -> Optional[bool]:
+    if sys.platform != "darwin":
+        return None
+    try:
+        proc = subprocess.run(
+            ["defaults", "read", "-g", "AppleInterfaceStyle"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return None
+    stdout = (proc.stdout or "").strip().lower()
+    stderr = (proc.stderr or "").strip().lower()
+    if stdout == "dark":
+        return True
+    if proc.returncode != 0 and "does not exist" in stderr:
+        return False
+    return None
+
+
 def _system_prefers_dark() -> bool:
     app = QtGui.QGuiApplication.instance()
+    if app is not None:
+        hints = app.styleHints()
+        scheme = hints.colorScheme()
+        if scheme == QtCore.Qt.ColorScheme.Dark:
+            return True
+        if scheme == QtCore.Qt.ColorScheme.Light:
+            return False
+    platform_pref = _macos_prefers_dark()
+    if platform_pref is not None:
+        return platform_pref
     if app is None:
-        return False
-    hints = app.styleHints()
-    scheme = hints.colorScheme()
-    if scheme == QtCore.Qt.ColorScheme.Dark:
-        return True
-    if scheme == QtCore.Qt.ColorScheme.Light:
         return False
     bg = app.palette().color(QtGui.QPalette.ColorRole.Window)
     return int(bg.lightness()) < 128
@@ -1678,6 +1702,26 @@ def effective_theme_id(preference: Optional[str]) -> str:
     if pref == THEME_PREF_AUTO:
         return "night" if _system_prefers_dark() else "ligth"
     return pref
+
+
+def _theme_switch_target_preference(current_theme_id: Optional[str]) -> str:
+    return "night" if _resolve_theme(current_theme_id) == "ligth" else "ligth"
+
+
+def _theme_tooltip_label(pref: str) -> str:
+    if pref == THEME_PREF_AUTO:
+        return "system"
+    if pref == "ligth":
+        return "light"
+    return pref
+
+
+def _theme_button_menu_choices() -> tuple[tuple[str, str], ...]:
+    return (
+        (THEME_PREF_AUTO, "System"),
+        ("ligth", "Light"),
+        ("night", "Dark"),
+    )
 
 
 def _resolve_theme(theme_id: Optional[str]) -> str:
@@ -4450,7 +4494,7 @@ class _GroupTopologyMapWidget(QtWidgets.QWidget):
         return {
             "live": "Live secure",
             "handshaking": "Secure intro in progress",
-            "await-root": "Awaiting group BlindBox root",
+            "await-root": "Awaiting BlindBox root",
             "blindbox": "Offline route ready",
             "degraded": "Needs refresh",
             "failed": "Last connect failed",
@@ -4583,7 +4627,7 @@ class _GroupTopologyMapWidget(QtWidgets.QWidget):
             lines.append(f"Peer state: {peer_state}")
         lines.append(
             (
-                "BlindBox: awaiting group root"
+                "BlindBox: awaiting pairwise root"
                 if (
                     getattr(self._snapshot, "await_group_root", False)
                     and not getattr(node, "blindbox_ready", False)
@@ -6242,6 +6286,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.theme_switch_button.setFixedHeight(self._STATUS_ROW_HEIGHT_PX)
         self.theme_switch_button.setFixedWidth(self._STATUS_ROW_HEIGHT_PX)
         self.theme_switch_button.clicked.connect(self.on_theme_switch_clicked)
+        self.theme_switch_button.setContextMenuPolicy(
+            QtCore.Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.theme_switch_button.customContextMenuRequested.connect(
+            self._show_theme_switch_menu
+        )
         _app_inst = QtWidgets.QApplication.instance()
         if _app_inst is not None:
             try:
@@ -10108,26 +10158,14 @@ class ChatWindow(QtWidgets.QMainWindow):
             QtWidgets.QApplication.beep()
 
     def _update_theme_switch_label(self) -> None:
-        try:
-            _ti = THEME_PREFERENCE_CYCLE.index(self._theme_preference)
-        except ValueError:
-            _ti = 0
-        _next_pref = THEME_PREFERENCE_CYCLE[
-            (_ti + 1) % len(THEME_PREFERENCE_CYCLE)
-        ]
-
-        def _pref_tooltip_label(pref: str) -> str:
-            if pref == THEME_PREF_AUTO:
-                return "system"
-            return pref
-
-        _next_lbl = _pref_tooltip_label(_next_pref)
+        _next_pref = _theme_switch_target_preference(self.theme_id)
+        _next_lbl = _theme_tooltip_label(_next_pref)
         if self._theme_preference == THEME_PREF_AUTO:
             _cur_lbl = (
                 f"system ({'dark' if self.theme_id == 'night' else 'light'})"
             )
         else:
-            _cur_lbl = _pref_tooltip_label(self._theme_preference)
+            _cur_lbl = _theme_tooltip_label(self._theme_preference)
         # Показываем иконку текущей *эффективной* темы: ligth -> sun, night -> moon.
         icon_name = "sun.max.png" if self.theme_id == "ligth" else "moon.png"
         icon_path = _resolve_gui_icon(icon_name)
@@ -10166,7 +10204,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         _set_tooltip_if_changed(
             self.theme_switch_button,
             _tooltip_with_portable_shortcut(
-                f"Theme: {_cur_lbl}. Click for: {_next_lbl}",
+                (
+                    f"Theme: {_cur_lbl}. Click for: {_next_lbl}. "
+                    "Secondary click for System / Light / Dark."
+                ),
                 "Ctrl+T",
             ),
         )
@@ -10311,12 +10352,24 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot()
     def on_theme_switch_clicked(self) -> None:
-        try:
-            i = THEME_PREFERENCE_CYCLE.index(self._theme_preference)
-        except ValueError:
-            i = 0
-        next_pref = THEME_PREFERENCE_CYCLE[(i + 1) % len(THEME_PREFERENCE_CYCLE)]
+        next_pref = _theme_switch_target_preference(self.theme_id)
         self._apply_theme(next_pref, persist=True)
+
+    @QtCore.pyqtSlot(QtCore.QPoint)
+    def _show_theme_switch_menu(self, pos: QtCore.QPoint) -> None:
+        menu = QtWidgets.QMenu(self)
+        menu.setObjectName("ThemeSwitchMenu")
+        menu.setStyleSheet(self.styleSheet())
+        action_to_pref: dict[QtGui.QAction, str] = {}
+        for pref, label in _theme_button_menu_choices():
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self._theme_preference == pref)
+            action_to_pref[action] = pref
+        chosen = menu.exec(self.theme_switch_button.mapToGlobal(pos))
+        pref = action_to_pref.get(chosen) if chosen is not None else None
+        if pref is not None and pref != self._theme_preference:
+            self._apply_theme(pref, persist=True)
 
     @QtCore.pyqtSlot()
     def _on_more_actions_popup_closed(self) -> None:

@@ -2,7 +2,7 @@ import asyncio
 import socket
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from i2pchat.blindbox.blindbox_client import BlindBoxClient
 from i2pchat.sam.protocol import session_create
@@ -115,6 +115,46 @@ class _ReplicaServer:
 
 
 class BlindBoxClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_cleans_up_ctrl_socket_on_non_timeout_hello_failure(self) -> None:
+        done = asyncio.Event()
+
+        async def _handle_ctrl(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            try:
+                await done.wait()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        server = await asyncio.start_server(_handle_ctrl, "127.0.0.1", _free_port())
+        sam_port = server.sockets[0].getsockname()[1]
+        try:
+            client = BlindBoxClient(
+                session_id="hello-fail",
+                blind_boxes=["x.b32.i2p"],
+                use_sam=True,
+                sam_host="127.0.0.1",
+                sam_port=int(sam_port),
+            )
+            with patch.object(
+                client,
+                "_sam_hello",
+                AsyncMock(side_effect=ConnectionResetError("Connection lost")),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Blind Box SAM startup failed: Connection lost",
+                ):
+                    await client.start()
+            self.assertIsNone(client._ctrl_reader)
+            self.assertIsNone(client._ctrl_writer)
+            self.assertFalse(client.is_runtime_ready())
+        finally:
+            done.set()
+            server.close()
+            await server.wait_closed()
+
     async def test_start_uses_validated_session_create_command(self) -> None:
         lines: list[str] = []
         done = asyncio.Event()
