@@ -8,7 +8,8 @@ from PIL import Image
 
 def make_icon() -> None:
     root = Path(__file__).parent
-    src = root / "image.png"
+    src_name = sys.argv[1] if len(sys.argv) > 1 else "image.png"
+    src = root / src_name
     out_icon = root / "icon.png"
 
     if not src.exists():
