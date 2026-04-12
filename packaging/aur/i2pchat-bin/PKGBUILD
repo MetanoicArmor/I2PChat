@@ -1,4 +1,5 @@
-# Maintainer: submit as i2pchat-bin on AUR (see packaging/README.md)
+# Maintainer: submit as i2pchat-bin on AUR (see packaging/aur/README.md)
+# Checksums: ./packaging/refresh-checksums.sh vX.Y.Z or sha256sum local zips after release.
 pkgname=i2pchat-bin
 pkgver=1.3.0
 pkgrel=1

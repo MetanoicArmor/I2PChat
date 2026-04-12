@@ -1701,8 +1701,9 @@ def _dialog_checkbox_indicator_qss(theme_tid: str) -> str:
     svg_path = _resolve_path_under_gui("assets", "dialog_checkbox_check.svg")
     image_clause = ""
     if svg_path:
-        url = QtCore.QUrl.fromLocalFile(os.path.normpath(svg_path)).toString()
-        image_clause = f"image: url({url});"
+        # QSS resolves unquoted url(file:///...) relative to cwd, yielding paths like .../file:/home/...
+        path_qss = os.path.normpath(svg_path).replace("\\", "/")
+        image_clause = f'image: url("{path_qss}");'
     if theme_tid == "ligth":
         unchecked_bg = "#ffffff"
         unchecked_border = "#8c93a3"

@@ -59,7 +59,12 @@ echo "==> Building image ${IMAGE_TAG}"
 "${RT}" build -f "${DOCKERFILE}" -t "${IMAGE_TAG}" "${ROOT}/packaging/docker"
 
 echo "==> Running build-linux.sh in container (mount ${ROOT} -> /src)"
-"${RT}" run --rm -it \
+# -t требует настоящий TTY; в CI/скриптах без TTY — только интерактивный режим с -it
+DOCKER_RUN_IT=()
+if [ -t 0 ] && [ -t 1 ]; then
+  DOCKER_RUN_IT=(-it)
+fi
+"${RT}" run --rm "${DOCKER_RUN_IT[@]}" \
   -e "I2PCHAT_SKIP_GPG_SIGN=${I2PCHAT_SKIP_GPG_SIGN:-1}" \
   -e "QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-offscreen}" \
   -e "APPIMAGE_EXTRACT_AND_RUN=${APPIMAGE_EXTRACT_AND_RUN:-1}" \
