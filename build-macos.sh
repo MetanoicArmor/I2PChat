@@ -38,7 +38,11 @@ if [ ! -f "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" ]; then
   echo "WARN: нет vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd — .app будет без встроенного i2pd (см. build-linux.sh / docs/BUILD.md)." >&2
 fi
 
-if command -v python3.14 >/dev/null 2>&1; then
+# На Apple Silicon при сборке x64 через Rosetta Homebrew может подставить arm64 Python 3.14 —
+# тогда PyInstaller соберёт не тот Mach-O. Задайте I2PCHAT_PYTHON=/usr/local/bin/python3 (Intel).
+if [[ -n "${I2PCHAT_PYTHON:-}" ]]; then
+  PYTHON_BIN="${I2PCHAT_PYTHON}"
+elif command -v python3.14 >/dev/null 2>&1; then
   PYTHON_BIN="python3.14"
 else
   PYTHON_BIN="python3"
