@@ -4189,6 +4189,19 @@ class I2PChatCore:
         # compatibility lane. The default runtime path is pairwise BlindBox.
         return _env_truthy("I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX")
 
+    @staticmethod
+    def _blindbox_client_runtime_ready(client: Any) -> bool:
+        if client is None:
+            return False
+        probe = getattr(client, "is_runtime_ready", None)
+        if callable(probe):
+            try:
+                return bool(probe())
+            except Exception:
+                return False
+        # Older tests and lightweight doubles only provide put/get/close methods.
+        return True
+
     def _load_trust_store(self) -> None:
         """Загружает pinning-таблицу peer_addr -> signing_pub_hex."""
         self.peer_trusted_signing_keys = {}
@@ -5086,7 +5099,7 @@ class I2PChatCore:
             self._blindbox_task is not None
             and not self._blindbox_task.done()
             and has_client
-            and self._blindbox_client.is_runtime_ready()
+            and self._blindbox_client_runtime_ready(self._blindbox_client)
         )
         return {
             "enabled": bool(self.blindbox_enabled),
@@ -5161,7 +5174,7 @@ class I2PChatCore:
         has_root_secret = self._blindbox_root_secret is not None
         bb_client = self._blindbox_client
         blindbox_runtime_ready = bool(
-            bb_client is not None and bb_client.is_runtime_ready()
+            self._blindbox_client_runtime_ready(bb_client)
         )
         outbound_policy = self.session_manager.select_outbound_policy(
             **policy_kwargs
@@ -5612,7 +5625,7 @@ class I2PChatCore:
             client = self._blindbox_client
             if (
                 self._blindbox_runtime_retry_active(now_mono=now)
-                and (client is None or not client.is_runtime_ready())
+                and not self._blindbox_client_runtime_ready(client)
             ):
                 return
             if self._blindbox_client is None:
@@ -6238,7 +6251,7 @@ class I2PChatCore:
             if not self._blindbox_ready():
                 return None
             client = self._blindbox_client
-            if not self.my_dest or client is None or not client.is_runtime_ready():
+            if not self.my_dest or not self._blindbox_client_runtime_ready(client):
                 return None
             if not target_peer:
                 return None
@@ -6639,7 +6652,7 @@ class I2PChatCore:
             )
         await self._ensure_blindbox_runtime_started()
         client = self._blindbox_client
-        if client is None or not client.is_runtime_ready():
+        if not self._blindbox_client_runtime_ready(client):
             runtime_reason = self._blindbox_runtime_unavailable_reason()
             return GroupTransportOutcome(
                 accepted=False,
@@ -6721,7 +6734,7 @@ class I2PChatCore:
             )
         await self._ensure_blindbox_runtime_started()
         client = self._blindbox_client
-        if client is None or not client.is_runtime_ready():
+        if not self._blindbox_client_runtime_ready(client):
             runtime_reason = self._blindbox_runtime_unavailable_reason()
             return GroupTransportOutcome(
                 accepted=False,
