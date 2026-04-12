@@ -11,7 +11,7 @@ Maintenance and polish release after **v1.3.0**. Improves **portable macOS Intel
 - **macOS Intel (`x86_64`):** build scripts and runtime resolve **`vendor/i2pd/darwin-x64/i2pd`** (PyInstaller, `.app` bundle, `bundled_i2pd` lookup). The companion repo **[i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd)** now ships a **`darwin-x64`** tree so `ensure_bundled_i2pd` / `fetch_bundled_i2pd` can stage the router for Intel portable builds. **Auto-update** artifact prefix for Intel macOS aligns with **`I2PChat-macOS-x64`** zip names.
 - **BlindBox / groups:** runtime **retry/backoff** on transport-style failures; **legacy group BlindBox outbound** gated behind **`I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX`**; safe **`is_runtime_ready`** probing via **`_blindbox_client_runtime_ready`** (tests and lightweight doubles); **parallel offline fan-out** for group envelopes (`asyncio.gather`) while send serialization stays lock-guarded.
 - **Nix (`flake.nix`):** Qt6 **multimedia**, **SVG**, **Wayland** plugin paths; Linux **notify** / sound helpers on `PATH`; **desktop** metadata and **`nix profile install`** documented in **README** / **BUILD**; **`keyring`** in the Python env (Secret Service still optional).
-- **Icons:** refreshed **`icon.png`**, **`i2pchat.ico`**, **`I2PChat.icns`** from tracked **`image2.png`**; **`make_icon.py`** defaults to **`image2.png`** so **`image.png`** remains available for README/marketing without being overwritten.
+- **Icons:** refreshed **`icon.png`**, **`i2pchat.ico`**, **`I2PChat.icns`** from **`image.png`**; **`make_icon.py`** defaults to **`image.png`** (optional override path as `argv[1]`).
 - **GUI:** dialog **checkbox** SVG path/styling; **group editor** member rows use real **QCheckBox** widgets on the light theme.
 
 ### Compatibility
@@ -38,7 +38,7 @@ uv run pytest -q
 - **macOS Intel:** встроенный **`i2pd`** для портативных сборок из **`darwin-x64`**; бинарь также в **[i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd)**; префикс zip для автообновления на Intel — **`I2PChat-macOS-x64`**.
 - **BlindBox / группы:** повтор при сбоях транспорта; наследие group BlindBox — за флагом **`I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX`**; безопасная проверка готовности рантайма; параллельная офлайн-рассылка по участникам группы.
 - **Nix:** Qt-плагины, уведомления/звук, desktop, **`nix profile install`**, документация.
-- **Иконки:** новый набор из **`image2.png`**; **`image.png`** оставлен для README.
+- **Иконки:** набор из **`image.png`** через **`make_icon.py`**.
 - **GUI:** SVG чекбокса в диалогах; чекбоксы в редакторе группы на светлой теме.
 
 ### Совместимость
