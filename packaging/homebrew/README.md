@@ -1,7 +1,7 @@
 # Homebrew (Cask)
 
-- [`Casks/i2pchat.rb`](Casks/i2pchat.rb) — GUI: `I2PChat.app` из zip релиза.
-- [`Casks/i2pchat-tui.rb`](Casks/i2pchat-tui.rb) — только TUI: zip **`I2PChat-macos-arm64-tui-vX.Y.Z.zip`** (без `.app`).
+- [`Casks/i2pchat.rb`](Casks/i2pchat.rb) — GUI: `I2PChat.app` из zip релиза (**arm64** / **x64** отдельные URL и SHA256 в `on_arm` / `on_intel`).
+- [`Casks/i2pchat-tui.rb`](Casks/i2pchat-tui.rb) — только TUI: **`on_arm`** → `I2PChat-macOS-arm64-tui-vX.Y.Z.zip`, **`on_intel`** → `I2PChat-macOS-x64-tui-vX.Y.Z.zip` (без `.app`).
 
 ## Отдельный tap-репозиторий (рекомендуется)
 
