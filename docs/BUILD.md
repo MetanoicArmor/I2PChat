@@ -100,8 +100,15 @@ Stronger padding reduces length correlation but increases bandwidth.
 
 ```bash
 nix run github:MetanoicArmor/I2PChat
+nix profile install github:MetanoicArmor/I2PChat   # installs i2pchat + i2pchat-tui wrappers and desktop files
 nix develop github:MetanoicArmor/I2PChat   # dev shell
 ```
+
+The flake packages the source tree directly and wraps the GUI with Qt plugins that commonly matter on NixOS desktops: Wayland/platform plugins, Qt Multimedia, SVG/image format support, plus `notify-send` / Linux sound helpers on `PATH`.
+
+The dev shell now includes `uv` and the same Qt runtime pieces as the package, so `python -m i2pchat.gui` and `python -m i2pchat.tui` behave closer to `nix run`.
+
+`keyring` is included in the Nix Python environment, but native Secret Service storage still depends on a running provider (for example `gnome-keyring` or KeepassXC Secret Service). If none is available, I2PChat falls back to file-backed storage automatically.
 
 ## BlindBox (daemon / ops)
 

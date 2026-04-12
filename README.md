@@ -416,9 +416,16 @@ Trade-off: stronger padding reduces length correlation but increases bandwidth.
 # Run directly
 nix run github:MetanoicArmor/I2PChat
 
+# Install into your profile (adds `i2pchat`, `i2pchat-tui`, desktop entries and icon)
+nix profile install github:MetanoicArmor/I2PChat
+
 # Development shell
 nix develop github:MetanoicArmor/I2PChat
 ```
+
+The flake now wraps the app with the Qt runtime pieces that are easy to miss on NixOS sessions: Wayland/platform plugins, multimedia/image plugins, desktop metadata, and Linux notification/sound helpers (`notify-send`, `canberra-gtk-play`, `paplay`, `aplay`).
+
+System keyring integration is optional. If no Secret Service backend is available, I2PChat falls back to file storage automatically; for native keyring support on NixOS, enable a provider such as `gnome-keyring` or KeepassXC Secret Service.
 
 ### 📄 License
 
