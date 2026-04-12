@@ -8,7 +8,8 @@ from PIL import Image
 
 def make_icon() -> None:
     root = Path(__file__).parent
-    src_name = sys.argv[1] if len(sys.argv) > 1 else "image.png"
+    # App icons only; README/screenshots use image.png (do not overwrite).
+    src_name = sys.argv[1] if len(sys.argv) > 1 else "image2.png"
     src = root / src_name
     out_icon = root / "icon.png"
 
