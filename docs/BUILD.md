@@ -125,3 +125,14 @@ See [`../packaging/debian/README.md`](../packaging/debian/README.md) and [`../pa
 ## Maintainer packaging (brew, winget, AUR, Fedora)
 
 Templates and checksum workflow: [`../packaging/README.md`](../packaging/README.md). TUI-only packages use [`../packaging/winget-tui/`](../packaging/winget-tui/), [`../packaging/homebrew/Casks/i2pchat-tui.rb`](../packaging/homebrew/Casks/i2pchat-tui.rb), [`../packaging/aur/i2pchat-tui-bin/`](../packaging/aur/i2pchat-tui-bin/), and [`../packaging/flatpak/`](../packaging/flatpak/).
+
+## Release tag helper
+
+Use [`../scripts/release-tag.sh`](../scripts/release-tag.sh) to cut a signed annotated release tag from the current `HEAD`:
+
+```bash
+./scripts/release-tag.sh v1.3.2
+./scripts/release-tag.sh v1.3.2 --push
+```
+
+The helper refuses to tag an unsigned `HEAD`, refuses to overwrite existing local or remote tags, and only pushes when `--push` is passed explicitly. This is the preferred path for new releases because moving a published tag changes GitHub source archives and can desynchronize packaging metadata from the original source snapshot.
