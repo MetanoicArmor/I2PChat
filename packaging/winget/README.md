@@ -1,19 +1,23 @@
 # winget
 
-Готовые манифесты для [Windows Package Manager](https://learn.microsoft.com/windows/package-manager/) лежат в каталоге с версией, например [`1.2.5/`](1.2.5/) (**GUI**). Отдельный пакет **TUI**: [`../winget-tui/`](../winget-tui/) (`MetanoicArmor.I2PChat.TUI`) — в репозитории winget-pkgs путь **`manifests/m/MetanoicArmor/I2PChat/TUI/<version>/`** (каждый сегмент идентификатора после издателя = вложенная папка). Старые версии ищите в истории git.
+Пакет **`MetanoicArmor.I2PChat`** (GUI, `*-winget-*` zip). Отдельный идентификатор **TUI** — только в [`../winget-tui/`](../winget-tui/): в [winget-pkgs](https://github.com/microsoft/winget-pkgs) это **два разных приложения**, поэтому нужны **два отдельных PR** (бот отклоняет один PR с обоими наборами файлов).
+
+**Путь в форке winget-pkgs (GUI):** `manifests/m/MetanoicArmor/I2PChat/<version>/` — в этом репозитории для **1.3.1** то же дерево: [`manifests/m/MetanoicArmor/I2PChat/1.3.1/`](manifests/m/MetanoicArmor/I2PChat/1.3.1/). Старые версии лежали плоско, например [`1.2.5/`](1.2.5/) (содержимое при копировании всё равно уходит в `manifests/m/MetanoicArmor/I2PChat/1.2.5/`).
 
 ## Публикация в community-репозитории
 
 1. Форкните [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs).
-2. Скопируйте три YAML-файла в ветку:
+2. Скопируйте **три** YAML этого пакета **только для `MetanoicArmor.I2PChat`** в ветку, например:
 
-   `manifests/m/MetanoicArmor/I2PChat/1.2.5/`
+   `manifests/m/MetanoicArmor/I2PChat/1.3.1/`
 
-3. Откройте pull request по [инструкции winget-pkgs](https://github.com/microsoft/winget-pkgs/blob/master/README.md).
+3. Откройте **отдельный** pull request по [инструкции winget-pkgs](https://github.com/microsoft/winget-pkgs/blob/master/README.md).
+4. Для **TUI** — второй PR из [`../winget-tui/`](../winget-tui/) (`manifests/m/MetanoicArmor/I2PChat/TUI/<version>/`).
 
 Проверка локально (при установленном [wingetcreate](https://github.com/microsoft/winget-create) или клиенте winget):
 
 ```powershell
+winget validate --manifest .\packaging\winget\manifests\m\MetanoicArmor\I2PChat\1.3.1
 winget validate --manifest .\packaging\winget\1.2.5
 ```
 

@@ -2,11 +2,11 @@
 
 Здесь лежат **шаблоны и инструкции** для Homebrew (cask), winget, AUR, **`.deb` (Debian/Ubuntu)** и **RPM/COPR (Fedora)**. Исходники приложения не обязаны жить в этих форматах — достаточно стабильных **GitHub Releases** с zip/AppImage.
 
-## Статус публикации (v1.3.0, 2026-04)
+## Статус публикации (v1.3.1, 2026-04)
 
 | Канал | Состояние |
 |-------|-----------|
-| **winget** | Манифесты **1.3.0** в репо: [`winget/1.3.0/`](winget/1.3.0/), [`winget-tui/.../TUI/1.3.0/`](winget-tui/manifests/m/MetanoicArmor/I2PChat/TUI/1.3.0/). **InstallerSha256** — из `refresh-checksums.sh 1.3.0` после релиза. PR в [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs): **MetanoicArmor.I2PChat** [#357997](https://github.com/microsoft/winget-pkgs/pull/357997), **MetanoicArmor.I2PChat.TUI** [#357998](https://github.com/microsoft/winget-pkgs/pull/357998). |
+| **winget** | **Два отдельных PR** в [winget-pkgs](https://github.com/microsoft/winget-pkgs): один только на **`MetanoicArmor.I2PChat`** (GUI), второй только на **`MetanoicArmor.I2PChat.TUI`**. Манифесты **1.3.1**: [`winget/manifests/m/MetanoicArmor/I2PChat/1.3.1/`](winget/manifests/m/MetanoicArmor/I2PChat/1.3.1/), [`winget-tui/.../TUI/1.3.1/`](winget-tui/manifests/m/MetanoicArmor/I2PChat/TUI/1.3.1/). **InstallerSha256** — `refresh-checksums.sh 1.3.1`. PR **1.3.1**: [#359186](https://github.com/microsoft/winget-pkgs/pull/359186) GUI, [#359187](https://github.com/microsoft/winget-pkgs/pull/359187) TUI. **1.3.0** (история): [#357997](https://github.com/microsoft/winget-pkgs/pull/357997), [#357998](https://github.com/microsoft/winget-pkgs/pull/357998). |
 | **Homebrew tap** | Репозиторий [MetanoicArmor/homebrew-i2pchat](https://github.com/MetanoicArmor/homebrew-i2pchat): `brew tap MetanoicArmor/i2pchat`. |
 | **AUR** | **Опубликовано:** [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i2pchat-tui-bin](https://aur.archlinux.org/packages/i2pchat-tui-bin). Установка (например **yay**): `yay -S i2pchat-bin`, `yay -S i2pchat-tui-bin`. Шаблоны в репо: [`aur/i2pchat-bin/`](aur/i2pchat-bin/), [`aur/i2pchat-tui-bin/`](aur/i2pchat-tui-bin/); обновление пакетов на AUR — см. [aur/README.md](aur/README.md). |
 | **Flatpak / COPR** | Flatpak — шаблоны в репо ([flatpak/README.md](flatpak/README.md)). COPR — по желанию мейнтейнера ([fedora/i2pchat.spec](fedora/i2pchat.spec)). |

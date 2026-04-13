@@ -28,7 +28,7 @@ uv run pytest -q
 ### Maintainer checklist (after `v1.3.1` tag and binaries on GitHub)
 
 1. Upload all platform zips (including **`*-winget-*`** Windows zips if you ship them).
-2. `./packaging/refresh-checksums.sh 1.3.1` — update **Homebrew** / **winget** manifests if you replace `sha256 :no_check` / placeholders.
+2. `./packaging/refresh-checksums.sh 1.3.1` — update **Homebrew** / **winget** manifests if you replace `sha256 :no_check` / placeholders. **winget-pkgs:** two separate PRs — `MetanoicArmor.I2PChat` (paths under `packaging/winget/manifests/m/MetanoicArmor/I2PChat/1.3.1/`) and `MetanoicArmor.I2PChat.TUI` (`packaging/winget-tui/.../TUI/1.3.1/`); do not combine in one PR.
 3. `gh release edit v1.3.1 --notes-file docs/releases/RELEASE_1.3.1.md` (optional).
 
 ## RU
