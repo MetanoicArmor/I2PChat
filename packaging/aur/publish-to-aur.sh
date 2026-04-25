@@ -18,6 +18,7 @@ if [ -z "${SSH_AUTH_SOCK:-}" ]; then
   echo "Подсказка: нет ssh-agent → ssh-add не сработает; passphrase спросят при каждом git/ssh."
   echo "  eval \"\$(ssh-agent -s)\""
   echo "  ssh-add ~/.ssh/aur_ed25519"
+  echo "  (Fish: см. packaging/aur/README.md — eval \"\$(ssh-agent -s)\" в fish не задаёт агент; удобно bash -lc '…'.)"
   echo ""
 fi
 echo "Если «Permission denied (publickey)», добавьте ключ: ssh-add ~/.ssh/aur_ed25519"

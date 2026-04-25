@@ -25,6 +25,11 @@
    ```
    Скрипт клонирует оба репозитория во временный каталог, копирует актуальные `PKGBUILD` и `.SRCINFO`, делает `commit` при изменениях и `git push` в ветку **`master`**.
 
+   **Fish:** строка `eval "$(ssh-agent -s)"` — это синтаксис **bash/zsh**; в fish она не задаёт `SSH_AUTH_SOCK`, и `ssh-add` пишет *No such file or directory*. Варианты:
+   - один раз запустить публикацию из bash:  
+     `bash -lc 'eval "$(ssh-agent -s)"; ssh-add ~/.ssh/aur_ed25519; cd ~/GitHub/I2PChat && ./packaging/aur/publish-to-aur.sh'`
+   - или поднять агент по-рыбьи (например пакет **`openssh`** + **`fish_ssh_agent`** из contrib, либо уже запущенный агент из DE), затем **`ssh-add ~/.ssh/aur_ed25519`** и снова **`./packaging/aur/publish-to-aur.sh`**.
+
 Если по SSH с текущей машины зайти нельзя, используйте другой хост с настроенным ключом или только веб-интерфейс Submit, затем правки через `git` там, где `ssh aur@aur.archlinux.org` работает.
 
 После изменения `PKGBUILD` пересоберите метаданные:
