@@ -122,9 +122,25 @@ if [ -f "${I2PD_BUNDLE_DIR}/i2pd" ]; then
   fi
 fi
 
-# Подтянуть ровно те *.so, что в DT_NEEDED у bundled i2pd (Arch / локальная сборка).
+# Подтянуть libboost_* рядом с bundled i2pd. На Arch часто нет Boost 1.83 под бинарь из
+# upstream — тогда подставляем системный i2pd из PATH (тот же, что pacman).
 if [ -f "${I2PD_BUNDLE_DIR}/i2pd" ] && command -v objdump >/dev/null 2>&1; then
-  "${REPO_ROOT}/scripts/stage_i2pd_linux_shlibs.sh"
+  if ! "${REPO_ROOT}/scripts/stage_i2pd_linux_shlibs.sh"; then
+    if [ "${I2PCHAT_SKIP_DISTRO_I2PD_FALLBACK:-0}" = "1" ]; then
+      exit 1
+    fi
+    if command -v i2pd >/dev/null 2>&1; then
+      echo "==> Staging Boost для bundled i2pd не удался; копирую системный i2pd из PATH" >&2
+      cp -f "$(command -v i2pd)" "${I2PD_BUNDLE_DIR}/i2pd"
+      chmod +x "${I2PD_BUNDLE_DIR}/i2pd"
+      "${REPO_ROOT}/scripts/stage_i2pd_linux_shlibs.sh" || {
+        echo "ERROR: после копирования i2pd из PATH staging всё ещё не прошёл." >&2
+        exit 1
+      }
+    else
+      exit 1
+    fi
+  fi
 fi
 
 if [ "$(id -u)" != 0 ] && [ -d "${UV_PROJECT_ENVIRONMENT}" ]; then
