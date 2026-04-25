@@ -1,8 +1,4 @@
-# Ubuntu 24.04 (noble): glibc 2.39 baseline for Linux PyInstaller/AppImage builds.
-# Official release zips still use CI on ubuntu-22.04 (glibc 2.35) for wider LTS compatibility.
-# See packaging/docker/README.md
-
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8 \
@@ -17,11 +13,6 @@ RUN apt-get update -qq \
         ca-certificates \
         curl \
         gnupg \
-        software-properties-common \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && add-apt-repository -y ppa:deadsnakes/nightly \
-    && apt-get update -qq \
-    && apt-get install -y --no-install-recommends \
         python3.14 \
         python3.14-dev \
         python3.14-venv \
@@ -55,7 +46,6 @@ RUN apt-get update -qq \
         libxcb-sync1 \
         libxcb-xinput0 \
         libxcb-cursor0 \
-        libboost-program-options1.83.0 \
         libcrypt1 \
     && rm -rf /var/lib/apt/lists/*
 

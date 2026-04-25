@@ -4,6 +4,14 @@
 
 Use **`./packaging/docker/run-linux-build.sh`** from the repo root (Docker or Podman). It builds **`Dockerfile.linux-noble-glibc239`** and runs **`./build-linux.sh`** → **`I2PChat-linux-x86_64-v*.zip`** and related outputs.
 
+## x86_64 — Ubuntu 26.04
+
+Use **`./packaging/docker/run-linux-build-ubuntu2604.sh`** from the repo root. It builds **`Dockerfile.linux-ubuntu2604-glibc-new`** and runs **`./build-linux.sh`**.
+
+```bash
+./packaging/docker/run-linux-build-ubuntu2604.sh
+```
+
 ### Troubleshooting: `failed to connect to the docker API` / `docker.sock`
 
 The Docker **client** is installed but the **daemon** is not running (or your user cannot access `/var/run/docker.sock`).
@@ -69,6 +77,14 @@ The image uses **deadsnakes** stable + **nightly** PPAs: **Python 3.14** is not 
 ## aarch64 (arm64) — Ubuntu 24.04
 
 **`linux-build-ubuntu2404-arm64.Dockerfile`** — Ubuntu **24.04** on **linux/arm64** with Python **3.14** (deadsnakes), Qt/AppImage dependencies.
+
+## aarch64 (arm64) — Ubuntu 26.04
+
+Use **`./packaging/docker/build-linux-aarch64-ubuntu2604.sh`**. It builds **`linux-build-ubuntu2604-arm64.Dockerfile`** and runs **`./build-linux.sh`** in `linux/arm64`.
+
+```bash
+./packaging/docker/build-linux-aarch64-ubuntu2604.sh
+```
 
 ## Quick run (aarch64)
 

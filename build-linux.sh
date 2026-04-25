@@ -97,6 +97,31 @@ if [ ! -f "vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd" ]; then
   echo "      Задайте I2PCHAT_BUNDLED_I2PD_SOURCE_DIR, SSH URL в I2PCHAT_BUNDLED_I2PD_GIT_URL, или ./scripts/fetch_bundled_i2pd.sh --from …" >&2
 fi
 
+# Linux bundled i2pd may need the exact boost SONAME it was linked against.
+# On noble builds we ensure a real libboost_program_options.so.1.83.0 is staged
+# next to i2pd (symlink to newer ABI is not sufficient and may crash at runtime).
+I2PD_BUNDLE_DIR="vendor/i2pd/${I2PD_LINUX_SUBDIR}"
+if [ -f "${I2PD_BUNDLE_DIR}/i2pd" ]; then
+  chmod +x "${I2PD_BUNDLE_DIR}/i2pd" 2>/dev/null || true
+  if [ ! -f "${I2PD_BUNDLE_DIR}/libboost_program_options.so.1.83.0" ] || [ -L "${I2PD_BUNDLE_DIR}/libboost_program_options.so.1.83.0" ]; then
+    for CAND in \
+      /usr/lib/libboost_program_options.so.1.83.0 \
+      /usr/lib64/libboost_program_options.so.1.83.0 \
+      /lib/libboost_program_options.so.1.83.0 \
+      /lib64/libboost_program_options.so.1.83.0 \
+      /usr/lib/*/libboost_program_options.so.1.83.0 \
+      /lib/*/libboost_program_options.so.1.83.0; do
+      if [ -f "$CAND" ]; then
+        rm -f "${I2PD_BUNDLE_DIR}/libboost_program_options.so.1.83.0"
+        cp -f "$CAND" "${I2PD_BUNDLE_DIR}/libboost_program_options.so.1.83.0"
+        chmod +x "${I2PD_BUNDLE_DIR}/libboost_program_options.so.1.83.0" 2>/dev/null || true
+        echo "==> Added libboost_program_options.so.1.83.0 to ${I2PD_BUNDLE_DIR}"
+        break
+      fi
+    done
+  fi
+fi
+
 uv sync --frozen --python "${PYTHON_BIN}" --group build --no-dev
 
 # Не полагаемся на source activate (в Docker + set -u иногда не появляется python в PATH)

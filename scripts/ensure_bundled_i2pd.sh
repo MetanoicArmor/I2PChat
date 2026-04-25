@@ -30,6 +30,37 @@ log() {
   printf '%s\n' "$*"
 }
 
+normalize_linux_i2pd_bundle_dir() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+
+  # Runtime startup requires executable i2pd and legacy boost SONAME alias
+  # for older bundled binaries.
+  if [[ -f "${dir}/i2pd" ]]; then
+    chmod +x "${dir}/i2pd" 2>/dev/null || true
+  fi
+
+  local boost_real=""
+  local cand
+  shopt -s nullglob
+  for cand in "${dir}"/libboost_program_options.so.*; do
+    [[ -e "$cand" ]] || continue
+    if [[ "$(basename "$cand")" != "libboost_program_options.so.1.83.0" ]]; then
+      boost_real="$(basename "$cand")"
+      break
+    fi
+  done
+  shopt -u nullglob
+  if [[ -n "$boost_real" && ! -e "${dir}/libboost_program_options.so.1.83.0" ]]; then
+    ln -sf "$boost_real" "${dir}/libboost_program_options.so.1.83.0"
+  fi
+}
+
+normalize_bundled() {
+  normalize_linux_i2pd_bundle_dir "${ROOT}/vendor/i2pd/linux-x86_64"
+  normalize_linux_i2pd_bundle_dir "${ROOT}/vendor/i2pd/linux-aarch64"
+}
+
 has_any_bundled() {
   find "${ROOT}/vendor/i2pd" -maxdepth 3 -type f \
     \( -name 'i2pd' -o -name 'i2pd.exe' \) 2>/dev/null | grep -q .
@@ -70,21 +101,25 @@ main() {
   fi
 
   if has_any_bundled; then
+    normalize_bundled
     log "==> Bundled i2pd: FOUND in vendor/i2pd/"
     exit 0
   fi
 
   if [[ -n "${SOURCE_DIR}" ]] && stage_from_dir "${SOURCE_DIR}"; then
+    normalize_bundled
     log "==> Bundled i2pd: STAGED from I2PCHAT_BUNDLED_I2PD_SOURCE_DIR=${SOURCE_DIR}"
     exit 0
   fi
 
   if stage_from_dir "${SIBLING_DIR}"; then
+    normalize_bundled
     log "==> Bundled i2pd: STAGED from sibling repo ${SIBLING_DIR}"
     exit 0
   fi
 
   if stage_from_git; then
+    normalize_bundled
     log "==> Bundled i2pd: STAGED from git source ${GIT_URL}"
     exit 0
   fi
