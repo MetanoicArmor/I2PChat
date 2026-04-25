@@ -122,6 +122,16 @@ if [ -f "${I2PD_BUNDLE_DIR}/i2pd" ]; then
   fi
 fi
 
+if [ "$(id -u)" != 0 ] && [ -d "${UV_PROJECT_ENVIRONMENT}" ]; then
+  vuid="$(stat -c %u "${UV_PROJECT_ENVIRONMENT}" 2>/dev/null || true)"
+  if [ -n "${vuid}" ] && [ "${vuid}" = "0" ]; then
+    echo "ERROR: виртуальное окружение принадлежит root: ${UV_PROJECT_ENVIRONMENT}" >&2
+    echo "       Часто после Docker-сборки с монтированием репозитория (uv не может перезаписать bin/*)." >&2
+    echo "       Исправление: sudo chown -R \"$(id -u):$(id -g)\" \"${UV_PROJECT_ENVIRONMENT}\"" >&2
+    exit 1
+  fi
+fi
+
 uv sync --frozen --python "${PYTHON_BIN}" --group build --no-dev
 
 # Не полагаемся на source activate (в Docker + set -u иногда не появляется python в PATH)
