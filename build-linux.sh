@@ -122,6 +122,11 @@ if [ -f "${I2PD_BUNDLE_DIR}/i2pd" ]; then
   fi
 fi
 
+# Подтянуть ровно те *.so, что в DT_NEEDED у bundled i2pd (Arch / локальная сборка).
+if [ -f "${I2PD_BUNDLE_DIR}/i2pd" ] && command -v objdump >/dev/null 2>&1; then
+  "${REPO_ROOT}/scripts/stage_i2pd_linux_shlibs.sh"
+fi
+
 if [ "$(id -u)" != 0 ] && [ -d "${UV_PROJECT_ENVIRONMENT}" ]; then
   vuid="$(stat -c %u "${UV_PROJECT_ENVIRONMENT}" 2>/dev/null || true)"
   if [ -n "${vuid}" ] && [ "${vuid}" = "0" ]; then

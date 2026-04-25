@@ -34,25 +34,10 @@ normalize_linux_i2pd_bundle_dir() {
   local dir="$1"
   [[ -d "$dir" ]] || return 0
 
-  # Runtime startup requires executable i2pd and legacy boost SONAME alias
-  # for older bundled binaries.
+  # Bundled i2pd must stay executable; do not add SONAME symlinks to arbitrary
+  # newer Boost *.so — C++ ABI differs and causes runtime symbol lookup errors.
   if [[ -f "${dir}/i2pd" ]]; then
     chmod +x "${dir}/i2pd" 2>/dev/null || true
-  fi
-
-  local boost_real=""
-  local cand
-  shopt -s nullglob
-  for cand in "${dir}"/libboost_program_options.so.*; do
-    [[ -e "$cand" ]] || continue
-    if [[ "$(basename "$cand")" != "libboost_program_options.so.1.83.0" ]]; then
-      boost_real="$(basename "$cand")"
-      break
-    fi
-  done
-  shopt -u nullglob
-  if [[ -n "$boost_real" && ! -e "${dir}/libboost_program_options.so.1.83.0" ]]; then
-    ln -sf "$boost_real" "${dir}/libboost_program_options.so.1.83.0"
   fi
 }
 
