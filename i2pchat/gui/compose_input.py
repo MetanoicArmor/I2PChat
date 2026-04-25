@@ -598,6 +598,8 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         # Как у меню «⋯» (main_qt): после hide Qt может тут же доставить clicked на ту же
         # кнопку — без короткого debounce панель открывается снова (особенно Windows).
         self._emoji_picker_suppress_until_ms: int = 0
+        self._emoji_hover_open_delay_ms = 120
+        self._emoji_hover_close_delay_ms = 180
 
         self._emoji_btn = QtWidgets.QToolButton(self)
         self._emoji_btn.setObjectName("EmojiPickerButton")
@@ -609,8 +611,16 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         self._emoji_btn.setFixedSize(self._BTN_SIDE, self._BTN_SIDE)
         self._emoji_btn.setIconSize(QtCore.QSize(17, 17))
         self._emoji_btn.clicked.connect(self._on_emoji_clicked)
+        self._emoji_btn.installEventFilter(self)
         self._apply_emoji_button_style()
         self._refresh_emoji_icon()
+
+        self._emoji_hover_open_timer = QtCore.QTimer(self)
+        self._emoji_hover_open_timer.setSingleShot(True)
+        self._emoji_hover_open_timer.timeout.connect(self._on_emoji_hover_open_timeout)
+        self._emoji_hover_close_timer = QtCore.QTimer(self)
+        self._emoji_hover_close_timer.setSingleShot(True)
+        self._emoji_hover_close_timer.timeout.connect(self._on_emoji_hover_close_timeout)
 
     def attach_input(self, edit: QtWidgets.QTextEdit) -> None:
         self._edit = edit
@@ -702,15 +712,79 @@ class ComposeInputWrapper(QtWidgets.QWidget):
         if p is not None and p.isVisible():
             p.hide()
             return
+        self._show_emoji_picker()
+
+    def _show_emoji_picker(self) -> None:
+        now_ms = int(QtCore.QDateTime.currentMSecsSinceEpoch())
+        if now_ms < self._emoji_picker_suppress_until_ms:
+            return
 
         host = self.window()
         parent_popup = host if isinstance(host, QtWidgets.QWidget) else self
+        p = self._popup
         if p is None:
             self._popup = EmojiPickerPopup(parent_popup)
             self._popup.emojiChosen.connect(self._on_emoji_chosen)
             self._popup.pickerHidden.connect(self._on_emoji_picker_hidden)
+            self._popup.installEventFilter(self)
             p = self._popup
+        self._emoji_hover_close_timer.stop()
         p.show_near_anchor(self._emoji_btn, self._theme_id)
+
+    def _start_emoji_hover_open_timer(self) -> None:
+        self._emoji_hover_close_timer.stop()
+        p = self._popup
+        if p is not None and p.isVisible():
+            return
+        self._emoji_hover_open_timer.start(self._emoji_hover_open_delay_ms)
+
+    def _start_emoji_hover_close_timer(self) -> None:
+        self._emoji_hover_open_timer.stop()
+        p = self._popup
+        if p is None or not p.isVisible():
+            return
+        self._emoji_hover_close_timer.start(self._emoji_hover_close_delay_ms)
+
+    def _cursor_over_emoji_trigger_area(self) -> bool:
+        gp = QtGui.QCursor.pos()
+        btn_rect = QtCore.QRect(self._emoji_btn.mapToGlobal(QtCore.QPoint(0, 0)), self._emoji_btn.size())
+        if btn_rect.contains(gp):
+            return True
+        p = self._popup
+        if p is not None and p.isVisible():
+            if p.frameGeometry().contains(gp):
+                return True
+        return False
+
+    def _on_emoji_hover_open_timeout(self) -> None:
+        if not self._cursor_over_emoji_trigger_area():
+            return
+        self._show_emoji_picker()
+
+    def _on_emoji_hover_close_timeout(self) -> None:
+        p = self._popup
+        if p is None or not p.isVisible():
+            return
+        if self._cursor_over_emoji_trigger_area():
+            return
+        p.hide()
+
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if watched is self._emoji_btn:
+            if event.type() == QtCore.QEvent.Type.Enter:
+                self._start_emoji_hover_open_timer()
+            elif event.type() == QtCore.QEvent.Type.Leave:
+                self._start_emoji_hover_close_timer()
+        p = self._popup
+        if p is not None and watched is p:
+            if event.type() == QtCore.QEvent.Type.Enter:
+                self._emoji_hover_close_timer.stop()
+            elif event.type() == QtCore.QEvent.Type.Leave:
+                self._start_emoji_hover_close_timer()
+            elif event.type() == QtCore.QEvent.Type.Hide:
+                self._emoji_hover_open_timer.stop()
+                self._emoji_hover_close_timer.stop()
+        return super().eventFilter(watched, event)
 
     def _on_emoji_picker_hidden(self) -> None:
         self._emoji_picker_suppress_until_ms = (

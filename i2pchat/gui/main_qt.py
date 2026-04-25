@@ -4865,22 +4865,36 @@ class _GroupTopologyMapWidget(QtWidgets.QWidget):
             return
 
         local_rect, node_rects = self._layout_node_rects(map_rect)
-        center_band = QtCore.QRectF(
-            local_rect.left() - 34.0,
-            map_rect.top() + 14.0,
-            local_rect.width() + 68.0,
-            map_rect.height() - 28.0,
-        )
-        band_fill = QtGui.QColor(palette["panel_alt"])
-        band_fill.setAlpha(65 if self._theme_id == "night" else 95)
-        painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.setBrush(band_fill)
-        painter.drawRoundedRect(center_band, 40.0, 40.0)
-        orbit_pen = QtGui.QPen(palette["orbit"], 1.2)
+        center = local_rect.center()
+        outer_r = max(local_rect.width(), local_rect.height()) * 0.88
+        mid_r = max(local_rect.width(), local_rect.height()) * 0.64
+        inner_r = max(local_rect.width(), local_rect.height()) * 0.46
+
+        # Нейтральный «network/hub» фон: концентрические орбиты и мягкие направляющие.
+        painter.save()
+        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        orbit_pen = QtGui.QPen(palette["orbit"], 1.1)
         orbit_pen.setStyle(QtCore.Qt.PenStyle.DotLine)
         painter.setPen(orbit_pen)
-        painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(center_band.adjusted(10.0, 10.0, -10.0, -10.0), 34.0, 34.0)
+        for radius in (outer_r, mid_r, inner_r):
+            painter.drawEllipse(center, radius, radius)
+
+        guide = QtGui.QPen(QtGui.QColor(palette["orbit"]))
+        guide.setWidthF(1.0)
+        guide.setStyle(QtCore.Qt.PenStyle.DashLine)
+        guide_color = QtGui.QColor(guide.color())
+        guide_color.setAlpha(58 if self._theme_id == "night" else 66)
+        guide.setColor(guide_color)
+        painter.setPen(guide)
+        painter.drawLine(
+            QtCore.QPointF(map_rect.left() + 18.0, center.y()),
+            QtCore.QPointF(map_rect.right() - 18.0, center.y()),
+        )
+        painter.drawLine(
+            QtCore.QPointF(center.x(), map_rect.top() + 22.0),
+            QtCore.QPointF(center.x(), map_rect.bottom() - 22.0),
+        )
+        painter.restore()
 
         edges_by_target = {
             getattr(edge, "target_id"): edge
@@ -5698,17 +5712,25 @@ class _RouterSettingsDialog(QtWidgets.QDialog):
         self._status_label.setObjectName("RouterStatusLabel")
         v.addWidget(self._status_label)
 
-        actions_row = QtWidgets.QHBoxLayout()
-        actions_row.setSpacing(8)
+        actions_inner = QtWidgets.QHBoxLayout()
+        actions_inner.setContentsMargins(0, 0, 0, 0)
+        actions_inner.setSpacing(8)
         self._btn_open_data_dir = QtWidgets.QPushButton("Open data dir", self)
         self._btn_open_data_dir.setObjectName("SecondaryButton")
         self._btn_open_log = QtWidgets.QPushButton("Open log", self)
         self._btn_open_log.setObjectName("SecondaryButton")
         self._btn_restart = QtWidgets.QPushButton("Restart bundled router", self)
         self._btn_restart.setObjectName("SecondaryButton")
-        actions_row.addWidget(self._btn_open_data_dir)
-        actions_row.addWidget(self._btn_open_log)
-        actions_row.addWidget(self._btn_restart)
+        actions_inner.addWidget(self._btn_open_data_dir)
+        actions_inner.addWidget(self._btn_open_log)
+        actions_inner.addWidget(self._btn_restart)
+        actions_bar = QtWidgets.QWidget(self)
+        actions_bar.setLayout(actions_inner)
+        actions_row = QtWidgets.QHBoxLayout()
+        actions_row.addStretch(1)
+        actions_row.addWidget(
+            actions_bar, 0, QtCore.Qt.AlignmentFlag.AlignHCenter
+        )
         actions_row.addStretch(1)
         v.addLayout(actions_row)
 
