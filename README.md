@@ -433,18 +433,6 @@ I2PChat is licensed under the **GNU Affero General Public License v3.0** (or any
 
 Bundled `i2pd` binaries, when injected for portable release builds, follow their upstream licenses. The application **SAM** stack is **`i2pchat.sam`** (no PyPI or vendored **i2plib**).
 
-### ☕ Buy me a coffee
-
-If you like this project and want to support development, you can send a small donation in Bitcoin:
-
-- **BTC address**: `bc1q3sq35ym2a90ndpqe35ujuzktjrjnr9mz55j8hd`
-
-<p align="center">
-  <img src="btc_donation_qr.png" alt="Bitcoin donation QR" width="220" />
-</p>
-
----
-
 ## 🚀 Quick Start
 
 ### 📥 Prebuilt Downloads
@@ -485,7 +473,8 @@ brew install --cask metanoicarmor/i2pchat/i2pchat       # GUI — I2PChat.app
 brew install --cask metanoicarmor/i2pchat/i2pchat-tui   # TUI only
 ```
 
-(`brew tap MetanoicArmor/i2pchat` then `brew install --cask i2pchat` works too.)
+Отдельный `brew tap` подключать не нужно — при установке через `metanoicarmor/i2pchat/...` tap подтянется автоматически.
+(`brew tap MetanoicArmor/i2pchat` then `brew install --cask i2pchat` тоже работает, если нужен классический путь.)
 
 <img src="docs/icons/icons8-arch-linux-48.png" alt="Arch Linux" width="28" height="28" align="middle" /> **Arch Linux — [AUR](https://aur.archlinux.org/)** (x86_64 and aarch64; example [yay](https://github.com/Jguer/yay))
 
