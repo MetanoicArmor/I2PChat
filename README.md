@@ -40,7 +40,7 @@
 - [🛠 Running from source](#-running-from-source)
 - [Cross‑platform builds](#cross-platform-builds)
 - [📄 License](#-license)
-- [☕ Buy me a coffee](#-buy-me-a-coffee)
+- [☕ Developer Support](#-developer-support)
 - [🚀 Quick Start](#-quick-start) — downloads, package managers, **INSTALL.md**
 
 ### ✨ Features
@@ -432,6 +432,31 @@ System keyring integration is optional. If no Secret Service backend is availabl
 I2PChat is licensed under the **GNU Affero General Public License v3.0** (or any later version — see section 14 of the license). The full text is in [`LICENSE`](LICENSE).
 
 Bundled `i2pd` binaries, when injected for portable release builds, follow their upstream licenses. The application **SAM** stack is **`i2pchat.sam`** (no PyPI or vendored **i2plib**).
+
+## ☕ Developer Support
+
+If you like this project and it brings value, you can support its development by buying a virtual coffee:
+
+<div align="center">
+
+**☕ Buy developer a coffee:**
+
+**⚡ TON:**
+<div align="center">
+<img src="ton_donation_qr.png" width="200">
+</div>
+
+### 📋 TON Address:
+
+```
+UQCsX_UVKylmlxb4dWZlXdmlyRzNm-kzUx7Ld1VQHk1ob0MY
+```
+
+*Thank you for your support! It motivates to continue working on the project* 🙏
+
+</div>
+
+---
 
 ## 🚀 Quick Start
 
