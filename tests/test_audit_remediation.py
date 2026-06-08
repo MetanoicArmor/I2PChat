@@ -98,10 +98,12 @@ class AuditRemediationPolicyTests(unittest.TestCase):
 
     def test_secret_scan_workflow_exists_and_is_hardened(self) -> None:
         content = _read(".github/workflows/secret-scan.yml")
-        self.assertIn("actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5", content)
+        self.assertIn("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd", content)
         self.assertIn("permissions:", content)
         self.assertIn("contents: read", content)
         self.assertIn("gitleaks", content)
+        self.assertIn("--retry 5", content)
+        self.assertIn("--retry-all-errors", content)
         self.assertIn("pull_request:", content)
 
     def test_gui_open_image_has_path_confinement(self) -> None:
