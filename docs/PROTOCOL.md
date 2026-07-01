@@ -232,6 +232,14 @@ Examples include:
 These signal payloads are parsed in the live core and tied back to `MSG_ID`,
 session epoch, and delivery telemetry.
 
+**Authentication rule:** `__SIGNAL__` control frames carry protocol state
+changes and are only honored when they arrive on the authenticated secure
+channel (i.e. with `FLAG_ENCRYPTED` set after the handshake). A plaintext
+control signal received *before* the handshake completes is ignored, with the
+sole exception of a graceful `QUIT`. This prevents an on-path attacker from
+injecting unauthenticated signals (spurious ACKs, transfer aborts, BlindBox
+root changes) before the secure channel exists.
+
 ## Acknowledgements and delivery state
 
 The protocol distinguishes local acceptance from peer-confirmed delivery.
@@ -369,9 +377,33 @@ semantics are carried in an **envelope** layer implemented in:
 Offline delivery uses **pairwise** BlindBox roots to each other member (see the
 manuals for user-visible requirements). User-facing behavior: [MANUAL_EN.md](MANUAL_EN.md) / [MANUAL_RU.md](MANUAL_RU.md).
 
+### Group sender authentication
+
+Group messages are fanned out **directly** from sender to each member (there is
+no relaying through a third member). For 1:1-delivered (`recipient` scope, v1)
+group transport — whether carried on the live secure channel or via a pairwise
+BlindBox root — the transport peer is cryptographically authenticated. The
+runtime therefore binds the envelope's self-declared `sender_id` to that
+authenticated peer: if they do not denote the same I2P destination, the message
+is rejected as `INVALID`. This stops a connected group member from injecting a
+message that spoofs another member's identity.
+
+Enforcement lives in `_validate_imported_group_transport(...)` in
+`i2pchat/core/i2p_chat_core.py` and is regression tested in
+`tests/test_protocol_security_audit.py`.
+
+Group-wide BlindBox delivery (`group_blindbox` scope, v2) uses a group-shared
+root, so per-member cryptographic sender attribution is not available in that
+mode; the binding check applies to the authenticated `recipient`-scope path.
+
 ## Security notes
 
 - Post-handshake plaintext traffic is treated as suspicious / downgrade-like.
+- Pre-handshake plaintext `__SIGNAL__` control frames are ignored (except a
+  graceful `QUIT`); control signals are only honored on the authenticated
+  encrypted channel.
+- 1:1-delivered (`recipient` scope) group messages bind their `sender_id` to the
+  authenticated transport peer, preventing member-to-member sender spoofing.
 - Some metadata necessarily remains visible (type, length, preface).
 - Padding reduces but does not eliminate traffic analysis leakage.
 - BlindBox is intentionally narrower than the live protocol and is aimed at
