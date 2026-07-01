@@ -6443,7 +6443,9 @@ class I2PChatCore:
             delivery_reasons=dict(delivery_reasons or {}),
         )
 
-    def _validate_imported_group_transport(self, decoded: Any) -> None:
+    def _validate_imported_group_transport(
+        self, decoded: Any, *, source_peer: Optional[str] = None
+    ) -> None:
         if getattr(decoded, "state", None) is None or getattr(decoded, "envelope", None) is None:
             raise ValueError("Group transport state and envelope are required")
         state = decoded.state
@@ -6481,6 +6483,20 @@ class I2PChatCore:
             raise ValueError("Unsupported group transport content type")
         if not any(same_i2p_destination(sender_id, m) for m in state.members if m):
             raise ValueError("Group transport sender is not a group member")
+        # Sender authentication: for 1:1-delivered ("recipient" scope) group
+        # messages the transport peer is cryptographically authenticated (live
+        # secure channel or pairwise BlindBox root). Bind the self-declared
+        # ``sender_id`` to that authenticated peer so a connected group member
+        # cannot inject a message that spoofs another member's identity.
+        normalized_source_peer = normalize_member_id(source_peer or "")
+        if (
+            delivery_scope == "recipient"
+            and normalized_source_peer
+            and not same_i2p_destination(sender_id, normalized_source_peer)
+        ):
+            raise ValueError(
+                "Group transport sender does not match the authenticated peer"
+            )
         try:
             local_member = self._local_group_member_id()
         except Exception:
@@ -7077,7 +7093,7 @@ class I2PChatCore:
         if decoded is None:
             return None
         try:
-            self._validate_imported_group_transport(decoded)
+            self._validate_imported_group_transport(decoded, source_peer=source_peer)
         except Exception as e:
             detail = _exception_user_message(e)
             self._emit_error(f"Invalid group transport payload: {detail}")
@@ -10328,6 +10344,19 @@ class I2PChatCore:
 
                 elif msg_type == "S":
                     if "__SIGNAL__:" in body:
+                        # Control signals carry protocol state changes (BlindBox
+                        # roots, delivery ACKs, transfer aborts). They must ride
+                        # the authenticated secure channel; only a graceful QUIT
+                        # is honored as a plaintext pre-handshake signal. This
+                        # blocks unauthenticated signal injection before the
+                        # handshake completes.
+                        if not is_encrypted and "QUIT" not in body:
+                            logger.warning(
+                                "Ignoring unauthenticated control signal before "
+                                "secure channel (peer=%s)",
+                                (err_peer or "?")[:24],
+                            )
+                            continue
                         if "GROUP_BLINDBOX_ROOT|" in body:
                             try:
                                 await self._handle_incoming_group_blindbox_root_signal(
