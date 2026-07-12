@@ -1,6 +1,6 @@
 # I2PChat Security Audit
 
-**Audit date:** 2026-04-11  
+**Audit date:** 2026-04-11; follow-up review and remediation: 2026-07-12
 **Method:** manual source review + automated secret/dependency/static scanning + targeted regression tests  
 **Scope:** repository source tree, build/release scripts, CI workflows, and security-sensitive docs/UI flows  
 **Important limitation:** this was a **source-based** audit. Generated archives and packaged binaries present in the repository were not reverse-engineered or diffed as binaries.
@@ -9,15 +9,18 @@
 
 ## Executive summary
 
-- No confirmed **Critical** or **High** vulnerabilities were identified in the current source tree.
+- No confirmed **Critical** or **High** vulnerabilities remain open in the current source tree.
+- The July follow-up identified a **High-impact group sender-spoofing flaw** in the optional group-wide BlindBox path. It was remediated before this report was updated with Ed25519-signed v3 envelopes, pinned-key verification, and rejection of unsigned v2 envelopes.
 - The chat/runtime security model is generally strong:
   - SAM command construction is input-validated.
   - Handshake uses X25519 + Ed25519 + HKDF-derived subkeys.
   - Post-handshake traffic enforces MAC validation and replay/order checks.
+  - Group sender identities are bound to authenticated channels or verified Ed25519 signatures.
+  - Bundled-router SAM is restricted to loopback addresses.
   - Local sensitive files are usually written atomically with restrictive permissions.
 - The main confirmed risks are **integrity and supply-chain/operational** risks rather than direct remote memory-corruption or injection bugs.
 
-**Severity tally:** Critical `0`, High `0`, Medium `3`, Low `3`, Informational `6`
+**Open/residual severity tally:** Critical `0`, High `0`, Medium `3`, Low `3`, Informational `6`
 
 ---
 
@@ -25,7 +28,7 @@
 
 ### Automated checks
 
-Commands executed during this audit:
+Commands executed during the original audit and July follow-up:
 
 ```bash
 gitleaks detect --no-git --source . --config .gitleaks.toml --report-format json --report-path /tmp/i2pchat-gitleaks.json
@@ -35,14 +38,16 @@ uvx pip-audit==2.9.0 --require-hashes -r /tmp/i2pchat-runtime.txt
 uv export --frozen --only-group build --no-emit-project -o /tmp/i2pchat-build.txt
 uvx pip-audit==2.9.0 --require-hashes -r /tmp/i2pchat-build.txt
 uv run pytest tests/test_audit_remediation.py tests/test_sam_input_validation.py tests/test_protocol_hardening.py tests/test_blindbox_server_example.py tests/test_profile_backup.py tests/test_history_export.py -q
+uv run pytest -q
 ```
 
 Observed results:
 
-- `gitleaks`: **no leaks found**
+- `gitleaks` follow-up: **678 commits scanned, no leaks found**
 - `pip-audit` runtime lock export: **No known vulnerabilities found**
 - `pip-audit` build lock export: **No known vulnerabilities found**
-- `pytest`: **102 passed in 57.07s**
+- Full follow-up `pytest`: **744 passed, 5 skipped, 64 subtests passed**
+- The locked Linux `cryptography` package is **49.0.0**; the earlier affected dependency was updated for **GHSA-537c-gmf6-5ccf**.
 - `bandit`: **103 findings**, but manual triage showed they were mostly low-signal patterns (`try/except/pass`, `assert`, generic subprocess heuristics). No Bandit High findings were confirmed as exploitable issues.
 
 ### Manual review focus areas
@@ -56,7 +61,43 @@ Observed results:
 
 ---
 
+## Findings remediated in the 2026-07-12 follow-up
+
+### R1. Group sender spoofing over authenticated 1:1 delivery
+
+- **Issue:** a group member could submit a group envelope whose self-declared `sender_id` named another member.
+- **Fix:** recipient-scoped group transport now requires `sender_id` to match the cryptographically authenticated transport peer.
+- **Regression coverage:** spoofed senders are rejected, matching senders are accepted, and normalized `.b32.i2p` forms are handled consistently.
+
+### R2. Sender spoofing through the shared legacy Group BlindBox secret
+
+- **Issue:** all members of the optional group-wide BlindBox channel shared encryption material, so encryption alone could not prove which member authored an envelope.
+- **Fix:** Group BlindBox protocol **v3** signs the canonical envelope with the sender's Ed25519 key. Import requires a valid signature and an exact match with the sender's pinned signing key.
+- **Downgrade protection:** unsigned Group BlindBox **v2** envelopes are rejected. Older clients reject v3 as an unsupported version instead of silently accepting it without signature validation.
+- **Compatibility:** the affected group-wide path remains opt-in through `I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX`; all participants using it must upgrade together.
+
+### R3. Unauthenticated pre-handshake control signals
+
+- **Issue:** plaintext control frames received before secure-channel establishment could reach control handling.
+- **Fix:** pre-handshake control signals are ignored except for the narrowly scoped graceful `QUIT` signal. Encrypted post-handshake control handling is unchanged.
+
+### R4. Unsafe bundled-router SAM bind and configuration injection
+
+- **Issue:** a crafted `bundled_sam_host` could expose SAM beyond the local machine or inject additional lines into generated `i2pd` configuration.
+- **Fix:** bundled SAM accepts only loopback IP addresses or `localhost`; validation is applied when loading/saving settings and again while rendering the router configuration.
+- **Compatibility:** remote **system-router** SAM configuration remains separate; the restriction applies to the application-managed bundled router.
+
+### R5. Vulnerable cryptography dependency
+
+- **Issue:** the previous locked `cryptography` version was affected by **GHSA-537c-gmf6-5ccf**.
+- **Fix:** the lock now resolves Linux `cryptography` to **49.0.0**.
+- **Verification:** current runtime and build lock exports report no known vulnerabilities under `pip-audit`.
+
+---
+
 ## Confirmed findings
+
+The findings below remain open after the July remediation. The severity tally describes these **residual** findings only.
 
 ### Medium
 
