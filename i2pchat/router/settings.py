@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import ipaddress
 import json
 import os
 from typing import Any
@@ -43,6 +44,12 @@ def bundled_i2pd_allowed() -> bool:
 
 
 def normalize_router_settings(settings: RouterSettings) -> RouterSettings:
+    settings = RouterSettings(
+        **{
+            **asdict(settings),
+            "bundled_sam_host": require_loopback_host(settings.bundled_sam_host),
+        }
+    )
     if bundled_i2pd_allowed():
         return settings
     if settings.backend != "bundled" and not settings.bundled_auto_start:
@@ -73,6 +80,19 @@ def router_runtime_dir() -> str:
 def _coerce_string_setting(value: Any, default: str) -> str:
     text = str(value).strip() if value is not None else ""
     return text or default
+
+
+def require_loopback_host(value: Any, default: str = "127.0.0.1") -> str:
+    """Return a loopback-only host suitable for a bundled router bind."""
+    text = _coerce_string_setting(value, default)
+    if text.lower() == "localhost":
+        return text
+    try:
+        if ipaddress.ip_address(text).is_loopback:
+            return text
+    except ValueError:
+        pass
+    raise ValueError("Bundled SAM host must be a loopback address")
 
 
 def _coerce_int_setting(
@@ -122,7 +142,7 @@ def _coerce_router_settings(raw: dict[str, Any]) -> RouterSettings:
             raw.get("system_sam_port"),
             defaults["system_sam_port"],
         ),
-        bundled_sam_host=_coerce_string_setting(
+        bundled_sam_host=require_loopback_host(
             raw.get("bundled_sam_host"),
             defaults["bundled_sam_host"],
         ),

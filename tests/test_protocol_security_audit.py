@@ -30,6 +30,7 @@ if "PIL" not in sys.modules:
     sys.modules["PIL"] = pil_module
     sys.modules["PIL.Image"] = pil_image_module
 
+from i2pchat import crypto
 from i2pchat.core.i2p_chat_core import I2PChatCore
 from i2pchat.groups import (
     GroupContentType,
@@ -38,7 +39,11 @@ from i2pchat.groups import (
     GroupRecipientDeliveryMetadata,
     GroupState,
 )
-from i2pchat.groups.wire import encode_group_transport_text
+from i2pchat.groups.wire import (
+    encode_group_transport_text,
+    encode_group_transport_text_v2,
+    group_blindbox_signature_payload,
+)
 
 from tests.live_session_helpers import attach_mock_live_session
 
@@ -150,6 +155,40 @@ def _make_group_wire(sender_id: str, recipient_id: str, *, group_id: str) -> str
     return encode_group_transport_text(state, envelope, metadata)
 
 
+def _make_signed_group_blindbox_wire(
+    sender_id: str,
+    signing_seed: bytes,
+    signing_public: bytes,
+    *,
+    group_id: str,
+) -> str:
+    state = GroupState(
+        group_id=group_id,
+        epoch=1,
+        members=(ALICE_BARE, BOB_BARE, CAROL_BARE),
+        title="Audit group",
+    )
+    envelope = GroupEnvelope(
+        group_id=group_id,
+        epoch=1,
+        msg_id=f"offline-from-{sender_id[:6]}",
+        sender_id=sender_id,
+        group_seq=1,
+        content_type=GroupContentType.GROUP_TEXT,
+        payload="offline hello",
+    )
+    signature = crypto.sign_data(
+        signing_seed,
+        group_blindbox_signature_payload(state, envelope, signing_public),
+    )
+    return encode_group_transport_text_v2(
+        state,
+        envelope,
+        signer_key=signing_public,
+        signature=signature,
+    )
+
+
 class GroupSenderAuthenticationTests(unittest.TestCase):
     def _make_core(self, tmpdir: str) -> I2PChatCore:
         core = I2PChatCore(profile="alice")
@@ -200,6 +239,39 @@ class GroupSenderAuthenticationTests(unittest.TestCase):
             result = core.import_group_transport(
                 wire, source_peer=f"{BOB_BARE}.b32.i2p"
             )
+            assert result is not None
+            self.assertEqual(result.status, GroupImportStatus.IMPORTED)
+
+    def test_group_blindbox_rejects_member_spoofing_another_sender(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = self._make_core(tmpdir)
+            bob_seed, bob_public = crypto.generate_signing_keypair()
+            _carol_seed, carol_public = crypto.generate_signing_keypair()
+            core.peer_trusted_signing_keys[CAROL_BARE] = carol_public.hex()
+            wire = _make_signed_group_blindbox_wire(
+                CAROL_BARE,
+                bob_seed,
+                bob_public,
+                group_id="audit-group-1",
+            )
+            result = core.import_group_transport(wire)
+            assert result is not None
+            self.assertEqual(result.status, GroupImportStatus.INVALID)
+            self.assertIn("pinned sender key", (result.error or "").lower())
+            self.assertEqual(core.load_group_history("audit-group-1"), [])
+
+    def test_group_blindbox_accepts_signature_from_pinned_sender(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = self._make_core(tmpdir)
+            bob_seed, bob_public = crypto.generate_signing_keypair()
+            core.peer_trusted_signing_keys[BOB_BARE] = bob_public.hex()
+            wire = _make_signed_group_blindbox_wire(
+                BOB_BARE,
+                bob_seed,
+                bob_public,
+                group_id="audit-group-1",
+            )
+            result = core.import_group_transport(wire)
             assert result is not None
             self.assertEqual(result.status, GroupImportStatus.IMPORTED)
 

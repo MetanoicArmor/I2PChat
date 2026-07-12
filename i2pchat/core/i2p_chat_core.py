@@ -54,6 +54,7 @@ from i2pchat.groups.wire import (
     decode_group_transport_text,
     encode_group_transport_text,
     encode_group_transport_text_v2,
+    group_blindbox_signature_payload,
 )
 from i2pchat.storage.contact_book import (
     load_book,
@@ -6369,7 +6370,20 @@ class I2PChatCore:
                 raise ValueError("Recipient delivery metadata is required for v1 group transport")
             return encode_group_transport_text(state, envelope, metadata)
         if delivery_scope == "group_blindbox":
-            return encode_group_transport_text_v2(state, envelope)
+            if not self.my_signing_seed or not self.my_signing_public:
+                raise ValueError("Local signing identity is required for group BlindBox")
+            signed_payload = group_blindbox_signature_payload(
+                state,
+                envelope,
+                self.my_signing_public,
+            )
+            signature = crypto.sign_data(self.my_signing_seed, signed_payload)
+            return encode_group_transport_text_v2(
+                state,
+                envelope,
+                signer_key=self.my_signing_public,
+                signature=signature,
+            )
         raise ValueError(f"Unsupported group delivery scope: {delivery_scope}")
 
     def _format_group_text_for_ui(
@@ -6517,6 +6531,44 @@ class I2PChatCore:
                 raise ValueError(
                     "Group blindbox transport must not include recipient metadata"
                 )
+            signer_key = getattr(decoded, "signer_key", None)
+            signature = getattr(decoded, "signature", None)
+            if not isinstance(signer_key, bytes) or len(signer_key) != 32:
+                raise ValueError("Group blindbox transport is missing a valid signer key")
+            if not isinstance(signature, bytes) or len(signature) != 64:
+                raise ValueError("Group blindbox transport is missing a valid signature")
+            normalized_sender = self._normalize_peer_addr(sender_id)
+            if local_member and same_i2p_destination(sender_id, local_member):
+                trusted_signer_hex = (
+                    self.my_signing_public.hex()
+                    if isinstance(self.my_signing_public, bytes)
+                    else ""
+                )
+            else:
+                trusted_signer_hex = self.peer_trusted_signing_keys.get(
+                    normalized_sender, ""
+                )
+            if not trusted_signer_hex:
+                raise ValueError(
+                    "Group blindbox sender has no pinned signing key"
+                )
+            try:
+                trusted_signer = bytes.fromhex(trusted_signer_hex)
+            except ValueError as exc:
+                raise ValueError(
+                    "Group blindbox sender has an invalid pinned signing key"
+                ) from exc
+            if not secrets.compare_digest(signer_key, trusted_signer):
+                raise ValueError(
+                    "Group blindbox signer key does not match the pinned sender key"
+                )
+            signed_payload = group_blindbox_signature_payload(
+                state,
+                envelope,
+                signer_key,
+            )
+            if not crypto.verify_signature(signer_key, signed_payload, signature):
+                raise ValueError("Invalid group blindbox sender signature")
             if local_member and not any(
                 same_i2p_destination(local_member, member) for member in state.members if member
             ):

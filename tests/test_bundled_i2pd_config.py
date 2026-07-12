@@ -41,6 +41,22 @@ class BundledI2pdConfigTests(unittest.TestCase):
         self.assertIn("http.port = 17070", text)
         self.assertIn("logfile = /tmp/router.log", text)
 
+    def test_render_i2pd_conf_rejects_non_loopback_sam_bind(self) -> None:
+        rt = BundledI2pdRuntime(
+            sam_host="0.0.0.0",
+            sam_port=17656,
+            http_proxy_port=14444,
+            socks_proxy_port=14447,
+            control_http_port=17070,
+            data_dir="/tmp/router-data",
+            conf_path="/tmp/i2pd.conf",
+            tunconf_path="/tmp/tunnels.conf",
+            log_path="/tmp/router.log",
+            pidfile_path="/tmp/i2pd.pid",
+        )
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            render_i2pd_conf(rt)
+
     def test_build_launch_args_use_isolated_paths(self) -> None:
         rt = BundledI2pdRuntime(
             sam_host="127.0.0.1",
