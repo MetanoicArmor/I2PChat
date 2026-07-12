@@ -18,6 +18,7 @@ from .models import (
 GROUP_TRANSPORT_PREFIX = "__I2PCHAT_GROUP__:"
 GROUP_TRANSPORT_VERSION = 1
 GROUP_TRANSPORT_VERSION_V2 = 2
+GROUP_TRANSPORT_VERSION_V3 = 3
 GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX = "group_blindbox"
 
 
@@ -57,6 +58,8 @@ class DecodedGroupTransportMessage:
     envelope: GroupEnvelope
     recipient_id: str | None = None
     delivery_id: str | None = None
+    signer_key: bytes | None = None
+    signature: bytes | None = None
     version: int = GROUP_TRANSPORT_VERSION
     delivery_scope: str = "recipient"
 
@@ -90,13 +93,16 @@ def encode_group_transport_text(
     )
 
 
-def encode_group_transport_text_v2(
+def group_blindbox_signature_payload(
     state: GroupState,
     envelope: GroupEnvelope,
-) -> str:
-    payload = {
+    signer_key: bytes,
+) -> bytes:
+    if len(signer_key) != 32:
+        raise ValueError("Group blindbox signer key must be 32 bytes")
+    payload: dict[str, Any] = {
         "transport": "group",
-        "version": GROUP_TRANSPORT_VERSION_V2,
+        "version": GROUP_TRANSPORT_VERSION_V3,
         "delivery_scope": GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX,
         "group_id": state.group_id,
         "group_title": state.title,
@@ -108,7 +114,29 @@ def encode_group_transport_text_v2(
         "content_type": str(envelope.content_type),
         "payload": envelope.payload,
         "created_at": _to_iso8601(envelope.created_at),
+        "signer_key": signer_key.hex(),
     }
+    return json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def encode_group_transport_text_v2(
+    state: GroupState,
+    envelope: GroupEnvelope,
+    *,
+    signer_key: bytes,
+    signature: bytes,
+) -> str:
+    if len(signature) != 64:
+        raise ValueError("Group blindbox signature must be 64 bytes")
+    payload = json.loads(
+        group_blindbox_signature_payload(state, envelope, signer_key).decode("utf-8")
+    )
+    payload["signature"] = signature.hex()
     return GROUP_TRANSPORT_PREFIX + json.dumps(
         payload,
         ensure_ascii=True,
@@ -176,7 +204,7 @@ def _decode_group_transport_v1(payload: dict[str, Any]) -> DecodedGroupTransport
     )
 
 
-def _decode_group_transport_v2(payload: dict[str, Any]) -> DecodedGroupTransportMessage:
+def _decode_group_transport_v3(payload: dict[str, Any]) -> DecodedGroupTransportMessage:
     if (
         str(payload.get("delivery_scope") or "").strip().lower()
         != GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX
@@ -190,6 +218,15 @@ def _decode_group_transport_v2(payload: dict[str, Any]) -> DecodedGroupTransport
     sender_id = normalize_member_id(_required_text_field(payload, "sender_id"))
     if not sender_id:
         raise ValueError("Missing required group transport field: sender_id")
+    try:
+        signer_key = bytes.fromhex(_required_text_field(payload, "signer_key"))
+        signature = bytes.fromhex(_required_text_field(payload, "signature"))
+    except ValueError as exc:
+        raise ValueError("Invalid group blindbox signature encoding") from exc
+    if len(signer_key) != 32:
+        raise ValueError("Group blindbox signer key must be 32 bytes")
+    if len(signature) != 64:
+        raise ValueError("Group blindbox signature must be 64 bytes")
     created_at = _parse_datetime(_required_text_field(payload, "created_at"))
     members_raw = payload.get("members", [])
     if not isinstance(members_raw, list):
@@ -223,7 +260,9 @@ def _decode_group_transport_v2(payload: dict[str, Any]) -> DecodedGroupTransport
     return DecodedGroupTransportMessage(
         state=state,
         envelope=envelope,
-        version=GROUP_TRANSPORT_VERSION_V2,
+        signer_key=signer_key,
+        signature=signature,
+        version=GROUP_TRANSPORT_VERSION_V3,
         delivery_scope=GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX,
     )
 
@@ -241,5 +280,7 @@ def decode_group_transport_text(text: str) -> DecodedGroupTransportMessage | Non
     if version == GROUP_TRANSPORT_VERSION:
         return _decode_group_transport_v1(payload)
     if version == GROUP_TRANSPORT_VERSION_V2:
-        return _decode_group_transport_v2(payload)
+        raise ValueError("Unsigned group blindbox transport is no longer accepted")
+    if version == GROUP_TRANSPORT_VERSION_V3:
+        return _decode_group_transport_v3(payload)
     raise ValueError("Unsupported group transport version")

@@ -99,6 +99,32 @@ class RouterSettingsTests(unittest.TestCase):
                 self.assertEqual(loaded.bundled_control_http_port, 20004)
                 self.assertTrue(loaded.bundled_auto_start)
 
+    def test_save_rejects_non_loopback_bundled_sam_host(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch("i2pchat.router.settings.get_profiles_dir", return_value=td):
+                with self.assertRaisesRegex(ValueError, "loopback"):
+                    save_router_settings(
+                        RouterSettings(
+                            backend="bundled",
+                            bundled_sam_host="0.0.0.0",
+                        )
+                    )
+
+    def test_load_invalid_bundled_sam_host_falls_back_to_safe_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            with mock.patch("i2pchat.router.settings.get_profiles_dir", return_value=td):
+                with open(router_settings_path(), "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "backend": "bundled",
+                            "bundled_sam_host": "127.0.0.1\nhttp.enabled = false",
+                        },
+                        f,
+                    )
+                loaded = load_router_settings()
+                self.assertEqual(loaded.backend, "system")
+                self.assertEqual(loaded.bundled_sam_host, "127.0.0.1")
+
 
 if __name__ == "__main__":
     unittest.main()

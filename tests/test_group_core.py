@@ -39,6 +39,7 @@ from i2pchat.groups import (
 from i2pchat.groups.wire import (
     encode_group_transport_text,
     encode_group_transport_text_v2,
+    group_blindbox_signature_payload,
 )
 from i2pchat.storage.blindbox_state import BlindBoxState
 from i2pchat.storage.group_store import GroupBlindBoxChannel
@@ -411,9 +412,22 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     content_type=GroupContentType.GROUP_TEXT,
                     payload="offline to both",
                 )
+                alice_signing_seed, alice_signing_public = (
+                    crypto.generate_signing_keypair()
+                )
+                signature = crypto.sign_data(
+                    alice_signing_seed,
+                    group_blindbox_signature_payload(
+                        group_state,
+                        incoming_envelope,
+                        alice_signing_public,
+                    ),
+                )
                 incoming_wire = encode_group_transport_text_v2(
                     group_state,
                     incoming_envelope,
+                    signer_key=alice_signing_public,
+                    signature=signature,
                 )
                 frame = seed_core._codec.encode(
                     "U",
@@ -448,6 +462,9 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     core.my_dest = _DummyDest(local_member)
                     core.my_signing_seed, core.my_signing_public = (
                         crypto.generate_signing_keypair()
+                    )
+                    core.peer_trusted_signing_keys[ALICE_BARE] = (
+                        alice_signing_public.hex()
                     )
                     core.save_group_state(group_state)
                     core._save_group_blindbox_channel(

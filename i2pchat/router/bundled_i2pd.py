@@ -12,7 +12,7 @@ import time
 from typing import Iterable, Optional
 
 from .runtime import is_tcp_open, pick_free_tcp_port, probe_sam_hello, wait_for_sam_ready
-from .settings import RouterSettings, router_runtime_dir
+from .settings import RouterSettings, require_loopback_host, router_runtime_dir
 
 
 @dataclass
@@ -216,11 +216,12 @@ def _ps_single_quoted(text: str) -> str:
 
 
 def render_i2pd_conf(rt: BundledI2pdRuntime) -> str:
+    sam_host = require_loopback_host(rt.sam_host)
     return f"""daemon = false
 service = false
 
 sam.enabled = true
-sam.address = {rt.sam_host}
+sam.address = {sam_host}
 sam.port = {rt.sam_port}
 
 http.enabled = true
