@@ -18,6 +18,7 @@ from .models import (
 GROUP_TRANSPORT_PREFIX = "__I2PCHAT_GROUP__:"
 GROUP_TRANSPORT_VERSION = 1
 GROUP_TRANSPORT_VERSION_V2 = 2
+GROUP_TRANSPORT_VERSION_V3 = 3
 GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX = "group_blindbox"
 
 
@@ -101,7 +102,7 @@ def group_blindbox_signature_payload(
         raise ValueError("Group blindbox signer key must be 32 bytes")
     payload: dict[str, Any] = {
         "transport": "group",
-        "version": GROUP_TRANSPORT_VERSION_V2,
+        "version": GROUP_TRANSPORT_VERSION_V3,
         "delivery_scope": GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX,
         "group_id": state.group_id,
         "group_title": state.title,
@@ -203,7 +204,7 @@ def _decode_group_transport_v1(payload: dict[str, Any]) -> DecodedGroupTransport
     )
 
 
-def _decode_group_transport_v2(payload: dict[str, Any]) -> DecodedGroupTransportMessage:
+def _decode_group_transport_v3(payload: dict[str, Any]) -> DecodedGroupTransportMessage:
     if (
         str(payload.get("delivery_scope") or "").strip().lower()
         != GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX
@@ -261,7 +262,7 @@ def _decode_group_transport_v2(payload: dict[str, Any]) -> DecodedGroupTransport
         envelope=envelope,
         signer_key=signer_key,
         signature=signature,
-        version=GROUP_TRANSPORT_VERSION_V2,
+        version=GROUP_TRANSPORT_VERSION_V3,
         delivery_scope=GROUP_TRANSPORT_DELIVERY_SCOPE_GROUP_BLINDBOX,
     )
 
@@ -279,5 +280,7 @@ def decode_group_transport_text(text: str) -> DecodedGroupTransportMessage | Non
     if version == GROUP_TRANSPORT_VERSION:
         return _decode_group_transport_v1(payload)
     if version == GROUP_TRANSPORT_VERSION_V2:
-        return _decode_group_transport_v2(payload)
+        raise ValueError("Unsigned group blindbox transport is no longer accepted")
+    if version == GROUP_TRANSPORT_VERSION_V3:
+        return _decode_group_transport_v3(payload)
     raise ValueError("Unsupported group transport version")

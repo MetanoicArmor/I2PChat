@@ -275,6 +275,22 @@ class GroupSenderAuthenticationTests(unittest.TestCase):
             assert result is not None
             self.assertEqual(result.status, GroupImportStatus.IMPORTED)
 
+    def test_group_blindbox_rejects_legacy_unsigned_protocol_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = self._make_core(tmpdir)
+            bob_seed, bob_public = crypto.generate_signing_keypair()
+            core.peer_trusted_signing_keys[BOB_BARE] = bob_public.hex()
+            wire = _make_signed_group_blindbox_wire(
+                BOB_BARE,
+                bob_seed,
+                bob_public,
+                group_id="audit-group-1",
+            ).replace('"version":3', '"version":2')
+            result = core.import_group_transport(wire)
+            assert result is not None
+            self.assertEqual(result.status, GroupImportStatus.INVALID)
+            self.assertIn("unsigned", (result.error or "").lower())
+
 
 class PreHandshakeSignalRejectionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
