@@ -9,6 +9,7 @@ Security-focused maintenance release after **v1.3.2**. It authenticates group-me
 ### Highlights
 
 - **Authenticated group senders:** group messages delivered over an authenticated 1:1 channel must identify the channel peer as their sender. A group member can no longer use its own connection to inject a message attributed to another member.
+- **Copyable group invites:** any current member can copy a `__I2PCHAT_GROUP_INVITE__:` string (Qt **Copy invite**, TUI `/group invite`) and share it out of band. The recipient redeems it via **Join group via invite…** or `/group join`; joining persists the local roster from the invite snapshot and announces `GROUP_CONTROL` `op=join` to existing members. Invites are multi-use in this release (no TTL/revoke).
 - **Signed group BlindBox protocol v3:** legacy group-wide BlindBox envelopes are signed with the sender's Ed25519 identity. Import requires a valid signature and a match with the sender's pinned signing key.
 - **Downgrade protection:** unsigned group BlindBox protocol v2 envelopes are rejected. This prevents participants who know the shared group secret from forging another member's identity.
 - **Pre-handshake hardening:** unauthenticated plaintext control signals are ignored before the secure channel is established, except for the limited graceful `QUIT` signal.
@@ -19,6 +20,7 @@ Security-focused maintenance release after **v1.3.2**. It authenticates group-me
 ### Compatibility
 
 - Normal 1:1 messaging, pairwise BlindBox delivery, profiles, chat history, and stored contacts require no migration.
+- Group invite strings are a new out-of-band format (`__I2PCHAT_GROUP_INVITE__:`); they are not group transport frames. Older clients without invite UI still merge `members` from incoming `GROUP_CONTROL` when a peer joins from a newer client.
 - Legacy group-wide BlindBox is still opt-in through `I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX`, but its wire envelope is now **version 3** and requires pinned Ed25519 identities.
 - Unsigned group BlindBox v2 messages are intentionally incompatible and rejected. All participants using the optional group-wide BlindBox path should upgrade to **v1.3.3**.
 - Existing bundled-router settings using `127.0.0.1`, another loopback address, `::1`, or `localhost` continue to work. Non-loopback bundled SAM binds are no longer accepted.
@@ -45,6 +47,7 @@ Security-focused maintenance release after **v1.3.2**. It authenticates group-me
 ### Основные изменения
 
 - **Аутентификация отправителя группы:** `sender_id` группового сообщения, доставленного по защищённому каналу 1:1, теперь обязан совпадать с аутентифицированным пиром этого канала.
+- **Копируемые инвайты в группы:** любой текущий участник может скопировать строку `__I2PCHAT_GROUP_INVITE__:` (Qt **Copy invite**, TUI `/group invite`) и передать её вне приложения. Получатель принимает её через **Join group via invite…** или `/group join`; при входе создаётся локальный roster из снимка инвайта и рассылается `GROUP_CONTROL` с `op=join`. В этом релизе инвайты многоразовые (без TTL/отзыва).
 - **Подписанный Group BlindBox v3:** конверты опционального общего Group BlindBox подписываются Ed25519-ключом отправителя. При импорте проверяются подпись и совпадение ключа с закреплённым ключом отправителя.
 - **Защита от downgrade:** неподписанные конверты Group BlindBox v2 отклоняются. Участник, знающий общий секрет группы, больше не может выдать сообщение за сообщение другого участника.
 - **Защита до handshake:** открытые управляющие сигналы до установки защищённого канала игнорируются; исключение оставлено только для ограниченного корректного `QUIT`.
@@ -55,6 +58,7 @@ Security-focused maintenance release after **v1.3.2**. It authenticates group-me
 ### Совместимость
 
 - Обычные чаты 1:1, попарная BlindBox-доставка, профили, история и контакты не требуют миграции.
+- Строки инвайта — новый out-of-band формат (`__I2PCHAT_GROUP_INVITE__:`), это не group transport. Старые клиенты без UI инвайтов по-прежнему мержат `members` из входящего `GROUP_CONTROL`, когда пир входит с более нового клиента.
 - Старый общий Group BlindBox остаётся опциональным через `I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX`, но теперь использует подписанный протокол **v3** и закреплённые Ed25519-ключи.
 - Неподписанные сообщения Group BlindBox v2 намеренно не принимаются. Пользователям этого опционального режима необходимо обновить всех участников до **v1.3.3**.
 - Настройки встроенного роутера с loopback-адресами продолжают работать; привязка встроенного SAM к внешнему интерфейсу запрещена.

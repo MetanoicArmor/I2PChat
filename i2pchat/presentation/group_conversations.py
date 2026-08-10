@@ -109,6 +109,21 @@ def render_group_control_text(
 ) -> str:
     actor = (actor_label or "").strip() or "Group"
     control_payload = dict(payload or {})
+    op = str(control_payload.get("op") or "").strip().lower()
+
+    if op == "join":
+        joined_raw = str(
+            control_payload.get("joined_member_id")
+            or control_payload.get("member_id")
+            or ""
+        ).strip()
+        if joined_raw:
+            joined_label = short_member_label(joined_raw)
+            if actor in {"You", "Group"} or actor == joined_label:
+                return f"{joined_label} joined the group."
+            return f"{actor} joined the group."
+        return f"{actor} joined the group."
+
     detail_parts: list[str] = []
 
     title = str(control_payload.get("title") or "").strip()
@@ -128,8 +143,11 @@ def render_group_control_text(
             pass
 
     if not detail_parts and control_payload:
-        visible_keys = ", ".join(sorted(str(key) for key in control_payload.keys()))
-        detail_parts.append(f"fields {visible_keys}")
+        visible_keys = ", ".join(
+            sorted(str(key) for key in control_payload.keys() if str(key) != "op")
+        )
+        if visible_keys:
+            detail_parts.append(f"fields {visible_keys}")
 
     if detail_parts:
         return f"{actor} updated group settings: " + ", ".join(detail_parts)

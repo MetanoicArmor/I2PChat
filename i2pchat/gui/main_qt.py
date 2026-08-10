@@ -2724,7 +2724,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
     # Базовая 8‑px сетка: все отступы и скругления кратны 4/8.
     PADDING_X = 12
-    PADDING_Y = 8
+    PADDING_Y = 6
     # Горизонтальные поля для system/info без бабла (почти на всю ширину списка).
     SYSTEM_INLINE_MARGIN_X = 20
     # Вертикальные поля только для system/info — меньше, чем у баблов, чтобы сгустить служебные строки.
@@ -2736,6 +2736,10 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     # BUBBLE_SPACING_Y остаётся 0 — только этот inset даёт «чуть-чуть» воздуха. Внутренние PADDING у текста те же.
     BUBBLE_OUTER_MARGIN_Y = 2
     BUBBLE_RADIUS = 12
+    # Строка «время · статус»: мельче основного текста, плотнее к нему.
+    META_FONT_DELTA_PT = 3
+    META_GAP_Y = 2
+    META_ALPHA = 150
     
     # Настройки для inline-изображений
     # Макс. размер превью в бабле (масштабирование с сохранением пропорций).
@@ -2764,7 +2768,33 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
     def _c(self, name: str, fallback: str) -> QtGui.QColor:
         return QtGui.QColor(str(self._bubble_palette.get(name, fallback)))
-    
+
+    def _meta_font(self, base_font: QtGui.QFont) -> QtGui.QFont:
+        """Кегль строки времени/статуса — заметно мельче текста сообщения."""
+        font = QtGui.QFont(base_font)
+        pt = base_font.pointSize()
+        if pt > 0:
+            font.setPointSize(max(pt - self.META_FONT_DELTA_PT, 8))
+        else:
+            px = base_font.pixelSize()
+            if px > 0:
+                font.setPixelSize(max(px - self.META_FONT_DELTA_PT, 9))
+        return font
+
+    def _meta_color_for_item(self, item: "ChatItem", text_color: QtGui.QColor) -> QtGui.QColor:
+        """Полупрозрачный цвет меты: читается, но не конкурирует с текстом."""
+        delivery_state = _chat_item_delivery_state(item)
+        if item.kind == "success":
+            color = QtGui.QColor(self._c("tick_success", "#15542d"))
+        elif delivery_state == DELIVERY_STATE_FAILED:
+            color = QtGui.QColor("#ffd6d6")
+        elif item.kind in {"me", "image_braille", "image_bw"}:
+            color = QtGui.QColor("#ffffff")
+        else:
+            color = QtGui.QColor(text_color)
+        color.setAlpha(self.META_ALPHA)
+        return color
+
     def _load_pixmap(self, path: str) -> Optional[QtGui.QPixmap]:
         """Загрузить изображение с кэшированием."""
         real_path = os.path.realpath(path)
@@ -2847,7 +2877,6 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         omy = float(self.SYSTEM_INLINE_OUTER_MARGIN_Y)
         py = float(self.SYSTEM_INLINE_PADDING_Y)
 
-        metrics = QtGui.QFontMetrics(sys_font)
         outer = QtCore.QRectF(
             rect.left() + mx,
             rect.top() + omy + py,
@@ -2856,8 +2885,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         )
 
         if item.timestamp:
-            ts_height = float(metrics.height())
-            gap = py / 2.0
+            ts_height = float(QtGui.QFontMetrics(self._meta_font(sys_font)).height())
+            gap = float(self.META_GAP_Y)
             text_area = QtCore.QRectF(
                 outer.left(),
                 outer.top(),
@@ -2895,11 +2924,10 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         meta_text = _chat_item_delivery_meta_text(item)
         if ts_rect is not None and meta_text:
-            ts_font = QtGui.QFont(sys_font)
-            ts_font.setPixelSize(max(_status_label_font_pixel_size() - 1, 8))
+            ts_font = self._meta_font(sys_font)
             painter.setFont(ts_font)
             ts_color = QtGui.QColor(text_color)
-            ts_color = ts_color.lighter(130)
+            ts_color.setAlpha(self.META_ALPHA)
             painter.setPen(ts_color)
             painter.drawText(
                 ts_rect.toRect(),
@@ -3005,16 +3033,17 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         painter.setFont(base_font)
 
         full_text = item.text
-        metrics = QtGui.QFontMetrics(base_font)
+        meta_font = self._meta_font(base_font)
+        meta_metrics = QtGui.QFontMetrics(meta_font)
 
-        # Если есть таймстамп – резервируем под него одну строку снизу
+        # Если есть таймстамп – резервируем под него компактную строку снизу
         if item.timestamp:
-            ts_height = metrics.height()
+            ts_height = meta_metrics.height()
             text_area = QtCore.QRectF(
                 inner_rect.left(),
                 inner_rect.top(),
                 inner_rect.width(),
-                inner_rect.height() - ts_height - self.PADDING_Y / 2,
+                inner_rect.height() - ts_height - self.META_GAP_Y,
             )
             ts_rect = QtCore.QRectF(
                 inner_rect.left(),
@@ -3043,23 +3072,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         meta_text = _chat_item_delivery_meta_text(item)
         if ts_rect is not None and meta_text:
-            ts_font = QtGui.QFont(base_font)
-            ts_font.setPointSize(max(base_font.pointSize() - 1, 6))
-            painter.setFont(ts_font)
-
-            # Цвет штампа делаем чуть темнее текста для контраста на ярком фоне
-            if item.kind == "success":
-                ts_color = self._c("tick_success", "#15542d")
-            elif delivery_state == DELIVERY_STATE_FAILED:
-                ts_color = QtGui.QColor("#ffd6d6")
-            elif item.kind in {"me", "image_braille", "image_bw"}:
-                ts_color = QtGui.QColor("#d0e2ff")
-            else:
-                # слегка осветляем основной текстовый цвет
-                ts_color = QtGui.QColor(text_color)
-                ts_color = ts_color.lighter(130)
-
-            painter.setPen(ts_color)
+            painter.setFont(meta_font)
+            painter.setPen(self._meta_color_for_item(item, text_color))
             painter.drawText(
                 ts_rect,
                 int(
@@ -3512,10 +3526,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 + self.BUBBLE_SPACING_Y * 2
             )
             if item.timestamp:
-                ts_f = QtGui.QFont(font)
-                ts_f.setPixelSize(max(_status_label_font_pixel_size() - 1, 8))
-                ts_m = QtGui.QFontMetrics(ts_f)
-                height += ts_m.height() + int(self.SYSTEM_INLINE_PADDING_Y / 2)
+                ts_m = QtGui.QFontMetrics(self._meta_font(font))
+                height += ts_m.height() + self.META_GAP_Y
             return QtCore.QSize(int(cell_width), int(height))
 
         cell_width = option.rect.width() if option.rect.width() > 0 else 600
@@ -3534,11 +3546,11 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         text_height = math.ceil(float(doc.size().height()))
 
         # Высота строки = высота документа + цепочка отступов как в paint():
-        # rect → bubble (−2·OUTER_MARGIN_Y) → inner (−2·PY) → text_area (−ts_height − PY/2 при timestamp).
+        # rect → bubble (−2·OUTER_MARGIN_Y) → inner (−2·PY) → text_area (−ts_height − META_GAP_Y при timestamp).
         height = int(text_height) + self.PADDING_Y * 2 + 2 * self.BUBBLE_OUTER_MARGIN_Y + self.BUBBLE_SPACING_Y * 2
         if item.timestamp:
-            ts_m = QtGui.QFontMetrics(font)
-            height += ts_m.height() + int(self.PADDING_Y / 2)
+            ts_m = QtGui.QFontMetrics(self._meta_font(font))
+            height += ts_m.height() + self.META_GAP_Y
 
         return QtCore.QSize(int(cell_width), int(height))
 
@@ -6872,6 +6884,14 @@ class ChatWindow(QtWidgets.QMainWindow):
             shortcut_hint=_native_shortcut_text("Ctrl+G"),
         )
         self.more_actions_popup.add_action(
+            "Join group via invite…",
+            self._show_join_group_invite_dialog,
+            tool_tip=_tooltip_with_portable_shortcut(
+                menu_tt.TT_JOIN_GROUP_INVITE, "Ctrl+J"
+            ),
+            shortcut_hint=_native_shortcut_text("Ctrl+J"),
+        )
+        self.more_actions_popup.add_action(
             "BlindBox diagnostics",
             self._show_blindbox_diagnostics,
             tool_tip=_tooltip_with_portable_shortcut(
@@ -7556,7 +7576,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             )
 
         hint = QtWidgets.QLabel(
-            "Files, images, voice, invites, and roles are not part of this first group flow.",
+            "Files, images, voice, and roles are not part of this group flow. "
+            "Use Copy invite from the group menu to share a join string.",
             dialog,
         )
         hint.setWordWrap(True)
@@ -7668,6 +7689,9 @@ class ChatWindow(QtWidgets.QMainWindow):
                         allowed_members=allowed_members,
                     )
                     self.handle_system(f"Created group: {group_id}")
+                    dialog.accept()
+                    self._offer_copy_group_invite(group_id)
+                    return
             except Exception as exc:
                 QtWidgets.QMessageBox.warning(
                     dialog,
@@ -7681,6 +7705,124 @@ class ChatWindow(QtWidgets.QMainWindow):
         buttons.rejected.connect(dialog.reject)
         title_edit.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
         dialog.exec()
+
+    def _copy_group_invite(self, group_id: str) -> bool:
+        if self.core is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Copy invite",
+                "Wait for the local I2P session to finish starting, then try again.",
+            )
+            return False
+        try:
+            invite_text = self.core.create_group_invite(group_id)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Copy invite",
+                str(exc).strip() or type(exc).__name__,
+            )
+            return False
+        QtWidgets.QApplication.clipboard().setText(invite_text)
+        state = self.core.load_group_state(group_id)
+        label = self._group_display_name(
+            group_id,
+            title=(state.title if state is not None else None),
+        )
+        self.handle_system(f"Group invite copied: {label}")
+        return True
+
+    def _offer_copy_group_invite(self, group_id: str) -> None:
+        state = self.core.load_group_state(group_id) if self.core is not None else None
+        label = self._group_display_name(
+            group_id,
+            title=(state.title if state is not None else None),
+        )
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Copy invite?",
+            f'Group "{label}" is ready.\n\nCopy a shareable invite string to the clipboard now?',
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.Yes,
+        )
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            self._copy_group_invite(group_id)
+
+    def _show_join_group_invite_dialog(self) -> None:
+        if self.core is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Join group",
+                "Wait for the local I2P session to finish starting, then try again.",
+            )
+            return
+        dialog = QtWidgets.QDialog(self)
+        _apply_dialog_theme_sheet(dialog, self.theme_id)
+        dialog.setWindowTitle("Join group via invite")
+        dialog.resize(520, 280)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        help_label = QtWidgets.QLabel(
+            "Paste an invite string that starts with __I2PCHAT_GROUP_INVITE__:",
+            dialog,
+        )
+        help_label.setWordWrap(True)
+        invite_edit = QtWidgets.QPlainTextEdit(dialog)
+        invite_edit.setObjectName("GroupInvitePasteEdit")
+        invite_edit.setPlaceholderText("__I2PCHAT_GROUP_INVITE__:{…}")
+        clipboard_text = QtWidgets.QApplication.clipboard().text().strip()
+        if clipboard_text.startswith("__I2PCHAT_GROUP_INVITE__:"):
+            invite_edit.setPlainText(clipboard_text)
+        layout.addWidget(help_label)
+        layout.addWidget(invite_edit, 1)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        ok_btn = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        ok_btn.setText("Join")
+        layout.addWidget(buttons)
+
+        def _accept() -> None:
+            invite_text = invite_edit.toPlainText().strip()
+            if not invite_text:
+                QtWidgets.QMessageBox.warning(
+                    dialog,
+                    "Join group",
+                    "Paste a group invite string first.",
+                )
+                return
+            dialog.accept()
+            self._join_group_from_invite_async(invite_text)
+
+        buttons.accepted.connect(_accept)
+        buttons.rejected.connect(dialog.reject)
+        invite_edit.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+        dialog.exec()
+
+    def _join_group_from_invite_async(self, invite_text: str) -> None:
+        if self.core is None:
+            return
+
+        async def _join() -> None:
+            assert self.core is not None
+            try:
+                state = await self.core.join_group_from_invite(invite_text)
+            except Exception as exc:
+                self.handle_error(
+                    f"Could not join group: {str(exc).strip() or type(exc).__name__}"
+                )
+                return
+            self._refresh_groups_list()
+            self._set_active_group(state.group_id)
+            self.handle_system(
+                f"Joined group: {state.title or state.group_id}"
+            )
+
+        asyncio.create_task(_join())
 
     def _confirm_delete_group(self, group_id: str) -> None:
         if self.core is None:
@@ -8116,6 +8258,11 @@ class ChatWindow(QtWidgets.QMainWindow):
                 "Edit title & members…",
                 lambda g=addr: self._show_group_editor_dialog(existing_group_id=g),
                 tool_tip=menu_tt.TT_EDIT_GROUP,
+            )
+            popup.add_action(
+                "Copy invite",
+                lambda g=addr: self._copy_group_invite(g),
+                tool_tip=menu_tt.TT_COPY_GROUP_INVITE,
             )
             popup.add_action(
                 "Map…",
@@ -8946,6 +9093,9 @@ class ChatWindow(QtWidgets.QMainWindow):
             return True
         if _physical_key_matches(event, win_vk=0x47, mac_vk=0x05, linux_evdev=34):
             self._show_create_group_dialog()
+            return True
+        if _physical_key_matches(event, win_vk=0x4A, mac_vk=0x26, linux_evdev=36):
+            self._show_join_group_invite_dialog()
             return True
         if _physical_key_matches(event, win_vk=0x44, mac_vk=0x02, linux_evdev=32):
             self._show_blindbox_diagnostics()

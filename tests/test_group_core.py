@@ -1511,6 +1511,117 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(final_history[-1].group_seq, imported_envelope.group_seq)
             self.assertIsInstance(final_history[-1].created_at, datetime)
 
+    def test_create_group_invite_requires_membership(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            core = I2PChatCore(profile="alice")
+            core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
+            core.my_dest = _DummyDest(ALICE_BARE)
+            group_state = core.create_group(
+                title="Invite source",
+                members=[BOB_BARE],
+                group_id="core-group-invite",
+                epoch=2,
+            )
+            invite_text = core.create_group_invite(group_state.group_id)
+            self.assertTrue(invite_text.startswith("__I2PCHAT_GROUP_INVITE__:"))
+
+            core.my_dest = _DummyDest(CAROL_BARE)
+            with self.assertRaises(ValueError):
+                core.create_group_invite(group_state.group_id)
+
+    async def test_join_group_from_invite_announces_and_skips_repeat(self) -> None:
+        with tempfile.TemporaryDirectory() as alice_dir, tempfile.TemporaryDirectory() as carol_dir:
+            alice = I2PChatCore(profile="alice")
+            alice.get_profile_data_dir = lambda create=True: alice_dir  # type: ignore[method-assign]
+            alice.my_dest = _DummyDest(ALICE_BARE)
+            group_state = alice.create_group(
+                title="Invite party",
+                members=[BOB_BARE],
+                group_id="core-group-join",
+                epoch=1,
+            )
+            invite_text = alice.create_group_invite(group_state.group_id)
+
+            carol = I2PChatCore(profile="carol")
+            carol.get_profile_data_dir = lambda create=True: carol_dir  # type: ignore[method-assign]
+            carol.my_dest = _DummyDest(CAROL_BARE)
+            carol.session_manager.set_peer_handshake_complete(ALICE_BARE)
+            carol.session_manager.set_peer_handshake_complete(BOB_BARE)
+            carol._send_group_envelope_live = AsyncMock(  # type: ignore[method-assign]
+                return_value=GroupTransportOutcome(
+                    accepted=True,
+                    reason="live-session",
+                    transport_message_id="live-join",
+                )
+            )
+            carol._send_group_envelope_via_group_blindbox = AsyncMock(  # type: ignore[method-assign]
+                return_value=GroupTransportOutcome(
+                    accepted=True,
+                    reason="blindbox-ready",
+                    transport_message_id="queue-join",
+                )
+            )
+
+            joined = await carol.join_group_from_invite(invite_text)
+            self.assertEqual(joined.group_id, "core-group-join")
+            self.assertIn(CAROL_BARE, joined.members)
+            self.assertIn(ALICE_BARE, joined.members)
+            self.assertGreaterEqual(joined.epoch, 2)
+            history = carol.load_group_history(joined.group_id)
+            self.assertTrue(history)
+            self.assertEqual(history[-1].content_type, GroupContentType.GROUP_CONTROL)
+            assert isinstance(history[-1].payload, dict)
+            self.assertEqual(history[-1].payload.get("op"), "join")
+            self.assertEqual(history[-1].payload.get("joined_member_id"), CAROL_BARE)
+            carol._send_group_envelope_live.assert_awaited()  # type: ignore[attr-defined]
+            first_calls = carol._send_group_envelope_live.await_count  # type: ignore[attr-defined]
+
+            again = await carol.join_group_from_invite(invite_text)
+            self.assertEqual(again.group_id, joined.group_id)
+            # Re-join must not send another control announce.
+            self.assertEqual(
+                carol._send_group_envelope_live.await_count,  # type: ignore[attr-defined]
+                first_calls,
+            )
+
+            # Existing member imports join control and gains Carol in roster.
+            alice.my_dest = _DummyDest(ALICE_BARE)
+            join_state = GroupState(
+                group_id=joined.group_id,
+                epoch=joined.epoch,
+                members=joined.members,
+                title=joined.title,
+            )
+            join_envelope = GroupEnvelope(
+                group_id=joined.group_id,
+                epoch=joined.epoch,
+                msg_id="join-import-1",
+                sender_id=CAROL_BARE,
+                group_seq=1,
+                content_type=GroupContentType.GROUP_CONTROL,
+                payload={
+                    "op": "join",
+                    "members": list(joined.members),
+                    "title": joined.title,
+                    "epoch": joined.epoch,
+                    "joined_member_id": CAROL_BARE,
+                },
+            )
+            join_wire = encode_group_transport_text(
+                join_state,
+                join_envelope,
+                GroupRecipientDeliveryMetadata(
+                    recipient_id=ALICE_BARE,
+                    delivery_id="join-import-1:alice",
+                ),
+            )
+            imported = alice.import_group_transport(join_wire, source_peer=CAROL_BARE)
+            alice_state = alice.load_group_state(joined.group_id)
+            assert imported is not None
+            self.assertEqual(imported.status, GroupImportStatus.IMPORTED)
+            assert alice_state is not None
+            self.assertIn(CAROL_BARE, alice_state.members)
+
     async def test_direct_chat_behavior_still_works(self) -> None:
         core = I2PChatCore(profile="alice")
         attach_mock_live_session(core, BOB_BARE, (object(), _DummyWriter()))

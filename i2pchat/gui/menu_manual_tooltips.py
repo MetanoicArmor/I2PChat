@@ -28,6 +28,16 @@ TT_NEW_TEXT_GROUP = (
     "opens the same dialog as the New button in the Groups header."
 )
 
+TT_JOIN_GROUP_INVITE = (
+    "Paste a copied group invite string to join that text group on this device, "
+    "then announce your join to the current members."
+)
+
+TT_COPY_GROUP_INVITE = (
+    "Copy a shareable invite string for this group to the clipboard; "
+    "any current member can create one, and the recipient pastes it via Join group via invite."
+)
+
 TT_BLINDBOX_DIAGNOSTICS = (
     "Textual summary of BlindBox / offline routing and replica health; "
     "complements the status row."

@@ -74,6 +74,14 @@ def test_render_group_control_text_uses_known_fields() -> None:
     assert 'Alice updated group settings: title "Weekend plans", 2 members, epoch 3' == text
 
 
+def test_render_group_control_text_join_op() -> None:
+    text = render_group_control_text(
+        {"op": "join", "joined_member_id": PEER_B},
+        actor_label="You",
+    )
+    assert "joined the group" in text
+
+
 def test_render_group_history_preview_formats_text_and_control_entries() -> None:
     created_at = datetime(2026, 4, 9, 12, 0, tzinfo=timezone.utc)
     text_entry = GroupHistoryEntry(

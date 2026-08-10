@@ -377,6 +377,30 @@ semantics are carried in an **envelope** layer implemented in:
 Offline delivery uses **pairwise** BlindBox roots to each other member (see the
 manuals for user-visible requirements). User-facing behavior: [MANUAL_EN.md](MANUAL_EN.md) / [MANUAL_RU.md](MANUAL_RU.md).
 
+### Group invites (out-of-band)
+
+Any current member can create a **copyable invite string** (same trust model as
+sharing a destination address). The invite is **not** a group transport frame;
+it uses a separate prefix so pasting into chat does not import it as a message:
+
+```text
+__I2PCHAT_GROUP_INVITE__:{"v":1,"invite_id":"...","group_id":"...","title":"...","members":["..."],"epoch":N,"inviter_id":"...","created_at":"..."}
+```
+
+Implementation: `i2pchat/groups/invite.py`, core APIs `create_group_invite` /
+`join_group_from_invite` in `i2pchat/core/i2p_chat_core.py`.
+
+On redeem, the invitee persists a local `GroupState` from the snapshot
+(`members` ∪ self) and announces membership with a `GROUP_CONTROL` payload:
+
+```json
+{"op":"join","members":["…"],"title":"…","epoch":N,"joined_member_id":"…"}
+```
+
+Existing members merge `members` / `title` / `epoch` via the same control path
+as other group settings updates. Invites are multi-use in v1 (no TTL or
+revocation); roles/admin-only invites are out of scope.
+
 ### Group sender authentication
 
 Group messages are fanned out **directly** from sender to each member (there is
@@ -418,7 +442,7 @@ mode; the binding check applies to the authenticated `recipient`-scope path.
 | Session / transport lifecycle | `i2pchat/core/session_manager.py` |
 | Crypto primitives | `i2pchat/crypto.py` |
 | Delivery model | `i2pchat/protocol/message_delivery.py` |
-| Text groups | `i2pchat/groups/manager.py`, `i2pchat/groups/wire.py` |
+| Text groups | `i2pchat/groups/manager.py`, `i2pchat/groups/wire.py`, `i2pchat/groups/invite.py` |
 | BlindBox client | `i2pchat/blindbox/blindbox_client.py` |
 | BlindBox blob | `i2pchat/blindbox/blindbox_blob.py` |
 | BlindBox local replica | `i2pchat/blindbox/blindbox_local_replica.py` |

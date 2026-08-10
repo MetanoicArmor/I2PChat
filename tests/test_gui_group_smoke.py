@@ -1000,6 +1000,68 @@ def test_direct_peer_message_does_not_render_into_other_open_direct_chat_and_is_
     assert entries[0].text == "hello from B"
 
 
+def test_copy_group_invite_writes_clipboard(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    state = GroupState(
+        group_id="smoke-invite",
+        epoch=1,
+        members=(LOCAL_MEMBER, PEER_A),
+        title="Invite smoke",
+    )
+    window.core.create_group_invite = MagicMock(  # type: ignore[method-assign]
+        return_value='__I2PCHAT_GROUP_INVITE__:{"v":1}'
+    )
+    window.core.load_group_state = MagicMock(return_value=state)  # type: ignore[method-assign]
+    copied: list[str] = []
+    monkeypatch.setattr(
+        QApplication,
+        "clipboard",
+        lambda: SimpleNamespace(setText=lambda text: copied.append(text), text=lambda: ""),
+    )
+
+    assert window._copy_group_invite("smoke-invite") is True
+    window.core.create_group_invite.assert_called_once_with("smoke-invite")  # type: ignore[attr-defined]
+    assert copied == ['__I2PCHAT_GROUP_INVITE__:{"v":1}']
+
+
+def test_join_group_invite_dialog_starts_async_join(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    invite = (
+        '__I2PCHAT_GROUP_INVITE__:{"v":1,"invite_id":"ab","group_id":"g1",'
+        f'"title":"T","members":["{LOCAL_MEMBER}","{PEER_A}"],"epoch":1,'
+        f'"inviter_id":"{LOCAL_MEMBER}","created_at":"2026-04-09T10:00:00+00:00"}}'
+    )
+    started: list[str] = []
+
+    def _fake_join(invite_text: str) -> None:
+        started.append(invite_text)
+
+    monkeypatch.setattr(window, "_join_group_from_invite_async", _fake_join)
+
+    def _fake_exec(dialog: QDialog) -> int:
+        invite_edit = dialog.findChild(QPlainTextEdit, "GroupInvitePasteEdit")
+        buttons = dialog.findChild(QDialogButtonBox)
+        assert invite_edit is not None
+        assert buttons is not None
+        invite_edit.setPlainText(invite)
+        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        assert ok is not None
+        ok.click()
+        return int(QDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(QDialog, "exec", _fake_exec, raising=False)
+    monkeypatch.setattr(
+        QApplication,
+        "clipboard",
+        lambda: SimpleNamespace(setText=lambda _t: None, text=lambda: ""),
+    )
+
+    window._show_join_group_invite_dialog()
+    assert started == [invite]
+
+
 def test_connect_click_activates_peer_context_before_starting_network_connect(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:

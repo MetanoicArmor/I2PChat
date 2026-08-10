@@ -49,6 +49,11 @@ from i2pchat.groups import (
     render_group_topology_ascii,
     render_group_topology_mermaid,
 )
+from i2pchat.groups.invite import (
+    build_group_invite,
+    decode_group_invite,
+    encode_group_invite,
+)
 from i2pchat.groups.models import normalize_member_id, utc_now
 from i2pchat.groups.wire import (
     decode_group_transport_text,
@@ -3263,6 +3268,100 @@ class I2PChatCore:
             group_label=saved.state.title or saved.state.group_id,
         )
         return saved.state
+
+    def create_group_invite(self, group_id: str) -> str:
+        """Build a copyable out-of-band invite string for an existing local group."""
+        state = self.load_group_state(group_id)
+        if state is None:
+            raise ValueError(f"Unknown group: {group_id}")
+        local_member_id = self._local_group_member_id()
+        if local_member_id not in state.members:
+            raise ValueError("Only group members can create invites")
+        invite = build_group_invite(
+            group_id=state.group_id,
+            members=state.members,
+            epoch=int(state.epoch),
+            inviter_id=local_member_id,
+            title=state.title,
+        )
+        return encode_group_invite(invite)
+
+    async def join_group_from_invite(self, invite_text: str) -> GroupState:
+        """
+        Redeem a copyable group invite: persist local roster from the snapshot,
+        then announce join via GROUP_CONTROL when this peer was not already a member.
+        """
+        invite = decode_group_invite(invite_text)
+        local_member_id = self._local_group_member_id()
+        existing = self.load_group_state(invite.group_id)
+        if existing is not None and local_member_id in existing.members:
+            self._emit_system(
+                f"Already in group: {existing.title or existing.group_id}."
+            )
+            return existing
+
+        members: list[str] = []
+        seen: set[str] = set()
+        for raw in list(invite.members) + list(existing.members if existing else ()):
+            member_id = normalize_member_id(raw)
+            if not member_id or member_id in seen:
+                continue
+            seen.add(member_id)
+            members.append(member_id)
+        if local_member_id not in seen:
+            members.append(local_member_id)
+
+        base_epoch = int(invite.epoch)
+        if existing is not None:
+            base_epoch = max(base_epoch, int(existing.epoch))
+        title = invite.title or (existing.title if existing is not None else None)
+        state = GroupState(
+            group_id=invite.group_id,
+            epoch=base_epoch,
+            members=tuple(members),
+            title=title,
+            created_at=existing.created_at if existing is not None else utc_now(),
+            updated_at=utc_now(),
+        )
+        prev_members = frozenset(existing.members) if existing is not None else frozenset()
+        prev_epoch = int(existing.epoch) if existing is not None else None
+        saved = self.save_group(
+            state,
+            next_group_seq=1 if existing is None else None,
+        )
+        self._emit_system(
+            f"Joined group: {saved.state.title or saved.state.group_id} "
+            f"({max(0, len(saved.state.members) - 1)} peers)."
+        )
+        self._on_group_membership_changed(
+            prev_members,
+            prev_epoch,
+            saved.state,
+            group_label=saved.state.title or saved.state.group_id,
+        )
+
+        join_epoch = int(saved.state.epoch) + 1
+        join_state = GroupState(
+            group_id=saved.state.group_id,
+            epoch=join_epoch,
+            members=saved.state.members,
+            title=saved.state.title,
+            created_at=saved.state.created_at,
+            updated_at=utc_now(),
+        )
+        self.save_group(join_state)
+        await self.send_group_control(
+            join_state.group_id,
+            {
+                "op": "join",
+                "members": list(join_state.members),
+                "title": join_state.title,
+                "epoch": join_epoch,
+                "joined_member_id": local_member_id,
+            },
+        )
+        final_state = self.load_group_state(join_state.group_id)
+        return final_state or join_state
 
     def _group_display_name(self, state: GroupState) -> str:
         return state.title or state.group_id

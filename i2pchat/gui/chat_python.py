@@ -2057,6 +2057,20 @@ class I2PChat(App):
         return False
 
     async def _execute_command(self, raw: str) -> None:
+        stripped = (raw or "").strip()
+        join_match = re.match(
+            r"^/group\s+join\s+(.+)$",
+            stripped,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if join_match is not None:
+            await self._execute_group_subcommand(["join", join_match.group(1).strip()])
+            self._set_compose_text("")
+            if self._compose_draft_active_key is not None:
+                self._compose_drafts[self._compose_draft_active_key] = ""
+            self._flush_compose_drafts_to_disk()
+            self._refresh_status_bar()
+            return
         try:
             parts = shlex.split(raw)
         except ValueError as exc:
@@ -2729,10 +2743,56 @@ class I2PChat(App):
                 return
             self._refresh_group_conversation_display(force=True)
 
+        elif sub == "invite":
+            group_id = self._active_group_id
+            if len(args) >= 2:
+                group_id = self._resolve_group_selector(args[1])
+            if not group_id:
+                self.post("error", "No active group. Use /group invite <group_id> or /group open first.")
+                return
+            try:
+                invite_text = self.core.create_group_invite(group_id)
+            except Exception as exc:
+                self.post("error", f"Failed to create invite: {exc}")
+                return
+            if pyperclip is not None:
+                try:
+                    pyperclip.copy(invite_text)
+                    self.post(
+                        "success",
+                        f"Group invite copied to clipboard ({self._group_display_name(group_id)}).",
+                    )
+                    return
+                except Exception:
+                    pass
+            self.post("system", invite_text)
+            self.post("success", "Invite string printed above (clipboard unavailable).")
+
+        elif sub == "join":
+            if len(args) < 2:
+                self.post(
+                    "error",
+                    "Usage: /group join <invite…>  "
+                    "(paste the full __I2PCHAT_GROUP_INVITE__:… string)",
+                )
+                return
+            invite_text = " ".join(args[1:]).strip()
+            try:
+                state = await self.core.join_group_from_invite(invite_text)
+            except Exception as exc:
+                self.post("error", f"Failed to join group: {exc}")
+                return
+            self._set_active_group(state.group_id)
+            self.post(
+                "success",
+                f"Joined group: {self._group_display_name(state.group_id, title=state.title)}",
+            )
+            self._refresh_group_conversation_display(force=True)
+
         else:
             self.post("error",
                 "Usage: /group list | create <title> <members…> | open <id> | close | "
-                "info [id] | members [id] | topology [id] | send <text>")
+                "info [id] | members [id] | topology [id] | invite [id] | join <invite…> | send <text>")
 
     def _resolve_group_selector(self, selector: str) -> Optional[str]:
         states = self.core.list_group_states()
@@ -2764,7 +2824,7 @@ class I2PChat(App):
     def show_help(self) -> None:
         self.post("help", "Compose: Enter = newline, Ctrl+S / Ctrl+Enter = send current compose buffer.")
         self.post("help", "Primary function keys: F1 actions, F2 contacts, F3 media, F4 settings, F5 history, F6 diagnostics, F8 groups.")
-        self.post("help", "Groups: F8 or /group list|create|open|close|info|members|topology|send. Compose box sends to active group when open.")
+        self.post("help", "Groups: F8 or /group list|create|open|close|info|members|topology|invite|join|send. Compose box sends to active group when open.")
         self.post("help", "Connection: /connect <addr>, /disconnect, /save, /unlock, /status")
         self.post("help", "Messaging/media: /sendfile <path> (/send-file), /sendpic <path> (/send-picture), /img <path>, /img-bw <path>, /recent [count], /reply <ref>")
         self.post("help", "Launcher: optional via /launcher (/menu) if you want the quick launcher overlay.")
@@ -2786,6 +2846,8 @@ class TuiGroupsScreen(ModalScreen[None]):
         ("escape", "close", "Close"),
         ("enter", "open_selected", "Open"),
         ("n", "new_group", "New"),
+        ("c", "copy_invite_selected", "Copy invite"),
+        ("j", "join_invite", "Join invite"),
         ("i", "info_selected", "Info"),
         ("t", "topology_selected", "Topology"),
         ("d", "delete_selected", "Delete"),
@@ -2823,12 +2885,14 @@ class TuiGroupsScreen(ModalScreen[None]):
             yield Static("Groups", id="groups_title")
             yield DataTable(id="groups_table")
             yield Static(
-                "Enter open · N new · I info · T topology · D delete · Esc close",
+                "Enter open · N new · C copy invite · J join invite · I info · T topology · D delete · Esc close",
                 id="groups_help",
             )
             with Horizontal(id="groups_buttons"):
                 yield Button("New", id="groups_new")
                 yield Button("Open", id="groups_open", variant="primary")
+                yield Button("Copy invite", id="groups_invite")
+                yield Button("Join invite", id="groups_join")
                 yield Button("Info", id="groups_info")
                 yield Button("Topology", id="groups_topology")
                 yield Button("Delete", id="groups_delete", variant="warning")
@@ -2905,6 +2969,30 @@ class TuiGroupsScreen(ModalScreen[None]):
         self.host.post("system", "Use /group create <title> <member1> [member2 …] to create a group.")
         self.dismiss(None)
 
+    def action_copy_invite_selected(self) -> None:
+        group_id = self._selected_group_id()
+        if not group_id:
+            return
+        asyncio.create_task(self.host._execute_command(f"/group invite {group_id}"))
+        self.dismiss(None)
+
+    def action_join_invite(self) -> None:
+        invite_text = ""
+        if pyperclip is not None:
+            try:
+                invite_text = str(pyperclip.paste() or "").strip()
+            except Exception:
+                invite_text = ""
+        if invite_text.startswith("__I2PCHAT_GROUP_INVITE__:"):
+            asyncio.create_task(self.host._execute_command(f"/group join {invite_text}"))
+            self.dismiss(None)
+            return
+        self.host.post(
+            "system",
+            "Copy an invite string first, then press J here, or use /group join <invite…>.",
+        )
+        self.dismiss(None)
+
     def action_info_selected(self) -> None:
         group_id = self._selected_group_id()
         if not group_id:
@@ -2948,6 +3036,8 @@ class TuiGroupsScreen(ModalScreen[None]):
         mapping = {
             "groups_new": self.action_new_group,
             "groups_open": self.action_open_selected,
+            "groups_invite": self.action_copy_invite_selected,
+            "groups_join": self.action_join_invite,
             "groups_info": self.action_info_selected,
             "groups_topology": self.action_topology_selected,
             "groups_delete": self.action_delete_selected,

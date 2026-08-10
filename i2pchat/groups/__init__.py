@@ -1,3 +1,12 @@
+from .invite import (
+    GROUP_INVITE_PREFIX,
+    GROUP_INVITE_VERSION,
+    GroupInvite,
+    build_group_invite,
+    decode_group_invite,
+    encode_group_invite,
+    looks_like_group_invite,
+)
 from .manager import GroupManager
 from .mesh import GroupMeshManager, GroupMeshPeerSnapshot
 from .models import (
@@ -23,11 +32,14 @@ from .topology import (
 )
 
 __all__ = [
+    "GROUP_INVITE_PREFIX",
+    "GROUP_INVITE_VERSION",
     "GroupContentType",
     "GroupDeliveryStatus",
     "GroupEnvelope",
     "GroupImportResult",
     "GroupImportStatus",
+    "GroupInvite",
     "GroupManager",
     "GroupMeshManager",
     "GroupMeshPeerSnapshot",
@@ -40,7 +52,11 @@ __all__ = [
     "GroupTopologyNode",
     "GroupTopologySnapshot",
     "GroupTransportOutcome",
+    "build_group_invite",
     "build_observed_group_topology",
+    "decode_group_invite",
+    "encode_group_invite",
+    "looks_like_group_invite",
     "render_group_topology_ascii",
     "render_group_topology_mermaid",
 ]
