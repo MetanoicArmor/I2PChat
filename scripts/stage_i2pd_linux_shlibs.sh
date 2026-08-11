@@ -67,6 +67,14 @@ find_host_lib() {
   return 1
 }
 
+ensure_staged_lib_mode() {
+  # Shared libs must be world-readable and executable. Capital +X in chmod does
+  # not add +x to plain files that arrived as 0644 (common for libminiupnpc).
+  local path="$1"
+  [[ -f "$path" && ! -L "$path" ]] || return 0
+  chmod a+rx "$path" 2>/dev/null || true
+}
+
 copy_lib_into_vendor() {
   local src="$1" base
   base="$(basename "$src")"
@@ -76,12 +84,13 @@ copy_lib_into_vendor() {
   if [[ -f "${DIR}/${base}" && ! -L "${DIR}/${base}" ]]; then
     # Refresh if source is newer / different inode (optional: always overwrite for exact match)
     if cmp -s "$src" "${DIR}/${base}" 2>/dev/null; then
+      ensure_staged_lib_mode "${DIR}/${base}"
       return 0
     fi
   fi
   rm -f "${DIR}/${base}"
   cp -L "$src" "${DIR}/${base}"
-  chmod a+rX "${DIR}/${base}" 2>/dev/null || true
+  ensure_staged_lib_mode "${DIR}/${base}"
   echo "Copied ${base}"
 }
 
@@ -221,4 +230,9 @@ fi
 rm -f "${DIR}/.ldd-stderr"
 
 echo "OK: ${I2PD} resolves all dynamic deps with LD_LIBRARY_PATH=${DIR}"
+shopt -s nullglob
+for f in "${DIR}"/*.so*; do
+  ensure_staged_lib_mode "$f"
+done
+shopt -u nullglob
 ls -la "${DIR}"
