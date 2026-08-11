@@ -1051,6 +1051,7 @@ THEMES: dict[str, dict[str, object]] = {
             "me_text": "#ffffff",
             "peer_bg": "#e2e6ef",
             "peer_text": "#1c1c1e",
+            "sender_label": "#0a84ff",
             "system_bg": "#e8ecf3",
             "system_text": "#5f6673",
             "error_bg": "#f2d8d7",
@@ -1615,6 +1616,7 @@ THEMES: dict[str, dict[str, object]] = {
             "me_text": "#ffffff",
             "peer_bg": "#343842",
             "peer_text": "#f2f2f7",
+            "sender_label": "#7fb9ff",
             "system_bg": "#2d333d",
             "system_text": "#a3acbc",
             "error_bg": "#5a3536",
@@ -2162,6 +2164,8 @@ class ChatItem:
     retryable: bool = False
     retry_kind: Optional[str] = None
     retry_source_path: Optional[str] = None
+    # Групповой чат: имя отправителя рисуется отдельно над текстом пузыря.
+    show_sender_label: bool = False
 
 
 def _chat_item_delivery_state(item: ChatItem) -> Optional[str]:
@@ -2748,6 +2752,8 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
     META_FONT_DELTA_PT = 3
     META_GAP_Y = 2
     META_ALPHA = 150
+    # Имя отправителя в групповом пузыре — отдельная строка над текстом.
+    SENDER_GAP_Y = 2
     
     # Настройки для inline-изображений
     # Макс. размер превью в бабле (масштабирование с сохранением пропорций).
@@ -2788,6 +2794,22 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
             if px > 0:
                 font.setPixelSize(max(px - self.META_FONT_DELTA_PT, 9))
         return font
+
+    def _sender_label_font(self, base_font: QtGui.QFont) -> QtGui.QFont:
+        font = QtGui.QFont(base_font)
+        font.setBold(True)
+        return font
+
+    def _sender_label_text(self, item: "ChatItem") -> str:
+        if not getattr(item, "show_sender_label", False):
+            return ""
+        return (item.sender or "").strip()
+
+    def _sender_label_block_height(self, item: "ChatItem", base_font: QtGui.QFont) -> int:
+        label = self._sender_label_text(item)
+        if not label:
+            return 0
+        return int(QtGui.QFontMetrics(self._sender_label_font(base_font)).height()) + self.SENDER_GAP_Y
 
     def _meta_color_for_item(self, item: "ChatItem", text_color: QtGui.QColor) -> QtGui.QColor:
         """Полупрозрачный цвет меты: читается, но не конкурирует с текстом."""
@@ -2860,6 +2882,21 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         else:
             min_w = int(cell_width * 0.4)
         return max(min_w, min(max_w, content_px))
+
+    def _bubble_width_for_item(
+        self, cell_width: int, item: "ChatItem", font: QtGui.QFont
+    ) -> int:
+        text = item.text or " "
+        width = self._bubble_width(cell_width, text, font)
+        label = self._sender_label_text(item)
+        if not label:
+            return width
+        label_w = (
+            self._text_max_line_advance(label, self._sender_label_font(font))
+            + self.PADDING_X * 4
+        )
+        max_w = int(cell_width * 0.75)
+        return max(width, min(max_w, label_w))
 
     def _bubble_inner_text_width_px(self, bubble_width: int) -> float:
         """Ширина для QTextDocument в бабле — как text_area.width() в paint() после двойных отступов."""
@@ -2980,7 +3017,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
 
         cell_width = rect.width()
         base_font = painter.font()
-        bubble_width = self._bubble_width(cell_width, item.text, base_font)
+        bubble_width = self._bubble_width_for_item(cell_width, item, base_font)
 
         if is_me:
             bubble_rect = QtCore.QRectF(
@@ -3043,15 +3080,42 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         full_text = item.text
         meta_font = self._meta_font(base_font)
         meta_metrics = QtGui.QFontMetrics(meta_font)
+        sender_label = self._sender_label_text(item)
+        sender_block_h = self._sender_label_block_height(item, base_font)
 
         # Если есть таймстамп – резервируем под него компактную строку снизу
+        content_top = inner_rect.top()
+        if sender_label:
+            sender_font = self._sender_label_font(base_font)
+            sender_metrics = QtGui.QFontMetrics(sender_font)
+            sender_h = float(sender_metrics.height())
+            sender_rect = QtCore.QRectF(
+                inner_rect.left(),
+                content_top,
+                inner_rect.width(),
+                sender_h,
+            )
+            painter.setFont(sender_font)
+            painter.setPen(self._c("sender_label", "#0a84ff"))
+            painter.drawText(
+                sender_rect,
+                int(
+                    QtCore.Qt.AlignmentFlag.AlignLeft
+                    | QtCore.Qt.AlignmentFlag.AlignVCenter
+                ),
+                sender_label,
+            )
+            content_top += float(sender_block_h)
+            painter.setFont(base_font)
+            painter.setPen(text_color)
+
         if item.timestamp:
             ts_height = meta_metrics.height()
             text_area = QtCore.QRectF(
                 inner_rect.left(),
-                inner_rect.top(),
+                content_top,
                 inner_rect.width(),
-                inner_rect.height() - ts_height - self.META_GAP_Y,
+                max(1.0, inner_rect.bottom() - content_top - ts_height - self.META_GAP_Y),
             )
             ts_rect = QtCore.QRectF(
                 inner_rect.left(),
@@ -3060,7 +3124,12 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
                 ts_height,
             )
         else:
-            text_area = inner_rect
+            text_area = QtCore.QRectF(
+                inner_rect.left(),
+                content_top,
+                inner_rect.width(),
+                max(1.0, inner_rect.bottom() - content_top),
+            )
             ts_rect = None
 
         paths = emoji_paths_cached()
@@ -3541,7 +3610,7 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         cell_width = option.rect.width() if option.rect.width() > 0 else 600
         font = option.font
 
-        bubble_width = self._bubble_width(cell_width, item.text, font)
+        bubble_width = self._bubble_width_for_item(cell_width, item, font)
         inner_w = self._bubble_inner_text_width_px(bubble_width)
 
         text = item.text or " "
@@ -3554,8 +3623,10 @@ class ChatItemDelegate(QtWidgets.QStyledItemDelegate):
         text_height = math.ceil(float(doc.size().height()))
 
         # Высота строки = высота документа + цепочка отступов как в paint():
-        # rect → bubble (−2·OUTER_MARGIN_Y) → inner (−2·PY) → text_area (−ts_height − META_GAP_Y при timestamp).
+        # rect → bubble (−2·OUTER_MARGIN_Y) → inner (−2·PY) → text_area (−ts_height − META_GAP_Y при timestamp)
+        # + опционально строка имени отправителя в группе.
         height = int(text_height) + self.PADDING_Y * 2 + 2 * self.BUBBLE_OUTER_MARGIN_Y + self.BUBBLE_SPACING_Y * 2
+        height += self._sender_label_block_height(item, font)
         if item.timestamp:
             ts_m = QtGui.QFontMetrics(self._meta_font(font))
             height += ts_m.height() + self.META_GAP_Y
@@ -11682,14 +11753,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         sender_id = getattr(entry, "sender_id", None)
         kind = getattr(entry, "kind", "peer")
         sender = "Me" if kind == "me" else self._group_member_label(sender_id)
-        visible_text = plain_text if kind == "me" else f"{sender}: {plain_text}"
         self._append_item(
             ChatItem(
                 kind=kind,
                 timestamp=ts_display,
                 sender=sender,
-                text=visible_text,
+                text=plain_text,
                 message_id=getattr(entry, "msg_id", None),
+                show_sender_label=(kind != "me"),
             )
         )
 

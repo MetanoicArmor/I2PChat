@@ -1250,10 +1250,9 @@ class I2PChat(App):
             return
         sender = "Me" if entry.kind == "me" else self._group_member_label(entry.sender_id)
         text = str(entry.text or "")
-        visible = text if entry.kind == "me" else f"{sender}: {text}"
         self._render_chat_message(
             sender_label=sender,
-            text=visible,
+            text=text,
             align="left" if entry.kind == "me" else "right",
             border_color="green" if entry.kind == "me" else "cyan",
             timestamp=ts_display,
