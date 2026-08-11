@@ -25,7 +25,8 @@ from i2pchat.storage.profile_dat import (
 class ProfileDatEncryptionTests(unittest.TestCase):
     def test_roundtrip_encrypt_decrypt(self) -> None:
         wrap = b"\x42" * 32
-        key_b64 = "dGVzdC1wcml2YXRlLWtleS1saW5lLWJhc2U2NAo="
+        # Plain fixture string (not a real key); avoid base64 blobs that trip secret scanners.
+        key_b64 = "test-private-key-line-fixture"
         blob = encrypt_profile_dat(key_b64, wrap)
         self.assertTrue(is_encrypted_profile_dat(blob))
         self.assertEqual(blob[:4], PROFILE_DAT_MAGIC)

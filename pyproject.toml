@@ -15,10 +15,10 @@ dependencies = [
     "pyperclip",
     "PyQt6",
     "qasync",
-    "Pillow",
+    "Pillow>=12.3.0",
     "pynacl",
     "keyring",
-    "cryptography>=48.0.1; sys_platform == 'linux'",
+    "cryptography>=50.0.0; sys_platform == 'linux'",
     "pywin32-ctypes; sys_platform == 'win32'",
 ]
 
@@ -30,6 +30,7 @@ i2pchat-tui = "i2pchat.tui:main"
 build = [
     "pyinstaller",
     "pefile; sys_platform == 'win32'",
+    "setuptools>=83.0.0",
 ]
 dev = ["pytest"]
 

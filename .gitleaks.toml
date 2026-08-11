@@ -10,4 +10,5 @@ useDefault = true
 description = "Mock .dat first-line fixtures in unit tests (not production secrets)"
 paths = [
   '''tests/test_clear_locked_peer\.py''',
+  '''tests/test_profile_dat\.py''',
 ]
