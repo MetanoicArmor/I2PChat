@@ -17,6 +17,8 @@ Python **3.12+** is supported (**3.14+** recommended for release-style builds). 
 
 **Linux script** uses **uv** (`.venv`, `uv sync --frozen --group build`) and PyInstaller **`I2PChat.spec`** (GUI + TUI exe sharing one Qt onedir), `appimagetool`; the AppImage includes `usr/bin/I2PChat` and **`usr/bin/I2PChat-tui`**, plus a TUI `.desktop` with `Terminal=true`. After that it runs **`I2PChat-tui.spec`** → `dist/I2PChat-tui/` (no Qt) and packs **`I2PChat-linux-*-tui-*.zip`** from that tree.
 
+**Bundled router version:** portable payloads track i2pd **2.61.0** via [i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd) (Linux from Ubuntu noble → Boost **1.83** SONAME).
+
 **Optional bundled router staging:** portable builds can embed `i2pd` if local files are staged under `vendor/i2pd/`. Build scripts now auto-try [`scripts/ensure_bundled_i2pd.sh`](../scripts/ensure_bundled_i2pd.sh), which resolves in this order:
 
 1. already staged `vendor/i2pd/`

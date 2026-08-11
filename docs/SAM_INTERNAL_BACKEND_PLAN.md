@@ -43,7 +43,7 @@ Before changing runtime behavior:
 4. Implement the internal backend behind the compatibility API.
 5. Switch runtime to the internal backend.
 6. Remove `vendor/i2plib` path injection and direct imports.
-7. Run tests against real `i2pd >= 2.59.0`.
+7. Run tests against real `i2pd >= 2.61.0`.
 
 ## Target Module Layout
 
@@ -278,7 +278,7 @@ Main touchpoints:
 
 Target runtime requirement:
 
-- `i2pd >= 2.59.0`
+- `i2pd >= 2.61.0`
 
 The internal backend should be tested against that floor and should not assume
 bundled router binaries exist.
@@ -314,7 +314,7 @@ Suggested coverage:
 - timeout handling closes failed sockets;
 - `dest_lookup(.b32.i2p)` behavior;
 - connect retry semantics for peer reachability;
-- optional real integration with local `i2pd >= 2.59.0`.
+- optional real integration with local `i2pd >= 2.61.0`.
 
 ## Non-Goals
 
@@ -334,7 +334,7 @@ The migration is complete when all of these are true:
 2. `i2pchat/__init__.py` no longer alters `sys.path` for vendored `i2plib`.
 3. Core chat and BlindBox both use `i2pchat.sam`.
 4. Tests pass without runtime dependence on vendored `i2plib`.
-5. Real runtime works against `i2pd >= 2.59.0`.
+5. Real runtime works against `i2pd >= 2.61.0`.
 6. Debian/Ubuntu packaging no longer needs a separate `i2plib` strategy.
 
 ## Suggested Commit Sequence
@@ -357,7 +357,7 @@ Continue from docs/SAM_INTERNAL_BACKEND_PLAN.md (Status section) and docs/CURSOR
 Constraints:
 - Do not reintroduce vendored i2plib as a runtime dependency.
 - Keep SAM logic split across errors.py, destination.py, protocol.py, client.py, and backend.py.
-- Target i2pd >= 2.59.0.
+- Target i2pd >= 2.61.0.
 
 Next tasks:
 1. remove stale i2plib wording from comments and user-facing docs where it implies runtime use;

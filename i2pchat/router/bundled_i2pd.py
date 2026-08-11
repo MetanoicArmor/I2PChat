@@ -1061,11 +1061,27 @@ class BundledI2pdManager:
             raise RuntimeError("internal error: bundled i2pd process not started")
         while loop.time() < deadline:
             if proc.returncode is not None:
+                rc = proc.returncode
+                hint = (
+                    "See {log} — common causes: missing Boost/OpenSSL *.so next to "
+                    "vendor/i2pd/linux-*/i2pd; i2pd/libi2pd.so version skew (SIGSEGV/-11); "
+                    "or another instance holding the pidfile (exit 1)."
+                ).format(log=rt.log_path)
+                if rc in (-11, 139):  # SIGSEGV / 128+11
+                    hint = (
+                        f"See {rt.log_path} — exit {rc} is usually SIGSEGV from mismatched "
+                        "i2pd vs libi2pd.so/OpenSSL (re-stage matching libs, or use "
+                        "distro i2pd / rebuild vendor from i2pchat-bundled-i2pd)."
+                    )
+                elif rc == 1:
+                    hint = (
+                        f"See {rt.log_path} — exit 1 is often a pidfile lock "
+                        f"({os.path.join(os.path.dirname(rt.log_path), 'i2pd.pid')}) "
+                        "or missing shared library."
+                    )
                 raise RuntimeError(
                     "Bundled i2pd exited before SAM was ready "
-                    f"(exit code {proc.returncode}). "
-                    f"See {rt.log_path} — often \"error while loading shared libraries\" "
-                    "(copy ldd-listed *.so into vendor/i2pd/linux-*/ next to i2pd, or use a static i2pd)."
+                    f"(exit code {rc}). {hint}"
                 )
             try:
                 await probe_sam_hello(rt.sam_host, rt.sam_port, timeout=2.0)

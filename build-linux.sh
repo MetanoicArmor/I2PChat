@@ -97,7 +97,7 @@ if [ ! -f "vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd" ]; then
   echo "      Задайте I2PCHAT_BUNDLED_I2PD_SOURCE_DIR, SSH URL в I2PCHAT_BUNDLED_I2PD_GIT_URL, или ./scripts/fetch_bundled_i2pd.sh --from …" >&2
 fi
 
-# Linux bundled i2pd may need the exact boost SONAME it was linked against.
+# Linux bundled i2pd (2.61.0 noble payloads) may need the exact boost SONAME it was linked against.
 # On noble builds we ensure a real libboost_program_options.so.1.83.0 is staged
 # next to i2pd (symlink to newer ABI is not sufficient and may crash at runtime).
 I2PD_BUNDLE_DIR="vendor/i2pd/${I2PD_LINUX_SUBDIR}"
