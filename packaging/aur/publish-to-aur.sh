@@ -55,7 +55,22 @@ for pkg in "${PACKAGES[@]}"; do
   echo "==> ${pkg} (${pkgver}-${pkgrel})"
   clone="${WORKDIR}/${pkg}"
   rm -rf "${clone}"
-  git clone "ssh://aur@aur.archlinux.org/${pkg}.git" "${clone}"
+  clone_err="$(mktemp)"
+  if ! git clone "ssh://aur@aur.archlinux.org/${pkg}.git" "${clone}" 2>"${clone_err}"; then
+    cat "${clone_err}" >&2
+    if grep -qi 'down due to maintenance' "${clone_err}"; then
+      echo "" >&2
+      echo "ERROR: AUR git/SSH в maintenance (веб при этом может открываться)." >&2
+      echo "  Это не «нет прав» — стандартный текст git при любой ошибке clone." >&2
+      echo "  Подождите и повторите, либо:" >&2
+      echo "    ./packaging/aur/wait-and-publish-to-aur.sh" >&2
+      rm -f "${clone_err}"
+      exit 2
+    fi
+    rm -f "${clone_err}"
+    exit 1
+  fi
+  rm -f "${clone_err}"
   cd "${clone}"
   git config user.email "${GIT_COMMIT_EMAIL}"
   git config user.name "${GIT_COMMIT_NAME}"
