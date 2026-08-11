@@ -362,6 +362,30 @@ class PreHandshakeSignalRejectionTests(unittest.IsolatedAsyncioTestCase):
             systems,
         )
 
+    async def test_quit_substring_bypass_is_rejected(self) -> None:
+        """A control signal embedding the substring 'QUIT' must NOT bypass the
+        pre-handshake plaintext filter (regression for the substring bypass)."""
+        core = self._make_core(on_error=lambda _m: None)
+        payload = core.frame_message_plain("S", "__SIGNAL__:MSG_ACK|123|QUIT")
+        conn = (_Reader(payload), _Writer())
+        k = attach_mock_live_session(
+            core,
+            TEST_PEER_B32,
+            conn,
+            handshake_complete=False,
+            use_encryption=False,
+        )
+        with self.assertLogs("i2pchat", level="WARNING") as cm:
+            await core.receive_loop(conn, peer_id=k)
+        # The forged plaintext signal must hit the unauthenticated-signal filter.
+        self.assertTrue(
+            any(
+                "unauthenticated control signal" in line.lower()
+                for line in cm.output
+            ),
+            cm.output,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

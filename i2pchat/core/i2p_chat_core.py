@@ -92,6 +92,11 @@ from i2pchat.storage.profile_blindbox_replicas import (
     normalize_replica_endpoints,
     save_profile_blindbox_replicas_bundle,
 )
+from i2pchat.storage.profile_dat import (
+    is_encrypted_profile_dat,
+    read_profile_dat_file,
+    write_encrypted_profile_dat,
+)
 from i2pchat.presentation.group_conversations import (
     render_group_control_text,
     short_member_label,
@@ -153,6 +158,11 @@ def _sam_stream_connect_hint(exc: BaseException) -> str:
         return (
             "Hint: peer not reachable yet. Check the full 52-character .b32.i2p address, "
             "ensure the other side is online with tunnels ready, wait 1–3 minutes, retry."
+        )
+    if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+        return (
+            "Hint: the SAM/router connection dropped mid-connect. Wait until status shows "
+            "Pending or Visible, restart the I2P router if it stays down, then retry."
         )
     return ""
 
@@ -361,6 +371,9 @@ class PeerTrustInfo:
     pinned: bool
     signing_key_hex: Optional[str] = None
     fingerprint_short: Optional[str] = None
+    fingerprint_full: Optional[str] = None
+    safety_number: Optional[str] = None
+    oob_verified: bool = False
     rejected_by_peer: bool = False  # True если получатель отклонил входящий файл
 
 
@@ -436,6 +449,9 @@ class _BlindBoxPollGroupContext:
     state: BlindBoxState
     root_candidates: list[dict[str, Any]]
     save_state: Callable[[], None]
+    # Candidate sender identities (other group members) whose per-sender group
+    # blindbox slots we must scan. Empty means "unknown" (legacy behavior).
+    sender_candidates: tuple[str, ...] = ()
 
 
 def _is_host_port_replica(value: str) -> bool:
@@ -498,6 +514,7 @@ def _blindbox_direct_replicas_security_issue(
     require_sam: bool,
     local_auth_token: str,
     allow_insecure_local: bool,
+    replica_auth: Optional[dict[str, str]] = None,
 ) -> Optional[str]:
     if require_sam and len(replicas) > 0 and not use_sam:
         return (
@@ -517,6 +534,24 @@ def _blindbox_direct_replicas_security_issue(
             "Set a token or explicitly opt out with "
             "I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1."
         )
+    # v1.4.0: direct (non-SAM) replicas that are NOT loopback are remote plaintext
+    # endpoints; require a bearer token (per-endpoint replica_auth or the local
+    # token) by default so an unauthenticated remote replica can't be used.
+    if replicas and not use_sam and not allow_insecure_local:
+        auth_map = replica_auth or {}
+        for item in replicas:
+            if _is_loopback_replica(item):
+                continue
+            has_auth = bool((local_auth_token or "").strip()) or bool(
+                str(auth_map.get(item, "") or "").strip()
+            )
+            if not has_auth:
+                return (
+                    f"BlindBox direct non-loopback replica {item} requires an auth "
+                    "token (per-endpoint replica_auth or I2PCHAT_BLINDBOX_LOCAL_TOKEN). "
+                    "Set a token or explicitly opt out with "
+                    "I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1."
+                )
     return None
 
 
@@ -988,9 +1023,20 @@ def peek_persisted_stored_peer(profile: str) -> Optional[str]:
     if not key_file:
         return None
     try:
-        with open(key_file, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f.readlines() if line.strip()]
+        with open(key_file, "rb") as f:
+            raw = f.read()
     except OSError:
+        return None
+    # Encrypted .dat never carries the legacy lock-peer line.
+    if is_encrypted_profile_dat(raw):
+        return None
+    try:
+        lines = [
+            line.strip()
+            for line in raw.decode("utf-8").splitlines()
+            if line.strip()
+        ]
+    except UnicodeDecodeError:
         return None
     stored_line: Optional[str] = None
     if len(lines) > 1 and _peek_is_probable_peer_line(lines[1]):
@@ -1375,9 +1421,14 @@ class I2PChatCore:
         self.inline_image_info: Optional[Tuple[str, int]] = None  # (filename, size)
         self._inline_image_last_emit: int = 0
 
-        # криптография (устанавливается при handshake v2)
+        # криптография (устанавливается при handshake v4)
         self.shared_key: Optional[bytes] = None
         self.shared_mac_key: Optional[bytes] = None
+        # Направленные ключи (protocol v4): send_* исходящие, recv_* входящие.
+        self.send_key: Optional[bytes] = None
+        self.send_mac_key: Optional[bytes] = None
+        self.recv_key: Optional[bytes] = None
+        self.recv_mac_key: Optional[bytes] = None
         self.my_nonce: Optional[bytes] = None
         self.peer_nonce: Optional[bytes] = None
         self.my_ephemeral_private: Optional[bytes] = None
@@ -1387,8 +1438,15 @@ class I2PChatCore:
         self.my_signing_public: Optional[bytes] = None
         self.peer_signing_public: Optional[bytes] = None
         self.peer_trusted_signing_keys: dict[str, str] = {}
+        # Peers whose fingerprint the user confirmed out-of-band (typed challenge).
+        self.peer_oob_verified: dict[str, bool] = {}
         self.use_encryption: bool = False
         self.handshake_complete: bool = False
+        # Key confirmation (FINISHED) state (protocol v4).
+        self._hs_role: Optional[str] = None
+        self._hs_transcript: Optional[bytes] = None
+        self._hs_finished_sent: bool = False
+        self._hs_peer_finished: bool = False
         raw_padding_profile = os.environ.get(
             "I2PCHAT_PADDING_PROFILE", PADDING_PROFILE_BALANCED
         ).strip().lower()
@@ -1497,7 +1555,9 @@ class I2PChatCore:
             replicas_resolved = replicas_from_file
         elif self.profile != TRANSIENT_PROFILE_NAME and (
             (_bb_prof := load_profile_blindbox_replicas_bundle(
-                self.get_profile_data_dir(create=False), self.profile
+                self.get_profile_data_dir(create=False),
+                self.profile,
+                identity_key=self.get_identity_key_bytes(),
             ))[0]
         ):
             self._blindbox_replicas_source = "profile-file"
@@ -1579,6 +1639,24 @@ class I2PChatCore:
                     "Set a token or explicitly opt out with "
                     "I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1."
                 )
+        if (
+            self.blindbox_enabled
+            and not self._blindbox_use_sam
+            and not self._blindbox_allow_insecure_local
+        ):
+            for _replica in self.blindbox_replicas:
+                if _is_loopback_replica(_replica):
+                    continue
+                _has_auth = bool((self._blindbox_local_auth_token or "").strip()) or bool(
+                    str(self._blindbox_replica_auth.get(_replica, "") or "").strip()
+                )
+                if not _has_auth:
+                    raise ValueError(
+                        f"BlindBox direct non-loopback replica {_replica} requires an "
+                        "auth token (per-endpoint replica_auth or "
+                        "I2PCHAT_BLINDBOX_LOCAL_TOKEN). Set a token or explicitly opt "
+                        "out with I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1."
+                    )
         # Default 1: practical fast path for text — try one Blind Box and, on failure,
         # fallback to the next endpoint. Set I2PCHAT_BLINDBOX_PUT_QUORUM=2 to require
         # all configured boxes to ACK each offline message.
@@ -1939,16 +2017,14 @@ class I2PChatCore:
             if not self._has_active_session_for_peer(peer_addr_norm):
                 self._emit_error("No active connection.")
                 return False
-            live_kwargs: dict[str, Any] = {"peer_id": peer_addr_norm}
-        else:
-            if not self.any_live_stream():
-                self._emit_error("No active connection.")
+            if not self.is_secure_live_for_peer(peer_addr_norm):
+                self._emit_error("Secure channel not ready yet. Wait for 'Ready'.")
                 return False
-            live_kwargs = {
-                "connected": True,
-                "handshake_complete": self._handshake_complete_for_peer_route(""),
-            }
-        if not self.session_manager.is_live_path_alive(**live_kwargs):
+            return True
+        if not self.any_live_stream():
+            self._emit_error("No active connection.")
+            return False
+        if not self._handshake_complete_for_peer_route(""):
             self._emit_error("Secure channel not ready yet. Wait for 'Ready'.")
             return False
         return True
@@ -2035,7 +2111,11 @@ class I2PChatCore:
                 or ls.handshake_complete
             ):
                 return
-            self._emit_error("Secure handshake timed out")
+            self._emit_error(
+                "Secure handshake timed out. "
+                "If the peer is online, both sides need I2PChat 1.4+; "
+                "also check for a pending TOFU trust dialog."
+            )
             self.session_manager.mark_peer_failed(
                 k, reason="handshake-timeout"
             )
@@ -2146,6 +2226,112 @@ class I2PChatCore:
         s = self._live_sessions.get(k)
         return bool(s and s.conn)
 
+    def _live_session_secure_ready(self, peer_id: str) -> bool:
+        """Authoritative crypto readiness: LivePeerSession after FINISHED (+ TOFU)."""
+        try:
+            k = self._normalize_peer_addr(peer_id) if peer_id else ""
+        except ValueError:
+            return False
+        if not k:
+            return False
+        ls = self._live_sessions.get(k)
+        return bool(
+            ls is not None
+            and ls.conn is not None
+            and ls.handshake_complete
+            and ls.use_encryption
+        )
+
+    def _heal_session_manager_secure(self, peer_id: str) -> None:
+        """Keep session_manager in sync when LivePeerSession is already secure."""
+        try:
+            k = self._normalize_peer_addr(peer_id)
+        except ValueError:
+            return
+        if not k or not self._live_session_secure_ready(k):
+            return
+        pt = self.session_manager.get_peer_transport(k)
+        if (
+            pt is not None
+            and pt.connected
+            and pt.handshake_complete
+            and pt.peer_state == PeerState.SECURE
+        ):
+            self.session_manager.mark_live_healthy(peer_id=k)
+            return
+        self.session_manager.set_peer_handshake_complete(
+            k, reason="heal-from-live-session"
+        )
+        self.session_manager.mark_live_healthy(peer_id=k)
+
+    def is_secure_live_for_peer(self, peer_id: str) -> bool:
+        """True if this peer has a finished secure LivePeerSession (wire-ready).
+
+        Intentionally ignores session_manager-only "secure" flags: those can be
+        stale after accept/tie-break and would make Send target a peer with no
+        writer (acceptor cannot reply).
+        """
+        try:
+            k = self._normalize_peer_addr(peer_id) if peer_id else ""
+        except ValueError:
+            return False
+        if not k:
+            return False
+        if self._live_session_secure_ready(k):
+            self._heal_session_manager_secure(k)
+            return True
+        return False
+
+    def list_secure_live_peers(self) -> list[str]:
+        """Canonical peer ids with an active finished secure live session."""
+        out: list[str] = []
+        for k, ls in self._live_sessions.items():
+            if (
+                ls.conn is not None
+                and ls.handshake_complete
+                and ls.use_encryption
+            ):
+                out.append(k)
+        return out
+
+    def resolve_secure_live_peer(self, preferred: str = "") -> str:
+        """Pick a peer id for outbound live send.
+
+        Prefers ``preferred`` only when that LivePeerSession is secure; otherwise
+        the current peer or any secure live session (incoming-accept case where
+        addr_edit / last_active still points elsewhere). Never returns a
+        non-secure preferred while a wire-secure session exists — that forced
+        BlindBox-only Send on the acceptor despite Ready/receive working.
+        """
+        try:
+            pref = self._normalize_peer_addr(preferred) if preferred else ""
+        except ValueError:
+            pref = ""
+        if pref and self._live_session_secure_ready(pref):
+            self._heal_session_manager_secure(pref)
+            return pref
+        try:
+            cur = self._normalize_peer_addr(self.current_peer_addr or "")
+        except ValueError:
+            cur = ""
+        if cur and self._live_session_secure_ready(cur):
+            self._heal_session_manager_secure(cur)
+            return cur
+        secure = self.list_secure_live_peers()
+        if pref and pref in secure:
+            self._heal_session_manager_secure(pref)
+            return pref
+        if cur and cur in secure:
+            self._heal_session_manager_secure(cur)
+            return cur
+        if secure:
+            # Any wire-secure session beats BlindBox routing to a stale preferred.
+            pick = secure[0]
+            self._heal_session_manager_secure(pick)
+            return pick
+        # No wire-secure session — keep preferred for BlindBox offline routing.
+        return pref or cur or ""
+
     def _prefer_incoming_session(self, peer_id: str) -> bool:
         try:
             peer = self._normalize_peer_addr(peer_id)
@@ -2197,14 +2383,20 @@ class I2PChatCore:
         msg_id = self._allocate_msg_id()
         sess = self._session_for_frame(peer_id)
 
-        if sess.shared_key and sess.use_encryption and not force_plain:
+        # Directional keys (protocol v4). ``shared_key`` fallback keeps the
+        # legacy single-key path working for callers/tests that poke
+        # ``shared_key`` directly; the real handshake always installs the
+        # directional keys, so the fallback is never used in production.
+        send_enc = sess.send_key or sess.shared_key
+        send_mac = sess.send_mac_key or sess.shared_mac_key or send_enc
+        if send_enc and sess.use_encryption and not force_plain:
             if not crypto.NACL_AVAILABLE:
                 raise RuntimeError("NaCl is required for secure protocol mode")
             sess._send_seq += 1
             seq = sess._send_seq
-            mac_key = sess.shared_mac_key or sess.shared_key
+            mac_key = send_mac
             padded_body = self._apply_padding_profile(body)
-            encrypted_body = crypto.encrypt_message(sess.shared_key, padded_body)
+            encrypted_body = crypto.encrypt_message(send_enc, padded_body)
             mac = crypto.compute_mac(
                 mac_key,
                 msg_type,
@@ -2297,8 +2489,13 @@ class I2PChatCore:
 
     def get_identity_key_bytes(self) -> Optional[bytes]:
         """Return raw bytes of the I2P identity private key, or None."""
-        if self.my_dest is not None and self.my_dest.private_key is not None:
-            return self.my_dest.private_key.data
+        dest = self.my_dest
+        if dest is None:
+            return None
+        private_key = getattr(dest, "private_key", None)
+        data = getattr(private_key, "data", None)
+        if isinstance(data, (bytes, bytearray)):
+            return bytes(data)
         return None
 
     def get_profiles_dir(self) -> str:
@@ -2316,6 +2513,10 @@ class I2PChatCore:
             raise RuntimeError("Local destination is not initialized")
         return normalize_member_id(str(self.my_dest.base32))
 
+    def _group_store_key(self) -> Optional[bytes]:
+        """Identity key used to encrypt group records at rest (v1.4.0+)."""
+        return self.get_identity_key_bytes()
+
     def _load_group_conversation(
         self, group_id: str
     ) -> Optional[StoredGroupConversation]:
@@ -2323,6 +2524,7 @@ class I2PChatCore:
             self.get_profile_data_dir(create=True),
             self.profile,
             group_id,
+            identity_key=self._group_store_key(),
         )
         if conversation is not None:
             self.group_manager.prime_group_sequence(
@@ -2345,6 +2547,7 @@ class I2PChatCore:
             self.profile,
             state,
             next_group_seq=next_group_seq,
+            identity_key=self._group_store_key(),
         )
         self.group_manager.prime_group_sequence(
             state.group_id,
@@ -2379,6 +2582,7 @@ class I2PChatCore:
             self.get_profile_data_dir(create=True),
             self.profile,
             conversation,
+            identity_key=self._group_store_key(),
         )
         self.group_manager.prime_group_sequence(
             conversation.state.group_id,
@@ -2863,6 +3067,7 @@ class I2PChatCore:
             self.get_profile_data_dir(create=True),
             self.profile,
             group_id,
+            identity_key=self._group_store_key(),
         )
 
     def save_group_state(
@@ -2880,6 +3085,7 @@ class I2PChatCore:
         return list_persisted_group_states(
             self.get_profile_data_dir(create=True),
             self.profile,
+            identity_key=self._group_store_key(),
         )
 
     def delete_group(self, group_id: str) -> bool:
@@ -3021,14 +3227,19 @@ class I2PChatCore:
                     self.on_saved_contacts_changed()
                 except Exception:
                     logger.debug("on_saved_contacts_changed failed", exc_info=True)
+        prev = {normalize_member_id(x) for x in previous_members if x}
+        cur = {normalize_member_id(x) for x in new_state.members if x}
+        # v1.4.0: re-key pairwise BlindBox roots shared with any member that left
+        # so a departed member cannot ride a stale shared root going forward.
+        removed = {m for m in (prev - cur) if m and m != local_member}
+        for departed in sorted(removed):
+            self._rotate_pairwise_blindbox_root_for_departed_member(departed)
         intro = self._collect_group_peers_needing_secure_intro(
             new_state, local_member
         )
         self._notify_group_mesh_manager()
         if not intro:
             return
-        prev = {normalize_member_id(x) for x in previous_members if x}
-        cur = {normalize_member_id(x) for x in new_state.members if x}
         added = cur - prev
         intro_norm = {normalize_member_id(x) for x in intro}
         new_member_intros = sorted(intro_norm & added)
@@ -3051,6 +3262,44 @@ class I2PChatCore:
         self._schedule_group_peer_intros(intro)
         if self._legacy_group_blindbox_outbound_enabled():
             self._schedule_group_blindbox_root_push(new_state)
+
+    def _rotate_pairwise_blindbox_root_for_departed_member(
+        self, member_id: str
+    ) -> None:
+        """Stage a pairwise BlindBox root rotation for a member who left a group.
+
+        v1.4.0: a departed member still holds the shared pairwise root, so we
+        re-key the 1:1 relationship. We stage a *pending* rotation (committed via
+        the normal ack protocol on next contact) rather than replacing the live
+        root, so we never desync an active channel with a peer that also happens
+        to be a direct contact.
+        """
+        if not self.blindbox_enabled:
+            return
+        normalized = normalize_member_id(member_id)
+        if not normalized:
+            return
+        try:
+            snapshot = self._load_blindbox_peer_snapshot(normalized)
+        except Exception:
+            return
+        if snapshot.root_secret is None and snapshot.pending_root_secret is None:
+            return
+        try:
+            self._ensure_pending_blindbox_root(
+                force_rotate=True,
+                snapshot=snapshot,
+                save_state=lambda: self._save_blindbox_peer_snapshot(snapshot),
+            )
+        except Exception:
+            logger.debug(
+                "Pairwise BlindBox root rotation on leave failed", exc_info=True
+            )
+            return
+        logger.info(
+            "Staged pairwise BlindBox root rotation after member left group (peer=%s…)",
+            normalized[:12],
+        )
 
     def _on_group_blindbox_membership_changed(
         self,
@@ -3277,6 +3526,10 @@ class I2PChatCore:
         local_member_id = self._local_group_member_id()
         if local_member_id not in state.members:
             raise ValueError("Only group members can create invites")
+        if not self.my_signing_seed:
+            raise ValueError(
+                "Local signing key is not initialized; cannot sign group invite"
+            )
         invite = build_group_invite(
             group_id=state.group_id,
             members=state.members,
@@ -3284,7 +3537,9 @@ class I2PChatCore:
             inviter_id=local_member_id,
             title=state.title,
         )
-        return encode_group_invite(invite)
+        # Protocol v4: invites are Ed25519-signed with the inviter's handshake
+        # signing key so the roster snapshot cannot be forged or tampered with.
+        return encode_group_invite(invite, self.my_signing_seed)
 
     async def join_group_from_invite(self, invite_text: str) -> GroupState:
         """
@@ -3292,6 +3547,19 @@ class I2PChatCore:
         then announce join via GROUP_CONTROL when this peer was not already a member.
         """
         invite = decode_group_invite(invite_text)
+        # The invite signature is already verified against the embedded key in
+        # decode_group_invite. If we have a pinned handshake signing key for
+        # the inviter, additionally require it to match — a signed invite from
+        # a key other than the inviter's known identity is rejected.
+        pinned_hex = self.peer_trusted_signing_keys.get(
+            self._normalize_peer_addr(invite.inviter_id), ""
+        )
+        if pinned_hex and not secrets.compare_digest(
+            pinned_hex.lower(), invite.inviter_signing_pub
+        ):
+            raise ValueError(
+                "Group invite signing key does not match the inviter's pinned identity key"
+            )
         local_member_id = self._local_group_member_id()
         existing = self.load_group_state(invite.group_id)
         if existing is not None and local_member_id in existing.members:
@@ -4063,6 +4331,17 @@ class I2PChatCore:
             root_candidates = self._group_blindbox_root_candidates(snapshot)
             if not root_candidates:
                 continue
+            local_member = ""
+            try:
+                local_member = self._local_group_member_id()
+            except Exception:
+                local_member = ""
+            sender_candidates = tuple(
+                normalize_member_id(member)
+                for member in group_state.members
+                if normalize_member_id(member)
+                and normalize_member_id(member) != local_member
+            )
             contexts.append(
                 _BlindBoxPollGroupContext(
                     group_id=group_state.group_id,
@@ -4070,6 +4349,7 @@ class I2PChatCore:
                     state=snapshot.state,
                     root_candidates=root_candidates,
                     save_state=save_state,
+                    sender_candidates=sender_candidates,
                 )
             )
         return contexts
@@ -4303,8 +4583,9 @@ class I2PChatCore:
         return True
 
     def _load_trust_store(self) -> None:
-        """Загружает pinning-таблицу peer_addr -> signing_pub_hex."""
+        """Загружает pinning-таблицу peer_addr -> signing_pub_hex (+ OOB flags)."""
         self.peer_trusted_signing_keys = {}
+        self.peer_oob_verified = {}
         if self.profile == TRANSIENT_PROFILE_NAME:
             return
         path = self._trust_store_path()
@@ -4313,10 +4594,26 @@ class I2PChatCore:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    if isinstance(k, str) and isinstance(v, str):
-                        self.peer_trusted_signing_keys[k] = v.lower()
+            if not isinstance(data, dict):
+                return
+            # v2: {"version": 2, "pins": {peer: {signing_key_hex, oob_verified}}}
+            if int(data.get("version", 1)) >= 2 and isinstance(data.get("pins"), dict):
+                for k, v in data["pins"].items():
+                    if not isinstance(k, str):
+                        continue
+                    if isinstance(v, dict):
+                        hex_key = str(v.get("signing_key_hex") or "").strip().lower()
+                        if not hex_key:
+                            continue
+                        self.peer_trusted_signing_keys[k] = hex_key
+                        self.peer_oob_verified[k] = bool(v.get("oob_verified"))
+                    elif isinstance(v, str) and v.strip():
+                        self.peer_trusted_signing_keys[k] = v.strip().lower()
+                return
+            # v1: flat {peer: hex}
+            for k, v in data.items():
+                if isinstance(k, str) and isinstance(v, str):
+                    self.peer_trusted_signing_keys[k] = v.lower()
         except Exception as e:
             logger.warning("Failed to load trust store %s: %s", path, e)
 
@@ -4324,8 +4621,15 @@ class I2PChatCore:
         if self.profile == TRANSIENT_PROFILE_NAME:
             return
         path = self._trust_store_path()
+        pins: dict[str, Any] = {}
+        for peer, hex_key in self.peer_trusted_signing_keys.items():
+            pins[peer] = {
+                "signing_key_hex": hex_key,
+                "oob_verified": bool(self.peer_oob_verified.get(peer)),
+            }
+        payload = {"version": 2, "pins": pins}
         try:
-            atomic_write_json(path, self.peer_trusted_signing_keys)
+            atomic_write_json(path, payload)
         except Exception as e:
             logger.warning("Failed to save trust store %s: %s", path, e)
 
@@ -4335,9 +4639,22 @@ class I2PChatCore:
         if not normalized:
             raise ValueError("Peer address is empty")
         removed = self.peer_trusted_signing_keys.pop(normalized, None) is not None
+        self.peer_oob_verified.pop(normalized, None)
         if removed:
             self._save_trust_store()
         return removed
+
+    def mark_peer_oob_verified(self, peer_addr: str, verified: bool = True) -> bool:
+        """Record that the user confirmed the peer fingerprint out-of-band."""
+        normalized = self._normalize_peer_addr(peer_addr)
+        if not normalized or normalized not in self.peer_trusted_signing_keys:
+            return False
+        if verified:
+            self.peer_oob_verified[normalized] = True
+        else:
+            self.peer_oob_verified.pop(normalized, None)
+        self._save_trust_store()
+        return True
 
     def get_peer_trust_info(self, peer_addr: str) -> Optional[PeerTrustInfo]:
         """Trust pin state for a peer; None if the address string is invalid."""
@@ -4348,25 +4665,72 @@ class I2PChatCore:
         if not normalized:
             return None
         hex_key = self.peer_trusted_signing_keys.get(normalized)
-        fp: Optional[str] = None
+        fp_short: Optional[str] = None
+        fp_full: Optional[str] = None
+        safety: Optional[str] = None
         if hex_key:
             try:
                 raw = bytes.fromhex(hex_key)
-                fp = self._fingerprint_pubkey(raw)
+                fp_full = self._fingerprint_pubkey(raw)
+                fp_short = fp_full[:16]
+                local_pub = self.my_signing_public
+                if local_pub is not None:
+                    safety = self.format_safety_number(bytes(local_pub), raw)
             except ValueError:
-                fp = None
+                fp_short = None
+                fp_full = None
         return PeerTrustInfo(
             peer_normalized=normalized,
             pinned=hex_key is not None,
             signing_key_hex=hex_key,
-            fingerprint_short=fp,
+            fingerprint_short=fp_short,
+            fingerprint_full=fp_full,
+            safety_number=safety,
+            oob_verified=bool(self.peer_oob_verified.get(normalized)),
         )
 
     @staticmethod
     def _fingerprint_pubkey(pubkey: bytes) -> str:
+        """Full SHA-256 hex digest of the signing public key (64 chars)."""
         import hashlib
 
-        return hashlib.sha256(pubkey).hexdigest()[:16]
+        return hashlib.sha256(pubkey).hexdigest()
+
+    @staticmethod
+    def _fingerprint_pubkey_short(pubkey: bytes) -> str:
+        return I2PChatCore._fingerprint_pubkey(pubkey)[:16]
+
+    @staticmethod
+    def format_fingerprint_grouped(fingerprint_hex: str, group: int = 4) -> str:
+        """Group a hex fingerprint for easier out-of-band comparison."""
+        clean = re.sub(r"[^0-9a-fA-F]", "", fingerprint_hex or "").lower()
+        if not clean:
+            return ""
+        return " ".join(clean[i : i + group] for i in range(0, len(clean), group))
+
+    @staticmethod
+    def format_safety_number(local_pubkey: bytes, peer_pubkey: bytes) -> str:
+        """
+        Deterministic safety number: SHA-256 of the sorted pair of full
+        fingerprints, shown as 12 groups of 5 decimal digits (Signal-style).
+        """
+        import hashlib
+
+        fps = sorted(
+            [
+                hashlib.sha256(local_pubkey).digest(),
+                hashlib.sha256(peer_pubkey).digest(),
+            ]
+        )
+        digest = hashlib.sha256(fps[0] + fps[1]).digest()
+        # 30 bytes → 12 × 5 decimal digits (mod 100000)
+        chunks: list[str] = []
+        for i in range(12):
+            n = int.from_bytes(digest[i * 2 : i * 2 + 2], "big") % 100000
+            chunks.append(f"{n:05d}")
+        # 3 lines × 4 groups
+        lines = [" ".join(chunks[i : i + 4]) for i in range(0, 12, 4)]
+        return "\n".join(lines)
 
     def _normalize_peer_addr(self, addr: str) -> str:
         """
@@ -4562,7 +4926,7 @@ class I2PChatCore:
         private_key_base64: Optional[str],
         stored_peer: Optional[str],
     ) -> None:
-        """Persist identity key on line 1 only. Legacy second-line lock peer is never written."""
+        """Persist identity key encrypted at rest (I2PK). Legacy lock peer is never written."""
         del stored_peer  # kept in signature for callers; multi-peer model uses contacts.json
         if self.profile == TRANSIENT_PROFILE_NAME:
             return
@@ -4570,7 +4934,12 @@ class I2PChatCore:
         if not key:
             return
         path = self._profile_path()
-        atomic_write_text(path, key + "\n")
+        write_encrypted_profile_dat(
+            path,
+            key,
+            profile=self.profile,
+            profile_data_dir=self.get_profile_data_dir(create=True),
+        )
 
     def save_stored_peer(self, peer_addr: str) -> None:
         """
@@ -4600,19 +4969,32 @@ class I2PChatCore:
                 private_key_base64 = None
         key_file = self._profile_path()
         if not private_key_base64 and os.path.exists(key_file):
-            with open(key_file, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f.readlines() if line.strip()]
-            if lines and not self._is_probable_peer_addr(lines[0]):
-                private_key_base64 = lines[0]
+            try:
+                private_key_base64, _legacy_peer, _was_plain = read_profile_dat_file(
+                    key_file,
+                    profile=self.profile,
+                    profile_data_dir=self.get_profile_data_dir(create=False),
+                    is_probable_peer=self._is_probable_peer_addr,
+                )
+            except Exception:
+                private_key_base64 = None
         if private_key_base64:
             self._write_profile_dat(private_key_base64, None)
         else:
             if os.path.isfile(key_file):
                 try:
-                    with open(key_file, "r", encoding="utf-8") as f:
-                        lines = [line.strip() for line in f.readlines() if line.strip()]
-                    if len(lines) == 1 and self._is_probable_peer_addr(lines[0]):
-                        os.remove(key_file)
+                    with open(key_file, "rb") as f:
+                        raw = f.read()
+                    if is_encrypted_profile_dat(raw):
+                        pass  # keep encrypted identity file
+                    else:
+                        lines = [
+                            ln.strip()
+                            for ln in raw.decode("utf-8", errors="replace").splitlines()
+                            if ln.strip()
+                        ]
+                        if len(lines) == 1 and self._is_probable_peer_addr(lines[0]):
+                            os.remove(key_file)
                 except OSError:
                     pass
         self.stored_peer = None
@@ -4699,15 +5081,33 @@ class I2PChatCore:
         loop.call_soon(_ask_user)
         return await decision_future
 
-    async def _pin_or_verify_peer_signing_key(self, peer_addr: str, verify_key: bytes) -> bool:
+    async def _pin_or_verify_peer_signing_key(
+        self,
+        peer_addr: str,
+        verify_key: bytes,
+        *,
+        sess: Any = None,
+        defer_new_tofu: bool = False,
+    ) -> bool:
         peer_addr = self._normalize_peer_addr(peer_addr)
         if not peer_addr:
             self._emit_error("Cannot pin signing key: unknown peer address")
             return False
-        fp = self._fingerprint_pubkey(verify_key)
+        fp_full = self._fingerprint_pubkey(verify_key)
+        fp_short = fp_full[:16]
         current_hex = verify_key.hex().lower()
         pinned_hex = self.peer_trusted_signing_keys.get(peer_addr)
         if pinned_hex is None:
+            # Defer first-contact TOFU until after FINISHED so RESP is not blocked
+            # (initiator would otherwise hang on "Initiating secure handshake...").
+            if (
+                defer_new_tofu
+                and self.on_trust_decision is not None
+                and sess is not None
+            ):
+                sess._hs_tofu_pending_key = bytes(verify_key)
+                return True
+            oob_confirmed = False
             if self.on_trust_decision is not None:
                 # Продлеваем окно handshake перед блокирующим UI-диалогом TOFU.
                 ls_tofu = self._live_sessions.get(peer_addr)
@@ -4718,12 +5118,16 @@ class I2PChatCore:
                 ):
                     self._start_handshake_watchdog(ls_tofu.conn, peer_id=peer_addr)
                 self._emit_system("Waiting for TOFU trust confirmation...")
-                approved = await self._request_trust_decision(peer_addr, fp, current_hex)
+                # Pass the *full* fingerprint; UI shows grouped form + copy buttons.
+                approved = await self._request_trust_decision(
+                    peer_addr, fp_full, current_hex
+                )
                 if not approved:
                     self._emit_error(
-                        f"TOFU rejected: peer signing key {fp} for {peer_addr[:20]}..."
+                        f"TOFU rejected: peer signing key {fp_short} for {peer_addr[:20]}..."
                     )
                     return False
+                oob_confirmed = True
             elif not self._trust_auto:
                 self._emit_error(
                     "TOFU confirmation required for a new peer key. "
@@ -4732,24 +5136,31 @@ class I2PChatCore:
                 )
                 return False
             self.peer_trusted_signing_keys[peer_addr] = current_hex
+            if oob_confirmed:
+                self.peer_oob_verified[peer_addr] = True
             self._save_trust_store()
             if self.on_trust_decision is None:
                 self._emit_system(
                     "TOFU: auto-pinning peer signing key because "
                     "I2PCHAT_TRUST_AUTO=1 is enabled."
                 )
-            self._emit_system(
-                f"TOFU: pinned peer signing key {fp} for {peer_addr[:20]}..."
-            )
-            self._emit_system(
-                "Verify peer fingerprint out-of-band to mitigate first-contact MITM."
-            )
+                self._emit_system(
+                    "Auto-pin is NOT out-of-band verified. Compare fingerprints "
+                    f"manually: {self.format_fingerprint_grouped(fp_full)}"
+                )
+            else:
+                self._emit_system(
+                    f"TOFU: pinned + OOB-verified peer signing key {fp_short} "
+                    f"for {peer_addr[:20]}..."
+                )
             return True
-        if pinned_hex != current_hex:
+        if not secrets.compare_digest(pinned_hex, current_hex):
             try:
-                old_fp = self._fingerprint_pubkey(bytes.fromhex(pinned_hex))
+                old_fp_full = self._fingerprint_pubkey(bytes.fromhex(pinned_hex))
+                old_fp_short = old_fp_full[:16]
             except Exception:
-                old_fp = pinned_hex[:16]
+                old_fp_full = pinned_hex[:16]
+                old_fp_short = old_fp_full[:16]
             if self.on_trust_mismatch_decision is not None:
                 ls_mm = self._live_sessions.get(peer_addr)
                 if (
@@ -4761,19 +5172,18 @@ class I2PChatCore:
                 self._emit_system("Trusted key changed. Waiting for user decision...")
                 approved = await self._request_trust_mismatch_decision(
                     peer_addr,
-                    old_fp,
-                    fp,
+                    old_fp_full,
+                    fp_full,
                     pinned_hex,
                     current_hex,
                 )
                 if approved:
                     self.peer_trusted_signing_keys[peer_addr] = current_hex
+                    self.peer_oob_verified[peer_addr] = True
                     self._save_trust_store()
                     self._emit_system(
-                        f"Updated trusted signing key {old_fp} → {fp} for {peer_addr[:20]}..."
-                    )
-                    self._emit_system(
-                        "Verify the new fingerprint out-of-band before continuing to rely on this peer."
+                        f"Updated trusted signing key {old_fp_short} → {fp_short} "
+                        f"for {peer_addr[:20]}... (OOB-verified)"
                     )
                     return True
             self._emit_error(
@@ -4784,6 +5194,8 @@ class I2PChatCore:
                 "Trusted key change was not approved. Session remains blocked until you explicitly trust the new key."
             )
             return False
+        if sess is not None:
+            sess._hs_tofu_pending_key = None
         return True
 
     def _ensure_local_signing_key(self) -> None:
@@ -4906,32 +5318,43 @@ class I2PChatCore:
         dest: Optional[i2plib.Destination] = None
         legacy_lock_peer: Optional[str] = None
 
+        migrated_plaintext_dat = False
         if is_persistent:
             keyring_key = _try_keyring_get(self.profile)
             if keyring_key:
                 dest = i2plib.Destination(keyring_key, has_private_key=True)
-                self._emit_system(f"Loaded identity from secure keyring")
-            elif os.path.exists(key_file):
-                with open(key_file, "r") as f:
-                    lines = [line.strip() for line in f.readlines() if line.strip()]
-
-                if len(lines) > 0 and not self._is_probable_peer_addr(lines[0]):
-                    raw_private_key = lines[0]
-                    try:
-                        dest = i2plib.Destination(raw_private_key, has_private_key=True)
-                        self._emit_system(f"Loaded identity from {key_file}")
-                    except Exception:
-                        dest = None
+                self._emit_system("Loaded identity from secure keyring")
 
             if os.path.exists(key_file):
-                with open(key_file, "r") as f:
-                    lines = [line.strip() for line in f.readlines() if line.strip()]
-                stored_line: Optional[str] = None
-                if len(lines) > 1 and self._is_probable_peer_addr(lines[1]):
-                    stored_line = lines[1]
-                elif len(lines) > 0 and self._is_probable_peer_addr(lines[0]):
-                    # keyring-сценарий: в .dat может быть только pinned peer
-                    stored_line = lines[0]
+                try:
+                    file_key, stored_line, was_plaintext = read_profile_dat_file(
+                        key_file,
+                        profile=self.profile,
+                        profile_data_dir=self.get_profile_data_dir(create=True),
+                        is_probable_peer=self._is_probable_peer_addr,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to read profile .dat %s: %s", key_file, e)
+                    file_key, stored_line, was_plaintext = None, None, False
+                    self._emit_system(
+                        f"Warning: could not read profile .dat ({e}); "
+                        "falling back to keyring or new identity."
+                    )
+                migrated_plaintext_dat = bool(was_plaintext and file_key)
+                if dest is None and file_key:
+                    try:
+                        dest = i2plib.Destination(file_key, has_private_key=True)
+                        if was_plaintext:
+                            self._emit_system(
+                                f"Loaded identity from {key_file} "
+                                "(will encrypt at rest on save)"
+                            )
+                        else:
+                            self._emit_system(
+                                f"Loaded identity from encrypted {key_file}"
+                            )
+                    except Exception:
+                        dest = None
                 if stored_line:
                     legacy_lock_peer = self._normalize_peer_addr(stored_line)
                     disp_peer = self._peer_sam_hostname(legacy_lock_peer)
@@ -4949,7 +5372,7 @@ class I2PChatCore:
                 if _try_keyring_set(self.profile, dest.private_key.base64):
                     self._emit_system("Identity saved to secure keyring")
                 else:
-                    self._emit_system(f"Identity saved to {key_file}")
+                    self._emit_system(f"Identity will be saved encrypted to {key_file}")
 
         self.my_dest = dest
         if is_persistent:
@@ -4959,7 +5382,15 @@ class I2PChatCore:
                 self._emit_system(
                     "Former lock peer was added to Saved peers; profile .dat no longer stores a second line."
                 )
+            # Always (re)write encrypted .dat — migrates legacy plaintext and
+            # keeps the on-disk copy in sync with keyring.
             self._write_profile_dat(self.my_dest.private_key.base64, None)
+            if migrated_plaintext_dat:
+                self._emit_system(
+                    "Migrated profile .dat to encrypted at-rest format (I2PK)."
+                )
+            # Best-effort: also keep a copy in the OS keyring when available.
+            _try_keyring_set(self.profile, self.my_dest.private_key.base64)
         self._load_trust_store()
         self._ensure_local_signing_key()
         self._load_blindbox_state()
@@ -5252,23 +5683,28 @@ class I2PChatCore:
         peer_for_route = self._normalize_peer_addr(
             self.current_peer_addr or lap or ""
         )
+        # If context peer is empty / not wire-secure but exactly one secure live
+        # session exists, route UI Send against that session (acceptor Ready).
+        if not peer_for_route or not self._live_session_secure_ready(peer_for_route):
+            secure_peers = self.list_secure_live_peers()
+            if len(secure_peers) == 1:
+                peer_for_route = secure_peers[0]
         connected = self._any_live_stream()
-        live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
         policy_kwargs: dict[str, Any] = {
             "requested_route": "auto",
             "peer_id": peer_for_route,
         }
         if not peer_for_route:
-            live_kwargs["connected"] = connected
-            live_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
-                ""
-            )
             policy_kwargs["connected"] = connected
             policy_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
                 ""
             )
 
-        secure_live = self.session_manager.is_live_path_alive(**live_kwargs)
+        secure_live = bool(
+            peer_for_route and self._live_session_secure_ready(peer_for_route)
+        )
+        if secure_live and peer_for_route:
+            self._heal_session_manager_secure(peer_for_route)
         has_target = self._telemetry_has_peer_target()
         ready = bool(self._blindbox_ready())
         has_root_secret = self._blindbox_root_secret is not None
@@ -5299,8 +5735,16 @@ class I2PChatCore:
             if peer_for_route
             else self._handshake_complete_for_peer_route("")
         )
+        tofu_awaiting = False
+        if peer_for_route:
+            ls_route = self._live_sessions.get(peer_for_route)
+            if ls_route is not None and (
+                getattr(ls_route, "_hs_tofu_awaiting_ui", False)
+                or getattr(ls_route, "_hs_tofu_pending_key", None) is not None
+            ):
+                tofu_awaiting = True
         if connected and not route_hc:
-            state = "connecting-handshake"
+            state = "awaiting-tofu" if tofu_awaiting else "connecting-handshake"
         elif secure_live:
             state = "online-live"
         elif ready and has_root_secret:
@@ -5322,6 +5766,7 @@ class I2PChatCore:
             "state": state,
             "connected": connected,
             "secure_live": secure_live,
+            "tofu_awaiting": tofu_awaiting,
             "has_target": has_target,
             "blindbox_enabled": bool(self.blindbox_enabled),
             "blindbox_enabled_source": str(self._blindbox_enabled_source),
@@ -5590,6 +6035,18 @@ class I2PChatCore:
                 "BlindBox needs one successful live secure chat with this peer first. "
                 "Press Connect once to initialize offline delivery.",
             )
+        if state == "offline-ready":
+            return (
+                "blindbox-send-failed",
+                "BlindBox could not queue this message for the selected peer. "
+                "Select the Ready contact in the sidebar, or press Connect for a live session.",
+            )
+        if state == "online-live":
+            return (
+                "live-send-desync",
+                "Live session looks ready but Send could not use it. "
+                "Click the connected peer in Saved peers, then Send again.",
+            )
         return ("blocked", "No active secure session. Connect to peer or retry later.")
 
     @staticmethod
@@ -5845,6 +6302,7 @@ class I2PChatCore:
             require_sam=self._blindbox_require_sam,
             local_auth_token=self._blindbox_local_auth_token,
             allow_insecure_local=self._blindbox_allow_insecure_local,
+            replica_auth=filtered_auth,
         )
         if sec:
             return sec
@@ -5854,6 +6312,7 @@ class I2PChatCore:
                 self.profile,
                 norm,
                 filtered_auth,
+                identity_key=self.get_identity_key_bytes(),
             )
         except ValueError as e:
             return str(e)
@@ -6036,88 +6495,94 @@ class I2PChatCore:
                     for recv_index in recv_cands:
                         cycle_checked += 1
                         got_valid = False
+                        # v1.4.0: group blindbox slots are per-sender, so scan
+                        # every candidate sender's keyspace for each root.
                         for root_item in context.root_candidates:
-                            keys = derive_group_blindbox_message_keys(
-                                bytes(root_item["secret"]),
-                                context.group_id,
-                                "send",
-                                recv_index,
-                                group_epoch=int(root_item["group_epoch"]),
-                                root_epoch=int(root_item["root_epoch"]),
-                            )
-
-                            async def _accept_group_blob(blob: bytes) -> bool:
-                                digest = hashlib.sha256(blob).hexdigest()
-                                if digest in self._blindbox_seen_hashes:
-                                    return False
-                                try:
-                                    frame = decrypt_blindbox_blob(
-                                        blob,
-                                        keys.blob_key,
-                                        expected_direction="send",
-                                        expected_index=recv_index,
-                                        expected_state_tag=keys.state_tag,
-                                    )
-                                except Exception:
-                                    return False
-                                accepted = await self._process_blindbox_frame(frame)
-                                if accepted:
-                                    self._remember_blindbox_seen_hash(digest)
-                                    return True
-                                return False
-
-                            get_diag: dict[str, Any] = {}
-                            get_started_mono = time.monotonic()
-                            timed_out = False
-                            try:
-                                accepted_blob = await asyncio.wait_for(
-                                    client.get_first_accepted(
-                                        keys.lookup_token,
-                                        accept_blob=_accept_group_blob,
-                                        miss_grace_sec=self._blindbox_get_first_miss_grace_sec,
-                                        diag=get_diag,
-                                    ),
-                                    timeout=self._blindbox_get_first_timeout_sec,
-                                )
-                            except asyncio.TimeoutError:
-                                timed_out = True
-                                accepted_blob = None
-                                cycle_timeout += 1
-                            except Exception as exc:
-                                logger.debug(
-                                    "BlindBox group get_first_accepted failed group=%s recv_index=%s group_epoch=%s root_epoch=%s: %s",
+                            for sender_candidate in context.sender_candidates:
+                                keys = derive_group_blindbox_message_keys(
+                                    bytes(root_item["secret"]),
                                     context.group_id,
+                                    "send",
                                     recv_index,
-                                    int(root_item["group_epoch"]),
-                                    int(root_item["root_epoch"]),
-                                    exc,
-                                    exc_info=True,
+                                    group_epoch=int(root_item["group_epoch"]),
+                                    root_epoch=int(root_item["root_epoch"]),
+                                    sender_id=sender_candidate,
                                 )
-                                continue
-                            get_elapsed = max(
-                                0.0, time.monotonic() - get_started_mono
-                            )
-                            if get_elapsed >= self._blindbox_debug_ui_slow_sec:
-                                accepted_addr = str(get_diag.get("accepted_addr", "")).strip()
-                                first_addr = str(get_diag.get("first_result_addr", "")).strip()
-                                canceled = [
-                                    str(x).strip()
-                                    for x in (get_diag.get("canceled_pending_addrs") or [])
-                                    if str(x).strip()
-                                ]
-                                if accepted_addr:
-                                    slow_addr = accepted_addr
-                                elif canceled:
-                                    slow_addr = canceled[0]
-                                else:
-                                    slow_addr = first_addr or "unknown"
-                                if timed_out:
-                                    slow_addr = f"{slow_addr} (timeout)"
-                                slow_samples.append(
-                                    f"group={context.group_id[:10]} idx={recv_index} t={get_elapsed:.2f}s box={slow_addr}"
+
+                                async def _accept_group_blob(blob: bytes) -> bool:
+                                    digest = hashlib.sha256(blob).hexdigest()
+                                    if digest in self._blindbox_seen_hashes:
+                                        return False
+                                    try:
+                                        frame = decrypt_blindbox_blob(
+                                            blob,
+                                            keys.blob_key,
+                                            expected_direction="send",
+                                            expected_index=recv_index,
+                                            expected_state_tag=keys.state_tag,
+                                        )
+                                    except Exception:
+                                        return False
+                                    accepted = await self._process_blindbox_frame(frame)
+                                    if accepted:
+                                        self._remember_blindbox_seen_hash(digest)
+                                        return True
+                                    return False
+
+                                get_diag: dict[str, Any] = {}
+                                get_started_mono = time.monotonic()
+                                timed_out = False
+                                try:
+                                    accepted_blob = await asyncio.wait_for(
+                                        client.get_first_accepted(
+                                            keys.lookup_token,
+                                            accept_blob=_accept_group_blob,
+                                            miss_grace_sec=self._blindbox_get_first_miss_grace_sec,
+                                            diag=get_diag,
+                                        ),
+                                        timeout=self._blindbox_get_first_timeout_sec,
+                                    )
+                                except asyncio.TimeoutError:
+                                    timed_out = True
+                                    accepted_blob = None
+                                    cycle_timeout += 1
+                                except Exception as exc:
+                                    logger.debug(
+                                        "BlindBox group get_first_accepted failed group=%s recv_index=%s group_epoch=%s root_epoch=%s: %s",
+                                        context.group_id,
+                                        recv_index,
+                                        int(root_item["group_epoch"]),
+                                        int(root_item["root_epoch"]),
+                                        exc,
+                                        exc_info=True,
+                                    )
+                                    continue
+                                get_elapsed = max(
+                                    0.0, time.monotonic() - get_started_mono
                                 )
-                            if accepted_blob is not None:
-                                got_valid = True
+                                if get_elapsed >= self._blindbox_debug_ui_slow_sec:
+                                    accepted_addr = str(get_diag.get("accepted_addr", "")).strip()
+                                    first_addr = str(get_diag.get("first_result_addr", "")).strip()
+                                    canceled = [
+                                        str(x).strip()
+                                        for x in (get_diag.get("canceled_pending_addrs") or [])
+                                        if str(x).strip()
+                                    ]
+                                    if accepted_addr:
+                                        slow_addr = accepted_addr
+                                    elif canceled:
+                                        slow_addr = canceled[0]
+                                    else:
+                                        slow_addr = first_addr or "unknown"
+                                    if timed_out:
+                                        slow_addr = f"{slow_addr} (timeout)"
+                                    slow_samples.append(
+                                        f"group={context.group_id[:10]} idx={recv_index} t={get_elapsed:.2f}s box={slow_addr}"
+                                    )
+                                if accepted_blob is not None:
+                                    got_valid = True
+                                    break
+                            if got_valid:
                                 break
                         if got_valid:
                             context.state.mark_consumed(recv_index)
@@ -6331,6 +6796,7 @@ class I2PChatCore:
                 send_index,
                 group_epoch=group_epoch,
                 root_epoch=root_epoch,
+                sender_id=self.my_dest.base32,
             ),
         )
 
@@ -6596,6 +7062,37 @@ class I2PChatCore:
             raise ValueError("Unsupported group transport content type")
         if not any(same_i2p_destination(sender_id, m) for m in state.members if m):
             raise ValueError("Group transport sender is not a group member")
+        # Authorize the sender against the LOCALLY known roster, not just the
+        # roster embedded in the (attacker-controlled) message. If we already
+        # know this group and the sender is not in our roster, the only
+        # legitimate case is a peer announcing their own join via a
+        # GROUP_CONTROL "join" op; anything else (a non-member injecting text,
+        # or spoofing membership changes for others) is rejected. For groups we
+        # have not seen yet, first-contact trust is established via the signed
+        # invite, so we fall back to the message roster only when no local
+        # state exists.
+        local_state = self.load_group_state(group_id)
+        if local_state is not None and not any(
+            same_i2p_destination(sender_id, m) for m in local_state.members if m
+        ):
+            is_self_join = False
+            if envelope.content_type == GroupContentType.GROUP_CONTROL and isinstance(
+                envelope.payload, dict
+            ):
+                op = str(envelope.payload.get("op") or "").strip().lower()
+                joined_member = normalize_member_id(
+                    str(envelope.payload.get("joined_member_id") or "")
+                )
+                if (
+                    op == "join"
+                    and joined_member
+                    and same_i2p_destination(joined_member, sender_id)
+                ):
+                    is_self_join = True
+            if not is_self_join:
+                raise ValueError(
+                    "Group transport sender is not a member of the known group roster"
+                )
         # Sender authentication: for 1:1-delivered ("recipient" scope) group
         # messages the transport peer is cryptographically authenticated (live
         # secure channel or pairwise BlindBox root). Bind the self-declared
@@ -7114,6 +7611,7 @@ class I2PChatCore:
                 delivery_reasons=self._group_delivery_reason_map(result),
             ),
             next_group_seq=result.envelope.group_seq + 1,
+            identity_key=self._group_store_key(),
         )
         conversation = self._load_group_conversation(updated_state.group_id)
         if conversation is not None and pending_deliveries:
@@ -7191,6 +7689,7 @@ class I2PChatCore:
                 delivery_reasons=self._group_delivery_reason_map(result),
             ),
             next_group_seq=result.envelope.group_seq + 1,
+            identity_key=self._group_store_key(),
         )
         conversation = self._load_group_conversation(updated_state.group_id)
         if conversation is not None and pending_deliveries:
@@ -7306,6 +7805,7 @@ class I2PChatCore:
             merged_state,
             history_entry,
             next_group_seq=next_group_seq,
+            identity_key=self._group_store_key(),
         )
         if not imported:
             return GroupImportResult(
@@ -7658,38 +8158,51 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
         r = route if route in ("auto", "live", "offline") else "auto"
-        peer_for_route = ""
+        preferred = ""
         if peer_address and str(peer_address).strip():
             try:
-                peer_for_route = self._normalize_peer_addr(peer_address)
+                preferred = self._normalize_peer_addr(peer_address)
             except ValueError:
-                peer_for_route = ""
-        if not peer_for_route:
+                preferred = ""
+        if not preferred:
             lap = self._last_active_peer_for_telemetry()
-            peer_for_route = self._normalize_peer_addr(
-                self.current_peer_addr or lap or ""
-            )
+            try:
+                preferred = self._normalize_peer_addr(
+                    self.current_peer_addr or lap or ""
+                )
+            except ValueError:
+                preferred = ""
+        # Incoming-accept: UI address field often still holds last_active / empty /
+        # another contact while the only secure live session is the inbound peer.
+        peer_for_route = self.resolve_secure_live_peer(preferred)
+        wire_secure = bool(
+            peer_for_route and self._live_session_secure_ready(peer_for_route)
+        )
+        if wire_secure and peer_for_route:
+            self._heal_session_manager_secure(peer_for_route)
         connected = (
             bool(peer_for_route and self._has_active_session_for_peer(peer_for_route))
             if peer_for_route
             else self._any_live_stream()
         )
-        live_kwargs: dict[str, Any] = {"peer_id": peer_for_route}
-        policy_kwargs: dict[str, Any] = {
-            "requested_route": r,
-            "peer_id": peer_for_route,
-        }
-        if not peer_for_route:
-            live_kwargs["connected"] = connected
-            live_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
-                ""
-            )
-            policy_kwargs["connected"] = connected
-            policy_kwargs["handshake_complete"] = self._handshake_complete_for_peer_route(
-                ""
-            )
-
-        policy = self.session_manager.select_outbound_policy(**policy_kwargs)
+        # LivePeerSession is authoritative: never BlindBox-auto while wire-secure.
+        if r == "live":
+            policy = OutboundPolicy.LIVE_ONLY
+        elif r == "offline":
+            policy = OutboundPolicy.BLINDBOX_ONLY
+        elif wire_secure:
+            policy = OutboundPolicy.PREFER_LIVE_FALLBACK_BLINDBOX
+        else:
+            policy_kwargs: dict[str, Any] = {
+                "requested_route": r,
+                "peer_id": peer_for_route,
+            }
+            if not peer_for_route:
+                policy_kwargs["connected"] = connected
+                policy_kwargs["handshake_complete"] = (
+                    self._handshake_complete_for_peer_route("")
+                )
+            policy = self.session_manager.select_outbound_policy(**policy_kwargs)
 
         if policy == OutboundPolicy.BLINDBOX_ONLY:
             if self._blindbox_send_lock.locked():
@@ -7745,7 +8258,11 @@ class I2PChatCore:
                 retryable=lifecycle.retryable,
             )
 
-        secure_live = self.session_manager.is_live_path_alive(**live_kwargs)
+        secure_live = wire_secure or (
+            self.is_secure_live_for_peer(peer_for_route)
+            if peer_for_route
+            else bool(connected and self._handshake_complete_for_peer_route(""))
+        )
 
         if policy == OutboundPolicy.LIVE_ONLY:
             if not secure_live:
@@ -7854,11 +8371,31 @@ class I2PChatCore:
                 peer_for_route
             )
             if writer is None:
-                raise ConnectionError("No live connection for the selected peer")
-            if self._blindbox_ready():
-                await self._send_blindbox_root_if_needed(
-                    writer, peer_id=frame_peer_id
+                # Last-chance remap: UI/preferred peer had no writer but exactly one
+                # inbound secure session does (classic acceptor reply bug).
+                sole = self.list_secure_live_peers()
+                if len(sole) == 1 and sole[0] != peer_for_route:
+                    peer_for_route = sole[0]
+                    writer, frame_peer_id, text_ack_table = (
+                        self._writer_frame_peer_and_text_acks(peer_for_route)
+                    )
+            if writer is None:
+                raise ConnectionError(
+                    "No live connection for the selected peer. "
+                    "Select the connected contact in the sidebar (the one that shows Ready), then Send."
                 )
+            # Best-effort BlindBox root bootstrap must not abort live chat Send.
+            if self._blindbox_ready():
+                try:
+                    await self._send_blindbox_root_if_needed(
+                        writer, peer_id=frame_peer_id
+                    )
+                except Exception as root_exc:
+                    logger.warning(
+                        "BlindBox root exchange skipped during live send: %s",
+                        root_exc,
+                        exc_info=True,
+                    )
             chunks = split_long_chat_text(text)
             last_msg_id: Optional[int] = None
             lifecycle = delivery_lifecycle_from_send_result(
@@ -8621,6 +9158,10 @@ class I2PChatCore:
         """Сбрасывает криптографическое состояние при отключении."""
         self.shared_key = None
         self.shared_mac_key = None
+        self.send_key = None
+        self.send_mac_key = None
+        self.recv_key = None
+        self.recv_mac_key = None
         self.my_nonce = None
         self.peer_nonce = None
         self.my_ephemeral_private = None
@@ -8630,6 +9171,10 @@ class I2PChatCore:
         self.use_encryption = False
         self.handshake_complete = False
         self._handshake_initiated = False
+        self._hs_role = None
+        self._hs_transcript = None
+        self._hs_finished_sent = False
+        self._hs_peer_finished = False
         self._send_seq = 0
         self._recv_seq = 0
         self._pending_text_acks.clear()
@@ -8695,6 +9240,9 @@ class I2PChatCore:
             sess._handshake_initiated = True
             if sess.announce_lifecycle:
                 self._emit_system("Initiating secure handshake with PFS...")
+                self._emit_system(
+                    "Waiting for peer response (both sides need I2PChat 1.4+)..."
+                )
             writer.write(self.frame_message_plain("H", handshake_data, peer_id=peer_id))
             await writer.drain()
             return True
@@ -8703,12 +9251,15 @@ class I2PChatCore:
             self._schedule_disconnect(peer_id)
             return False
 
-    def _compute_session_subkeys(self, is_initiator: bool, sess: Any) -> Tuple[bytes, bytes]:
+    def _compute_session_subkeys(
+        self, is_initiator: bool, sess: Any
+    ) -> Tuple[bytes, bytes, bytes, bytes]:
         """
-        Вычисляет финальные subkeys для сессии.
+        Вычисляет направленные subkeys сессии (protocol v4 / PFS + key separation).
 
-        С PFS + key separation:
-        HKDF(dh_shared, nonce_init, nonce_resp) -> (k_enc, k_mac)
+        HKDF(dh_shared, nonce_init, nonce_resp) -> (i2r_enc, i2r_mac, r2i_enc, r2i_mac).
+        Возвращает их с точки зрения локальной роли:
+        ``(send_enc, send_mac, recv_enc, recv_mac)``.
         """
         if not crypto.NACL_AVAILABLE:
             raise RuntimeError("PyNaCl is required for secure protocol")
@@ -8726,7 +9277,28 @@ class I2PChatCore:
         else:
             nonce_init = sess.peer_nonce
             nonce_resp = sess.my_nonce
-        return crypto.derive_handshake_subkeys(dh_shared, nonce_init, nonce_resp)
+        k_enc_i2r, k_mac_i2r, k_enc_r2i, k_mac_r2i = crypto.derive_handshake_subkeys(
+            dh_shared, nonce_init, nonce_resp
+        )
+        if is_initiator:
+            return k_enc_i2r, k_mac_i2r, k_enc_r2i, k_mac_r2i
+        return k_enc_r2i, k_mac_r2i, k_enc_i2r, k_mac_i2r
+
+    def _install_session_keys(self, sess: Any, is_initiator: bool) -> None:
+        """Устанавливает направленные ключи и затирает ephemeral private (PFS)."""
+        send_enc, send_mac, recv_enc, recv_mac = self._compute_session_subkeys(
+            is_initiator=is_initiator, sess=sess
+        )
+        sess.send_key = send_enc
+        sess.send_mac_key = send_mac
+        sess.recv_key = recv_enc
+        sess.recv_mac_key = recv_mac
+        # ``shared_key`` — только индикатор «ключи установлены» для гейтинга.
+        sess.shared_key = send_enc
+        sess.shared_mac_key = send_mac
+        # Затираем эфемерный приватный ключ сразу после деривации: он больше не
+        # нужен, а его отсутствие в памяти усиливает forward secrecy.
+        sess.my_ephemeral_private = None
 
     def _should_initiate_blindbox_root_exchange(
         self, peer_id: Optional[str] = None
@@ -9584,7 +10156,12 @@ class I2PChatCore:
                 )
                 if not crypto.verify_signature(peer_sign_pub, init_sig_payload, peer_signature):
                     raise ValueError("INIT signature verification failed")
-                if not await self._pin_or_verify_peer_signing_key(peer_addr, peer_sign_pub):
+                if not await self._pin_or_verify_peer_signing_key(
+                    peer_addr,
+                    peer_sign_pub,
+                    sess=sess,
+                    defer_new_tofu=True,
+                ):
                     raise ValueError("Peer signing key does not match pinned key")
                 sess.peer_signing_public = peer_sign_pub
 
@@ -9615,48 +10192,16 @@ class I2PChatCore:
                 writer.write(self.frame_message_plain("H", response, peer_id=peer_id))
                 await writer.drain()
 
-                sess.shared_key, sess.shared_mac_key = self._compute_session_subkeys(
-                    is_initiator=False, sess=sess
+                # Derive directional keys, then require key confirmation
+                # (FINISHED) before treating the channel as secure.
+                self._install_session_keys(sess, is_initiator=False)
+                sess._hs_role = "responder"
+                sess._hs_transcript = crypto.compute_handshake_transcript_hash(
+                    resp_sig_payload
                 )
-                sess.use_encryption = True
-                sess.handshake_complete = True
-                sess._handshake_initiated = False
-                sess._recv_seq = 0
-                sess._send_seq = 0
-                self._cancel_handshake_watchdog()
-                peer_addr_norm = peer_addr
-                if peer_addr_norm:
-                    self.session_manager.set_peer_handshake_complete(
-                        peer_addr_norm, reason="handshake-ok"
-                    )
-                    self.session_manager.update_stream_state(
-                        peer_addr_norm,
-                        PeerState.SECURE,
-                        peer_id=peer_addr_norm,
-                    )
-                self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
-                if sess.announce_lifecycle:
-                    self._emit_message("info", "Secure channel with PFS established")
-                    self._emit_system("✔ Ready! You can now send messages.")
-                self._trigger_blindbox_hot_poll("peer-online")
-                self._notify_group_mesh_manager()
-                if peer_addr_norm:
-                    self._schedule_group_pending_flush([peer_addr_norm])
-                await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
-                if (
-                    peer_addr_norm
-                    and self._legacy_group_blindbox_outbound_enabled()
-                ):
-                    for group_state in self._group_states_for_member(peer_addr_norm):
-                        if self._should_initiate_group_blindbox_root_exchange(
-                            group_state
-                        ):
-                            await self._send_group_blindbox_root_if_needed(
-                                writer,
-                                group_state.group_id,
-                                peer_id=peer_id,
-                            )
-                logger.info("Handshake completed (responder)")
+                sess._hs_peer_finished = False
+                await self._send_handshake_finished(writer, sess, peer_id=peer_id)
+                logger.info("Handshake keys derived (responder); awaiting FINISHED")
 
             elif body.startswith("RESP:"):
                 if (
@@ -9700,58 +10245,52 @@ class I2PChatCore:
                 )
                 if not crypto.verify_signature(peer_sign_pub, resp_sig_payload, peer_signature):
                     raise ValueError("RESP signature verification failed")
-                if not await self._pin_or_verify_peer_signing_key(peer_addr, peer_sign_pub):
+                if not await self._pin_or_verify_peer_signing_key(
+                    peer_addr,
+                    peer_sign_pub,
+                    sess=sess,
+                    defer_new_tofu=True,
+                ):
                     raise ValueError("Peer signing key does not match pinned key")
                 sess.peer_signing_public = peer_sign_pub
-                sess.shared_key, sess.shared_mac_key = self._compute_session_subkeys(
-                    is_initiator=True, sess=sess
+                # Derive directional keys, then exchange key confirmation
+                # (FINISHED) before treating the channel as secure.
+                self._install_session_keys(sess, is_initiator=True)
+                sess._hs_role = "initiator"
+                sess._hs_transcript = crypto.compute_handshake_transcript_hash(
+                    resp_sig_payload
                 )
-                sess.use_encryption = True
-                sess.handshake_complete = True
-                sess._handshake_initiated = False
-                sess._recv_seq = 0
-                sess._send_seq = 0
-                self._cancel_handshake_watchdog()
-                peer_addr_norm = peer_addr
-                if peer_addr_norm:
-                    self.session_manager.set_peer_handshake_complete(
-                        peer_addr_norm, reason="handshake-ok"
-                    )
-                    self.session_manager.update_stream_state(
-                        peer_addr_norm,
-                        PeerState.SECURE,
-                        peer_id=peer_addr_norm,
-                    )
-                self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
+                sess._hs_peer_finished = False
+                await self._send_handshake_finished(writer, sess, peer_id=peer_id)
                 if sess.announce_lifecycle:
-                    self._emit_message("info", "Secure channel with PFS established")
-                    self._emit_system("✔ Ready! You can now send messages.")
-                self._trigger_blindbox_hot_poll("peer-online")
-                self._notify_group_mesh_manager()
-                if peer_addr_norm:
-                    self._schedule_group_pending_flush([peer_addr_norm])
-                await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
-                if (
-                    peer_addr_norm
-                    and self._legacy_group_blindbox_outbound_enabled()
+                    self._emit_system("Session keys derived; confirming with peer...")
+                logger.info("Handshake keys derived (initiator); awaiting FINISHED")
+
+            elif body.startswith("FINISHED:"):
+                if sess._hs_transcript is None or not sess.recv_mac_key:
+                    raise ValueError("FINISHED received before key derivation")
+                try:
+                    tag = bytes.fromhex(body[len("FINISHED:"):].strip())
+                except ValueError as exc:
+                    raise ValueError("Malformed FINISHED payload") from exc
+                if not crypto.verify_handshake_finished(
+                    sess.recv_mac_key, sess._hs_transcript, tag
                 ):
-                    for group_state in self._group_states_for_member(peer_addr_norm):
-                        if self._should_initiate_group_blindbox_root_exchange(
-                            group_state
-                        ):
-                            await self._send_group_blindbox_root_if_needed(
-                                writer,
-                                group_state.group_id,
-                                peer_id=peer_id,
-                            )
-                logger.info("Handshake completed (initiator)")
+                    raise ValueError("Handshake key confirmation (FINISHED) failed")
+                sess._hs_peer_finished = True
+                await self._finalize_secure_channel(
+                    sess, writer, peer_id=peer_id, peer_addr=peer_addr
+                )
 
             else:
                 logger.warning(f"Unknown handshake message: {body[:20]}")
                 
         except Exception as e:
+            # Keep the specific cause (signature/key/length mismatch, etc.) in
+            # the log only; a distinguishing message to the UI would help an
+            # attacker probe why a forged handshake was rejected.
             logger.error(f"Handshake error: {e}")
-            self._emit_error(f"Secure handshake failed: {e}")
+            self._emit_error("Secure handshake failed")
             peer_addr_norm = peer_addr
             if peer_addr_norm:
                 self.session_manager.mark_peer_failed(
@@ -9762,6 +10301,106 @@ class I2PChatCore:
                 peer_id=peer_addr_norm,
             )
             self._schedule_disconnect(peer_id)
+
+    async def _send_handshake_finished(
+        self, writer: Any, sess: Any, *, peer_id: Optional[str]
+    ) -> None:
+        """Отправляет FINISHED (key confirmation) как plaintext H-кадр."""
+        if not sess.send_mac_key or sess._hs_transcript is None:
+            raise ValueError("Cannot send FINISHED before key derivation")
+        tag = crypto.compute_handshake_finished(sess.send_mac_key, sess._hs_transcript)
+        writer.write(
+            self.frame_message_plain("H", f"FINISHED:{tag.hex()}", peer_id=peer_id)
+        )
+        await writer.drain()
+        sess._hs_finished_sent = True
+
+    def _incompatible_peer_handshake_message(self) -> str:
+        return (
+            "Incompatible peer protocol: both sides need I2PChat 1.4+ "
+            "(FINISHED key confirmation)."
+        )
+
+    async def _finalize_secure_channel(
+        self,
+        sess: Any,
+        writer: Any,
+        *,
+        peer_id: Optional[str],
+        peer_addr: str,
+    ) -> None:
+        """Финализирует защищённый канал после успешного key confirmation.
+
+        Идемпотентно: повторный FINISHED не выполняет пост-обработку дважды.
+        First-contact TOFU (if deferred) runs here so RESP/FINISHED are not blocked.
+        """
+        if sess.handshake_complete:
+            return
+        pending_key = getattr(sess, "_hs_tofu_pending_key", None)
+        if pending_key is not None:
+            sess._hs_tofu_pending_key = None
+            sess._hs_tofu_awaiting_ui = True
+            if sess.announce_lifecycle:
+                self._emit_system(
+                    "Keys confirmed. Accept the Trust dialog to enable Send "
+                    "(peer may already be able to message you)."
+                )
+            try:
+                trusted = await self._pin_or_verify_peer_signing_key(
+                    peer_addr,
+                    pending_key,
+                    sess=sess,
+                    defer_new_tofu=False,
+                )
+            finally:
+                sess._hs_tofu_awaiting_ui = False
+            if not trusted:
+                self._emit_error("Secure handshake aborted: peer key was not trusted")
+                if peer_addr:
+                    self.session_manager.mark_peer_failed(
+                        peer_addr, reason="tofu-rejected-after-finished"
+                    )
+                self._schedule_disconnect(peer_id)
+                return
+        sess.use_encryption = True
+        sess.handshake_complete = True
+        sess._handshake_initiated = False
+        sess._recv_seq = 0
+        sess._send_seq = 0
+        self._cancel_handshake_watchdog(peer_id)
+        peer_addr_norm = peer_addr
+        if peer_addr_norm:
+            try:
+                peer_addr_norm = self._normalize_peer_addr(peer_addr_norm)
+            except ValueError:
+                pass
+            self.activate_peer_context(peer_addr_norm)
+            self.session_manager.set_peer_handshake_complete(
+                peer_addr_norm, reason="handshake-ok"
+            )
+            self.session_manager.update_stream_state(
+                peer_addr_norm,
+                PeerState.SECURE,
+                peer_id=peer_addr_norm,
+            )
+            self.session_manager.mark_live_healthy(peer_id=peer_addr_norm)
+        if sess.announce_lifecycle:
+            self._emit_message("info", "Secure channel with PFS established")
+            self._emit_system("✔ Ready! You can now send messages.")
+        self._trigger_blindbox_hot_poll("peer-online")
+        self._notify_group_mesh_manager()
+        if peer_addr_norm:
+            self._schedule_group_pending_flush([peer_addr_norm])
+        await self._send_blindbox_root_if_needed(writer, peer_id=peer_id)
+        if peer_addr_norm and self._legacy_group_blindbox_outbound_enabled():
+            for group_state in self._group_states_for_member(peer_addr_norm):
+                if self._should_initiate_group_blindbox_root_exchange(group_state):
+                    await self._send_group_blindbox_root_if_needed(
+                        writer,
+                        group_state.group_id,
+                        peer_id=peer_id,
+                    )
+        logger.info("Handshake completed (%s)", sess._hs_role or "?")
 
     async def shutdown(self) -> None:
         """Аккуратно остановить фоновые задачи и закрыть соединения."""
@@ -10032,22 +10671,36 @@ class I2PChatCore:
                         msg_type,
                         (err_peer or "?")[:24],
                     )
-                    self._emit_error(
-                        "Protocol violation: data before secure handshake" + _ps(err_peer)
-                    )
+                    if getattr(sess, "_hs_finished_sent", False):
+                        self._emit_error(
+                            self._incompatible_peer_handshake_message() + _ps(err_peer)
+                        )
+                    else:
+                        self._emit_error(
+                            "Protocol violation: data before secure handshake"
+                            + _ps(err_peer)
+                        )
                     self._schedule_disconnect(peer_id)
                     break
                 seq_num: Optional[int] = None
+                recv_enc = sess.recv_key or sess.shared_key
+                recv_mac = sess.recv_mac_key or sess.shared_mac_key or recv_enc
                 if is_encrypted:
-                    if not sess.shared_key or not sess.use_encryption:
+                    if not recv_enc or not sess.use_encryption:
                         logger.warning(
                             "Encrypted frame received before key setup (peer=%s)",
                             (err_peer or "?")[:24],
                         )
-                        self._emit_error(
-                            "Protocol error: encrypted frame before handshake"
-                            + _ps(err_peer)
-                        )
+                        if getattr(sess, "_hs_finished_sent", False):
+                            self._emit_error(
+                                self._incompatible_peer_handshake_message()
+                                + _ps(err_peer)
+                            )
+                        else:
+                            self._emit_error(
+                                "Protocol error: encrypted frame before handshake"
+                                + _ps(err_peer)
+                            )
                         self._schedule_disconnect(peer_id)
                         break
                     if len(body_data) < ENCRYPTED_TRAILER_SIZE:
@@ -10066,7 +10719,7 @@ class I2PChatCore:
                     if len(encrypted_body) == 0:
                         logger.warning("Encrypted body is empty")
                         break
-                    mac_key = sess.shared_mac_key or sess.shared_key
+                    mac_key = recv_mac
                     if not crypto.verify_mac(
                         mac_key,
                         msg_type,
@@ -10105,7 +10758,7 @@ class I2PChatCore:
                         self._schedule_disconnect(peer_id)
                         break
 
-                    decrypted = crypto.decrypt_message(sess.shared_key, encrypted_body)
+                    decrypted = crypto.decrypt_message(recv_enc, encrypted_body)
                     if decrypted is None:
                         logger.warning("Decryption failed")
                         self._emit_error("Failed to decrypt message")
@@ -10501,7 +11154,12 @@ class I2PChatCore:
                         # is honored as a plaintext pre-handshake signal. This
                         # blocks unauthenticated signal injection before the
                         # handshake completes.
-                        if not is_encrypted and "QUIT" not in body:
+                        signal_payload = (
+                            body.split("__SIGNAL__:", 1)[1].strip()
+                            if "__SIGNAL__:" in body
+                            else ""
+                        )
+                        if not is_encrypted and signal_payload != "QUIT":
                             logger.warning(
                                 "Ignoring unauthenticated control signal before "
                                 "secure channel (peer=%s)",

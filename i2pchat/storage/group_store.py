@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import secrets
+import struct
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from i2pchat import crypto
 from i2pchat.groups.models import (
     GroupContentType,
     GroupEnvelope,
@@ -15,10 +19,100 @@ from i2pchat.groups.models import (
     normalize_member_id,
     utc_now,
 )
-from i2pchat.storage.blindbox_state import BlindBoxState, atomic_write_json
+from i2pchat.storage.blindbox_state import (
+    BlindBoxState,
+    atomic_write_bytes,
+    atomic_write_json,
+)
+
+logger = logging.getLogger("i2pchat.storage.group_store")
 
 GROUP_RECORD_VERSION = 1
 MAX_SEEN_GROUP_MSG_IDS = 4096
+
+# At-rest encryption (v1.4.0+): group conversation records hold plaintext
+# message history, member destinations and blindbox root material. Wrap the
+# JSON payload in a NaCl SecretBox keyed off the profile identity key, mirroring
+# chat_history.py. Legacy plaintext-JSON records are still read (and re-written
+# encrypted on next save) so upgrades migrate transparently.
+GROUP_STORE_MAGIC = b"I2GS"
+GROUP_STORE_ENC_VERSION = 1
+GROUP_STORE_SALT_SIZE = 32
+GROUP_STORE_HEADER_SIZE = 4 + 2 + GROUP_STORE_SALT_SIZE
+
+
+def _derive_group_store_key(
+    identity_key: bytes, salt: bytes, group_token: str
+) -> bytes:
+    """Two-stage HKDF: identity key -> profile key -> per-record file key."""
+    prk = crypto.hkdf_extract(b"I2PCHAT-GROUPSTORE", identity_key)
+    profile_key = crypto.hkdf_expand(prk, b"I2PCHAT-GROUPSTORE|profile-key", 32)
+    prk2 = crypto.hkdf_extract(salt, profile_key)
+    return crypto.hkdf_expand(
+        prk2,
+        b"I2PCHAT-GROUPSTORE|file-key|" + group_token.encode("ascii"),
+        32,
+    )
+
+
+def _read_existing_group_salt(path: str) -> bytes | None:
+    try:
+        with open(path, "rb") as handle:
+            header = handle.read(GROUP_STORE_HEADER_SIZE)
+    except OSError:
+        return None
+    if len(header) < GROUP_STORE_HEADER_SIZE or header[:4] != GROUP_STORE_MAGIC:
+        return None
+    return header[6:GROUP_STORE_HEADER_SIZE]
+
+
+def _write_group_payload(
+    path: str,
+    payload: dict[str, Any],
+    group_token: str,
+    identity_key: bytes | None,
+) -> None:
+    if not identity_key or not crypto.NACL_AVAILABLE:
+        if identity_key and not crypto.NACL_AVAILABLE:
+            logger.warning(
+                "PyNaCl unavailable — writing group record without at-rest encryption"
+            )
+        atomic_write_json(path, payload)
+        return
+    salt = _read_existing_group_salt(path) or secrets.token_bytes(GROUP_STORE_SALT_SIZE)
+    file_key = _derive_group_store_key(identity_key, salt, group_token)
+    plaintext = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    ciphertext = crypto.encrypt_message(file_key, plaintext)
+    header = GROUP_STORE_MAGIC + struct.pack(">H", GROUP_STORE_ENC_VERSION) + salt
+    atomic_write_bytes(path, header + ciphertext)
+
+
+def _read_group_payload(
+    path: str,
+    group_token: str,
+    identity_key: bytes | None,
+) -> dict[str, Any]:
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    if raw[:4] != GROUP_STORE_MAGIC:
+        # Legacy plaintext JSON record — parse directly; will be re-encrypted on save.
+        return json.loads(raw.decode("utf-8"))
+    if len(raw) < GROUP_STORE_HEADER_SIZE:
+        raise ValueError("Group record truncated")
+    if not identity_key or not crypto.NACL_AVAILABLE:
+        raise ValueError("Group record is encrypted but no identity key is available")
+    version = struct.unpack(">H", raw[4:6])[0]
+    if version != GROUP_STORE_ENC_VERSION:
+        raise ValueError(f"Unsupported encrypted group record version {version}")
+    salt = raw[6:GROUP_STORE_HEADER_SIZE]
+    ciphertext = raw[GROUP_STORE_HEADER_SIZE:]
+    file_key = _derive_group_store_key(identity_key, salt, group_token)
+    plaintext = crypto.decrypt_message(file_key, ciphertext)
+    if plaintext is None:
+        raise ValueError("Group record decryption failed (wrong key or tampered)")
+    return json.loads(plaintext.decode("utf-8"))
 
 
 def _to_iso8601(value: datetime) -> str:
@@ -664,6 +758,8 @@ def save_group_conversation(
     profile_data_dir: str,
     profile: str,
     conversation: StoredGroupConversation,
+    *,
+    identity_key: bytes | None = None,
 ) -> None:
     payload = {
         "version": GROUP_RECORD_VERSION,
@@ -685,9 +781,11 @@ def save_group_conversation(
             for entry in conversation.pending_group_blindbox_messages
         ],
     }
-    atomic_write_json(
+    _write_group_payload(
         _group_record_path(profile_data_dir, profile, conversation.state.group_id),
         payload,
+        _safe_group_token(conversation.state.group_id),
+        identity_key,
     )
 
 
@@ -695,12 +793,15 @@ def load_group_conversation(
     profile_data_dir: str,
     profile: str,
     group_id: str,
+    *,
+    identity_key: bytes | None = None,
 ) -> StoredGroupConversation | None:
     path = _group_record_path(profile_data_dir, profile, group_id)
     if not os.path.exists(path):
         return None
-    with open(path, "r", encoding="utf-8") as handle:
-        payload = json.load(handle)
+    payload = _read_group_payload(
+        path, _safe_group_token(group_id), identity_key
+    )
     if int(payload.get("version", 0)) != GROUP_RECORD_VERSION:
         raise ValueError("Unsupported group store version")
     state = _deserialize_state(dict(payload["state"]))
@@ -746,8 +847,11 @@ def upsert_group_state(
     state: GroupState,
     *,
     next_group_seq: int | None = None,
+    identity_key: bytes | None = None,
 ) -> StoredGroupConversation:
-    existing = load_group_conversation(profile_data_dir, profile, state.group_id)
+    existing = load_group_conversation(
+        profile_data_dir, profile, state.group_id, identity_key=identity_key
+    )
     conversation = StoredGroupConversation(
         state=state,
         next_group_seq=_resolve_next_group_seq(existing, next_group_seq),
@@ -761,7 +865,9 @@ def upsert_group_state(
             existing.pending_group_blindbox_messages if existing is not None else ()
         ),
     )
-    save_group_conversation(profile_data_dir, profile, conversation)
+    save_group_conversation(
+        profile_data_dir, profile, conversation, identity_key=identity_key
+    )
     return conversation
 
 
@@ -772,8 +878,11 @@ def append_group_history_entry(
     entry: GroupHistoryEntry,
     *,
     next_group_seq: int | None = None,
+    identity_key: bytes | None = None,
 ) -> tuple[StoredGroupConversation, bool]:
-    existing = load_group_conversation(profile_data_dir, profile, state.group_id)
+    existing = load_group_conversation(
+        profile_data_dir, profile, state.group_id, identity_key=identity_key
+    )
     history = list(existing.history) if existing is not None else []
     seen_msg_ids = list(existing.seen_msg_ids) if existing is not None else []
     seen_msg_id_set = set(seen_msg_ids)
@@ -797,7 +906,9 @@ def append_group_history_entry(
                 else ()
             ),
         )
-        save_group_conversation(profile_data_dir, profile, conversation)
+        save_group_conversation(
+            profile_data_dir, profile, conversation, identity_key=identity_key
+        )
         return conversation, False
     history.append(entry)
     if normalized_msg_id:
@@ -818,7 +929,9 @@ def append_group_history_entry(
             existing.pending_group_blindbox_messages if existing is not None else ()
         ),
     )
-    save_group_conversation(profile_data_dir, profile, conversation)
+    save_group_conversation(
+        profile_data_dir, profile, conversation, identity_key=identity_key
+    )
     return conversation, True
 
 
@@ -826,16 +939,40 @@ def load_group_state(
     profile_data_dir: str,
     profile: str,
     group_id: str,
+    *,
+    identity_key: bytes | None = None,
 ) -> GroupState | None:
-    conversation = load_group_conversation(profile_data_dir, profile, group_id)
+    conversation = load_group_conversation(
+        profile_data_dir, profile, group_id, identity_key=identity_key
+    )
     return None if conversation is None else conversation.state
 
 
-def list_group_states(profile_data_dir: str, profile: str) -> list[GroupState]:
+def _group_token_from_record_path(profile: str, path: str) -> str | None:
+    name = os.path.basename(path)
+    prefix = f"{profile}.group."
+    suffix = ".json"
+    if not (name.startswith(prefix) and name.endswith(suffix)):
+        return None
+    return name[len(prefix) : -len(suffix)] or None
+
+
+def list_group_states(
+    profile_data_dir: str,
+    profile: str,
+    *,
+    identity_key: bytes | None = None,
+) -> list[GroupState]:
     states: list[GroupState] = []
     for path in _group_record_paths(profile_data_dir, profile):
-        with open(path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
+        token = _group_token_from_record_path(profile, path)
+        if token is None:
+            continue
+        try:
+            payload = _read_group_payload(path, token, identity_key)
+        except (ValueError, OSError, json.JSONDecodeError) as e:
+            logger.warning("Failed to read group record %s: %s", path, e)
+            continue
         if int(payload.get("version", 0)) != GROUP_RECORD_VERSION:
             continue
         states.append(_deserialize_state(dict(payload["state"])))

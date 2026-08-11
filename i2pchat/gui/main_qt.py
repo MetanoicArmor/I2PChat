@@ -12,13 +12,14 @@ import sys
 import time
 from types import SimpleNamespace
 from datetime import datetime, timezone
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Callable, List, Literal, Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets, sip
 import qasync
 
 from i2pchat.router.bundled_i2pd import BundledI2pdManager
+from i2pchat.router.runtime import is_tcp_open, probe_sam_hello, wait_for_sam_ready
 from i2pchat.router.settings import (
     RouterSettings,
     bundled_i2pd_allowed,
@@ -412,6 +413,13 @@ def _blindbox_status_bar_and_tooltip(
 
 
 def _delivery_status_bar_and_tooltip(state: str) -> tuple[str, str]:
+    if state == "awaiting-tofu":
+        return (
+            "Send: accept Trust",
+            "Keys are confirmed, but Send stays off until you accept the "
+            "Trust on First Use dialog (Trust and pin). The peer may already "
+            "be able to message you.",
+        )
     if state == "connecting-handshake":
         return (
             "Send: wait secure",
@@ -777,13 +785,13 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QScrollBar:vertical {
                 background: transparent;
-                width: 8px;
-                margin: 0px;
+                width: 7px;
+                margin: 2px 0px 2px 0px;
             }
             QScrollBar::handle:vertical {
                 background: rgba(60, 60, 67, 0.35);
                 min-height: 24px;
-                border-radius: 4px;
+                border-radius: 3px;
             }
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical { height: 0px; }
@@ -1351,13 +1359,13 @@ THEMES: dict[str, dict[str, object]] = {
             }
             QScrollBar:vertical {
                 background: transparent;
-                width: 8px;
-                margin: 0px;
+                width: 7px;
+                margin: 2px 0px 2px 0px;
             }
             QScrollBar::handle:vertical {
                 background: rgba(255, 255, 255, 0.20);
                 min-height: 24px;
-                border-radius: 4px;
+                border-radius: 3px;
             }
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical { height: 0px; }
@@ -5864,6 +5872,96 @@ class _BackupPassphraseDialog(QtWidgets.QDialog):
         return self._pw1.text().strip()
 
 
+class _TofuOobConfirmDialog(QtWidgets.QDialog):
+    """First-contact / key-change TOFU dialog showing full fingerprint for OOB compare.
+
+    Trust/Cancel only — no typed challenge. Cancel is the default so users pause
+    and can copy the fingerprint / safety number before pinning.
+    """
+
+    def __init__(
+        self,
+        parent: Optional[QtWidgets.QWidget],
+        *,
+        title: str,
+        intro_html: str,
+        fingerprint_full: str,
+        safety_number: str = "",
+        theme_id: Optional[str] = None,
+        warning: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        _apply_dialog_theme_sheet(self, theme_id)
+        self.setWindowTitle(title)
+        self.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+        self.setModal(True)
+        try:
+            self.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
+        except Exception:
+            pass
+        v = QtWidgets.QVBoxLayout(self)
+        v.setContentsMargins(20, 16, 20, 16)
+        v.setSpacing(12)
+        v.addWidget(_contact_details_selectable_label(self, intro_html))
+        grouped = I2PChatCore.format_fingerprint_grouped(fingerprint_full)
+        fp_box = QtWidgets.QPlainTextEdit(self)
+        fp_box.setReadOnly(True)
+        fp_box.setPlainText(grouped)
+        fp_box.setMaximumHeight(72)
+        v.addWidget(QtWidgets.QLabel("Full fingerprint (SHA-256, selectable):", self))
+        v.addWidget(fp_box)
+        if safety_number:
+            v.addWidget(QtWidgets.QLabel("Safety number (compare with peer):", self))
+            sn_box = QtWidgets.QPlainTextEdit(self)
+            sn_box.setReadOnly(True)
+            sn_box.setPlainText(safety_number)
+            sn_box.setMaximumHeight(80)
+            v.addWidget(sn_box)
+        copy_row = QtWidgets.QHBoxLayout()
+        copy_fp = QtWidgets.QPushButton("Copy fingerprint", self)
+        copy_fp.clicked.connect(
+            lambda: QtWidgets.QApplication.clipboard().setText(
+                re.sub(r"[^0-9a-fA-F]", "", fingerprint_full or "").lower()
+            )
+        )
+        copy_row.addWidget(copy_fp)
+        if safety_number:
+            copy_sn = QtWidgets.QPushButton("Copy safety number", self)
+            copy_sn.clicked.connect(
+                lambda: QtWidgets.QApplication.clipboard().setText(safety_number)
+            )
+            copy_row.addWidget(copy_sn)
+        copy_row.addStretch(1)
+        v.addLayout(copy_row)
+        hint = (
+            "Compare this fingerprint (or safety number) with your peer over an "
+            "independent channel, then Trust and pin — or Cancel."
+        )
+        if warning:
+            hint = (
+                "Only Trust the new key if you verified the change out-of-band "
+                "(new device / reinstall). Otherwise Cancel."
+            )
+        v.addWidget(QtWidgets.QLabel(hint, self))
+        bb = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        ok_btn = bb.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        ok_btn.setText("Trust and pin")
+        ok_btn.setObjectName("PrimaryButton")
+        cancel_btn = bb.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        cancel_btn.setObjectName("SecondaryButton")
+        cancel_btn.setDefault(True)
+        cancel_btn.setAutoDefault(True)
+        ok_btn.setDefault(False)
+        ok_btn.setAutoDefault(False)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        _add_centered_dialog_buttons(v, bb)
+        cancel_btn.setFocus()
+
+
 class _ContactsSidebarResizeGrip(QtWidgets.QWidget):
     """Узкая зона для изменения ширины первой панели QSplitter."""
 
@@ -6410,7 +6508,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         chat_surface_layout = QtWidgets.QVBoxLayout(chat_surface)
         g = self._UI_GRID_PX
         col_left = self._CONTACTS_STRIP_EDGE_EXPANDED_PX
-        chat_surface_layout.setContentsMargins(col_left, g, g, g)
+        # Правый gutter = 0: скроллбар ленты у края ChatSurface (как на macOS).
+        # Строка поиска сохраняет симметричный inset через собственные margins.
+        chat_surface_layout.setContentsMargins(col_left, g, 0, g)
         chat_surface_layout.setSpacing(0)
         self._chat_search_match_rows: list[int] = []
         self._chat_search_cur: int = -1
@@ -6424,11 +6524,10 @@ class ChatWindow(QtWidgets.QMainWindow):
 
         # Вложенный QHBoxLayout + обёртка вокруг QLineEdit: на macOS поле часто не
         # забирает горизонтальное растяжение (остаётся пустота справа от ◀▶).
-        # ChatSurface: левый margin = col_left, правый = g — компенсируем здесь,
-        # чтобы строка поиска визуально имела симметричные боковые отступы.
+        # ChatSurface справа без gutter (скроллбар у края) — правый inset поиска = g.
         self._chat_search_header = QtWidgets.QWidget(chat_surface)
         _hdr_layout = QtWidgets.QVBoxLayout(self._chat_search_header)
-        _hdr_layout.setContentsMargins(0, 0, 0, 5)
+        _hdr_layout.setContentsMargins(0, 0, g, 5)
         _hdr_layout.setSpacing(0)
         self._chat_search_row = QtWidgets.QWidget(self._chat_search_header)
         search_h = QtWidgets.QHBoxLayout(self._chat_search_row)
@@ -7074,9 +7173,52 @@ class ChatWindow(QtWidgets.QMainWindow):
         return ""
 
     def _outbound_peer_arg(self) -> Optional[str]:
-        """Куда слать live-текст/файлы: поле адреса / контакт важнее, чем last SAM session."""
+        """Куда слать live-текст/файлы.
+
+        Prefer a finished secure live session over a stale address-field value
+        (common on the acceptor after incoming Connect: Ready is for peer A,
+        while addr_edit still shows last_active peer B).
+        """
         r = self._resolved_peer_addr_for_actions()
+        if self.core is None:
+            return r if r else None
+        try:
+            live = self.core.resolve_secure_live_peer(r or "")
+        except Exception:
+            live = ""
+        if live:
+            return live
         return r if r else None
+
+    def _focus_secure_live_peer_in_ui(self, peer: str) -> None:
+        """Point address field + peer context at the live secure peer so Send works."""
+        if self.core is None:
+            return
+        try:
+            canon = self.core._normalize_peer_addr(peer)
+        except Exception:
+            canon = normalize_peer_address(peer) or (peer or "").strip().lower()
+        if not canon:
+            return
+        # Leave group view — otherwise Send uses group can_send and stays dead.
+        if self._active_group_id is not None:
+            self._active_group_id = None
+            self._loaded_group_history_id = None
+        shown = normalize_peer_address(self.addr_edit.text().strip() or "") or ""
+        if shown != canon:
+            self.addr_edit.setText(canon)
+        try:
+            self.core.activate_peer_context(canon)
+            self.core.is_secure_live_for_peer(canon)
+        except Exception:
+            pass
+        try:
+            if set_last_active_peer(self._contact_book, canon):
+                self._save_contacts_book()
+        except Exception:
+            pass
+        self._sync_sidebar_list_selection()
+        self._refresh_connection_buttons()
 
     def _group_display_name(
         self, group_id: str, *, title: Optional[str] = None
@@ -8326,12 +8468,25 @@ class ChatWindow(QtWidgets.QMainWindow):
         elif info.pinned:
             key_hex = info.signing_key_hex or ""
             short_key = f"{key_hex[:24]}…{key_hex[-16:]}" if len(key_hex) > 48 else key_hex
+            fp_full = info.fingerprint_full or ""
+            fp_grouped = I2PChatCore.format_fingerprint_grouped(fp_full) if fp_full else "—"
+            oob = "yes (confirmed)" if info.oob_verified else "no — compare out-of-band"
+            safety_html = ""
+            if info.safety_number:
+                safety_html = (
+                    f"<br><b>Safety number:</b><br>"
+                    f"<pre style='margin:4px 0'>{info.safety_number}</pre>"
+                )
             v.addWidget(
                 _contact_details_selectable_label(
                     dlg,
                     f"<b>TOFU</b>: pinned<br>"
-                    f"Fingerprint (SHA-256, short): {info.fingerprint_short or '—'}<br>"
-                    f"Signing key (hex, truncated): {short_key}",
+                    f"<b>OOB verified:</b> {oob}<br>"
+                    f"<b>Fingerprint (short):</b> {info.fingerprint_short or '—'}<br>"
+                    f"<b>Fingerprint (full):</b><br>"
+                    f"<pre style='margin:4px 0'>{fp_grouped}</pre>"
+                    f"{safety_html}"
+                    f"<b>Signing key (hex, truncated):</b> {short_key}",
                 )
             )
         else:
@@ -8347,6 +8502,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         copy_btn.clicked.connect(lambda: QtWidgets.QApplication.clipboard().setText(norm))
         row.addWidget(copy_btn)
         if info is not None and info.pinned:
+            if info.fingerprint_full:
+                copy_fp_btn = QtWidgets.QPushButton("Copy fingerprint", dlg)
+                copy_fp_btn.clicked.connect(
+                    lambda: QtWidgets.QApplication.clipboard().setText(
+                        info.fingerprint_full or ""
+                    )
+                )
+                row.addWidget(copy_fp_btn)
             forget_btn = QtWidgets.QPushButton("Remove pin…", dlg)
 
             def forget() -> None:
@@ -8531,6 +8694,13 @@ class ChatWindow(QtWidgets.QMainWindow):
                 return False
             hints = self.core.get_group_send_ui_hints(self._active_group_id)
             return bool(hints.get("can_send"))
+        resolved = self._resolved_peer_addr_for_actions()
+        try:
+            live = self.core.resolve_secure_live_peer(resolved or "")
+            if live and self.core.is_secure_live_for_peer(live):
+                return True
+        except Exception:
+            pass
         d = self.core.get_delivery_telemetry()
         if bool(d.get("secure_live")):
             return True
@@ -8716,14 +8886,29 @@ class ChatWindow(QtWidgets.QMainWindow):
             self.send_button.setText("Send\noffline")
         else:
             self.send_button.setText("Send")
-        send_tip = (
-            route_tip
-            if can_send
-            else (
+        if can_send:
+            send_tip = route_tip
+        elif state == "awaiting-tofu" or bool(delivery.get("tofu_awaiting")):
+            send_tip = (
+                "Accept the Trust on First Use dialog (Trust and pin) to enable Send. "
+                "Your peer may already be able to write to you."
+            )
+        elif state in {
+            "blindbox-initializing",
+            "blindbox-starting-local-session",
+            "connecting-handshake",
+        }:
+            send_tip = route_tip
+        elif not bb_runtime and bool(delivery.get("blindbox_enabled")):
+            send_tip = (
+                "BlindBox runtime is not up (check I2P/SAM — More actions → I2P router…). "
+                "Or press Connect and wait for Ready to send live."
+            )
+        else:
+            send_tip = (
                 "Send needs a finished live secure session (Connect + handshake) "
                 "or a started BlindBox runtime (I2P up, replicas)."
             )
-        )
         _set_tooltip_if_changed(
             self.send_button,
             f"{send_tip}\n\n{shortcut_tip}",
@@ -9391,6 +9576,20 @@ class ChatWindow(QtWidgets.QMainWindow):
             and "Secure channel with PFS established" in text
         ):
             self._try_load_history()
+            if self.core is not None:
+                try:
+                    peer = self.core.resolve_secure_live_peer(
+                        self.core.current_peer_addr or ""
+                    )
+                except Exception:
+                    peer = (self.core.current_peer_addr or "").strip()
+                if peer:
+                    self._focus_secure_live_peer_in_ui(peer)
+
+        if kind == "info" and "Connection accepted from" in text and self.core is not None:
+            peer = (self.core.current_peer_addr or "").strip()
+            if peer:
+                self._focus_secure_live_peer_in_ui(peer)
 
         if kind == "disconnect" or (
             kind == "info" and text in _SESSION_END_INFO_TEXTS
@@ -9556,6 +9755,9 @@ class ChatWindow(QtWidgets.QMainWindow):
         elif msg.kind == "connect":
             notify_kind = "connect"
             peer = (msg.text or "").strip()
+            # Always bind compose/Send to the incoming peer (acceptor UI bug).
+            if peer:
+                self._focus_secure_live_peer_in_ui(peer)
             clean_peer = peer.replace(".b32.i2p", "") if peer else "peer"
             if len(clean_peer) > 12:
                 clean_peer = f"{clean_peer[:6]}..{clean_peer[-6:]}"
@@ -9613,6 +9815,26 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot(str)
     def handle_system(self, text: str) -> None:
         self._append_item(ChatItem(kind="system", timestamp="", sender="SYSTEM", text=text))
+        # After Ready / incoming accept: bind UI to the live peer so Send targets
+        # the session that actually finished handshake (not a stale addr_edit).
+        if self.core is not None and isinstance(text, str):
+            ready = "Ready! You can now send messages" in text
+            accepted = "Connection accepted from" in text
+            if ready or accepted:
+                peer = ""
+                try:
+                    peer = self.core.resolve_secure_live_peer(
+                        self.core.current_peer_addr or ""
+                    )
+                except Exception:
+                    peer = (self.core.current_peer_addr or "").strip()
+                if not peer:
+                    peer = (self.core.current_peer_addr or "").strip()
+                if peer and (
+                    not ready
+                    or self.core.is_secure_live_for_peer(peer)
+                ):
+                    self._focus_secure_live_peer_in_ui(peer)
         self.refresh_status_label()
         self._refresh_connection_buttons()
 
@@ -10063,23 +10285,118 @@ class ChatWindow(QtWidgets.QMainWindow):
         )
         return core
 
+    def _persist_system_sam_backend(self, settings: RouterSettings) -> RouterSettings:
+        fallback = normalize_router_settings(
+            RouterSettings(
+                **{
+                    **asdict(settings),
+                    "backend": "system",
+                    "bundled_auto_start": False,
+                }
+            )
+        )
+        self._router_settings = fallback
+        save_router_settings(fallback)
+        self._active_http_proxy_address = ("127.0.0.1", 4444)
+        return fallback
+
     async def _ensure_router_backend_ready(self) -> tuple[str, int]:
         settings = normalize_router_settings(self._router_settings)
         self._router_settings = settings
-        save_router_settings(settings)
+        sys_host = settings.system_sam_host
+        sys_port = int(settings.system_sam_port)
 
-        if settings.backend == "system":
+        async def _system_sam_ready(timeout: float = 2.0) -> bool:
+            if not is_tcp_open(sys_host, sys_port):
+                return False
+            try:
+                await probe_sam_hello(sys_host, sys_port, timeout=timeout)
+                return True
+            except Exception:
+                return False
+
+        # If I2P Daemon GUI (or any system SAM) is already healthy, prefer it over
+        # launching bundled i2pd. Otherwise BlindBox/core keep targeting a dead
+        # bundled port (e.g. :17656) and Send stays disabled.
+        if settings.backend == "bundled" and await _system_sam_ready():
+            bundled_host = settings.bundled_sam_host
+            bundled_port = int(settings.bundled_sam_port)
+            bundled_ready = False
+            if is_tcp_open(bundled_host, bundled_port):
+                try:
+                    await probe_sam_hello(bundled_host, bundled_port, timeout=1.0)
+                    bundled_ready = True
+                except Exception:
+                    bundled_ready = False
+            if not bundled_ready:
+                logger.warning(
+                    "Bundled SAM %s:%s not ready; using system SAM %s:%s",
+                    bundled_host,
+                    bundled_port,
+                    sys_host,
+                    sys_port,
+                )
+                self._persist_system_sam_backend(settings)
+                try:
+                    await wait_for_sam_ready(sys_host, sys_port, timeout=15.0)
+                except TimeoutError:
+                    pass
+                self.handle_system(
+                    f"Using system SAM {sys_host}:{sys_port} "
+                    f"(bundled SAM {bundled_host}:{bundled_port} is not ready)."
+                )
+                return (sys_host, sys_port)
+
+        save_router_settings(self._router_settings)
+
+        if self._router_settings.backend == "system":
             self._active_http_proxy_address = ("127.0.0.1", 4444)
-            return (settings.system_sam_host, int(settings.system_sam_port))
+            host = self._router_settings.system_sam_host
+            port = int(self._router_settings.system_sam_port)
+            # If something already listens (router restart / settings apply), wait for a
+            # real SAM HELLO instead of racing init_session into ConnectionReset/BrokenPipe.
+            if is_tcp_open(host, port):
+                try:
+                    await wait_for_sam_ready(host, port, timeout=45.0)
+                except TimeoutError:
+                    pass
+            return (host, port)
 
         # Hold a local reference: another asyncio task may clear
         # ``self._bundled_router_manager`` during ``await manager.start()`` (shutdown / router dialog).
         manager = self._bundled_router_manager
         if manager is None:
-            manager = BundledI2pdManager(settings)
+            manager = BundledI2pdManager(self._router_settings)
             self._bundled_router_manager = manager
 
-        sam_address = await manager.start()
+        try:
+            sam_address = await manager.start()
+        except Exception as bundled_exc:
+            # Common on macOS when I2P Daemon GUI already owns SAM: bundled i2pd
+            # exits before readiness while system SAM on :7656 is fine.
+            if not await _system_sam_ready(timeout=3.0):
+                raise
+            try:
+                await wait_for_sam_ready(sys_host, sys_port, timeout=15.0)
+            except Exception:
+                raise bundled_exc from None
+            logger.warning(
+                "Bundled i2pd failed (%s); using system SAM %s:%s",
+                bundled_exc,
+                sys_host,
+                sys_port,
+            )
+            try:
+                await manager.stop()
+            except Exception:
+                pass
+            self._bundled_router_manager = None
+            self._persist_system_sam_backend(settings)
+            self.handle_system(
+                f"Bundled router failed; switched to system SAM {sys_host}:{sys_port}."
+            )
+            return (sys_host, sys_port)
+
         self._bundled_router_manager = manager
         self._active_http_proxy_address = manager.http_proxy_address()
         return sam_address
@@ -10604,34 +10921,80 @@ class ChatWindow(QtWidgets.QMainWindow):
                 pass
             msg.deleteLater()
 
+    async def _async_tofu_oob_dialog(self, dlg: _TofuOobConfirmDialog) -> bool:
+        """Non-blocking open()+Future for TOFU OOB dialogs (same constraint as Yes/No)."""
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[bool] = loop.create_future()
+
+        def on_finished(result: int) -> None:
+            def _deliver() -> None:
+                if not fut.done():
+                    fut.set_result(result == int(QtWidgets.QDialog.DialogCode.Accepted))
+
+            loop.call_soon(_deliver)
+
+        dlg.finished.connect(on_finished)
+        dlg.open()
+        dlg.raise_()
+        dlg.activateWindow()
+        try:
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.alert(dlg, 0)
+        except Exception:
+            pass
+        try:
+            return await fut
+        finally:
+            try:
+                dlg.finished.disconnect(on_finished)
+            except TypeError:
+                pass
+            dlg.deleteLater()
+
     async def handle_trust_decision(
         self, peer_addr: str, fingerprint: str, signing_key_hex: str
     ) -> bool:
         """
-        TOFU-подтверждение: показать пользователю fingerprint нового ключа пира.
-
-        Возвращает True, если пользователь доверяет ключу и согласен его закрепить.
+        TOFU + out-of-band confirmation: show full fingerprint / safety number;
+        Trust/Cancel only (Cancel is default) — no typed challenge.
         """
         short_addr = (peer_addr or "").strip()
         if len(short_addr) > 40:
             short_addr = f"{short_addr[:18]}...{short_addr[-18:]}"
-        short_key = (signing_key_hex or "")[:24]
-        msg = (
-            "First contact with this peer signing key.\n\n"
-            f"Peer: {short_addr}\n"
-            f"Fingerprint (SHA-256, short): {fingerprint}\n"
-            f"PubKey (hex, prefix): {short_key}...\n\n"
-            "Warning: TOFU pins only the signing key.\n"
-            "Identity is NOT OOB-verified yet.\n"
-            "Verify fingerprint over an independent channel before trusting this peer.\n\n"
-            "Trust and pin this key (TOFU)?"
+        fp_full = re.sub(r"[^0-9a-fA-F]", "", fingerprint or "").lower()
+        # Back-compat: older callers may still pass a 16-char short fingerprint.
+        if len(fp_full) < 64 and signing_key_hex:
+            try:
+                fp_full = I2PChatCore._fingerprint_pubkey(bytes.fromhex(signing_key_hex))
+            except ValueError:
+                pass
+        safety = ""
+        try:
+            local_pub = self.core.my_signing_public if self.core is not None else None
+            peer_raw = bytes.fromhex(signing_key_hex) if signing_key_hex else b""
+            if local_pub is not None and peer_raw:
+                safety = I2PChatCore.format_safety_number(bytes(local_pub), peer_raw)
+        except Exception:
+            safety = ""
+        intro = (
+            f"<b>First contact</b> with this peer signing key.<br><br>"
+            f"<b>Peer:</b> {short_addr}<br>"
+            f"<b>Short fingerprint:</b> {fp_full[:16] or '—'}<br><br>"
+            "Compare the full fingerprint (or safety number) with your peer over an "
+            "<b>independent channel</b> (voice, in person, another app). "
+            "TOFU alone does not protect against first-contact MITM."
         )
-        return await self._async_yes_no_message_box(
-            QtWidgets.QMessageBox.Icon.Question,
-            "Trust on First Use (TOFU)",
-            msg,
-            default_yes=False,
+        dlg = _TofuOobConfirmDialog(
+            self,
+            title="Trust on First Use (TOFU)",
+            intro_html=intro,
+            fingerprint_full=fp_full,
+            safety_number=safety,
+            theme_id=self.theme_id,
+            warning=False,
         )
+        return await self._async_tofu_oob_dialog(dlg)
 
     async def handle_trust_mismatch_decision(
         self,
@@ -10644,22 +11007,41 @@ class ChatWindow(QtWidgets.QMainWindow):
         short_addr = (peer_addr or "").strip()
         if len(short_addr) > 40:
             short_addr = f"{short_addr[:18]}...{short_addr[-18:]}"
-        msg = (
-            "Trusted peer signing key changed.\n\n"
-            f"Peer: {short_addr}\n"
-            f"Previously trusted fingerprint: {old_fingerprint}\n"
-            f"New fingerprint: {new_fingerprint}\n"
-            f"Old key prefix: {(old_signing_key_hex or '')[:24]}...\n"
-            f"New key prefix: {(new_signing_key_hex or '')[:24]}...\n\n"
-            "Only trust the new key if you have verified the change out-of-band.\n"
-            "Trust and replace the pinned key?"
+        new_fp = re.sub(r"[^0-9a-fA-F]", "", new_fingerprint or "").lower()
+        if len(new_fp) < 64 and new_signing_key_hex:
+            try:
+                new_fp = I2PChatCore._fingerprint_pubkey(
+                    bytes.fromhex(new_signing_key_hex)
+                )
+            except ValueError:
+                pass
+        old_fp = re.sub(r"[^0-9a-fA-F]", "", old_fingerprint or "").lower()
+        safety = ""
+        try:
+            local_pub = self.core.my_signing_public if self.core is not None else None
+            peer_raw = bytes.fromhex(new_signing_key_hex) if new_signing_key_hex else b""
+            if local_pub is not None and peer_raw:
+                safety = I2PChatCore.format_safety_number(bytes(local_pub), peer_raw)
+        except Exception:
+            safety = ""
+        intro = (
+            f"<b>Trusted peer signing key changed.</b><br><br>"
+            f"<b>Peer:</b> {short_addr}<br>"
+            f"<b>Previous fingerprint:</b> {old_fp[:16] or '—'}…<br>"
+            f"<b>New fingerprint (short):</b> {new_fp[:16] or '—'}<br><br>"
+            "This may indicate a new device <b>or</b> an active MITM. "
+            "Only trust the new key after out-of-band verification."
         )
-        return await self._async_yes_no_message_box(
-            QtWidgets.QMessageBox.Icon.Warning,
-            "Trusted key changed",
-            msg,
-            default_yes=False,
+        dlg = _TofuOobConfirmDialog(
+            self,
+            title="Trusted key changed",
+            intro_html=intro,
+            fingerprint_full=new_fp,
+            safety_number=safety,
+            theme_id=self.theme_id,
+            warning=True,
         )
+        return await self._async_tofu_oob_dialog(dlg)
 
     def _set_status_text(self, line_text_full: str, line_text_compact: str) -> None:
         """Полная и компактная строка; в лейбле — по ширине окна (без всплывающей подсказки)."""
@@ -10887,7 +11269,27 @@ class ChatWindow(QtWidgets.QMainWindow):
     @QtCore.pyqtSlot()
     def on_send_clicked(self) -> None:
         if not self._send_action_allowed():
+            tip = ""
+            try:
+                tip = (self.send_button.toolTip() or "").strip().split("\n\n")[0]
+            except Exception:
+                tip = ""
+            self.handle_system(
+                tip
+                or "Send is not available yet. Wait for Ready, or select the connected peer in the sidebar."
+            )
+            self._refresh_connection_buttons()
             return
+        # Re-bind to the wire-secure peer right before send (acceptor UI drift).
+        if self.core is not None and not self._active_group_id:
+            try:
+                live = self.core.resolve_secure_live_peer(
+                    self._resolved_peer_addr_for_actions() or ""
+                )
+            except Exception:
+                live = ""
+            if live and self.core.is_secure_live_for_peer(live):
+                self._focus_secure_live_peer_in_ui(live)
         text = self.input_edit.plainTextForSend().strip()
         if not text:
             return
@@ -11971,6 +12373,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             _, auth_disk = load_profile_blindbox_replicas_bundle(
                 get_profile_data_dir(self.profile, create=False, app_root=app),
                 self.profile,
+                identity_key=(
+                    self.core.get_identity_key_bytes()
+                    if self.core is not None
+                    else None
+                ),
             )
             if not auth_disk:
                 return ""

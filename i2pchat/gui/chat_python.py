@@ -532,8 +532,16 @@ class I2PChat(App):
     async def handle_trust_decision(
         self, peer_addr: str, fingerprint: str, signing_key_hex: str
     ) -> bool:
+        from i2pchat.core.i2p_chat_core import I2PChatCore
+
         loop = asyncio.get_running_loop()
         decision_future: asyncio.Future[bool] = loop.create_future()
+        fp_full = "".join(c for c in (fingerprint or "") if c in "0123456789abcdefABCDEF").lower()
+        if len(fp_full) < 64 and signing_key_hex:
+            try:
+                fp_full = I2PChatCore._fingerprint_pubkey(bytes.fromhex(signing_key_hex))
+            except ValueError:
+                pass
 
         def _done(result: bool | None) -> None:
             if not decision_future.done():
@@ -544,9 +552,9 @@ class I2PChat(App):
                 title="Trust new peer key?",
                 peer_addr=peer_addr,
                 body_lines=[
-                    f"Fingerprint: {fingerprint}",
+                    f"Fingerprint: {I2PChatCore.format_fingerprint_grouped(fp_full)}",
                     f"Key: {signing_key_hex[:24]}…",
-                    "Verify out-of-band before trusting if possible.",
+                    "Compare out-of-band if possible, then Trust — or Reject.",
                 ],
                 confirm_label="Trust",
             ),
@@ -562,8 +570,18 @@ class I2PChat(App):
         old_signing_key_hex: str,
         new_signing_key_hex: str,
     ) -> bool:
+        from i2pchat.core.i2p_chat_core import I2PChatCore
+
         loop = asyncio.get_running_loop()
         decision_future: asyncio.Future[bool] = loop.create_future()
+        new_fp = "".join(
+            c for c in (new_fingerprint or "") if c in "0123456789abcdefABCDEF"
+        ).lower()
+        if len(new_fp) < 64 and new_signing_key_hex:
+            try:
+                new_fp = I2PChatCore._fingerprint_pubkey(bytes.fromhex(new_signing_key_hex))
+            except ValueError:
+                pass
 
         def _done(result: bool | None) -> None:
             if not decision_future.done():
@@ -574,11 +592,11 @@ class I2PChat(App):
                 title="Trusted key changed",
                 peer_addr=peer_addr,
                 body_lines=[
-                    f"Old fingerprint: {old_fingerprint}",
-                    f"New fingerprint: {new_fingerprint}",
+                    f"Old fingerprint: {old_fingerprint[:16]}…",
+                    f"New fingerprint: {I2PChatCore.format_fingerprint_grouped(new_fp)}",
                     f"Old key: {old_signing_key_hex[:24]}…",
                     f"New key: {new_signing_key_hex[:24]}…",
-                    "Trusting the new key will replace the old TOFU pin.",
+                    "Only Trust if you verified the change out-of-band.",
                 ],
                 confirm_label="Trust new key",
             ),
@@ -4570,7 +4588,6 @@ class TuiConfirmScreen(ModalScreen[bool]):
 class TuiTrustDecisionScreen(ModalScreen[bool]):
     BINDINGS = [
         ("escape", "reject", "Reject"),
-        ("enter", "approve", "Approve"),
     ]
 
     CSS = """
@@ -4620,7 +4637,8 @@ class TuiTrustDecisionScreen(ModalScreen[bool]):
                 yield Button(self._confirm_label, id="trust_approve", variant="warning")
 
     def on_mount(self) -> None:
-        self.query_one("#trust_approve", Button).focus()
+        # Default focus on Reject so Enter alone does not auto-trust.
+        self.query_one("#trust_reject", Button).focus()
 
     def action_reject(self) -> None:
         self.dismiss(False)

@@ -3,19 +3,64 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import ipaddress
 import json
+import logging
 import os
 from typing import Any
 
 from i2pchat.core.i2p_chat_core import get_profiles_dir
 from i2pchat.storage.blindbox_state import atomic_write_json
 
+logger = logging.getLogger("i2pchat.router.settings")
+
 
 _ROUTER_SETTINGS_FILE = "router_prefs.json"
 _DISABLE_BUNDLED_ENV = "I2PCHAT_DISABLE_BUNDLED_I2PD"
+# Opt-in for pointing the "system" SAM backend at a non-loopback host (e.g. an
+# I2P router on another machine on a trusted LAN). Off by default so a stray or
+# malicious config cannot silently send traffic to a remote SAM bridge.
+_ALLOW_REMOTE_SAM_ENV = "I2PCHAT_ALLOW_REMOTE_SAM"
 _DISABLE_BUNDLED_MARKERS = (
     "/usr/share/i2pchat/system-router-only",
     "/usr/local/share/i2pchat/system-router-only",
 )
+
+
+def allow_remote_system_sam() -> bool:
+    return os.environ.get(_ALLOW_REMOTE_SAM_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _is_loopback_host(text: str) -> bool:
+    if text.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(text).is_loopback
+    except ValueError:
+        return False
+
+
+def require_system_sam_host(value: Any, default: str = "127.0.0.1") -> str:
+    """Constrain the system SAM host to loopback unless remote SAM is opted in.
+
+    A non-loopback host without the ``I2PCHAT_ALLOW_REMOTE_SAM`` opt-in is
+    coerced back to the loopback default (fail-safe) rather than trusting a
+    remote router, which would carry all traffic over the clearnet to a third
+    party.
+    """
+    text = _coerce_string_setting(value, default)
+    if allow_remote_system_sam() or _is_loopback_host(text):
+        return text
+    logger.warning(
+        "Ignoring non-loopback system SAM host %r (set %s=1 to allow); using %s",
+        text,
+        _ALLOW_REMOTE_SAM_ENV,
+        default,
+    )
+    return default
 
 
 @dataclass
@@ -48,6 +93,7 @@ def normalize_router_settings(settings: RouterSettings) -> RouterSettings:
         **{
             **asdict(settings),
             "bundled_sam_host": require_loopback_host(settings.bundled_sam_host),
+            "system_sam_host": require_system_sam_host(settings.system_sam_host),
         }
     )
     if bundled_i2pd_allowed():
@@ -73,7 +119,12 @@ def router_settings_path() -> str:
 
 def router_runtime_dir() -> str:
     path = os.path.join(get_profiles_dir(), "router")
-    os.makedirs(path, exist_ok=True)
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    if os.name == "posix":
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            logger.debug("Could not tighten permissions on %s", path)
     return path
 
 
@@ -134,7 +185,7 @@ def _coerce_router_settings(raw: dict[str, Any]) -> RouterSettings:
         backend = defaults["backend"]
     return RouterSettings(
         backend=backend,
-        system_sam_host=_coerce_string_setting(
+        system_sam_host=require_system_sam_host(
             raw.get("system_sam_host"),
             defaults["system_sam_host"],
         ),

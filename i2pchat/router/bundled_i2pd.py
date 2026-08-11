@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import hashlib
+import hmac
 import json
+import logging
 import os
 from pathlib import Path
 import signal
@@ -10,6 +13,8 @@ import subprocess
 import sys
 import time
 from typing import Iterable, Optional
+
+logger = logging.getLogger("i2pchat.router.bundled_i2pd")
 
 from .runtime import is_tcp_open, pick_free_tcp_port, probe_sam_hello, wait_for_sam_ready
 from .settings import RouterSettings, require_loopback_host, router_runtime_dir
@@ -195,6 +200,62 @@ def resolve_bundled_i2pd_binary() -> Optional[str]:
         if candidate.is_file():
             return str(candidate)
     return None
+
+
+def _read_pinned_i2pd_sha256(binary: str) -> Optional[str]:
+    """Read the pinned SHA-256 for the bundled i2pd from a sidecar file.
+
+    Looks for ``<binary>.sha256`` (either a bare hex digest or the standard
+    ``<digest>  <filename>`` format). Release builds ship this sidecar next to
+    the binary; the release archive itself is SHA256SUMS+GPG signed, so the
+    sidecar is trustworthy for anyone who verified the download.
+    """
+    sidecar = binary + ".sha256"
+    try:
+        raw = Path(sidecar).read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+    if not raw:
+        return None
+    token = raw.split()[0].strip().lower()
+    if len(token) == 64 and all(c in "0123456789abcdef" for c in token):
+        return token
+    return None
+
+
+def verify_bundled_i2pd_integrity(binary: str) -> None:
+    """Refuse to launch a bundled i2pd whose hash doesn't match its pinned value.
+
+    No-op when no sidecar checksum is shipped (integrity then rests on the
+    signed release archive as a whole). When a sidecar *is* present, a mismatch
+    means the binary was tampered with or corrupted and we must not exec it.
+    """
+    pinned = _read_pinned_i2pd_sha256(binary)
+    if pinned is None:
+        logger.debug("No pinned i2pd checksum sidecar for %s; skipping integrity check", binary)
+        return
+    h = hashlib.sha256()
+    with open(binary, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    actual = h.hexdigest()
+    if not hmac.compare_digest(actual, pinned):
+        raise RuntimeError(
+            "Bundled i2pd integrity check failed: on-disk binary does not match "
+            f"the pinned checksum ({binary}). Refusing to launch a possibly "
+            "tampered router. Reinstall from a verified release."
+        )
+    logger.info("Bundled i2pd integrity verified against pinned checksum")
+
+
+def _tighten_permissions(path: str, mode: int) -> None:
+    """Best-effort chmod on POSIX; router conf/keys/logs must not be world-readable."""
+    if os.name != "posix":
+        return
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        logger.debug("Could not tighten permissions on %s", path)
 
 
 def _subprocess_env_with_i2pd_libdir(binary: str) -> dict[str, str]:
@@ -887,8 +948,12 @@ class BundledI2pdManager:
                         continue
                     key, value = stripped.split("=", 1)
                     values[key.strip()] = value.strip()
+            # Validate the adopted config: only adopt a runtime whose SAM binds
+            # to loopback. A conf on disk with a non-loopback sam.address (e.g.
+            # tampered) would otherwise be adopted and connected to blindly.
+            sam_host = require_loopback_host(values.get("sam.address", "127.0.0.1"))
             return BundledI2pdRuntime(
-                sam_host=values.get("sam.address", "127.0.0.1"),
+                sam_host=sam_host,
                 sam_port=int(values["sam.port"]),
                 http_proxy_port=int(values["httpproxy.port"]),
                 socks_proxy_port=int(values["socksproxy.port"]),
@@ -948,7 +1013,8 @@ class BundledI2pdManager:
     def _build_runtime(self, root: Optional[str] = None) -> BundledI2pdRuntime:
         root = root or router_runtime_dir()
         data_dir = os.path.join(root, "data")
-        os.makedirs(data_dir, exist_ok=True)
+        os.makedirs(data_dir, mode=0o700, exist_ok=True)
+        _tighten_permissions(data_dir, 0o700)
 
         host = self.settings.bundled_sam_host
         sam_port = self._pick_preferred_or_free_port(host, int(self.settings.bundled_sam_port))
@@ -972,6 +1038,8 @@ class BundledI2pdManager:
     def _write_config(self, rt: BundledI2pdRuntime) -> None:
         Path(rt.conf_path).write_text(render_i2pd_conf(rt), encoding="utf-8")
         Path(rt.tunconf_path).write_text(render_tunnels_conf(), encoding="utf-8")
+        _tighten_permissions(rt.conf_path, 0o600)
+        _tighten_permissions(rt.tunconf_path, 0o600)
 
     @staticmethod
     def _build_launch_args(binary: str, rt: BundledI2pdRuntime) -> list[str]:
@@ -1018,6 +1086,8 @@ class BundledI2pdManager:
         binary = resolve_bundled_i2pd_binary()
         if not binary:
             raise RuntimeError("Bundled i2pd binary not found")
+        # Verify integrity before exec (no-op unless a pinned checksum ships).
+        verify_bundled_i2pd_integrity(binary)
 
         root = router_runtime_dir()
         if await self._adopt_existing_runtime_if_available(root):
@@ -1029,6 +1099,7 @@ class BundledI2pdManager:
 
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self._log_handle = open(rt.log_path, "ab")
+        _tighten_permissions(rt.log_path, 0o600)
         self._proc = await asyncio.create_subprocess_exec(
             *self._build_launch_args(binary, rt),
             stdout=self._log_handle,

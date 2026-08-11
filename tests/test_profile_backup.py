@@ -13,6 +13,9 @@ from i2pchat.storage.profile_backup import (
     export_profile_bundle,
     import_history_bundle,
     import_profile_bundle,
+    _build_manifest,
+    _build_tar_payload,
+    _encrypt_payload,
 )
 
 
@@ -58,6 +61,24 @@ class ProfileBackupTests(unittest.TestCase):
                 alice_dir, "alice", PEER, IDENTITY_KEY, app_data_root=dst_td
             )
             self.assertEqual([x.text for x in loaded], ["hello"])
+
+    def test_import_rejects_blindbox_dat_overwrite(self) -> None:
+        # A crafted bundle whose "blindbox/dat" member would map onto
+        # "<profile>.dat" (the private identity key) must be refused.
+        with tempfile.TemporaryDirectory() as td:
+            files = {
+                "profile.dat": b"legit-identity",
+                "blindbox/dat": b"OVERWRITE-THE-IDENTITY-KEY",
+            }
+            manifest = _build_manifest(
+                bundle_type="profile", profile="alice", files=files
+            )
+            payload = _build_tar_payload(manifest, files)
+            bundle_path = os.path.join(td, "evil.i2pchat-profile-backup")
+            with open(bundle_path, "wb") as f:
+                f.write(_encrypt_payload(payload, "passphrase"))
+            with self.assertRaises(BackupError):
+                import_profile_bundle(bundle_path, td, "passphrase")
 
     def test_history_backup_roundtrip_skip_conflicts(self) -> None:
         with tempfile.TemporaryDirectory() as src_td, tempfile.TemporaryDirectory() as dst_td:

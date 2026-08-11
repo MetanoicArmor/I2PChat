@@ -127,17 +127,34 @@ class OpenerSelectionTests(unittest.TestCase):
         self.assertNotEqual(op, urllib.request.urlopen)
 
     def test_i2p_uses_proxy_opener_when_no_env_proxy(self) -> None:
-        with patch.object(ri, "_env_http_proxy_explicit", return_value=False):
+        with patch.object(ri, "_configured_http_proxy_url", return_value=""):
             op = ri._opener_for_update_fetch("http://x.b32.i2p/")
         self.assertNotEqual(op, urllib.request.urlopen)
 
-    def test_i2p_uses_urlopen_when_env_proxy_set(self) -> None:
-        with patch.object(ri, "_env_http_proxy_explicit", return_value=True):
+    def test_i2p_ignores_clearnet_env_proxy(self) -> None:
+        # A clearnet system proxy must NOT be used for a .i2p host; the opener
+        # falls back to the local I2P proxy (a proxy opener, not urlopen).
+        with patch.object(
+            ri, "_configured_http_proxy_url", return_value="http://proxy.corp.example:8080"
+        ):
             op = ri._opener_for_update_fetch("http://x.b32.i2p/")
-        self.assertEqual(op, urllib.request.urlopen)
+        self.assertNotEqual(op, urllib.request.urlopen)
+
+    def test_i2p_honors_loopback_env_proxy(self) -> None:
+        with patch.object(
+            ri, "_configured_http_proxy_url", return_value="http://127.0.0.1:4444"
+        ):
+            op = ri._opener_for_update_fetch("http://x.b32.i2p/")
+        self.assertNotEqual(op, urllib.request.urlopen)
+
+    def test_i2p_rejects_non_loopback_explicit_proxy(self) -> None:
+        with self.assertRaises(ValueError):
+            ri._opener_for_update_fetch(
+                "http://x.b32.i2p/", proxy_url="http://10.0.0.5:8080"
+            )
 
     def test_non_i2p_no_proxy_injection(self) -> None:
-        with patch.object(ri, "_env_http_proxy_explicit", return_value=False):
+        with patch.object(ri, "_configured_http_proxy_url", return_value=""):
             op = ri._opener_for_update_fetch("https://example.com/")
         self.assertEqual(op, urllib.request.urlopen)
 

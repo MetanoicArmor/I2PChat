@@ -1182,7 +1182,11 @@ class AsyncioRegressionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(removed)
                 self.assertNotIn(EXAMPLE_BARE, core.peer_trusted_signing_keys)
                 with open(core._trust_store_path(), "r", encoding="utf-8") as f:
-                    self.assertEqual(f.read().strip(), "{}")
+                    import json
+
+                    data = json.load(f)
+                self.assertEqual(data.get("version"), 2)
+                self.assertEqual(data.get("pins"), {})
 
     async def test_signing_key_mismatch_emits_explicit_rejection_message(self) -> None:
         errors: list[str] = []

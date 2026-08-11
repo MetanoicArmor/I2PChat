@@ -1,7 +1,7 @@
 import unittest
 
 from i2pchat.sam.errors import CantReachPeer, DuplicatedId, InvalidId, LegacySAMException, ProtocolError
-from i2pchat.sam.protocol import expect_ok, parse_reply_line
+from i2pchat.sam.protocol import expect_ok, parse_reply_line, redact_sam_line
 
 
 class SamProtocolTests(unittest.TestCase):
@@ -79,6 +79,28 @@ class SamProtocolTests(unittest.TestCase):
         with self.assertRaises(LegacySAMException) as ctx:
             expect_ok(reply)
         self.assertEqual(ctx.exception.result, "NO_SUCH_THING")
+
+    def test_redact_sam_line_masks_private_key_material(self) -> None:
+        raw = "DEST REPLY PUB=pubvalue PRIV=secretkey RESULT=OK"
+        redacted = redact_sam_line(raw)
+        self.assertNotIn("secretkey", redacted)
+        self.assertIn("PUB=pubvalue", redacted)  # PUB is public material and stays
+        self.assertIn("RESULT=OK", redacted)
+
+    def test_parse_reply_line_does_not_retain_priv_in_raw_line(self) -> None:
+        reply = parse_reply_line(b"DEST REPLY PUB=aaa PRIV=supersecret\n")
+        self.assertNotIn("supersecret", reply.raw_line or "")
+        # Programmatic extraction still works via fields.
+        self.assertEqual(reply.fields["PRIV"], "supersecret")
+
+    def test_expect_ok_error_does_not_leak_destination_in_raw_line(self) -> None:
+        reply = parse_reply_line(
+            b"SESSION STATUS RESULT=I2P_ERROR DESTINATION=longsecretdest MESSAGE=boom\n"
+        )
+        with self.assertRaises(LegacySAMException) as ctx:
+            expect_ok(reply)
+        self.assertNotIn("longsecretdest", ctx.exception.raw_line or "")
+        self.assertNotIn("longsecretdest", repr(ctx.exception))
 
 
 if __name__ == "__main__":

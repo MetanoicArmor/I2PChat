@@ -47,7 +47,41 @@ class ProfileBlindboxReplicasTests(unittest.TestCase):
             with open(p, "r", encoding="utf-8") as f:
                 disk = json.load(f)
             self.assertEqual(disk.get("version"), PROFILE_BLINDBOX_REPLICAS_VERSION)
-            self.assertEqual(disk.get("replica_auth"), {})
+            # v3: empty auth is not persisted as a plaintext field anymore.
+            self.assertNotIn("replica_auth", disk)
+            self.assertNotIn("replica_auth_enc", disk)
+
+    def test_bundle_encrypts_replica_auth_at_rest_with_identity_key(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            identity_key = b"\x11" * 32
+            save_profile_blindbox_replicas_bundle(
+                td,
+                "p3",
+                ["x.b32.i2p:1"],
+                {"x.b32.i2p:1": "supersecret-token"},
+                identity_key=identity_key,
+            )
+            path = profile_blindbox_replicas_path(td, "p3")
+            with open(path, "r", encoding="utf-8") as f:
+                disk = json.load(f)
+            # Token must not appear in plaintext anywhere on disk.
+            self.assertNotIn("replica_auth", disk)
+            self.assertIn("replica_auth_enc", disk)
+            with open(path, "r", encoding="utf-8") as f:
+                self.assertNotIn("supersecret-token", f.read())
+            # Without the key, auth cannot be recovered.
+            _, auth_nokey = load_profile_blindbox_replicas_bundle(td, "p3")
+            self.assertEqual(auth_nokey, {})
+            # With the key, it roundtrips.
+            _, auth = load_profile_blindbox_replicas_bundle(
+                td, "p3", identity_key=identity_key
+            )
+            self.assertEqual(auth, {"x.b32.i2p:1": "supersecret-token"})
+            # Wrong key fails closed (no partial leak).
+            _, auth_wrong = load_profile_blindbox_replicas_bundle(
+                td, "p3", identity_key=b"\x22" * 32
+            )
+            self.assertEqual(auth_wrong, {})
 
     def test_load_v1_no_replica_auth(self) -> None:
         with tempfile.TemporaryDirectory() as td:

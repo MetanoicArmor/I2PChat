@@ -58,7 +58,14 @@ def _derive_key(password: str | bytes, salt: bytes) -> bytes:
 
 
 def _read_dat(app_root: str, profile_name: str) -> bytes:
-    from i2pchat.core.i2p_chat_core import resolve_existing_profile_file
+    from i2pchat.core.i2p_chat_core import (
+        get_profile_data_dir,
+        resolve_existing_profile_file,
+    )
+    from i2pchat.storage.profile_dat import (
+        is_encrypted_profile_dat,
+        plaintext_key_bytes_for_backup,
+    )
 
     path = resolve_existing_profile_file(
         app_root, profile_name, f"{profile_name}.dat"
@@ -68,7 +75,16 @@ def _read_dat(app_root: str, profile_name: str) -> bytes:
             f"Profile .dat not found for {profile_name!r} under {app_root!r}"
         )
     with open(path, "rb") as f:
-        return f.read()
+        raw = f.read()
+    if is_encrypted_profile_dat(raw):
+        return plaintext_key_bytes_for_backup(
+            path,
+            profile=profile_name,
+            profile_data_dir=get_profile_data_dir(
+                profile_name, create=False, app_root=app_root
+            ),
+        )
+    return raw
 
 
 def _read_contacts(app_root: str, profile_name: str) -> Any:
@@ -124,6 +140,12 @@ def export_profile(
         ImportError: if pynacl is not installed
     """
     from nacl.secret import SecretBox
+
+    if not password:
+        raise ValueError(
+            "A non-empty password is required to export a profile "
+            "(the archive contains your private identity key)."
+        )
 
     dat_bytes = _read_dat(profiles_dir, profile_name)
     contacts = _read_contacts(profiles_dir, profile_name)

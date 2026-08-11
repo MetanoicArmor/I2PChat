@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import struct
 from dataclasses import asdict
@@ -36,6 +37,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from i2pchat import crypto
+from i2pchat.storage.blindbox_state import atomic_write_bytes
 from i2pchat.storage.chat_history import (
     HistoryEntry,
     _normalize_peer_addr,
@@ -44,6 +46,25 @@ from i2pchat.storage.chat_history import (
 )
 
 logger = logging.getLogger("i2pchat.history_export")
+
+_PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def _ensure_safe_profile_name(name: str) -> str:
+    """Reject profile names that could escape ``profile_data_dir`` (path traversal).
+
+    The name is later interpolated into on-disk file paths, so we constrain it to
+    a conservative charset and forbid separators / parent references. Mirrors
+    ``i2pchat.core.i2p_chat_core.ensure_valid_profile_name`` without importing the
+    core module (avoids a circular import).
+    """
+    candidate = (name or "").strip()
+    if not _PROFILE_NAME_RE.match(candidate) or candidate in {".", ".."}:
+        raise ValueError(
+            "Invalid profile name for history import. Allowed characters: "
+            "a-z A-Z 0-9 . _ - (1..64 chars, no path separators)."
+        )
+    return candidate
 
 EXPORT_MAGIC = b"I2HX"
 EXPORT_VERSION = 1
@@ -181,6 +202,9 @@ def export_history(
     if not crypto.NACL_AVAILABLE:
         raise RuntimeError("PyNaCl not available — cannot export history")
 
+    if not password:
+        raise ValueError("A non-empty password is required to export history")
+
     # Discover peers if not specified
     if not peers:
         peers = _discover_peers(profile_data_dir, profile_name, identity_key)
@@ -208,18 +232,11 @@ def export_history(
 
     header = EXPORT_MAGIC + struct.pack(">H", EXPORT_VERSION) + salt
 
-    # Write atomically via temp file
-    tmp_path = output_path + ".tmp"
-    try:
-        with open(tmp_path, "wb") as f:
-            f.write(header + ciphertext)
-        os.replace(tmp_path, output_path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    # Atomic write with restrictive permissions (0600) via a randomized temp
+    # file in the destination directory. The archive holds decrypted history
+    # (protected only by the passphrase-derived key), so it must not be
+    # world-readable.
+    atomic_write_bytes(output_path, header + ciphertext)
 
 
 def import_history(
@@ -281,7 +298,10 @@ def import_history(
 
     payload = _parse_payload(plaintext)
 
-    target_profile = profile_name or payload["profile"]
+    # Validate the profile name BEFORE it is interpolated into on-disk paths.
+    # Without this, a crafted archive (or caller argument) with "../" or an
+    # absolute path could write history files outside profile_data_dir.
+    target_profile = _ensure_safe_profile_name(profile_name or payload["profile"])
     results: dict[str, int] = {}
 
     for peer_obj in payload["peers"]:

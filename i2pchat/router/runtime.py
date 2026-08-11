@@ -42,8 +42,15 @@ async def probe_sam_hello(host: str, port: int, timeout: float = 5.0) -> None:
         if "HELLO REPLY" not in text or "RESULT=OK" not in text:
             raise RuntimeError(f"Unexpected SAM HELLO reply: {text!r}")
     finally:
-        writer.close()
-        await writer.wait_closed()
+        # Do not let BrokenPipe/ConnectionReset on close mask a HELLO failure.
+        try:
+            writer.close()
+        except Exception:
+            pass
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
 
 
 async def wait_for_sam_ready(host: str, port: int, timeout: float = 45.0) -> None:

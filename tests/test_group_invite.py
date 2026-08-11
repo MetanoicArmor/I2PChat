@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from i2pchat import crypto
 from i2pchat.groups.invite import (
     GROUP_INVITE_PREFIX,
     build_group_invite,
@@ -16,7 +17,13 @@ BOB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 CAROL = "cccccccccccccccccccccccccccccccccccccccc"
 
 
+def _seed() -> bytes:
+    seed, _ = crypto.generate_signing_keypair()
+    return seed
+
+
 def test_group_invite_round_trip() -> None:
+    seed = _seed()
     invite = build_group_invite(
         group_id="group-abc",
         members=(ALICE, BOB),
@@ -25,7 +32,7 @@ def test_group_invite_round_trip() -> None:
         title="Weekend",
         invite_id="deadbeef",
     )
-    encoded = encode_group_invite(invite)
+    encoded = encode_group_invite(invite, seed)
     assert encoded.startswith(GROUP_INVITE_PREFIX)
     assert looks_like_group_invite(encoded) is True
 
@@ -36,9 +43,42 @@ def test_group_invite_round_trip() -> None:
     assert decoded.inviter_id == ALICE
     assert decoded.members == (ALICE, BOB)
     assert decoded.invite_id == "deadbeef"
+    assert decoded.inviter_signing_pub == crypto.get_verify_key_from_seed(seed).hex()
+    assert decoded.signature
+
+
+def test_encode_requires_signing_seed() -> None:
+    invite = build_group_invite(
+        group_id="g", members=(ALICE,), epoch=0, inviter_id=ALICE
+    )
+    with pytest.raises(ValueError, match="signing seed"):
+        encode_group_invite(invite, b"")
+
+
+def test_decode_rejects_tampered_members() -> None:
+    seed = _seed()
+    encoded = encode_group_invite(
+        build_group_invite(group_id="g", members=(ALICE, BOB), epoch=1, inviter_id=ALICE),
+        seed,
+    )
+    tampered = encoded.replace(BOB, CAROL)
+    with pytest.raises(ValueError, match="signature verification failed"):
+        decode_group_invite(tampered)
+
+
+def test_decode_rejects_v1_unsigned_invite() -> None:
+    # A legacy v1 (unsigned) invite payload must be rejected outright.
+    legacy = GROUP_INVITE_PREFIX + (
+        '{"v":1,"invite_id":"x","group_id":"g","title":null,'
+        '"members":["' + ALICE + '"],"epoch":0,"inviter_id":"' + ALICE + '",'
+        '"created_at":"2020-01-01T00:00:00+00:00"}'
+    )
+    with pytest.raises(ValueError, match="version"):
+        decode_group_invite(legacy)
 
 
 def test_decode_group_invite_rejects_malformed() -> None:
+    seed = _seed()
     with pytest.raises(ValueError, match="Not a group invite"):
         decode_group_invite("__I2PCHAT_GROUP__:{}")
     with pytest.raises(ValueError, match="Empty group invite"):
@@ -53,7 +93,8 @@ def test_decode_group_invite_rejects_malformed() -> None:
                     members=(ALICE,),
                     epoch=0,
                     inviter_id=ALICE,
-                )
+                ),
+                seed,
             ).replace('"group_id":"x"', '"group_id":""')
         )
 

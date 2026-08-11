@@ -198,7 +198,11 @@ def enforce_retention_all(
             )
             results[peer_addr] = removed
         except Exception as e:
-            logger.warning("Failed to enforce retention for peer %s: %s", peer_addr, e)
+            # Log only a short prefix of the peer address to avoid writing full
+            # destination identifiers into plaintext logs.
+            logger.warning(
+                "Failed to enforce retention for peer %s…: %s", peer_addr[:16], e
+            )
             results[peer_addr] = 0
     return results
 

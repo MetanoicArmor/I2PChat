@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import tarfile
 import tempfile
 import time
@@ -21,6 +22,10 @@ from i2pchat.core.i2p_chat_core import (
 )
 from i2pchat.storage import chat_history as chat_history_mod
 from i2pchat.storage.blindbox_state import atomic_write_bytes
+from i2pchat.storage.profile_dat import (
+    is_encrypted_profile_dat,
+    plaintext_key_bytes_for_backup,
+)
 
 
 BUNDLE_MAGIC = b"I2PBKP1"
@@ -101,6 +106,27 @@ def _safe_member_name(name: str) -> str:
     if not cleaned or cleaned.startswith("../") or "/../" in cleaned:
         raise BackupError(f"Unsafe bundle path: {name!r}")
     return cleaned
+
+
+_SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_SAFE_BLINDBOX_SUFFIX_RE = re.compile(r"^blindbox\.[A-Za-z0-9._-]+\.json$")
+
+
+def _is_safe_path_segment(segment: str) -> bool:
+    """True if ``segment`` is a single, separator-free, non-parent path component."""
+    return (
+        bool(segment)
+        and segment not in {".", ".."}
+        and "/" not in segment
+        and "\\" not in segment
+        and "\x00" not in segment
+        and bool(_SAFE_SEGMENT_RE.match(segment))
+    )
+
+
+def _is_safe_blindbox_suffix(suffix: str) -> bool:
+    """Only accept genuine blindbox sidecar names (``blindbox.<token>.json``)."""
+    return bool(_SAFE_BLINDBOX_SUFFIX_RE.match(suffix))
 
 
 def _build_tar_payload(manifest: dict[str, object], files: dict[str, bytes]) -> bytes:
@@ -225,9 +251,24 @@ def _collect_profile_bundle_files(
     migrate_legacy_profile_files_if_needed(app_root=app_root, profile=profile)
     pdir = get_profile_data_dir(profile, create=False, app_root=app_root)
 
-    profile_dat = _collect_optional_file(_profile_dat_path(app_root, profile))
+    profile_dat_path = _profile_dat_path(app_root, profile)
+    profile_dat = _collect_optional_file(profile_dat_path)
     if profile_dat is None:
         raise BackupError(f"Profile data file not found: {profile}.dat")
+    # Export a portable plaintext key line inside the passphrase-protected
+    # bundle so restore works without the local wrap key / OS keyring. The
+    # restored .dat is re-encrypted on next profile init.
+    if is_encrypted_profile_dat(profile_dat):
+        try:
+            profile_dat = plaintext_key_bytes_for_backup(
+                profile_dat_path,
+                profile=profile,
+                profile_data_dir=pdir,
+            )
+        except Exception as exc:
+            raise BackupError(
+                f"Failed to unwrap encrypted profile .dat for backup: {exc}"
+            ) from exc
     files["profile.dat"] = profile_dat
 
     optional_sidecars = [
@@ -400,6 +441,7 @@ def import_profile_bundle(
     restored_files += 1
 
     pdir = get_profile_data_dir(target_profile, create=True, app_root=profiles_dir)
+    pdir_real = os.path.realpath(pdir)
     for logical_name, content in sorted(files.items()):
         if logical_name == "profile.dat":
             continue
@@ -409,14 +451,29 @@ def import_profile_bundle(
             dest_name = f"{target_profile}.compose_drafts.json"
         elif logical_name.startswith("blindbox/"):
             suffix = logical_name[len("blindbox/") :]
+            # A crafted bundle could smuggle a suffix like "dat" or
+            # "contacts.json" here, which would collide with (and overwrite)
+            # the freshly-imported profile.dat / contacts sidecars. Only accept
+            # genuine blindbox sidecars: "blindbox.<token>.json".
+            if not _is_safe_blindbox_suffix(suffix):
+                raise BackupError(
+                    f"Unexpected blindbox entry in profile bundle: {logical_name}"
+                )
             dest_name = f"{target_profile}.{suffix}"
         elif logical_name.startswith("history/"):
             suffix = logical_name[len("history/") :]
+            if not _is_safe_path_segment(suffix):
+                raise BackupError(
+                    f"Unsafe history entry in profile bundle: {logical_name}"
+                )
             dest_name = f"{target_profile}.history.{suffix}"
             history_files += 1
         else:
             raise BackupError(f"Unexpected file in profile bundle: {logical_name}")
-        atomic_write_bytes(os.path.join(pdir, dest_name), content)
+        dest_path = os.path.join(pdir, dest_name)
+        if os.path.dirname(os.path.realpath(dest_path)) != pdir_real:
+            raise BackupError(f"Refusing to write bundle entry outside profile dir: {dest_name}")
+        atomic_write_bytes(dest_path, content)
         restored_files += 1
 
     return ImportSummary(

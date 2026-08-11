@@ -26,8 +26,15 @@ class LivePeerSession:
     peer_identity_binding_verified: bool = False
     proven: bool = False
 
+    # ``shared_key`` остаётся индикатором «ключи установлены» (гейтинг), но
+    # реальное шифрование/MAC используют направленные ключи ниже (protocol v4).
     shared_key: Optional[bytes] = None
     shared_mac_key: Optional[bytes] = None
+    # Направленные ключи: send_* — исходящий трафик, recv_* — входящий.
+    send_key: Optional[bytes] = None
+    send_mac_key: Optional[bytes] = None
+    recv_key: Optional[bytes] = None
+    recv_mac_key: Optional[bytes] = None
     my_nonce: Optional[bytes] = None
     peer_nonce: Optional[bytes] = None
     my_ephemeral_private: Optional[bytes] = None
@@ -37,6 +44,15 @@ class LivePeerSession:
     use_encryption: bool = False
     handshake_complete: bool = False
     _handshake_initiated: bool = False
+    # Key confirmation (FINISHED) state (protocol v4).
+    _hs_role: Optional[str] = None  # "initiator" | "responder"
+    _hs_transcript: Optional[bytes] = None
+    _hs_finished_sent: bool = False
+    _hs_peer_finished: bool = False
+    # First-contact TOFU deferred until after FINISHED (avoids stalling RESP).
+    _hs_tofu_pending_key: Optional[bytes] = None
+    # True while the Trust dialog is open during finalize (Send stays disabled).
+    _hs_tofu_awaiting_ui: bool = False
     _send_seq: int = 0
     _recv_seq: int = 0
     _pending_text_acks: Dict[int, Any] = field(default_factory=dict)
@@ -65,6 +81,10 @@ class LivePeerSession:
     def reset_crypto(self) -> None:
         self.shared_key = None
         self.shared_mac_key = None
+        self.send_key = None
+        self.send_mac_key = None
+        self.recv_key = None
+        self.recv_mac_key = None
         self.my_nonce = None
         self.peer_nonce = None
         self.my_ephemeral_private = None
@@ -74,6 +94,12 @@ class LivePeerSession:
         self.use_encryption = False
         self.handshake_complete = False
         self._handshake_initiated = False
+        self._hs_role = None
+        self._hs_transcript = None
+        self._hs_finished_sent = False
+        self._hs_peer_finished = False
+        self._hs_tofu_pending_key = None
+        self._hs_tofu_awaiting_ui = False
         self._send_seq = 0
         self._recv_seq = 0
         self._pending_text_acks.clear()

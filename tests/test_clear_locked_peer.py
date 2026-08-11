@@ -9,6 +9,10 @@ from unittest.mock import patch
 
 from i2pchat.core.transient_profile import TRANSIENT_PROFILE_NAME
 from i2pchat.core.i2p_chat_core import I2PChatCore
+from i2pchat.storage.profile_dat import (
+    is_encrypted_profile_dat,
+    read_profile_dat_file,
+)
 
 PEER = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b32.i2p"
 # First line of .dat (mock identity blob); avoid *KEY* name — gitleaks generic-api-key false positive.
@@ -28,9 +32,17 @@ class ClearLockedPeerTests(unittest.TestCase):
                 core.my_dest = None
                 core.clear_locked_peer()
             self.assertIsNone(core.stored_peer)
-            with open(dat, "r", encoding="utf-8") as f:
-                lines = [ln.strip() for ln in f.readlines() if ln.strip()]
-            self.assertEqual(lines, [MOCK_DAT_LINE1])
+            with open(dat, "rb") as f:
+                raw = f.read()
+            self.assertTrue(is_encrypted_profile_dat(raw))
+            key, legacy_peer, was_plain = read_profile_dat_file(
+                dat,
+                profile="p",
+                profile_data_dir=os.path.dirname(dat),
+            )
+            self.assertEqual(key, MOCK_DAT_LINE1)
+            self.assertIsNone(legacy_peer)
+            self.assertFalse(was_plain)
 
     def test_keyring_only_peer_file_removed(self) -> None:
         with tempfile.TemporaryDirectory() as td:

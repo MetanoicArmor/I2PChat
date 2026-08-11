@@ -442,6 +442,7 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                     0,
                     group_epoch=3,
                     root_epoch=2,
+                    sender_id=ALICE_BARE,
                 )
                 blob = encrypt_blindbox_blob(
                     frame,
@@ -1516,6 +1517,7 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             core = I2PChatCore(profile="alice")
             core.get_profile_data_dir = lambda create=True: tmpdir  # type: ignore[method-assign]
             core.my_dest = _DummyDest(ALICE_BARE)
+            core.my_signing_seed, core.my_signing_public = crypto.generate_signing_keypair()
             group_state = core.create_group(
                 title="Invite source",
                 members=[BOB_BARE],
@@ -1534,6 +1536,7 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
             alice = I2PChatCore(profile="alice")
             alice.get_profile_data_dir = lambda create=True: alice_dir  # type: ignore[method-assign]
             alice.my_dest = _DummyDest(ALICE_BARE)
+            alice.my_signing_seed, alice.my_signing_public = crypto.generate_signing_keypair()
             group_state = alice.create_group(
                 title="Invite party",
                 members=[BOB_BARE],

@@ -53,6 +53,19 @@ class SamDestinationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Destination(b"too-short", has_private_key=True)
 
+    def test_private_destination_rejects_inflated_cert_len(self) -> None:
+        # cert_len is attacker-influenced; an inflated value must not splice
+        # private-key bytes into the "public" destination.
+        blob = _sample_private_destination(cert_len=100)  # 387+100=487 > 420
+        with self.assertRaises(ValueError):
+            Destination(blob, has_private_key=True)
+
+    def test_private_destination_requires_remaining_private_bytes(self) -> None:
+        # public_len == blob length means there are no private-key bytes left.
+        blob = _sample_private_destination(cert_len=420 - 387)  # public_len == 420
+        with self.assertRaises(ValueError):
+            Destination(blob, has_private_key=True)
+
 
 if __name__ == "__main__":
     unittest.main()

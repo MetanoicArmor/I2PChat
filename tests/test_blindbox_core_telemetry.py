@@ -432,6 +432,69 @@ class BlindBoxCoreTelemetryTests(unittest.IsolatedAsyncioTestCase):
             else:
                 os.environ["I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL"] = old_allow_insecure
 
+    def test_blindbox_non_loopback_direct_requires_token_by_default(self) -> None:
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        old_local_token = os.environ.get("I2PCHAT_BLINDBOX_LOCAL_TOKEN")
+        old_allow_insecure = os.environ.get("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        # A remote (non-loopback) direct host:port replica with no auth token.
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "203.0.113.7:19444"
+        os.environ.pop("I2PCHAT_BLINDBOX_LOCAL_TOKEN", None)
+        os.environ.pop("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL", None)
+        try:
+            with self.assertRaises(ValueError):
+                I2PChatCore(profile="alice")
+        finally:
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+            if old_local_token is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_LOCAL_TOKEN", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_LOCAL_TOKEN"] = old_local_token
+            if old_allow_insecure is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL"] = old_allow_insecure
+
+    def test_blindbox_non_loopback_direct_token_allows_startup(self) -> None:
+        old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
+        old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")
+        old_local_token = os.environ.get("I2PCHAT_BLINDBOX_LOCAL_TOKEN")
+        old_allow_insecure = os.environ.get("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL")
+        os.environ["I2PCHAT_BLINDBOX_ENABLED"] = "1"
+        os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = "203.0.113.7:19444"
+        os.environ["I2PCHAT_BLINDBOX_LOCAL_TOKEN"] = "a-shared-bearer-token"
+        os.environ.pop("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL", None)
+        try:
+            core = I2PChatCore(profile="alice")
+            self.assertTrue(
+                bool(core.get_blindbox_telemetry()["local_auth_token_enabled"])
+            )
+        finally:
+            if old_enabled is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ENABLED", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ENABLED"] = old_enabled
+            if old_replicas is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_REPLICAS", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_REPLICAS"] = old_replicas
+            if old_local_token is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_LOCAL_TOKEN", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_LOCAL_TOKEN"] = old_local_token
+            if old_allow_insecure is None:
+                os.environ.pop("I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL", None)
+            else:
+                os.environ["I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL"] = old_allow_insecure
+
     def test_blindbox_local_direct_opt_out_allows_insecure_mode(self) -> None:
         old_enabled = os.environ.get("I2PCHAT_BLINDBOX_ENABLED")
         old_replicas = os.environ.get("I2PCHAT_BLINDBOX_REPLICAS")

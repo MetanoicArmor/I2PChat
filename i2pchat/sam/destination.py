@@ -70,7 +70,20 @@ class Destination:
         if has_private_key:
             self.private_key = PrivateKey.from_value(data)
             cert_len = self._read_cert_len(self.private_key.data)
-            public_data = self.private_key.data[: 387 + cert_len]
+            public_len = 387 + cert_len
+            # The public destination is the first 387 + cert_len bytes; the
+            # remaining bytes are the private key material. Without this bound
+            # an inflated cert_len would splice private-key bytes into the
+            # "public" destination (.data/.base64/.base32).
+            if public_len > len(self.private_key.data):
+                raise ValueError(
+                    "Destination certificate length exceeds blob size"
+                )
+            if public_len >= len(self.private_key.data):
+                raise ValueError(
+                    "Private destination blob is missing private-key bytes"
+                )
+            public_data = self.private_key.data[:public_len]
 
         if isinstance(public_data, bytes):
             self.data = public_data

@@ -10,6 +10,26 @@ SENSITIVE_SAM_KEYS = {"PRIV", "PRIVATE", "DESTINATION", "SIGNING_PRIVATE_KEY"}
 TRANSIENT_DESTINATION = "TRANSIENT"
 
 
+def redact_sam_line(raw: str) -> str:
+    """Redact secret token values (private keys, full destinations) from a SAM line.
+
+    A ``DEST REPLY`` carries ``PRIV=<private key>`` and ``PUB=<full destination>``;
+    storing that verbatim in an exception's ``raw_line`` (whose dataclass repr is
+    logged) would leak the profile's private identity key. Replace the value of
+    any sensitive token with a short prefix + ``…`` so logs stay useful but safe.
+    """
+    if not raw:
+        return raw
+    out_tokens: list[str] = []
+    for token in raw.split(" "):
+        if "=" in token:
+            key, value = token.split("=", 1)
+            if key.upper() in SENSITIVE_SAM_KEYS and value:
+                token = f"{key}=<redacted:{len(value)}b>"
+        out_tokens.append(token)
+    return " ".join(out_tokens)
+
+
 @dataclass(frozen=True, slots=True)
 class SAMReply:
     command: str
@@ -189,7 +209,7 @@ def parse_reply_line(line: bytes) -> SAMReply:
         raise ProtocolError(message="Empty SAM reply", raw_line="")
     parts = raw.split()
     if len(parts) < 2:
-        raise ProtocolError(message="Malformed SAM reply", raw_line=raw)
+        raise ProtocolError(message="Malformed SAM reply", raw_line=redact_sam_line(raw))
     command = parts[0].upper()
     topic = parts[1].upper()
     fields: dict[str, str] = {}
@@ -198,7 +218,11 @@ def parse_reply_line(line: bytes) -> SAMReply:
             continue
         key, value = token.split("=", 1)
         fields[key.upper()] = value
-    return SAMReply(command=command, topic=topic, fields=fields, raw_line=raw)
+    # Never retain private-key / full-destination material in raw_line: the
+    # SAMReply/exception dataclass repr can end up in logs.
+    return SAMReply(
+        command=command, topic=topic, fields=fields, raw_line=redact_sam_line(raw)
+    )
 
 
 def expect_ok(reply: SAMReply, *, result_key: str = "RESULT") -> SAMReply:

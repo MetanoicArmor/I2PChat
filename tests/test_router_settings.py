@@ -90,7 +90,9 @@ class RouterSettingsTests(unittest.TestCase):
                     loaded = load_router_settings()
 
                 self.assertEqual(loaded.backend, "bundled")
-                self.assertEqual(loaded.system_sam_host, "router.local")
+                # Non-loopback system SAM host is coerced to loopback default
+                # unless I2PCHAT_ALLOW_REMOTE_SAM is set (protocol v4 hardening).
+                self.assertEqual(loaded.system_sam_host, "127.0.0.1")
                 self.assertEqual(loaded.system_sam_port, 7656)
                 self.assertEqual(loaded.bundled_sam_host, "127.0.0.2")
                 self.assertEqual(loaded.bundled_sam_port, 17657)
@@ -124,6 +126,21 @@ class RouterSettingsTests(unittest.TestCase):
                 loaded = load_router_settings()
                 self.assertEqual(loaded.backend, "system")
                 self.assertEqual(loaded.bundled_sam_host, "127.0.0.1")
+
+    def test_non_loopback_system_sam_host_requires_opt_in(self) -> None:
+        # Without the opt-in env var, a remote system SAM host is coerced to
+        # loopback; with it set, the remote host is honored.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("I2PCHAT_ALLOW_REMOTE_SAM", None)
+            coerced = normalize_router_settings(
+                RouterSettings(backend="system", system_sam_host="192.168.1.50")
+            )
+            self.assertEqual(coerced.system_sam_host, "127.0.0.1")
+        with mock.patch.dict(os.environ, {"I2PCHAT_ALLOW_REMOTE_SAM": "1"}):
+            allowed = normalize_router_settings(
+                RouterSettings(backend="system", system_sam_host="192.168.1.50")
+            )
+            self.assertEqual(allowed.system_sam_host, "192.168.1.50")
 
 
 if __name__ == "__main__":

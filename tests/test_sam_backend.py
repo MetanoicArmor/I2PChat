@@ -564,6 +564,27 @@ class SamBackendTests(unittest.IsolatedAsyncioTestCase):
             server.close()
             await server.wait_closed()
 
+    async def test_open_preserves_hello_failure_not_broken_pipe(self) -> None:
+        """Abortive close during HELLO must not surface as BrokenPipe from wait_closed."""
+        from i2pchat.sam.errors import ProtocolError
+
+        async def _drop(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            await reader.readline()
+            writer.transport.abort()
+
+        server = await asyncio.start_server(_drop, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        client = SAMClient(sam_address=("127.0.0.1", int(port)), hello_timeout=2.0)
+        try:
+            with self.assertRaises((ConnectionError, OSError, ProtocolError)) as ctx:
+                await client.open()
+            self.assertNotIsInstance(ctx.exception, BrokenPipeError)
+        finally:
+            server.close()
+            await server.wait_closed()
+
 
 if __name__ == "__main__":
     unittest.main()

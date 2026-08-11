@@ -23,6 +23,78 @@ from i2pchat.storage.group_store import (
 )
 
 
+class GroupStoreAtRestEncryptionTests(unittest.TestCase):
+    def _record_path(self, tmpdir: str, profile: str, group_id: str) -> str:
+        from i2pchat.storage.group_store import _group_record_path
+
+        return _group_record_path(tmpdir, profile, group_id)
+
+    def test_records_are_encrypted_at_rest_with_identity_key(self) -> None:
+        identity_key = b"\x33" * 32
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(
+                group_id="grp-enc-1",
+                epoch=1,
+                members=("alice.b32.i2p", "bob.b32.i2p"),
+                title="Secret Room",
+            )
+            entry = GroupHistoryEntry(
+                kind="peer",
+                sender_id="bob.b32.i2p",
+                content_type=GroupContentType.GROUP_TEXT,
+                text="top-secret-message-body",
+                msg_id="m1",
+                group_seq=1,
+            )
+            upsert_group_state(
+                tmpdir, "alice", state, next_group_seq=1, identity_key=identity_key
+            )
+            append_group_history_entry(
+                tmpdir, "alice", state, entry, identity_key=identity_key
+            )
+
+            path = self._record_path(tmpdir, "alice", "grp-enc-1")
+            with open(path, "rb") as f:
+                raw = f.read()
+            self.assertEqual(raw[:4], b"I2GS")
+            self.assertNotIn(b"top-secret-message-body", raw)
+            self.assertNotIn(b"Secret Room", raw)
+
+            conv = load_group_conversation(
+                tmpdir, "alice", "grp-enc-1", identity_key=identity_key
+            )
+            assert conv is not None
+            self.assertEqual(conv.state.title, "Secret Room")
+            self.assertEqual(conv.history[0].text, "top-secret-message-body")
+
+    def test_wrong_key_fails_closed(self) -> None:
+        identity_key = b"\x44" * 32
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(group_id="grp-enc-2", epoch=1, members=("a.i2p",))
+            upsert_group_state(
+                tmpdir, "alice", state, next_group_seq=1, identity_key=identity_key
+            )
+            with self.assertRaises(ValueError):
+                load_group_conversation(
+                    tmpdir, "alice", "grp-enc-2", identity_key=b"\x55" * 32
+                )
+
+    def test_legacy_plaintext_record_is_still_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = GroupState(group_id="grp-legacy", epoch=1, members=("a.i2p",))
+            # Write without a key -> legacy plaintext JSON.
+            upsert_group_state(tmpdir, "alice", state, next_group_seq=1)
+            path = self._record_path(tmpdir, "alice", "grp-legacy")
+            with open(path, "rb") as f:
+                self.assertNotEqual(f.read()[:4], b"I2GS")
+            # Reading with a key present still works (migration path).
+            conv = load_group_conversation(
+                tmpdir, "alice", "grp-legacy", identity_key=b"\x66" * 32
+            )
+            assert conv is not None
+            self.assertEqual(conv.state.group_id, "grp-legacy")
+
+
 class GroupStoreTests(unittest.TestCase):
     def test_create_load_save_group_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

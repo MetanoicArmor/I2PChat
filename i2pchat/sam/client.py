@@ -17,6 +17,18 @@ from .protocol import (
 )
 
 
+async def _safe_close_writer(writer: asyncio.StreamWriter) -> None:
+    """Close a SAM TCP writer without masking the original failure (BrokenPipe, etc.)."""
+    try:
+        writer.close()
+    except Exception:
+        pass
+    try:
+        await writer.wait_closed()
+    except Exception:
+        pass
+
+
 @dataclass(slots=True)
 class SessionHandle:
     session_id: str
@@ -24,8 +36,7 @@ class SessionHandle:
     writer: asyncio.StreamWriter
 
     async def close(self) -> None:
-        self.writer.close()
-        await self.writer.wait_closed()
+        await _safe_close_writer(self.writer)
 
 
 class SAMClient:
@@ -55,8 +66,7 @@ class SAMClient:
         try:
             await self._write_and_expect(build_hello(), timeout=self.hello_timeout)
         except Exception:
-            writer.close()
-            await writer.wait_closed()
+            await _safe_close_writer(writer)
             self._reader = None
             self._writer = None
             raise
@@ -64,10 +74,10 @@ class SAMClient:
     async def close(self) -> None:
         if self._writer is None:
             return
-        self._writer.close()
-        await self._writer.wait_closed()
+        writer = self._writer
         self._reader = None
         self._writer = None
+        await _safe_close_writer(writer)
 
     async def dest_generate(self, sig_type: int = 7) -> tuple[Destination, Destination]:
         reply = await self._write_and_expect(build_dest_generate(sig_type))
@@ -164,8 +174,7 @@ async def open_stream_connect(
         expect_ok(parse_reply_line(line))
         return reader, writer
     except Exception:
-        writer.close()
-        await writer.wait_closed()
+        await _safe_close_writer(writer)
         raise
 
 
@@ -189,6 +198,5 @@ async def open_stream_accept(
         expect_ok(parse_reply_line(line))
         return reader, writer
     except Exception:
-        writer.close()
-        await writer.wait_closed()
+        await _safe_close_writer(writer)
         raise

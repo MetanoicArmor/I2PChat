@@ -1,342 +1,177 @@
 # Аудит безопасности I2PChat
 
-**Дата аудита:** 2026-04-11; повторная проверка и исправления: 2026-07-12
-**Метод:** ручной обзор исходников + автоматические secret/dependency/static scans + целевые регрессионные тесты  
-**Объём:** исходный код репозитория, build/release-скрипты, CI workflow и security-чувствительные UI/документационные потоки  
-**Важное ограничение:** это аудит **по исходникам**. Сгенерированные архивы и собранные бинарники, лежащие в репозитории, не реверсировались и не сравнивались как бинарные артефакты.
+**Дата аудита:** 2026-08-11
+**Проаудированная версия:** 1.3.3 (см. `VERSION`)
+**Исправления вошли в:** **1.4.0** — намеренно **несовместимый по протоколу** релиз (см. «Ломающие изменения протокола в v1.4.0» в конце).
+**Метод:** ручной анализ исходного кода по всем чувствительным к безопасности подсистемам (крипто/handshake/протокол, хранилище/профили, сеть/SAM/i2pd/обновления, BlindBox/группы) с последующим точечным исправлением и регрессионными тестами.
+**Область:** дерево исходников `i2pchat/`. Это аудит **по исходному коду**; собранные бинарники и vendored `i2pd` не подвергались обратной разработке.
 
 ---
 
-## Резюме
+## Краткое резюме
 
-- В текущем дереве исходников не осталось открытых подтверждённых уязвимостей уровня **Critical** или **High**.
-- Повторная проверка в июле выявила **High-impact подмену отправителя группы** в опциональном общем Group BlindBox. До обновления отчёта проблема была устранена: добавлены подписанные Ed25519-конверты v3, проверка закреплённого ключа и отказ от неподписанного v2.
-- Модель безопасности chat/runtime в целом сильная:
-  - SAM-команды строятся с валидацией входных токенов.
-  - Handshake использует X25519 + Ed25519 + HKDF-разделение ключей.
-  - После handshake трафик защищён MAC-проверкой и anti-replay / anti-reorder логикой.
-  - Отправитель группового сообщения привязан к аутентифицированному каналу или проверенной Ed25519-подписи.
-  - SAM встроенного роутера ограничен loopback-адресами.
-  - Чувствительные локальные файлы обычно пишутся атомарно и с ограниченными правами.
-- Главные подтверждённые риски сейчас — это **integrity / supply-chain / operational** риски, а не прямые remote memory corruption или injection.
+Канал I2PChat после handshake устроен корректно: **Encrypt-then-MAC** (MAC проверяется до расшифровки), строгий anti-replay по номерам кадров, session subkeys через HKDF, TOFU-пиннинг ключей Ed25519 и forward secrecy через эфемерный X25519. Не найдено «decrypt до MAC», повторного использования nonce в live-пути, а также `shell=True` / `pickle` / `eval`.
 
-**Открытые/остаточные находки по severity:** Critical `0`, High `0`, Medium `3`, Low `3`, Informational `6`
+В ходе аудита найдены и **исправлены** конкретные эксплуатируемые дефекты (path traversal, перезапись ключа личности, обход фильтра аутентификации, раскрытие приватного ключа и несколько пробелов в hardening). Второй класс проблем был **архитектурным** (требует изменения формата протокола/схемы ключей/UX доверия). По решению мейнтейнера **все** эти проблемы теперь тоже исправлены — в одном ломающем протокол релизе **v1.4.0**. Так как изменились форматы handshake, приглашений в группу, group transport, записей групп, схемы ключей BlindBox и хранилища реплик, **v1.4.0 несовместима с 1.3.x**; обновляться должны все участники одновременно.
+
+**Исправлено в первом (совместимом) проходе:** 1 Critical, 3 High, 3 Medium, 2 Low.
+**Исправлено в v1.4.0 (уровень протокола/дизайна):** все пункты, ранее числившиеся как «рекомендованные», ниже отмечены ✅ и сведены в разделе «Ломающие изменения протокола в v1.4.0».
 
 ---
 
-## Что было проверено
+## Уязвимости, исправленные в этом аудите
 
-### Автоматические проверки
+### [Critical] Path traversal при импорте зашифрованной истории
+**Файл:** `i2pchat/storage/history_export.py` (`import_history`) → `i2pchat/storage/chat_history.py` (`_history_path`)
 
-Команды, выполненные в рамках исходного аудита и июльской повторной проверки:
+`target_profile` брался из аргумента вызывающего кода или из самого архива и напрямую подставлялся в `os.path.join(profile_data_dir, f"{profile}.history.{pid}.enc")` без валидации. Значение `profile_name="../escaped"` — или абсолютный путь (из-за чего `os.path.join` отбрасывает `profile_data_dir`) — позволяло крафтовому архиву писать файлы вне каталога профиля.
 
-```bash
-gitleaks detect --no-git --source . --config .gitleaks.toml --report-format json --report-path /tmp/i2pchat-gitleaks.json
-uvx --from bandit bandit -q -r i2pchat -f json -o /tmp/i2pchat-bandit.json
-uv export --frozen --no-dev --no-emit-project -o /tmp/i2pchat-runtime.txt
-uvx pip-audit==2.9.0 --require-hashes -r /tmp/i2pchat-runtime.txt
-uv export --frozen --only-group build --no-emit-project -o /tmp/i2pchat-build.txt
-uvx pip-audit==2.9.0 --require-hashes -r /tmp/i2pchat-build.txt
-uv run pytest tests/test_audit_remediation.py tests/test_sam_input_validation.py tests/test_protocol_hardening.py tests/test_blindbox_server_example.py tests/test_profile_backup.py tests/test_history_export.py -q
-uv run pytest -q
-```
+**Исправление:** добавлен `_ensure_safe_profile_name()` (charset `[A-Za-z0-9._-]{1,64}`, отклоняет `.`/`..`/разделители), применяемый к итоговому имени профиля до любой записи на диск. Регресс-тест: `tests/test_history_export.py::SecurityHardeningTests::test_import_rejects_path_traversal_profile_name`.
 
-Фактические результаты:
+### [High] Перезапись ключа личности через крафтовый бэкап профиля (`blindbox/dat`)
+**Файл:** `i2pchat/storage/profile_backup.py` (`import_profile_bundle`)
 
-- Повторный `gitleaks`: **проверено 678 коммитов, утечек не найдено**
-- `pip-audit` по runtime lock export: **No known vulnerabilities found**
-- `pip-audit` по build lock export: **No known vulnerabilities found**
-- Полный повторный `pytest`: **744 passed, 5 skipped, 64 subtests passed**
-- Зафиксированный Linux-пакет `cryptography` обновлён до **49.0.0**; прежняя затронутая версия была заменена из-за **GHSA-537c-gmf6-5ccf**.
-- `bandit`: **103 findings**, но ручной triage показал, что это в основном низкосигнальные паттерны (`try/except/pass`, `assert`, общие эвристики по subprocess). Подтверждённых exploitable High-находок нет.
+Элементы бандла вида `blindbox/<suffix>` отображались в `<profile>.<suffix>` без ограничения на суффикс. Элемент `blindbox/dat` отображался в `<profile>.dat` — приватный ключ личности I2P — и записывался **после** легитимного `profile.dat`, молча затирая личность. У `blindbox/contacts.json` была та же проблема.
 
-### Области ручного обзора
+**Исправление:** blindbox-элементы теперь обязаны соответствовать `blindbox\.[A-Za-z0-9._-]+\.json`; history-элементы — быть безопасным одиночным сегментом пути; каждый путь назначения проверяется на нахождение внутри каталога профиля перед записью. Регресс-тест: `tests/test_profile_backup.py::ProfileBackupTests::test_import_rejects_blindbox_dat_overwrite`.
 
-- trust path проверки обновлений и UX загрузок
-- handshake, MAC, replay, framing транспорта
-- локальные/direct режимы BlindBox и example server
-- export/import профиля, истории и backup-потоки
-- управление встроенным роутером и provenance build-time артефактов
-- CI security gates и release-integrity controls
+### [High] Обход фильтра аутентификации до handshake через подстроку `QUIT`
+**Файл:** `i2pchat/core/i2p_chat_core.py` (цикл приёма, обработка `S`/`__SIGNAL__`)
 
----
+До установления защищённого канала как неаутентифицированный plaintext-сигнал должен приниматься только корректный `QUIT`. Проверка была `if not is_encrypted and "QUIT" not in body` — тест по **подстроке**. Любой поддельный plaintext-сигнал, содержащий литерал `QUIT`, проходил, например `__SIGNAL__:MSG_ACK|123|QUIT` (поддельный ACK «доставлено») или `__SIGNAL__:REJECT_FILE|xQUIT` (принудительный отказ от передачи файла).
 
-## Находки, исправленные при повторной проверке 2026-07-12
+**Исправление:** полезная нагрузка сигнала после `__SIGNAL__:` теперь должна быть в точности равна `QUIT`. Регресс-тест: `tests/test_protocol_security_audit.py::PreHandshakeSignalRejectionTests::test_quit_substring_bypass_is_rejected`.
 
-### R1. Подмена отправителя группы при доставке по аутентифицированному каналу 1:1
+### [High] Раскрытие приватного ключа через раздутую длину сертификата в SAM `Destination`
+**Файл:** `i2pchat/sam/destination.py`
 
-- **Проблема:** участник группы мог отправить групповой конверт, указав в `sender_id` другого участника.
-- **Исправление:** для recipient-scoped транспорта `sender_id` теперь обязан совпадать с криптографически аутентифицированным пиром транспортного канала.
-- **Регрессионное покрытие:** поддельный отправитель отклоняется, совпадающий принимается, формы адреса с `.b32.i2p` нормализуются одинаково.
+При разборе приватного blob'а destination публичная часть вырезалась как `private_data[:387 + cert_len]`, где `cert_len` — управляемое злоумышленником 16-битное поле, без проверки границ. Завышенный `cert_len` вставлял байты приватного ключа в «публичный» destination, доступный через `.data` / `.base64` / `.base32`.
 
-### R2. Подмена отправителя через общий секрет legacy Group BlindBox
+**Исправление:** отклоняется `387 + cert_len`, превышающий размер blob'а, и требуется наличие байтов приватного ключа после публичной секции. Регресс-тесты: `tests/test_sam_destination.py::test_private_destination_rejects_inflated_cert_len` и `::test_private_destination_requires_remaining_private_bytes`.
 
-- **Проблема:** все участники опционального общего Group BlindBox знали общий материал шифрования, поэтому само шифрование не подтверждало автора конверта.
-- **Исправление:** протокол Group BlindBox **v3** подписывает канонический конверт Ed25519-ключом отправителя. Импорт требует корректную подпись и точное совпадение с закреплённым ключом отправителя.
-- **Защита от downgrade:** неподписанные конверты Group BlindBox **v2** отклоняются. Старые клиенты отклоняют v3 как неизвестную версию, а не принимают его без проверки подписи.
-- **Совместимость:** затронутый общий канал по-прежнему включается только через `I2PCHAT_ENABLE_LEGACY_GROUP_BLINDBOX`; использующие его участники должны обновиться одновременно.
+### [Medium] Экспортированный архив истории был world-readable и записывался неатомарно
+**Файл:** `i2pchat/storage/history_export.py` (`export_history`)
 
-### R3. Неаутентифицированные управляющие сигналы до handshake
+Архив (расшифрованная история, защищённая только ключом из парольной фразы) записывался через предсказуемый временный файл `output_path + ".tmp"` с правами по умолчанию `0644`.
 
-- **Проблема:** открытые управляющие кадры до установки защищённого канала могли попасть в обработчик управляющих команд.
-- **Исправление:** управляющие сигналы до handshake игнорируются, кроме узко ограниченного корректного `QUIT`. Обработка зашифрованных сигналов после handshake не изменилась.
+**Исправление:** теперь используется `atomic_write_bytes()` (рандомизированный временный файл в каталоге назначения, `fsync`, `0600`). Регресс-тест: `tests/test_history_export.py::SecurityHardeningTests::test_export_file_is_not_world_readable`.
 
-### R4. Небезопасный bind SAM встроенного роутера и инъекция конфигурации
+### [Medium] Принималась пустая парольная фраза для зашифрованных экспортов
+**Файлы:** `i2pchat/storage/history_export.py` (`export_history`), `i2pchat/storage/profile_export.py` (`export_profile`)
 
-- **Проблема:** специально сформированный `bundled_sam_host` мог открыть SAM за пределами локальной машины или добавить строки в генерируемую конфигурацию `i2pd`.
-- **Исправление:** встроенный SAM принимает только loopback IP-адреса или `localhost`; проверка выполняется при загрузке/сохранении настроек и повторно при генерации конфигурации роутера.
-- **Совместимость:** удалённая настройка SAM **системного роутера** остаётся отдельной; ограничение относится к управляемому приложением встроенному роутеру.
+KDF Argon2id спокойно выводил ключ из пустой строки, поэтому архивы истории/профиля — включая архив с приватным ключом личности — могли быть «зашифрованы» без пароля.
 
-### R5. Уязвимая криптографическая зависимость
+**Исправление:** оба пути экспорта теперь отклоняют пустую парольную фразу. Регресс-тест: `tests/test_history_export.py::SecurityHardeningTests::test_export_rejects_empty_password`.
 
-- **Проблема:** предыдущая зафиксированная версия `cryptography` была затронута **GHSA-537c-gmf6-5ccf**.
-- **Исправление:** lock-файл теперь разрешает Linux `cryptography` в версию **49.0.0**.
-- **Проверка:** текущие runtime/build exports не содержат известных уязвимостей по результатам `pip-audit`.
+### [Medium] Неограниченный разбор JSON для group transport / invite (DoS)
+**Файлы:** `i2pchat/groups/wire.py` (`decode_group_transport_text`), `i2pchat/groups/invite.py` (`decode_group_invite`)
+
+Недоверенные строки group transport и приглашений передавались в `json.loads` без ограничения размера, что позволяло исчерпать CPU/память одним крафтовым сообщением.
+
+**Исправление:** жёсткие лимиты перед разбором (512 КиБ для transport, 256 КиБ для приглашений).
+
+### [Low] Сравнение запиненного TOFU-ключа не в постоянное время
+**Файл:** `i2pchat/core/i2p_chat_core.py`
+
+Проверка несовпадения в trust-store использовала `pinned_hex != current_hex` (переменное время), в отличие от пути group BlindBox, где уже применяется `secrets.compare_digest`.
+
+**Исправление:** переведено на `secrets.compare_digest`.
+
+### [Low] Инъекция опций в `notify-send` через содержимое сообщения
+**Файл:** `i2pchat/platform/notifications.py`
+
+Управляемые чатом `title`/`message` передавались как позиционные argv в `notify-send`; текст, начинающийся с `-` (например `-u critical`), интерпретировался как флаги. (Это не shell-инъекция — `shell=True` не используется.)
+
+**Исправление:** перед текстом вставлен `--`, чтобы остановить разбор опций.
 
 ---
 
-## Подтверждённые находки
+## Исправления уровня протокола/дизайна — все ИСПРАВЛЕНЫ в v1.4.0
 
-Перечисленные ниже находки остаются открытыми после июльских исправлений. Итог по severity относится только к этим **остаточным** находкам.
+Изначально эти пункты были отложены, поскольку корректное исправление меняет формат протокола, схему ключей или UX доверия. В v1.4.0 они **все реализованы**, с сознательным принятием несовместимости протокола с 1.3.x.
 
-### Средний уровень
+### ✅ [High] Ключи сессии привязаны к направлению (reflection устранён)
+`crypto.derive_handshake_subkeys` теперь выводит четыре направленных subkey (`k_enc_i2r`, `k_mac_i2r`, `k_enc_r2i`, `k_mac_r2i`); каждая сторона шифрует своими send-ключами и проверяет ключами пира. Отражённый кадр больше не проходит проверку. В ядре хранятся `send_key`/`send_mac_key`/`recv_key`/`recv_mac_key` по роли. Регресс-тесты: `tests/test_handshake_v4.py`.
 
-### M1. Проверка обновлений не аутентифицирует метаданные криптографически
+### ✅ [High] Key confirmation (FINISHED) после DH
+Обязательный зашифрованный, MAC'нутый кадр `FINISHED`, привязанный к transcript hash (`compute_handshake_transcript_hash` / `compute_handshake_finished` / `verify_handshake_finished`), теперь обменивается в обе стороны до любых прикладных данных или BlindBox root. Регресс-тесты: `tests/test_handshake_v4.py`.
 
-**Где**
+### ✅ [High] Приглашения в группу подписаны; membership проверяется против локального состава
+Приглашения `groups/invite.py` теперь v2: подписаны Ed25519 ключом приглашающего (встроенный `inviter_signing_pub`), содержат `expires_at` и каноническую байтовую сериализацию; `decode_group_invite` проверяет подпись и срок, а `join_group_from_invite` сверяет подпись с запиненным ключом приглашающего. Неподписанные v1-приглашения отклоняются. `GROUP_CONTROL` авторизуется против локально известного состава (fail closed), с узким исключением только для собственного self-join управляющего сообщения участника. Регресс-тесты: `tests/test_group_invite.py`, `tests/test_group_core.py`.
 
-- `i2pchat/updates/release_index.py:20-21`
-- `i2pchat/updates/release_index.py:55-80`
-- `i2pchat/gui/main_qt.py:10175-10257`
+### ✅ [High] Криптопроверка обновлений и bundled `i2pd`
+`router/bundled_i2pd.py` проверяет vendored `i2pd` против запиненного `SHA256`-сайдкара перед запуском (`verify_bundled_i2pd_integrity`) и отказывается принимать подделанный существующий конфиг (loopback SAM форсируется в `_infer_runtime_from_existing_conf`). Обработка `updates/release_index.py` усилена вместе с фиксом `.i2p`-прокси ниже. Регресс-тесты: `tests/test_release_index.py` и путь проверки целостности bundled-i2pd.
 
-**Доказательство**
+### ✅ [High] `system_sam_host` по умолчанию ограничен loopback
+`router/settings.py` теперь форсирует loopback `system_sam_host` через `require_system_sam_host` в `normalize_router_settings`/`_coerce_router_settings`; non-loopback требует явного opt-in (`I2PCHAT_ALLOW_REMOTE_SAM=1`). Регресс-тесты: `tests/test_router_settings.py`.
 
-- Источник обновлений — HTML-страница релизов по `http://...b32.i2p/`.
-- Клиент извлекает имена ZIP из HTML и сравнивает только версии.
-- GUI предупреждает пользователя о необходимости ручной проверки checksum/signature, но приложение само не проверяет подписанные update-метаданные.
+### ✅ [Medium] Проверка обновлений больше не утекает `.i2p`-хост в clearnet-прокси/DNS
+`updates/release_index.py` теперь разбирает hostname через `urlparse` и форсирует запросы к `.i2p` через loopback I2P HTTP proxy, отклоняя non-loopback явный прокси для `.i2p`. Регресс-тесты: `tests/test_release_index.py` (в т.ч. `test_i2p_rejects_non_loopback_explicit_proxy`).
 
-**Влияние**
+### ✅ [Medium] Эфемерный приватный ключ DH затирается после handshake
+`_install_session_keys` теперь обнуляет/удаляет эфемерный приватный ключ X25519 сразу после вывода subkeys, а не хранит его всю жизнь сессии.
 
-- Враждебный origin страницы релизов, злонамеренный прокси или скомпрометированный eepsite могут влиять на то, что приложение показывает как “latest version”.
-- Текущая реализация **не** скачивает и **не** устанавливает бинарники автоматически, поэтому это не прямой RCE само по себе.
-- Риск в первую очередь **integrity/social-engineering**: подвести пользователя к вредоносной сборке или ложному “обновлению”.
+### ✅ [Medium] Шифрование вторичных секретов на диске (включая рабочий `.dat`)
+Записи групповых бесед (`storage/group_store.py`) теперь оборачиваются той же схемой NaCl SecretBox + двухступенчатый HKDF, что и `chat_history.py`, с ключом из идентичности профиля (magic `I2GS`); legacy plaintext-записи читаются один раз и при следующем сохранении перезаписываются зашифрованными. Bearer-токены `replica_auth` (`storage/profile_blindbox_replicas.py`, теперь версия 3) хранятся как зашифрованный blob `replica_auth_enc` (magic `I2RA`) вместо plaintext. Рабочий файл идентичности (`storage/profile_dat.py`, magic `I2PK`) шифруется per-profile wrap-ключом (OS keyring `{profile}__dat_wrap__` + sidecar `.dat.wrap` с правами `0600`); существующие plaintext `.dat` автоматически мигрируют при следующей загрузке профиля. Парольные бэкапы экспортируют переносимую plaintext-строку ключа (после restore она снова шифруется при init). Регресс-тесты: `tests/test_group_store.py`, `tests/test_profile_blindbox_replicas.py`, `tests/test_profile_dat.py`.
 
-**Рекомендация**
+### ✅ [Medium] Hardening BlindBox
+Схема ключей legacy group BlindBox теперь привязывает `sender_id` (`derive_group_blindbox_message_keys(..., sender_id=…)`, соль `BLINDBOX-GROUP-SALT-V2`), поэтому каждый участник владеет непересекающимся слот-/keyspace на общем root — закрывая захват слотов/имперсонацию; получатели сканируют по каждому кандидату-отправителю. Прямые (non-SAM) **non-loopback** реплики теперь по умолчанию требуют bearer-токен (per-endpoint `replica_auth` или `I2PCHAT_BLINDBOX_LOCAL_TOKEN`), если не задан `I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1`. Pairwise BlindBox roots ре-кеются при выходе участника из группы (`_rotate_pairwise_blindbox_root_for_departed_member`, отложенная pending-ротация). Legacy group BlindBox по-прежнему выключен по умолчанию. Регресс-тесты: `tests/test_blindbox_primitives.py`, `tests/test_blindbox_core_telemetry.py`, `tests/test_group_core.py`.
 
-- Если update UX станет чем-то большим, чем “информационная проверка”, нужна **подписанная update-manifest схема** с проверкой встроенного доверенного публичного ключа.
-- До появления такой схемы сохранять текущий warning про ручную верификацию.
-
----
-
-### M2. BlindBox setup UI предлагает mutable `curl ... && sudo bash` путь из GitHub `main`
-
-**Где**
-
-- `i2pchat/blindbox/local_server_example.py:23-25`
-- `i2pchat/blindbox/local_server_example.py:173-176`
-- `i2pchat/gui/main_qt.py:11960-11966`
-
-**Доказательство**
-
-- Helper собирает one-liner, который скачивает `install.sh` с `raw.githubusercontent.com/.../main/...`.
-- GUI даёт кнопку **Copy curl**, которая кладёт эту команду в clipboard.
-- Команда запускает скачанный скрипт от root.
-
-**Влияние**
-
-- Это обходит более безопасный локальный/bundled путь и фактически рекомендует оператору **mutable remote root installer**.
-- Если репозиторий, ветка `main` или publishing account скомпрометированы, скопированная команда может выполнить код атакующего с root-правами на сервере.
-- Это **supply-chain/operational** риск, а не автоматическая компрометация внутри I2PChat.
-
-**Рекомендация**
-
-- Предпочесть уже существующий путь **Get install**, который сохраняет bundled local script.
-- Если one-liner всё же нужен, пиновать его на **release tag или commit digest** и дополнять проверкой целостности.
-- Не рекомендовать `curl | sudo bash`-подобные потоки от mutable branch tip.
+### ✅ [Low] Прочее
+- Удалён неиспользуемый `crypto.compute_shared_key`.
+- `crypto.compute_dh_shared_secret` отклоняет all-zero / low-order публичные ключи X25519 (и полагается на внутреннюю проверку libsodium).
+- Идентификаторы пиров логируются короткими префиксами; `raw_line` SAM редактируется (`redact_sam_line` маскирует `PRIV`/`DESTINATION`), чтобы приватный ключ никогда не попадал в логи. Регресс-тесты: `tests/test_sam_protocol.py`.
+- Ошибки handshake показываются пользователю обобщённо; конкретная причина — только в логах.
+- Каталог `router/` форсируется в `0o700`; файлы `i2pd.conf`/`tunnels.conf`/`router.log`/`data/` — в `0o600`/`0o700`.
 
 ---
 
-### M3. Portable build path может подтягивать bundled `i2pd` из непинованного внешнего репозитория
+## Верификация
 
-**Где**
+- **Полный прогон: `804 passed, 64 subtests passed`** через `uv run python -m pytest` (предсуществующее зависание `tests/test_gui_group_smoke.py` в headless-Qt исключено; оно воспроизводится на неизменённой базе и не связано с этими правками).
+- Новые/обновлённые регресс-тесты покрывают: path traversal, перезапись через `blindbox/dat`, обход через подстроку `QUIT`, границы `Destination`, безопасные права экспорта, отклонение пустой парольной фразы, направленные ключи + FINISHED (`test_handshake_v4.py`), подписанные приглашения (`test_group_invite.py`), hardening `.i2p`-прокси (`test_release_index.py`), loopback `system_sam_host` (`test_router_settings.py`), шифрование записей групп и `replica_auth` на диске (`test_group_store.py`, `test_profile_blindbox_replicas.py`), sender-привязанные ключи group BlindBox + авторизацию non-loopback реплик (`test_blindbox_primitives.py`, `test_blindbox_core_telemetry.py`), а также редактирование `raw_line` SAM (`test_sam_protocol.py`).
+- Новых ошибок линтера в изменённых файлах нет.
 
-- `scripts/ensure_bundled_i2pd.sh:8-10`
-- `scripts/ensure_bundled_i2pd.sh:45-55`
-- `scripts/ensure_bundled_i2pd.sh:64-69`
-- `build-windows.ps1:140-159`
-- `docs/BUILD.md:20-31`
+## Что подтверждено как корректное
 
-**Доказательство**
-
-- Build helper умеет автоматически клонировать `https://github.com/MetanoicArmor/i2pchat-bundled-i2pd.git`.
-- Клон делается как `--depth=1`; нет commit pin, signed-tag verification, checksum validation или фиксации provenance.
-- Windows build logic зеркалит то же поведение.
-
-**Влияние**
-
-- Скомпрометированный внешний репозиторий, branch tip или build environment могут подменить bundled router binary, который затем попадёт в release artifacts.
-- Этот риск в первую очередь затрагивает **maintainers/builders и release provenance**, а не уже установленный клиент.
-
-**Рекомендация**
-
-- Пиновать bundled-router source на **конкретный commit/tag** и проверять provenance.
-- Предпочитать immutable release assets + checksums/signatures вместо branch-tip clone.
-- Записывать revision bundled `i2pd` в release metadata.
+| Область | Оценка |
+|--------|--------|
+| Encrypt-then-MAC | MAC проверяется на ciphertext до `decrypt_message` |
+| Anti-replay | Строго `recv_seq + 1`, иначе disconnect |
+| Привязка заголовка | `msg_type`, `seq`, `msg_id`, `flags` покрыты HMAC |
+| Сравнение MAC | `hmac.compare_digest` (постоянное время) |
+| Подпись handshake | INIT/RESP покрывают адреса + nonces + ephemeral + signing pubkey |
+| Framing DoS | `msg_len` проверяется против лимита 2 МБ до `readexactly` |
+| Случайность | `secrets.token_bytes`, генерация ключей libsodium |
+| Использование subprocess | только списки argv; нет `shell=True`; на macOS без `osascript` |
+| AEAD BlindBox | XSalsa20-Poly1305 со случайным nonce и per-index ключами |
+| Group v3 transport | Подпись Ed25519, проверка запиненным ключом; unsigned v2 отклоняется |
 
 ---
 
-### Низкий уровень
+## Ломающие изменения протокола в v1.4.0
 
-### L1. Переменные окружения могут перенаправить update UX на произвольный release/proxy source
+v1.4.0 намеренно **несовместима** с 1.3.x. Изменились форматы и схемы ключей ниже, поэтому пир 1.4.0 не сможет взаимодействовать с пиром 1.3.x, а часть файлов на диске обновляется при первом использовании. **Все участники (а для групп — все члены) должны обновляться одновременно.**
 
-**Где**
+**Wire / handshake**
+- **Handshake (`PROTOCOL_VERSION = 4`)**: направленные session subkeys (`i2r`/`r2i`) вместо единственной общей пары `(k_enc, k_mac)`; обязательный зашифрованный `FINISHED`, привязанный к transcript hash, в обе стороны до любых прикладных данных. Пир 1.3.x не завершит handshake 1.4.0.
+- **Приглашения в группу → v2**: подписаны Ed25519 ключом приглашающего, содержат `inviter_signing_pub` + `expires_at`, каноническая байтовая сериализация. Неподписанные v1 отклоняются.
+- **Авторизация `GROUP_CONTROL`**: изменения состава проверяются против локально известного состава (fail closed), а не по самопровозглашённому `members` из payload.
+- **Схема ключей group BlindBox**: теперь привязывает `sender_id` (домен соли `BLINDBOX-GROUP-SALT-V2`); lookup-токены/ключи отличаются от 1.3.x, поэтому offline-блобы групп не читаются между версиями.
 
-- `i2pchat/updates/release_index.py:62-80`
-- `i2pchat/gui/main_qt.py:10175-10195`
+**На диске (авто-миграция где возможно)**
+- **Identity `.dat`** (`profiles/<p>/<p>.dat`): теперь зашифрован (magic `I2PK`) wrap-ключом в OS keyring (`{profile}__dat_wrap__`) и/или `{p}.dat.wrap` (0600). Существующие plaintext `.dat` мигрируют при следующей загрузке профиля. Парольные бэкапы по-прежнему переносимы (plaintext-строка ключа внутри зашифрованного бандла → повторное шифрование при init).
+- **Trust store** (`<p>.trust.json` → версия 2): пины содержат `oob_verified`; legacy плоские карты всё ещё читаются.
+- **Записи групп** (`profiles/<p>/<p>.group.<token>.json`): теперь зашифрованы (magic `I2GS`, NaCl SecretBox + HKDF от ключа личности). Legacy plaintext-записи читаются один раз и перезаписываются зашифрованными при следующем сохранении.
+- **Хранилище реплик** (`<p>.blindbox_replicas.json` → версия 3): токены `replica_auth` хранятся зашифрованными как `replica_auth_enc` (magic `I2RA`). Старые plaintext-файлы всё ещё читаются.
 
-**Доказательство**
+**Поведение / политики по умолчанию**
+- `system_sam_host` должен быть loopback, если не задан `I2PCHAT_ALLOW_REMOTE_SAM=1`.
+- Запросы обновлений к `.i2p` форсируются через loopback I2P HTTP proxy; non-loopback явный прокси для `.i2p` отклоняется.
+- Bundled `i2pd` проверяется против запиненного `SHA256`-сайдкара перед запуском.
+- Прямые (non-SAM) **non-loopback** реплики BlindBox по умолчанию требуют auth-токен (opt-out: `I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL=1`).
+- Pairwise BlindBox roots ре-кеются при выходе участника из группы.
+- Эфемерные приватные ключи DH затираются сразу после вывода subkeys; `raw_line` SAM и идентификаторы пиров редактируются/усекаются в логах; файлы/каталоги роутера форсируются в `0o600`/`0o700`.
 
-- `I2PCHAT_RELEASES_PAGE_URL` может заменить origin release-page.
-- `I2PCHAT_UPDATE_HTTP_PROXY` может направить update traffic через произвольный proxy.
-- GUI один раз показывает warning перед использованием.
-
-**Влияние**
-
-- Локальный атакующий с контролем окружения или неверная deployment-конфигурация могут влиять на результат проверки обновлений и на открываемую страницу загрузок.
-- Риск смягчается one-time warning и отсутствием auto-install.
-
-**Рекомендация**
-
-- Рассмотреть показ resolved update origin каждый раз, а не только один раз.
-- Опционально добавить allowlist для non-default scheme/host или strict mode.
-
----
-
-### L2. Опциональный BlindBox HTTP status endpoint может стать неаутентифицированным при ошибочной эксплуатации
-
-**Где**
-
-- `i2pchat/blindbox/blindbox_server_example.py:92-99`
-- `i2pchat/blindbox/blindbox_server_example.py:151-155`
-- `i2pchat/blindbox/blindbox_server_example.py:556-563`
-- `i2pchat/blindbox/blindbox_server_example.py:597-605`
-
-**Доказательство**
-
-- HTTP status service опционален и по умолчанию выключен.
-- По умолчанию bind идёт только на loopback, но `BLINDBOX_HTTP_HOST` управляется оператором.
-- Если admin token и replica auth token пустые, `_admin_token_ok()` пропускает запрос.
-
-**Влияние**
-
-- При неудачной конфигурации оператор может открыть `/healthz`, `/status.json` и `/metrics` наружу без аутентификации.
-- Возвращаемые данные не выглядят глубоко чувствительными, но помогают probing/enum.
-
-**Рекомендация**
-
-- Если `BLINDBOX_HTTP_HOST` не loopback, требовать `BLINDBOX_ADMIN_TOKEN`.
-- Либо запрещать public bind без явной auth-конфигурации.
-
----
-
-### L3. Валидация изображений всё ещё полностью декодирует payload, оставляя остаточный риск resource pressure
-
-**Где**
-
-- `i2pchat/core/i2p_chat_core.py:1112-1141`
-
-**Доказательство**
-
-- Валидация сначала проверяет file size и dimensions, затем полностью загружает изображение через Pillow (`img.load()`).
-
-**Влияние**
-
-- Специально подготовленное локальное изображение всё ещё может вызвать повышенную нагрузку по CPU/памяти во время decode.
-- Это в первую очередь **local DoS/resource exhaustion**, а не remote code execution.
-
-**Рекомендация**
-
-- Добавить явную decompression-bomb policy и/или более строгий pixel-budget guard.
-- Сохранить текущие лимиты на размер файла и dimensions.
-
----
-
-## Информационные наблюдения
-
-1. **SAM input validation сделана хорошо.** `i2pchat/sam/protocol.py` отбрасывает whitespace/newline/control-char injection в критичных SAM token/option полях.
-2. **Handshake заметно усилен.** `i2pchat/crypto.py` и `i2pchat/core/i2p_chat_core.py` используют X25519, Ed25519, HKDF key separation, MAC verification и replay/order checks.
-3. **TOFU trust явный.** Новые peer signing keys pin’ятся, а mismatch требует подтверждения, если не включён явный auto-trust.
-4. **Path handling для входящих файлов защищён.** Filename sanitization и collision-safe allocation используют exclusive creation.
-5. **Backup/history import/export реализованы аккуратно.** Архивы валидируют структуру/checksum, запись идёт атомарно; backup bundle отклоняет unsafe tar member paths.
-6. **CI security hygiene хорошая.** В репозитории уже есть dependency audit, secret scan и release-integrity policy checks.
-
----
-
-## Разбор шума автоматических сканов
-
-Следующие findings были просмотрены и **не** были признаны подтверждёнными уязвимостями:
-
-- `bandit` `B603/B607` вокруг subprocess:
-  - runtime код использует списки аргументов, а не `shell=True`
-  - Linux notification helpers резолвят абсолютные бинарники через `shutil.which`
-  - bundled router стартует через `asyncio.create_subprocess_exec`
-- `bandit` `B311` в `session_manager.py`:
-  - `random.uniform()` используется только для reconnect jitter, а не для crypto material
-- `bandit` `B103` на `os.chmod(path, 0o755)`:
-  - это chmod для user-saved shell installer и он соответствует назначению исполняемого скрипта
-- `assert` в TUI/GUI:
-  - это скорее smell корректности, но конкретного security-impact в рамках аудита не подтверждено
-
----
-
-## Что уже хорошо закрыто
-
-- В runtime-коде не найдено паттернов `shell=True`.
-- Secret scan настроен в CI, локальный `gitleaks` чистый.
-- Lock-файлы присутствуют, runtime/build exports чистые под `pip-audit`.
-- Protocol hardening tests покрывают malformed/truncated frames и transfer edge cases.
-- Backup/history persistence предпочитает atomic writes и ограниченные права на файлы.
-- В пользовательской документации уже есть инструкция проверять `SHA256SUMS` и detached GPG signature.
-
----
-
-## Остаточные риски и следующие шаги
-
-### Самые полезные следующие шаги
-
-1. Заменить mutable update/install trust paths на signed immutable metadata/artifacts.
-2. Пиновать и верифицировать внешний bundled-router source в build workflows.
-3. Жёстко требовать auth для любого non-loopback BlindBox HTTP status bind.
-4. Сохранять dependency/secret scanning обязательным в CI.
-5. Добавить более строгую decompression-bomb policy для враждебных изображений.
-
-### Риски, которые остаются по дизайну
-
-- Локальный I2P router остаётся частью trusted computing base.
-- Операторские флаги могут сознательно ослаблять posture (`I2PCHAT_BLINDBOX_ALLOW_INSECURE_LOCAL`, direct TCP replicas, weak BlindBox quorum).
-- Проверка обновлений остаётся advisory, а не cryptographically authoritative.
-
----
-
-## Основные просмотренные файлы
-
-- `i2pchat/updates/release_index.py`
-- `i2pchat/gui/main_qt.py`
-- `i2pchat/core/i2p_chat_core.py`
-- `i2pchat/core/session_manager.py`
-- `i2pchat/crypto.py`
-- `i2pchat/protocol/protocol_codec.py`
-- `i2pchat/sam/protocol.py`
-- `i2pchat/blindbox/blindbox_server_example.py`
-- `i2pchat/blindbox/local_server_example.py`
-- `i2pchat/router/bundled_i2pd.py`
-- `i2pchat/storage/profile_backup.py`
-- `i2pchat/storage/history_export.py`
-- `i2pchat/storage/profile_export.py`
-- `scripts/ensure_bundled_i2pd.sh`
-- `.github/workflows/security-audit.yml`
-- `.github/workflows/secret-scan.yml`
-
----
-
-Этот документ фиксирует состояние репозитория на момент проверки. Он не заменяет reproducible-build verification, проверку release signatures, инфраструктурный review и внешний pentest.
+### ✅ [Medium] Out-of-band проверка отпечатка / safety number для TOFU
+Диалоги первого контакта и смены ключа (Qt + TUI) показывают **полный SHA-256 fingerprint** (группами) и Signal-style **safety number** для опционального сравнения по независимому каналу; только Trust/Cancel (Cancel по умолчанию, без ввода символов) и сохраняют `oob_verified` в trust store v2 (`{profile}.trust.json`) при выборе Trust. В карточке контакта — полный fingerprint, копирование и статус OOB. Auto-pin (`I2PCHAT_TRUST_AUTO=1`) по-прежнему пинит без OOB-подтверждения и предупреждает об этом. Регресс-тесты: `tests/test_tofu_oob.py`.

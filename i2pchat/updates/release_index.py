@@ -8,6 +8,7 @@ HTTP к *.i2p: если в окружении нет http_proxy/HTTP_PROXY (и �
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import platform
 import re
@@ -16,6 +17,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Callable, Optional
+from urllib.parse import urlparse
 
 DEFAULT_RELEASES_PAGE_URL = (
     "http://i2pchatsfjisxgbfpjqg52qfv4unspxgcizvvh7mfirn2uzj2udq.b32.i2p/"
@@ -35,44 +37,85 @@ _DEFAULT_I2P_HTTP_PROXY = "http://127.0.0.1:4444"
 
 
 def _url_is_i2p_host(url: str) -> bool:
-    return ".i2p" in url.lower()
+    host = (urlparse(url).hostname or "").lower()
+    return host.endswith(".i2p")
+
+
+def _is_loopback_proxy(proxy_url: str) -> bool:
+    """True only if the proxy points at a loopback address (local I2P proxy)."""
+    host = (urlparse(proxy_url).hostname or "").strip().lower()
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _configured_http_proxy_url() -> str:
+    """The HTTP proxy configured via environment / system settings, if any."""
+    proxies = urllib.request.getproxies()
+    candidate = proxies.get("http") or proxies.get("https") or ""
+    if candidate:
+        return candidate
+    for key in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        value = (os.environ.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _env_http_proxy_explicit() -> bool:
-    if urllib.request.getproxies().get("http") or urllib.request.getproxies().get("https"):
-        return True
-    for key in (
-        "HTTP_PROXY",
-        "http_proxy",
-        "ALL_PROXY",
-        "all_proxy",
-    ):
-        if (os.environ.get(key) or "").strip():
-            return True
-    return False
+    return bool(_configured_http_proxy_url())
 
 
 def _opener_for_update_fetch(
     url: str, *, proxy_url: Optional[str] = None
 ) -> Callable[..., object]:
+    """Select a URL opener, keeping ``.i2p`` update checks off the clearnet.
+
+    For ``.i2p`` hosts the request MUST go through an I2P HTTP proxy on
+    loopback. A clearnet system/env proxy (or direct connection with clearnet
+    DNS) would leak the ``.i2p`` lookup and the fact that this host runs
+    I2PChat, so such proxies are ignored and the default local I2P proxy
+    (127.0.0.1:4444) is used instead. Only an explicit
+    ``I2PCHAT_UPDATE_HTTP_PROXY`` (or ``proxy_url``) can override this, and for
+    ``.i2p`` it must itself be a loopback proxy.
     """
-    Для *.i2p без явного прокси в окружении — HTTP через 127.0.0.1:4444.
-    ``I2PCHAT_UPDATE_HTTP_PROXY`` задаёт URL прокси; пусто/0/none/off/direct — как urllib без доп. прокси.
-    """
-    raw = proxy_url if proxy_url is not None else (os.environ.get("I2PCHAT_UPDATE_HTTP_PROXY") or "").strip()
+    raw = (
+        proxy_url
+        if proxy_url is not None
+        else (os.environ.get("I2PCHAT_UPDATE_HTTP_PROXY") or "").strip()
+    )
     low = raw.lower()
+    is_i2p = _url_is_i2p_host(url)
+
     if low in ("0", "none", "off", "direct", "false"):
+        # Explicit opt-out of proxying. For clearnet URLs this is fine; for
+        # .i2p it means "no proxy" (the caller has taken responsibility, e.g. a
+        # transparent I2P setup) — we honor the explicit request.
         return urllib.request.urlopen
     if raw:
+        if is_i2p and not _is_loopback_proxy(raw):
+            raise ValueError(
+                "Refusing to fetch a .i2p update page through a non-loopback "
+                "proxy (would leak the lookup to the clearnet). Point "
+                "I2PCHAT_UPDATE_HTTP_PROXY at your local I2P HTTP proxy."
+            )
         handler = urllib.request.ProxyHandler({"http": raw, "https": raw})
         return urllib.request.build_opener(handler).open
-    if not _url_is_i2p_host(url):
+
+    if not is_i2p:
         return urllib.request.urlopen
-    if _env_http_proxy_explicit():
-        return urllib.request.urlopen
-    handler = urllib.request.ProxyHandler(
-        {"http": _DEFAULT_I2P_HTTP_PROXY, "https": _DEFAULT_I2P_HTTP_PROXY}
-    )
+
+    # .i2p with no explicit override: only honor a *loopback* system/env proxy
+    # (a local I2P proxy); otherwise force the default local I2P proxy so a
+    # clearnet system proxy can never see the .i2p request.
+    configured = _configured_http_proxy_url()
+    proxy = configured if configured and _is_loopback_proxy(configured) else _DEFAULT_I2P_HTTP_PROXY
+    handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
     return urllib.request.build_opener(handler).open
 
 

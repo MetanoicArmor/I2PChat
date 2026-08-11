@@ -47,6 +47,41 @@ def _make_entries(n: int, prefix: str = "msg") -> list[HistoryEntry]:
 
 
 @unittest.skipUnless(crypto.NACL_AVAILABLE, "PyNaCl required")
+class SecurityHardeningTests(unittest.TestCase):
+    def test_export_rejects_empty_password(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            save_history(td, "alice", PEER_A, _make_entries(1), IDENTITY_KEY)
+            archive = os.path.join(td, "export.i2hx")
+            with self.assertRaises(ValueError):
+                export_history("alice", IDENTITY_KEY, [PEER_A], "", archive, td)
+
+    def test_export_file_is_not_world_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            save_history(td, "alice", PEER_A, _make_entries(1), IDENTITY_KEY)
+            archive = os.path.join(td, "export.i2hx")
+            export_history("alice", IDENTITY_KEY, [PEER_A], PASSWORD, archive, td)
+            mode = os.stat(archive).st_mode & 0o777
+            self.assertEqual(mode & 0o077, 0, oct(mode))
+
+    def test_import_rejects_path_traversal_profile_name(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            save_history(td, "alice", PEER_A, _make_entries(1), IDENTITY_KEY)
+            archive = os.path.join(td, "export.i2hx")
+            export_history("alice", IDENTITY_KEY, [PEER_A], PASSWORD, archive, td)
+            with tempfile.TemporaryDirectory() as td2:
+                for bad in ("../escaped", "/tmp/evil", "a/b", ".."):
+                    with self.assertRaises(ValueError):
+                        import_history(
+                            archive,
+                            PASSWORD,
+                            IDENTITY_KEY,
+                            td2,
+                            CONFLICT_REPLACE,
+                            profile_name=bad,
+                        )
+
+
+@unittest.skipUnless(crypto.NACL_AVAILABLE, "PyNaCl required")
 class ExportRoundTripTests(unittest.TestCase):
     def test_export_import_roundtrip_replace(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -71,8 +71,11 @@ def show_notification(title: str, message: str) -> None:
             # Linux: вызываем helper только по абсолютному пути.
             notify_send_path = shutil.which("notify-send")
             if notify_send_path:
+                # "--" stops option parsing so message text starting with "-"
+                # (e.g. a chat message "-u critical ...") can't be interpreted
+                # as notify-send flags.
                 subprocess.run(
-                    [notify_send_path, title, message],
+                    [notify_send_path, "--", title, message],
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,

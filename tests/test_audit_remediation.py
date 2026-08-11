@@ -19,10 +19,9 @@ class AuditRemediationPolicyTests(unittest.TestCase):
         self.assertIn("def derive_handshake_subkeys(", crypto_content)
         self.assertIn("hkdf_extract(", crypto_content)
         self.assertIn("hkdf_expand(", crypto_content)
-        self.assertIn(
-            "sess.shared_key, sess.shared_mac_key = self._compute_session_subkeys(",
-            core_content,
-        )
+        # Protocol v4: directional subkeys installed via a dedicated helper.
+        self.assertIn("def _install_session_keys(", core_content)
+        self.assertIn("self._install_session_keys(sess, is_initiator=", core_content)
 
     def test_padding_profile_balanced_is_default(self) -> None:
         content = _read("i2pchat/core/i2p_chat_core.py")
@@ -131,7 +130,8 @@ class AuditRemediationPolicyTests(unittest.TestCase):
         self.assertIn("linux_cmds.append([aplay_path, self.notify_sound_path])", gui_content)
 
         self.assertIn('notify_send_path = shutil.which("notify-send")', notif_content)
-        self.assertIn("[notify_send_path, title, message]", notif_content)
+        # "--" stops option parsing so message text can't inject notify-send flags.
+        self.assertIn('[notify_send_path, "--", title, message]', notif_content)
 
 
 if __name__ == "__main__":

@@ -178,13 +178,16 @@ class BlindBoxClient:
     def _log_box_failure(self, op: str, box_addr: str, err: Exception) -> None:
         now = time.monotonic()
         key = f"{op}|{box_addr}|{type(err).__name__}|{err!s}"
+        # Only a short prefix of the box address goes to logs; full destinations
+        # are identifying metadata and must not persist in plaintext logs.
+        addr_hint = f"{box_addr[:16]}…" if box_addr else box_addr
         if now < self._box_warn_next.get(key, 0):
             logger.debug(
-                "Blind Box %s failed (%s) (suppressed): %s", op, box_addr, err
+                "Blind Box %s failed (%s) (suppressed): %s", op, addr_hint, err
             )
             return
         self._box_warn_next[key] = now + 90.0
-        logger.warning("Blind Box %s failed (%s): %s", op, box_addr, err)
+        logger.warning("Blind Box %s failed (%s): %s", op, addr_hint, err)
 
     async def start(self) -> None:
         if self._started:

@@ -41,6 +41,7 @@ class GroupBlindBoxMessageKeys:
     index: int
     group_epoch: int
     root_epoch: int
+    sender_id: str = ""
 
 
 def _normalize_peer_id(peer_id: str) -> str:
@@ -149,6 +150,7 @@ def derive_group_blindbox_message_keys(
     *,
     group_epoch: int,
     root_epoch: int,
+    sender_id: str,
 ) -> GroupBlindBoxMessageKeys:
     if not isinstance(root_secret, (bytes, bytearray)) or len(root_secret) < 16:
         raise ValueError("root_secret must be bytes and at least 16 bytes long")
@@ -161,16 +163,25 @@ def derive_group_blindbox_message_keys(
 
     normalized_group_id = _normalize_channel_id(group_id)
     normalized_direction = _normalize_group_direction(direction)
+    # v1.4.0: bind the sender identity into the schedule so each member owns a
+    # disjoint slot/keyspace on the shared group root. Without this, any member
+    # holding the root can squat another member's slots or forge blobs that
+    # look like they came from a different sender.
+    normalized_sender = _normalize_peer_id(sender_id)
     direction_label = f"GROUP_{normalized_direction.upper()}"
     index_bytes = int(index).to_bytes(8, "big", signed=False)
 
     salt = hashlib.sha256(
-        b"BLINDBOX-GROUP-SALT-V1|" + normalized_group_id.encode("utf-8")
+        b"BLINDBOX-GROUP-SALT-V2|"
+        + normalized_group_id.encode("utf-8")
+        + b"|"
+        + normalized_sender.encode("utf-8")
     ).digest()
     prk = crypto.hkdf_extract(salt, bytes(root_secret))
     context = b"|".join(
         [
             normalized_group_id.encode("utf-8"),
+            normalized_sender.encode("utf-8"),
             direction_label.encode("ascii"),
             index_bytes.hex().encode("ascii"),
             f"group_epoch={int(group_epoch)}".encode("ascii"),
@@ -196,4 +207,5 @@ def derive_group_blindbox_message_keys(
         index=index,
         group_epoch=int(group_epoch),
         root_epoch=int(root_epoch),
+        sender_id=normalized_sender,
     )

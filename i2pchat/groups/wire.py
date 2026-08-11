@@ -267,10 +267,16 @@ def _decode_group_transport_v3(payload: dict[str, Any]) -> DecodedGroupTransport
     )
 
 
+MAX_GROUP_TRANSPORT_BYTES = 512 * 1024
+
+
 def decode_group_transport_text(text: str) -> DecodedGroupTransportMessage | None:
     raw = str(text or "")
     if not raw.startswith(GROUP_TRANSPORT_PREFIX):
         return None
+    # Bound untrusted input before json.loads to avoid CPU/memory DoS.
+    if len(raw) > MAX_GROUP_TRANSPORT_BYTES:
+        raise ValueError("Group transport payload too large")
     payload = json.loads(raw[len(GROUP_TRANSPORT_PREFIX) :])
     if not isinstance(payload, dict):
         raise ValueError("Group transport payload must be a JSON object")

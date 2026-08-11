@@ -62,6 +62,7 @@ class BlindBoxKeyScheduleTests(unittest.TestCase):
             4,
             group_epoch=2,
             root_epoch=7,
+            sender_id="alice.b32.i2p",
         )
         second = derive_group_blindbox_message_keys(
             root_secret,
@@ -70,11 +71,36 @@ class BlindBoxKeyScheduleTests(unittest.TestCase):
             4,
             group_epoch=2,
             root_epoch=7,
+            sender_id="alice.b32.i2p",
         )
         self.assertEqual(first.lookup_token, second.lookup_token)
         self.assertEqual(first.lookup_key, second.lookup_key)
         self.assertEqual(first.blob_key, second.blob_key)
         self.assertEqual(first.state_tag, second.state_tag)
+
+    def test_group_message_keys_are_sender_bound(self) -> None:
+        root_secret = b"g" * 32
+        alice = derive_group_blindbox_message_keys(
+            root_secret,
+            "group-1",
+            "send",
+            4,
+            group_epoch=2,
+            root_epoch=7,
+            sender_id="alice.b32.i2p",
+        )
+        bob = derive_group_blindbox_message_keys(
+            root_secret,
+            "group-1",
+            "send",
+            4,
+            group_epoch=2,
+            root_epoch=7,
+            sender_id="bob.b32.i2p",
+        )
+        self.assertNotEqual(alice.lookup_token, bob.lookup_token)
+        self.assertNotEqual(alice.blob_key, bob.blob_key)
+        self.assertNotEqual(alice.state_tag, bob.state_tag)
 
     def test_group_epoch_changes_derived_material(self) -> None:
         root_secret = b"g" * 32
@@ -85,6 +111,7 @@ class BlindBoxKeyScheduleTests(unittest.TestCase):
             1,
             group_epoch=2,
             root_epoch=1,
+            sender_id="alice.b32.i2p",
         )
         epoch3 = derive_group_blindbox_message_keys(
             root_secret,
@@ -93,6 +120,7 @@ class BlindBoxKeyScheduleTests(unittest.TestCase):
             1,
             group_epoch=3,
             root_epoch=1,
+            sender_id="alice.b32.i2p",
         )
         self.assertNotEqual(epoch2.lookup_token, epoch3.lookup_token)
         self.assertNotEqual(epoch2.blob_key, epoch3.blob_key)
@@ -107,6 +135,7 @@ class BlindBoxKeyScheduleTests(unittest.TestCase):
             1,
             group_epoch=2,
             root_epoch=1,
+            sender_id="alice.b32.i2p",
         )
         root2 = derive_group_blindbox_message_keys(
             root_secret,
@@ -115,6 +144,7 @@ class BlindBoxKeyScheduleTests(unittest.TestCase):
             1,
             group_epoch=2,
             root_epoch=2,
+            sender_id="alice.b32.i2p",
         )
         self.assertNotEqual(root1.lookup_token, root2.lookup_token)
         self.assertNotEqual(root1.blob_key, root2.blob_key)
@@ -173,6 +203,7 @@ class BlindBoxBlobTests(unittest.TestCase):
             9,
             group_epoch=5,
             root_epoch=2,
+            sender_id="alice.b32.i2p",
         )
         blob = encrypt_blindbox_blob(
             b"group-payload",

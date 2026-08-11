@@ -22,14 +22,6 @@ def generate_nonce() -> bytes:
     return secrets.token_bytes(NONCE_SIZE)
 
 
-def compute_shared_key(nonce_a: bytes, nonce_b: bytes) -> bytes:
-    """
-    Вычисляет общий ключ из двух nonce.
-    shared_key = SHA256(nonce_A || nonce_B)
-    """
-    return hashlib.sha256(nonce_a + nonce_b).digest()
-
-
 def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
     """
     HKDF-Extract (RFC 5869) with HMAC-SHA256.
@@ -64,19 +56,53 @@ def derive_handshake_subkeys(
     dh_shared: bytes,
     nonce_init: bytes,
     nonce_resp: bytes,
-) -> Tuple[bytes, bytes]:
+) -> Tuple[bytes, bytes, bytes, bytes]:
     """
-    Деривация session subkeys для шифрования и MAC:
-    - k_enc (32)
-    - k_mac (32)
+    Деривация направленных session subkeys (protocol v4 / HS4).
+
+    Возвращает четыре независимых 32-байтных ключа:
+    - k_enc_i2r, k_mac_i2r — трафик initiator → responder
+    - k_enc_r2i, k_mac_r2i — трафик responder → initiator
+
+    Направленное разделение ключей исключает reflection-атаку: кадр,
+    отражённый обратно отправителю, проверяется ключом противоположного
+    направления и не проходит MAC. Это НЕСОВМЕСТИМО с HS3 (v1.3.x): домены
+    и число ключей изменены.
     """
     salt = hashlib.sha256(
-        b"I2PCHAT-HS3-SALT|" + nonce_init + nonce_resp
+        b"I2PCHAT-HS4-SALT|" + nonce_init + nonce_resp
     ).digest()
     prk = hkdf_extract(salt, dh_shared)
-    k_enc = hkdf_expand(prk, b"I2PCHAT-HS3|key|enc", 32)
-    k_mac = hkdf_expand(prk, b"I2PCHAT-HS3|key|mac", 32)
-    return k_enc, k_mac
+    k_enc_i2r = hkdf_expand(prk, b"I2PCHAT-HS4|key|enc|i2r", 32)
+    k_mac_i2r = hkdf_expand(prk, b"I2PCHAT-HS4|key|mac|i2r", 32)
+    k_enc_r2i = hkdf_expand(prk, b"I2PCHAT-HS4|key|enc|r2i", 32)
+    k_mac_r2i = hkdf_expand(prk, b"I2PCHAT-HS4|key|mac|r2i", 32)
+    return k_enc_i2r, k_mac_i2r, k_enc_r2i, k_mac_r2i
+
+
+def compute_handshake_transcript_hash(resp_sig_payload: bytes) -> bytes:
+    """
+    Хэш транскрипта handshake для key confirmation (FINISHED).
+
+    ``resp_sig_payload`` уже включает оба адреса, оба nonce, оба ephemeral
+    и оба signing pubkey, т.е. является полным транскриптом обмена.
+    """
+    return hashlib.sha256(b"I2PCHAT-HS4-TRANSCRIPT|" + resp_sig_payload).digest()
+
+
+def compute_handshake_finished(mac_key: bytes, transcript_hash: bytes) -> bytes:
+    """HMAC-SHA256 подтверждения ключей (FINISHED) над transcript hash."""
+    return hmac.new(
+        mac_key, b"I2PCHAT-HS4|FINISHED|" + transcript_hash, hashlib.sha256
+    ).digest()
+
+
+def verify_handshake_finished(
+    mac_key: bytes, transcript_hash: bytes, tag: bytes
+) -> bool:
+    """Проверяет FINISHED-подтверждение с защитой от timing attack."""
+    expected = compute_handshake_finished(mac_key, transcript_hash)
+    return hmac.compare_digest(expected, tag)
 
 
 def compute_mac(
@@ -214,9 +240,27 @@ try:
             
         Returns:
             32-байтный shared secret
+
+        Raises:
+            ValueError: если публичный ключ пира невалиден (неверная длина,
+            all-zero или low-order точка, дающая неконтрибутивный секрет).
         """
-        box = Box(PrivateKey(my_private), PublicKey(peer_public))
-        return bytes(box.shared_key())
+        if len(peer_public) != 32:
+            raise ValueError("peer public key must be 32 bytes")
+        # All-zero публичный ключ — тривиальная неконтрибутивная точка.
+        # Прочие low-order точки Curve25519 отвергаются самим libsodium
+        # (crypto_scalarmult возвращает ошибку для неконтрибутивного секрета);
+        # оборачиваем это в явный ValueError на границе.
+        if peer_public == bytes(32):
+            raise ValueError("peer public key is all-zero (invalid X25519 point)")
+        try:
+            box = Box(PrivateKey(my_private), PublicKey(peer_public))
+            shared = bytes(box.shared_key())
+        except Exception as exc:
+            raise ValueError(f"invalid X25519 public key: {exc}") from exc
+        if shared == bytes(32):
+            raise ValueError("X25519 produced an all-zero shared secret")
+        return shared
     
     def sign_data(signing_key: bytes, data: bytes) -> bytes:
         """
