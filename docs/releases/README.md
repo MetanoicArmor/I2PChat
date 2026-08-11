@@ -4,6 +4,7 @@ Versioned release write-ups for I2PChat live in this directory (`docs/releases/`
 
 | Version | Notes |
 |--------|--------|
+| **1.4.0** | [RELEASE_1.4.0.md](RELEASE_1.4.0.md) — handshake v4 (`FINISHED`), TOFU OOB fingerprints, live acceptor Send, system SAM fallback; **protocol-incompatible with 1.3.x** |
 | **1.3.3** | [RELEASE_1.3.3.md](RELEASE_1.3.3.md) — security hardening: authenticated group senders, signed Group BlindBox v3, downgrade protection, loopback-only bundled SAM, cryptography update; **copyable group invites** (`op=join`) |
 | **1.3.2** | [RELEASE_1.3.2.md](RELEASE_1.3.2.md) — UI polish: centered router action rows, emoji panel hover open/close, and Group map visual restyle (no protocol changes) |
 | **1.3.1** | [RELEASE_1.3.1.md](RELEASE_1.3.1.md) — **Intel macOS** bundled `i2pd` (`darwin-x64`); BlindBox runtime retry / group polish; **Nix** Qt + profile install; **icons** (`image.png`); GUI checkbox / group editor fixes |
