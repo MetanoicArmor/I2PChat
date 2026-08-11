@@ -1,13 +1,13 @@
 cask "i2pchat-tui" do
-  version "1.3.2"
+  version "1.4.0"
 
   on_arm do
-    sha256 "7f77fc9d2bb39ce2016663fe9251314d990d86a12b8a4709e12fe0485b0d9fdb"
+    sha256 "66380c09ec1d85120eb62fa9219bf5016da444b02117d8c7fb90d4f9de160abd"
 
     url "https://github.com/MetanoicArmor/I2PChat/releases/download/v#{version}/I2PChat-macOS-arm64-tui-v#{version}.zip"
   end
   on_intel do
-    sha256 "8d1ab5ca5ad15be658bed683ff605737ab6b4270921be5c2eb7fdf9c6cbd6090"
+    sha256 "ffae5d20bec1403b81cdf6c13391654d7cc72b5c4c2660e47bad37cdb222e4ed"
 
     url "https://github.com/MetanoicArmor/I2PChat/releases/download/v#{version}/I2PChat-macOS-x64-tui-v#{version}.zip"
   end
