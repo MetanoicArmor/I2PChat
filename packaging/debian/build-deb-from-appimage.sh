@@ -63,9 +63,18 @@ WORKDIR="$(mktemp -d)"
 cleanup() { rm -rf "$WORKDIR"; }
 trap cleanup EXIT
 
-echo "==> Downloading ${ZIP_URL}"
-curl_retry "$ZIP_URL" "$WORKDIR/${ZIP_NAME}" "$ZIP_ATTEMPTS"
-curl_retry "$ICON_URL" "$WORKDIR/icon.png" 12
+if [[ -f "${ROOT}/${ZIP_NAME}" ]]; then
+  echo "==> Using local ${ROOT}/${ZIP_NAME}"
+  cp "${ROOT}/${ZIP_NAME}" "$WORKDIR/${ZIP_NAME}"
+else
+  echo "==> Downloading ${ZIP_URL}"
+  curl_retry "$ZIP_URL" "$WORKDIR/${ZIP_NAME}" "$ZIP_ATTEMPTS"
+fi
+if [[ -f "${ROOT}/icon.png" ]]; then
+  cp "${ROOT}/icon.png" "$WORKDIR/icon.png"
+else
+  curl_retry "$ICON_URL" "$WORKDIR/icon.png" 12
+fi
 
 echo "==> Extracting GUI zip"
 unzip -q "$WORKDIR/${ZIP_NAME}" -d "$WORKDIR/stage"
