@@ -518,27 +518,25 @@ sudo apt install ./i2pchat_*_amd64.deb
 # optional TUI-only: sudo apt install ./i2pchat-tui_*_amd64.deb
 ```
 
-**Optional apt mirror** (GitHub Pages, **amd64** only): exists **only after** someone sets **`APT_REPO_GPG_PRIVATE_KEY`** and runs the publish workflow — see [`packaging/apt/README.md`](packaging/apt/README.md). **Until then,** `curl …/KEY.gpg` will **404**; use the `.deb` commands above.
-
-If a mirror **is** live, add it with **deb822** (`.sources`):
+**Optional apt mirror** (GitHub Pages, **amd64** + **arm64**): [metanoicarmor.github.io/I2PChat-ng](https://metanoicarmor.github.io/I2PChat-ng/) — see [`packaging/apt/README.md`](packaging/apt/README.md). (Repo rename: old `…/I2PChat/` Pages path **404**; use **`I2PChat-ng`**.) Or install `.deb` from Releases above.
 
 ```bash
 sudo mkdir -p /etc/apt/keyrings
-curl -fsSL "https://metanoicarmor.github.io/I2PChat/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
+curl -fsSL "https://metanoicarmor.github.io/I2PChat-ng/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
 sudo tee /etc/apt/sources.list.d/i2pchat.sources >/dev/null <<'EOF'
 Types: deb
-URIs: https://metanoicarmor.github.io/I2PChat
+URIs: https://metanoicarmor.github.io/I2PChat-ng
 Suites: stable
 Components: main
 Signed-By: /etc/apt/keyrings/i2pchat.gpg
-Architectures: amd64
+Architectures: amd64 arm64
 EOF
 sudo apt update
 sudo apt install i2pchat i2pchat-tui   # pick one or both
 ```
 
 Legacy one-line:  
-`echo 'deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat stable main' | sudo tee /etc/apt/sources.list.d/i2pchat.list`
+`echo 'deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat-ng stable main' | sudo tee /etc/apt/sources.list.d/i2pchat.list`
 
 ### ℹ️ About
 

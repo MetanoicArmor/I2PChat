@@ -1,6 +1,6 @@
 # apt-зеркало в этом же репозитории (GitHub Pages)
 
-**Пока никто не настроил секреты и не выкатил сайт, зеркала нет:** пользователям нужны **`.deb` с GitHub Releases** (`sudo apt install ./…`). Ниже — инструкция **для будущего мейнтейнера** и готовые команды на тот случай, когда **`KEY.gpg`** уже отдаётся по URL.
+**Сейчас зеркало живо:** [https://metanoicarmor.github.io/I2PChat-ng/](https://metanoicarmor.github.io/I2PChat-ng/) (`KEY.gpg`, `dists/`, `pool/`). После rename репозитория старый URL **`https://metanoicarmor.github.io/I2PChat/`** отдаёт **404** (Pages не редиректит). Без зеркала пользователям нужны **`.deb` с GitHub Releases** (`sudo apt install ./…`). Ниже — инструкция мейнтейнера и команды установки.
 
 ## Что нужно для этого apt-зеркала (кроме мейнтейнера)
 
@@ -17,7 +17,7 @@
 | Те же версии **`i2pchat_X.Y.Z_arm64.deb`** и **`i2pchat-tui_X.Y.Z_arm64.deb`** (по желанию) | Если оба есть на релизе, **`build-apt-site.sh`** добавляет **`dists/stable/main/binary-arm64/`** и в **`Release`** указывает **Architectures: amd64 arm64**. Job **deb-arm64** в **Release Linux packages** загружает их параллельно; job **deb-amd64** ждёт появления arm64 на релизе (до ~12 мин) и при успехе собирает multi-arch зеркало. |
 | Linux **x86_64** GUI + TUI **zip** на том же релизе | Нужны **до** сборки amd64 `.deb` в CI (`I2PChat-linux-x86_64-v*.zip`, `…-tui-…`). Для arm64 — **aarch64** zip (`I2PChat-linux-aarch64-…`). GUI zip — с **AppImage** внутри (режим по умолчанию `build-linux.sh`) или **portable** onedir — скрипт **`packaging/debian/build-deb-from-appimage.sh`** поддерживает оба варианта. |
 
-После деплоя пользователи подключают apt к **`https://<owner>.github.io/<repo>/`** (для **`MetanoicArmor/I2PChat`**: `https://metanoicarmor.github.io/I2PChat/`). В корне зеркала лежит **`index.html`** — витрина с командами установки и ссылками на `KEY.gpg` / индексы.
+После деплоя пользователи подключают apt к **`https://<owner>.github.io/<repo>/`** (для **`MetanoicArmor/I2PChat-ng`**: `https://metanoicarmor.github.io/I2PChat-ng/`). Старый путь **`…/I2PChat/`** после rename репозитория **не редиректится** (404). В корне зеркала лежит **`index.html`** — витрина с командами установки и ссылками на `KEY.gpg` / индексы.
 
 Сайт публикуется через **GitHub Actions → Pages** (артефакт): в выдачу попадает полное дерево **`dists/`**, **`pool/main/*.deb`**, **`KEY.gpg`**, подписи. Так обходятся два ограничения:
 
@@ -75,7 +75,7 @@ sudo apt install i2pchat        # GUI (AppImage)
 sudo apt install i2pchat-tui    # только TUI (тот же источник apt)
 ```
 
-Для **MetanoicArmor/I2PChat** подставьте `https://metanoicarmor.github.io/I2PChat` в поле **`URIs`** (без завершающего `/`).
+Для **MetanoicArmor/I2PChat-ng** подставьте `https://metanoicarmor.github.io/I2PChat-ng` в поле **`URIs`** (без завершающего `/`).
 
 **Архитектуры:** если зеркало собрано только с amd64 (arm64 на релизе не было вовремя), укажите **`Architectures: amd64`** или опустите строку **`Architectures`** — иначе **apt** может ругаться на отсутствие **arm64** в индексе. Если в зеркале есть **`binary-arm64/`**, используйте **`amd64 arm64`** (или только ту архитектуру, на которой вы ставите пакет).
 

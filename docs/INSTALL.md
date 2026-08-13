@@ -56,16 +56,16 @@ Package pages: [i2pchat-bin](https://aur.archlinux.org/packages/i2pchat-bin), [i
 
 <img src="icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" /> **Optional `.deb` (Debian/Ubuntu):** some releases include **`i2pchat_<version>_amd64.deb`** / **`i2pchat-tui_<version>_amd64.deb`** and **`i2pchat_<version>_arm64.deb`** / **`i2pchat-tui_<version>_arm64.deb`**. Install with `sudo apt install ./i2pchat_*_<arch>.deb` (or download from the browser). If missing, use the Linux zips or build locally — [`packaging/debian/README.md`](../packaging/debian/README.md).
 
-<img src="icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" /> **apt mirror (Debian/Ubuntu, GitHub Pages)** is **not** guaranteed: it appears only after a maintainer configures **`APT_REPO_GPG_PRIVATE_KEY`** and deploys Pages via Actions — [`packaging/apt/README.md`](../packaging/apt/README.md). **Until then** use **`sudo apt install ./i2pchat_*_*.deb`** from Releases (see above).
+<img src="icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" /> **apt mirror (Debian/Ubuntu, GitHub Pages):** [metanoicarmor.github.io/I2PChat-ng](https://metanoicarmor.github.io/I2PChat-ng/) (signed; **amd64** + **arm64**). Details: [`packaging/apt/README.md`](../packaging/apt/README.md). Fallback without the mirror: **`sudo apt install ./i2pchat_*_*.deb`** from Releases (see above).
 
-**If** the mirror is published, add it with **deb822** (Debian 12+ / recent Ubuntu). Use **`Architectures: amd64 arm64`** when the mirror lists both architectures (see **`…/binary-arm64/Packages.gz`** on the site); if the mirror was built **amd64-only**, use **`Architectures: amd64`** or omit the line — [`packaging/apt/README.md`](../packaging/apt/README.md).
+Add the mirror with **deb822** (Debian 12+ / recent Ubuntu). Use **`Architectures: amd64 arm64`** when the mirror lists both architectures (see **`…/binary-arm64/Packages.gz`** on the site); if the mirror was built **amd64-only**, use **`Architectures: amd64`** or omit the line.
 
 ```bash
 sudo mkdir -p /etc/apt/keyrings
-curl -fsSL "https://metanoicarmor.github.io/I2PChat/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
+curl -fsSL "https://metanoicarmor.github.io/I2PChat-ng/KEY.gpg" | sudo gpg --dearmor -o /etc/apt/keyrings/i2pchat.gpg
 sudo tee /etc/apt/sources.list.d/i2pchat.sources >/dev/null <<'EOF'
 Types: deb
-URIs: https://metanoicarmor.github.io/I2PChat
+URIs: https://metanoicarmor.github.io/I2PChat-ng
 Suites: stable
 Components: main
 Signed-By: /etc/apt/keyrings/i2pchat.gpg
@@ -77,7 +77,7 @@ sudo apt install i2pchat        # GUI
 ```
 
 Legacy `sources.list` line:  
-`echo 'deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat/ stable main' | sudo tee /etc/apt/sources.list.d/i2pchat.list`
+`echo 'deb [signed-by=/etc/apt/keyrings/i2pchat.gpg] https://metanoicarmor.github.io/I2PChat-ng/ stable main' | sudo tee /etc/apt/sources.list.d/i2pchat.list`
 
 **glibc:** packages from the mirror are the same PyInstaller bundles as the `.deb` on Releases. If they were linked against **GLIBC_2.42**, distros with **older** glibc (e.g. **Ubuntu 24.04 ≈ 2.39**) can still report `GLIBC_2.42 not found` — install a build produced on an older baseline (see [Build Linux release artifacts](../.github/workflows/build-linux-release-artifacts.yml)) or use [Build from source](#build-from-source).
 
