@@ -94,6 +94,7 @@ from i2pchat.storage.profile_backup import (
 from i2pchat.groups import (
     GroupTopologySnapshot,
     build_observed_group_topology,
+    looks_like_group_invite,
     render_group_topology_ascii,
 )
 from i2pchat.groups.models import GroupState
@@ -2790,7 +2791,7 @@ class I2PChat(App):
                 self.post(
                     "error",
                     "Usage: /group join <invite…>  "
-                    "(paste the full __I2PCHAT_GROUP_INVITE__:… string)",
+                    "(paste the full copied invite token)",
                 )
                 return
             invite_text = " ".join(args[1:]).strip()
@@ -3000,13 +3001,13 @@ class TuiGroupsScreen(ModalScreen[None]):
                 invite_text = str(pyperclip.paste() or "").strip()
             except Exception:
                 invite_text = ""
-        if invite_text.startswith("__I2PCHAT_GROUP_INVITE__:"):
+        if looks_like_group_invite(invite_text):
             asyncio.create_task(self.host._execute_command(f"/group join {invite_text}"))
             self.dismiss(None)
             return
         self.host.post(
             "system",
-            "Copy an invite string first, then press J here, or use /group join <invite…>.",
+            "Copy an invite token first, then press J here, or use /group join <invite…>.",
         )
         self.dismiss(None)
 

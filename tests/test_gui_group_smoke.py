@@ -736,6 +736,56 @@ def test_active_group_control_refresh_updates_title_and_readable_text(
     assert _group_list_titles(window) == ["Renamed Study Group"]
 
 
+def test_groups_list_populates_once_identity_key_is_available(
+    qapp: QApplication,
+) -> None:
+    window = ChatWindow(profile="default", theme_id=THEME_DEFAULT)
+    created_at = datetime(2026, 4, 9, 12, 0, tzinfo=timezone.utc)
+    state = GroupState(
+        group_id="group-ilita",
+        epoch=1,
+        members=(LOCAL_MEMBER, PEER_A),
+        title="ILITA",
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    store = {
+        state.group_id: StoredGroupConversation(
+            state=state,
+            next_group_seq=1,
+            history=(),
+        )
+    }
+    identity_ready = {"value": False}
+
+    def _list_group_states() -> list[GroupState]:
+        if not identity_ready["value"]:
+            return []
+        return [conversation.state for conversation in store.values()]
+
+    window.core.list_group_states = _list_group_states  # type: ignore[method-assign]
+    window.core.load_group = lambda group_id: store.get(group_id)  # type: ignore[method-assign]
+    window.core.load_group_state = (  # type: ignore[method-assign]
+        lambda group_id: store[group_id].state if group_id in store else None
+    )
+    window.core.get_identity_key_bytes = lambda: None  # type: ignore[method-assign]
+    window._sidebar_identity_refresh_core_id = None
+
+    window._refresh_contacts_sidebar_list()
+    assert _group_list_titles(window) == []
+
+    window.handle_system("Loaded identity from secure keyring")
+    assert _group_list_titles(window) == []
+
+    identity_ready["value"] = True
+    window.core.get_identity_key_bytes = lambda: b"\x01" * 32  # type: ignore[method-assign]
+    window.handle_system("Starting I2P session, please wait…")
+    assert _group_list_titles(window) == ["ILITA"]
+
+    window.handle_system("Building I2P tunnels (may take 1-2 min)...")
+    assert _group_list_titles(window) == ["ILITA"]
+
+
 def test_switch_profile_resets_active_group_state_and_reloads_group_list(
     qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -43,7 +43,7 @@ from i2pchat.blindbox.local_server_example import (
     get_i2pd_blindbox_tunnel_example_source,
 )
 from i2pchat.presentation.compose_drafts import apply_compose_draft_peer_switch
-from i2pchat.groups import GroupTopologySnapshot
+from i2pchat.groups import GroupTopologySnapshot, looks_like_group_invite
 from i2pchat.groups.models import GroupState
 from i2pchat.presentation.group_conversations import (
     make_group_conversation_key,
@@ -984,9 +984,9 @@ THEMES: dict[str, dict[str, object]] = {
             QPushButton#ContactsSidebarToggle {
                 background-color: #f8f9fc;
                 border: none;
-                border-radius: 10px;
+                border-radius: 8px;
                 color: #525966;
-%(status_ui_font_family_qss)s                font-size: %(status_font_px)spx;
+%(status_ui_font_family_qss)s                font-size: 11px;
                 font-weight: normal;
                 min-width: %(contacts_toggle_btn_width_px)spx;
                 max-width: %(contacts_toggle_btn_width_px)spx;
@@ -1550,9 +1550,9 @@ THEMES: dict[str, dict[str, object]] = {
             QPushButton#ContactsSidebarToggle {
                 background-color: rgba(255, 255, 255, 0.06);
                 border: none;
-                border-radius: 10px;
+                border-radius: 8px;
                 color: #9fa1b5;
-%(status_ui_font_family_qss)s                font-size: %(status_font_px)spx;
+%(status_ui_font_family_qss)s                font-size: 11px;
                 font-weight: normal;
                 min-width: %(contacts_toggle_btn_width_px)spx;
                 max-width: %(contacts_toggle_btn_width_px)spx;
@@ -6385,8 +6385,8 @@ class ChatWindow(QtWidgets.QMainWindow):
     _CONTACTS_STRIP_EDGE_COLLAPSED_PX = 0
     # Развёрнуто: половина grid слева от ◀ и как левый inset колонки чата (визуально ровно по бокам ◀).
     _CONTACTS_STRIP_EDGE_EXPANDED_PX = _UI_GRID_PX // 2
-    # Ширина как у кнопки темы в строке статуса (квадрат _STATUS_ROW_HEIGHT_PX).
-    _CONTACTS_TOGGLE_BTN_WIDTH_PX = _STATUS_ROW_HEIGHT_PX
+    # Узкая вертикальная полоска ◀/▶ (не квадрат статус-бара).
+    _CONTACTS_TOGGLE_BTN_WIDTH_PX = 22
     # Ближе к шагу сетки, чем 3px — визуально ровнее зазор ◀↔чат.
     _CONTACTS_RESIZE_GRIP_WIDTH_PX = 4
     _CONTACTS_SIDEBAR_MIN_OPEN_PX = 160
@@ -6449,6 +6449,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._history_loaded_for_peer: Optional[str] = None
         self._loaded_group_history_id: Optional[str] = None
         self._active_group_id: Optional[str] = None
+        self._sidebar_identity_refresh_core_id: Optional[int] = None
         self._history_entries: list[HistoryEntry] = []
         self._history_dirty = False
         self._history_save_error_reported = False
@@ -7489,6 +7490,27 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _refresh_contacts_list(self) -> None:
         self._refresh_contacts_sidebar_list()
 
+    def _refresh_sidebar_once_identity_ready(self) -> None:
+        """Rebuild Groups after identity loads; encrypted records are unreadable before that."""
+        core = self.core
+        if core is None:
+            self._sidebar_identity_refresh_core_id = None
+            return
+        getter = getattr(core, "get_identity_key_bytes", None)
+        if not callable(getter):
+            return
+        try:
+            identity_key = getter()
+        except Exception:
+            return
+        if not identity_key:
+            return
+        core_id = id(core)
+        if self._sidebar_identity_refresh_core_id == core_id:
+            return
+        self._sidebar_identity_refresh_core_id = core_id
+        self._refresh_contacts_sidebar_list()
+
     def _set_active_group(self, group_id: str) -> bool:
         if self.core is None:
             return False
@@ -7978,15 +8000,16 @@ class ChatWindow(QtWidgets.QMainWindow):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
         help_label = QtWidgets.QLabel(
-            "Paste an invite string that starts with __I2PCHAT_GROUP_INVITE__:",
+            "Paste a copied group invite token. The string is opaque: "
+            "it does not show the group title or member addresses.",
             dialog,
         )
         help_label.setWordWrap(True)
         invite_edit = QtWidgets.QPlainTextEdit(dialog)
         invite_edit.setObjectName("GroupInvitePasteEdit")
-        invite_edit.setPlaceholderText("__I2PCHAT_GROUP_INVITE__:{…}")
+        invite_edit.setPlaceholderText("Paste invite token")
         clipboard_text = QtWidgets.QApplication.clipboard().text().strip()
-        if clipboard_text.startswith("__I2PCHAT_GROUP_INVITE__:"):
+        if looks_like_group_invite(clipboard_text):
             invite_edit.setPlainText(clipboard_text)
         layout.addWidget(help_label)
         layout.addWidget(invite_edit, 1)
@@ -9552,6 +9575,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._last_status = status
         self.refresh_status_label()
         self._refresh_connection_buttons()
+        self._refresh_sidebar_once_identity_ready()
 
     @QtCore.pyqtSlot(object)
     def handle_message(self, msg: ChatMessage) -> None:
@@ -9906,6 +9930,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                     or self.core.is_secure_live_for_peer(peer)
                 ):
                     self._focus_secure_live_peer_in_ui(peer)
+        self._refresh_sidebar_once_identity_ready()
         self.refresh_status_label()
         self._refresh_connection_buttons()
 
@@ -10542,10 +10567,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                 sam_address = await self._ensure_router_backend_ready()
                 self._active_sam_address = sam_address
                 self.core = self._create_core(self.profile, sam_address)
+                self._sidebar_identity_refresh_core_id = None
                 await self.core.init_session()
                 self._update_peer_lock_indicator()
                 self.refresh_status_label()
                 self._refresh_connection_buttons()
+                self._refresh_sidebar_once_identity_ready()
                 QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
                 self.handle_system("Bundled router restarted.")
             except Exception as e:
@@ -10608,10 +10635,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                 sam_address = await self._ensure_router_backend_ready()
                 self._active_sam_address = sam_address
                 self.core = self._create_core(self.profile, sam_address)
+                self._sidebar_identity_refresh_core_id = None
                 await self.core.init_session()
                 self._update_peer_lock_indicator()
                 self.refresh_status_label()
                 self._refresh_connection_buttons()
+                self._refresh_sidebar_once_identity_ready()
                 QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
                 self.handle_system(
                     f"I2P router backend applied: {self._router_settings.backend}"
@@ -10626,10 +10655,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                     sam_address = await self._ensure_router_backend_ready()
                     self._active_sam_address = sam_address
                     self.core = self._create_core(self.profile, sam_address)
+                    self._sidebar_identity_refresh_core_id = None
                     await self.core.init_session()
                     self._update_peer_lock_indicator()
                     self.refresh_status_label()
                     self._refresh_connection_buttons()
+                    self._refresh_sidebar_once_identity_ready()
                     QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
                 except Exception:
                     logger.exception("router settings rollback failed")
@@ -12863,6 +12894,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         sam_address = await self._ensure_router_backend_ready()
         self._active_sam_address = sam_address
         self.core = self._create_core(self.profile, sam_address)
+        self._sidebar_identity_refresh_core_id = None
         # До init_session() accept_loop не крутится; иначе handle_peer_changed во время
         # await внутри init_session сохранит в файл НОВОГО профиля ещё СТАРУЮ книгу в памяти.
         self._load_contacts_book()
@@ -13032,10 +13064,12 @@ class ChatWindow(QtWidgets.QMainWindow):
             sam_address = await self._ensure_router_backend_ready()
             self._active_sam_address = sam_address
             self.core = self._create_core(self.profile, sam_address)
+            self._sidebar_identity_refresh_core_id = None
             await self.core.init_session()
         except Exception as e:
             logger.exception("start_core failed")
             self.core = None
+            self._sidebar_identity_refresh_core_id = None
             err_msg = str(e).strip() or type(e).__name__
             QtCore.QTimer.singleShot(
                 0,
@@ -13044,6 +13078,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 ),
             )
             return
+        self._refresh_sidebar_once_identity_ready()
         QtCore.QTimer.singleShot(0, self._update_peer_lock_indicator)
         QtCore.QTimer.singleShot(0, self._refresh_offline_history_display)
 

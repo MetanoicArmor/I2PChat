@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import secrets
 from dataclasses import dataclass
@@ -16,6 +17,17 @@ GROUP_INVITE_PREFIX = "__I2PCHAT_GROUP_INVITE__:"
 GROUP_INVITE_VERSION = 2
 MAX_GROUP_INVITE_BYTES = 256 * 1024
 _INVITE_SIG_DOMAIN = b"I2PCHAT-GROUP-INVITE-v2"
+# Outer seal: random wrap key + SecretBox(JSON). The shareable string is
+# base64url with no stable prefix, so title/members/destinations are not
+# recognizable on sight. Anyone who has the full token can still decrypt it.
+_INVITE_WRAP_KEY_SIZE = 32
+_INVITE_WRAP_SALT = b"I2PCHAT-GROUP-INVITE-SEAL"
+_INVITE_WRAP_INFO = b"I2PCHAT-GROUP-INVITE-SEAL|v3"
+_INVITE_B64URL_ALPHABET = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+)
+# wrap_key(32) + SecretBox overhead (nonce 24 + mac 16) + tiny JSON.
+_MIN_SEALED_INVITE_BYTES = _INVITE_WRAP_KEY_SIZE + 24 + 16 + 16
 
 
 def _to_iso8601(value: datetime) -> str:
@@ -180,27 +192,82 @@ def encode_group_invite(invite: GroupInvite, signing_seed: bytes) -> str:
         "expires_at": expires_at,
         "signature": signature,
     }
-    return GROUP_INVITE_PREFIX + json.dumps(
-        payload, separators=(",", ":"), ensure_ascii=False
+    plaintext = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode(
+        "utf-8"
     )
+    return _seal_invite_plaintext(plaintext)
+
+
+def _derive_invite_wrap_key(wrap_key: bytes) -> bytes:
+    prk = crypto.hkdf_extract(_INVITE_WRAP_SALT, wrap_key)
+    return crypto.hkdf_expand(prk, _INVITE_WRAP_INFO, 32)
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(text: str) -> bytes:
+    compact = "".join((text or "").split())
+    pad = "=" * ((4 - len(compact) % 4) % 4)
+    try:
+        return base64.urlsafe_b64decode(compact + pad)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Invalid group invite encoding") from exc
+
+
+def _seal_invite_plaintext(plaintext: bytes) -> str:
+    if not crypto.NACL_AVAILABLE:
+        raise ValueError("PyNaCl is required to create a sealed group invite")
+    wrap_key = secrets.token_bytes(_INVITE_WRAP_KEY_SIZE)
+    file_key = _derive_invite_wrap_key(wrap_key)
+    ciphertext = crypto.encrypt_message(file_key, plaintext)
+    return _b64url_encode(wrap_key + ciphertext)
+
+
+def _unseal_invite_plaintext(token: str) -> bytes:
+    if not crypto.NACL_AVAILABLE:
+        raise ValueError("PyNaCl is required to open a sealed group invite")
+    compact = "".join((token or "").split())
+    if not compact or any(ch not in _INVITE_B64URL_ALPHABET for ch in compact):
+        raise ValueError("Not a group invite string")
+    raw = _b64url_decode(compact)
+    if len(raw) < _MIN_SEALED_INVITE_BYTES:
+        raise ValueError("Group invite payload too small")
+    wrap_key = raw[:_INVITE_WRAP_KEY_SIZE]
+    ciphertext = raw[_INVITE_WRAP_KEY_SIZE:]
+    plaintext = crypto.decrypt_message(_derive_invite_wrap_key(wrap_key), ciphertext)
+    if plaintext is None:
+        raise ValueError("Group invite decryption failed")
+    return plaintext
+
+
+def _load_invite_payload(text: str) -> dict[str, Any]:
+    raw = (text or "").strip()
+    if not raw:
+        raise ValueError("Empty group invite payload")
+    if len(raw) > MAX_GROUP_INVITE_BYTES:
+        raise ValueError("Group invite payload too large")
+    if raw.startswith(GROUP_INVITE_PREFIX):
+        body = raw[len(GROUP_INVITE_PREFIX) :].strip()
+        if not body:
+            raise ValueError("Empty group invite payload")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Invalid group invite JSON") from exc
+    else:
+        try:
+            payload = json.loads(_unseal_invite_plaintext(raw).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Invalid group invite payload") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Group invite payload must be an object")
+    return payload
 
 
 def decode_group_invite(text: str) -> GroupInvite:
-    raw = (text or "").strip()
-    if not raw.startswith(GROUP_INVITE_PREFIX):
-        raise ValueError("Not a group invite string")
-    # Bound untrusted input before json.loads to avoid CPU/memory DoS.
-    if len(raw) > MAX_GROUP_INVITE_BYTES:
-        raise ValueError("Group invite payload too large")
-    body = raw[len(GROUP_INVITE_PREFIX) :].strip()
-    if not body:
-        raise ValueError("Empty group invite payload")
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError as exc:
-        raise ValueError("Invalid group invite JSON") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("Group invite payload must be an object")
+    payload = _load_invite_payload(text)
 
     version = int(payload.get("v", 0))
     if version != GROUP_INVITE_VERSION:
@@ -298,4 +365,13 @@ def decode_group_invite(text: str) -> GroupInvite:
 
 
 def looks_like_group_invite(text: str) -> bool:
-    return (text or "").strip().startswith(GROUP_INVITE_PREFIX)
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if raw.startswith(GROUP_INVITE_PREFIX):
+        return True
+    try:
+        payload = _load_invite_payload(raw)
+    except ValueError:
+        return False
+    return bool(payload.get("invite_id") and payload.get("signature"))

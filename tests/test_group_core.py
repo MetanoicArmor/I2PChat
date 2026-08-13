@@ -1525,7 +1525,10 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 epoch=2,
             )
             invite_text = core.create_group_invite(group_state.group_id)
-            self.assertTrue(invite_text.startswith("__I2PCHAT_GROUP_INVITE__:"))
+            self.assertFalse(invite_text.startswith("__I2PCHAT_GROUP_INVITE__:"))
+            self.assertNotIn("Invite source", invite_text)
+            self.assertNotIn(BOB_BARE, invite_text)
+            self.assertNotIn("{", invite_text)
 
             core.my_dest = _DummyDest(CAROL_BARE)
             with self.assertRaises(ValueError):
@@ -1544,6 +1547,9 @@ class GroupCoreTests(unittest.IsolatedAsyncioTestCase):
                 epoch=1,
             )
             invite_text = alice.create_group_invite(group_state.group_id)
+            self.assertFalse(invite_text.startswith("__I2PCHAT_GROUP_INVITE__:"))
+            self.assertNotIn("Invite party", invite_text)
+            self.assertNotIn(BOB_BARE, invite_text)
 
             carol = I2PChatCore(profile="carol")
             carol.get_profile_data_dir = lambda create=True: carol_dir  # type: ignore[method-assign]

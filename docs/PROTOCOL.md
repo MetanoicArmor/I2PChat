@@ -379,13 +379,30 @@ manuals for user-visible requirements). User-facing behavior: [MANUAL_EN.md](MAN
 
 ### Group invites (out-of-band)
 
-Any current member can create a **copyable invite string** (same trust model as
-sharing a destination address). The invite is **not** a group transport frame;
-it uses a separate prefix so pasting into chat does not import it as a message:
+Any current member can create a **copyable invite token** (same trust model as
+sharing a destination address). The invite is **not** a group transport frame.
+
+New invites are an **opaque sealed blob**: the signed JSON roster snapshot is
+wrapped in a NaCl SecretBox whose random key is carried in the token, then
+encoded as unpadded base64url. The shareable string has no `__I2PCHAT_…`
+prefix and does not contain the group title, member destinations, or other
+metadata in plaintext. Anyone who possesses the full token can decrypt it;
+Ed25519 signature verification still binds the roster to the inviter's
+handshake signing key.
 
 ```text
-__I2PCHAT_GROUP_INVITE__:{"v":1,"invite_id":"...","group_id":"...","title":"...","members":["..."],"epoch":N,"inviter_id":"...","created_at":"..."}
+<base64url(wrap_key || SecretBox(JSON))>
 ```
+
+Inner JSON (after decrypt) remains signed invite v2:
+
+```json
+{"v":2,"invite_id":"...","group_id":"...","title":"...","members":["..."],"epoch":N,"inviter_id":"...","inviter_signing_pub":"...","created_at":"...","expires_at":null,"signature":"..."}
+```
+
+Legacy `__I2PCHAT_GROUP_INVITE__:` + plaintext JSON tokens are still accepted
+on redeem so older copied invites keep working; newly created invites are
+always sealed.
 
 Implementation: `i2pchat/groups/invite.py`, core APIs `create_group_invite` /
 `join_group_from_invite` in `i2pchat/core/i2p_chat_core.py`.

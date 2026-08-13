@@ -5,6 +5,8 @@ import pytest
 from i2pchat import crypto
 from i2pchat.groups.invite import (
     GROUP_INVITE_PREFIX,
+    _seal_invite_plaintext,
+    _unseal_invite_plaintext,
     build_group_invite,
     decode_group_invite,
     encode_group_invite,
@@ -33,7 +35,13 @@ def test_group_invite_round_trip() -> None:
         invite_id="deadbeef",
     )
     encoded = encode_group_invite(invite, seed)
-    assert encoded.startswith(GROUP_INVITE_PREFIX)
+    assert not encoded.startswith(GROUP_INVITE_PREFIX)
+    assert "{" not in encoded
+    assert "Weekend" not in encoded
+    assert ALICE not in encoded
+    assert BOB not in encoded
+    assert "group-abc" not in encoded
+    assert "inviter_id" not in encoded
     assert looks_like_group_invite(encoded) is True
 
     decoded = decode_group_invite(encoded)
@@ -47,6 +55,24 @@ def test_group_invite_round_trip() -> None:
     assert decoded.signature
 
 
+def test_group_invite_round_trip_ignores_wrapping_whitespace() -> None:
+    seed = _seed()
+    encoded = encode_group_invite(
+        build_group_invite(
+            group_id="g",
+            members=(ALICE,),
+            epoch=1,
+            inviter_id=ALICE,
+            title="ILITA",
+        ),
+        seed,
+    )
+    wrapped = "\n".join(encoded[i : i + 40] for i in range(0, len(encoded), 40))
+    decoded = decode_group_invite(wrapped)
+    assert decoded.title == "ILITA"
+    assert looks_like_group_invite(wrapped) is True
+
+
 def test_encode_requires_signing_seed() -> None:
     invite = build_group_invite(
         group_id="g", members=(ALICE,), epoch=0, inviter_id=ALICE
@@ -55,15 +81,28 @@ def test_encode_requires_signing_seed() -> None:
         encode_group_invite(invite, b"")
 
 
-def test_decode_rejects_tampered_members() -> None:
+def test_decode_rejects_tampered_sealed_blob() -> None:
     seed = _seed()
     encoded = encode_group_invite(
         build_group_invite(group_id="g", members=(ALICE, BOB), epoch=1, inviter_id=ALICE),
         seed,
     )
-    tampered = encoded.replace(BOB, CAROL)
+    flipped = encoded[:-1] + ("A" if encoded[-1] != "A" else "B")
+    with pytest.raises(ValueError, match="decryption failed|Invalid group invite"):
+        decode_group_invite(flipped)
+
+
+def test_decode_rejects_tampered_members_inside_seal() -> None:
+    seed = _seed()
+    encoded = encode_group_invite(
+        build_group_invite(group_id="g", members=(ALICE, BOB), epoch=1, inviter_id=ALICE),
+        seed,
+    )
+    inner = _unseal_invite_plaintext(encoded).decode("utf-8")
+    tampered_inner = inner.replace(BOB, CAROL).encode("utf-8")
+    resealed = _seal_invite_plaintext(tampered_inner)
     with pytest.raises(ValueError, match="signature verification failed"):
-        decode_group_invite(tampered)
+        decode_group_invite(resealed)
 
 
 def test_decode_rejects_v1_unsigned_invite() -> None:
@@ -77,6 +116,24 @@ def test_decode_rejects_v1_unsigned_invite() -> None:
         decode_group_invite(legacy)
 
 
+def test_decode_accepts_legacy_signed_v2_prefix_form() -> None:
+    seed = _seed()
+    invite = build_group_invite(
+        group_id="legacy-g",
+        members=(ALICE, BOB),
+        epoch=2,
+        inviter_id=ALICE,
+        title="Old",
+        invite_id="cafebabe",
+    )
+    sealed = encode_group_invite(invite, seed)
+    inner = _unseal_invite_plaintext(sealed).decode("utf-8")
+    legacy = GROUP_INVITE_PREFIX + inner
+    decoded = decode_group_invite(legacy)
+    assert decoded.title == "Old"
+    assert decoded.group_id == "legacy-g"
+
+
 def test_decode_group_invite_rejects_malformed() -> None:
     seed = _seed()
     with pytest.raises(ValueError, match="Not a group invite"):
@@ -85,18 +142,25 @@ def test_decode_group_invite_rejects_malformed() -> None:
         decode_group_invite(GROUP_INVITE_PREFIX)
     with pytest.raises(ValueError, match="Invalid group invite JSON"):
         decode_group_invite(GROUP_INVITE_PREFIX + "{not-json")
-    with pytest.raises(ValueError, match="group_id"):
-        decode_group_invite(
-            encode_group_invite(
-                build_group_invite(
-                    group_id="x",
-                    members=(ALICE,),
-                    epoch=0,
-                    inviter_id=ALICE,
-                ),
-                seed,
-            ).replace('"group_id":"x"', '"group_id":""')
+    inner = _unseal_invite_plaintext(
+        encode_group_invite(
+            build_group_invite(
+                group_id="x",
+                members=(ALICE,),
+                epoch=0,
+                inviter_id=ALICE,
+            ),
+            seed,
         )
+    ).decode("utf-8")
+    with pytest.raises(ValueError, match="group_id"):
+        decode_group_invite(_seal_invite_plaintext(inner.replace('"group_id":"x"', '"group_id":""').encode("utf-8")))
+
+
+def test_looks_like_group_invite_ignores_destinations() -> None:
+    assert looks_like_group_invite("") is False
+    assert looks_like_group_invite(ALICE) is False
+    assert looks_like_group_invite("hello world") is False
 
 
 def test_build_group_invite_ensures_inviter_in_members() -> None:
