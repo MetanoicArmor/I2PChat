@@ -2,6 +2,8 @@
 Encrypted-profile contact list (v2): MRU peers, display names, notes, last message preview.
 
 File: ``profiles/<profile>/<profile>.contacts.json`` (v2; migrates from v1 list-of-strings).
+At rest (v1.4.x+): NaCl SecretBox keyed off the profile identity, same model as
+group records. Legacy plaintext JSON is still read and re-encrypted on save.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from i2pchat.storage.blindbox_state import atomic_write_json
+from i2pchat.storage.sealed_json import read_sealed_json, write_sealed_json
 
 logger = logging.getLogger("i2pchat.contacts")
 
@@ -21,6 +23,8 @@ _CONTACT_HOST_RE = re.compile(r"^[a-z2-7]{40,80}$")
 MAX_CONTACTS = 500
 BOOK_VERSION = 2
 PREVIEW_MAX_LEN = 80
+CONTACTS_STORE_MAGIC = b"I2CB"
+CONTACTS_STORE_DOMAIN = b"I2PCHAT-CONTACTS"
 
 
 def normalize_peer_address(raw: str) -> Optional[str]:
@@ -158,19 +162,34 @@ def book_to_json_dict(book: ContactBook) -> dict[str, Any]:
     }
 
 
-def load_book(path: str) -> ContactBook:
+def load_book(path: str, *, identity_key: bytes | None = None) -> ContactBook:
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        data = read_sealed_json(
+            path,
+            identity_key=identity_key,
+            magic=CONTACTS_STORE_MAGIC,
+            domain=CONTACTS_STORE_DOMAIN,
+        )
+    except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
         return ContactBook()
     return parse_book_from_json(data)
 
 
-def save_book(path: str, book: ContactBook) -> None:
+def save_book(
+    path: str,
+    book: ContactBook,
+    *,
+    identity_key: bytes | None = None,
+) -> None:
     book = trim_book(book)
     try:
-        atomic_write_json(path, book_to_json_dict(book))
+        write_sealed_json(
+            path,
+            book_to_json_dict(book),
+            identity_key=identity_key,
+            magic=CONTACTS_STORE_MAGIC,
+            domain=CONTACTS_STORE_DOMAIN,
+        )
     except Exception:
         logger.debug("failed to save contact book", exc_info=True)
 

@@ -158,7 +158,14 @@ from .raster_emoji_render import (
     map_qt_pos_to_plain_offset,
     document_needs_raster_emoji_materialize,
 )
+from i2pchat.storage.compose_drafts_store import (
+    COMPOSE_DRAFTS_MAGIC,
+    load_compose_drafts,
+    save_compose_drafts,
+)
+from i2pchat.storage.sealed_json import is_sealed_json_file
 from i2pchat.storage.contact_book import (
+    CONTACTS_STORE_MAGIC,
     ContactBook,
     ContactRecord,
     load_book,
@@ -7203,8 +7210,24 @@ class ChatWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(0, self._balance_contacts_splitter_initial)
         QtCore.QTimer.singleShot(0, self._balance_compose_splitter_initial)
 
+    def _profile_identity_key(self) -> bytes | None:
+        core = self.core
+        if core is None:
+            return None
+        getter = getattr(core, "get_identity_key_bytes", None)
+        if not callable(getter):
+            return None
+        try:
+            key = getter()
+        except Exception:
+            return None
+        return key if isinstance(key, (bytes, bytearray)) and key else None
+
     def _load_contacts_book(self) -> None:
-        self._contact_book = load_book(_contacts_file_path_for_read(self.profile))
+        self._contact_book = load_book(
+            _contacts_file_path_for_read(self.profile),
+            identity_key=self._profile_identity_key(),
+        )
 
     def _reload_contacts_book_after_core_write(self) -> None:
         """Core persisted ``contacts.json`` (e.g. group member sync); refresh MRU list."""
@@ -7226,7 +7249,11 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._save_contacts_book()
 
     def _save_contacts_book(self) -> None:
-        save_book(_contacts_file_path_for_write(self.profile), self._contact_book)
+        save_book(
+            _contacts_file_path_for_write(self.profile),
+            self._contact_book,
+            identity_key=self._profile_identity_key(),
+        )
 
     def _resolved_peer_addr_for_actions(self) -> str:
         """Address for Connect / retries when the field is empty: session, last active, first saved."""
@@ -7491,7 +7518,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._refresh_contacts_sidebar_list()
 
     def _refresh_sidebar_once_identity_ready(self) -> None:
-        """Rebuild Groups after identity loads; encrypted records are unreadable before that."""
+        """Rebuild Groups, contacts, and drafts after identity loads; encrypted files are unreadable before that."""
         core = self.core
         if core is None:
             self._sidebar_identity_refresh_core_id = None
@@ -7509,6 +7536,23 @@ class ChatWindow(QtWidgets.QMainWindow):
         if self._sidebar_identity_refresh_core_id == core_id:
             return
         self._sidebar_identity_refresh_core_id = core_id
+        self._load_contacts_book()
+        self._ensure_stored_peer_in_contact_book()
+        contacts_path = _contacts_file_path_for_write(self.profile)
+        if not is_sealed_json_file(contacts_path, CONTACTS_STORE_MAGIC):
+            self._save_contacts_book()
+        self._merge_compose_drafts_from_disk()
+        draft_key = self._compose_draft_active_key
+        if draft_key:
+            restored = self._compose_drafts.get(draft_key, "")
+            current = self.input_edit.plainTextForSend()
+            if restored and not (current or "").strip():
+                self.input_edit.setPlainTextForCompose(restored)
+        drafts_path = _compose_drafts_file_path_for_write(self.profile)
+        if self._compose_drafts or not is_sealed_json_file(
+            drafts_path, COMPOSE_DRAFTS_MAGIC
+        ):
+            self._flush_compose_drafts_to_disk()
         self._refresh_contacts_sidebar_list()
 
     def _set_active_group(self, group_id: str) -> bool:
@@ -11673,33 +11717,30 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._compose_drafts[self._compose_draft_active_key] = self.input_edit.plainTextForSend()
 
     def _load_compose_drafts_from_disk(self) -> None:
-        self._compose_drafts = {}
-        path = _compose_drafts_file_path_for_read(self.profile)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            return
-        if not isinstance(data, dict):
-            return
-        raw = data.get("drafts")
-        if not isinstance(raw, dict):
-            return
-        for k, v in raw.items():
-            if isinstance(k, str) and isinstance(v, str):
-                self._compose_drafts[k] = v
+        self._compose_drafts = load_compose_drafts(
+            _compose_drafts_file_path_for_read(self.profile),
+            identity_key=self._profile_identity_key(),
+        )
+
+    def _merge_compose_drafts_from_disk(self) -> None:
+        disk = load_compose_drafts(
+            _compose_drafts_file_path_for_read(self.profile),
+            identity_key=self._profile_identity_key(),
+        )
+        for key, value in disk.items():
+            current = self._compose_drafts.get(key, "")
+            if key not in self._compose_drafts or not str(current).strip():
+                self._compose_drafts[key] = value
 
     def _flush_compose_drafts_to_disk(self) -> None:
         self._merge_active_input_into_compose_drafts()
         while len(self._compose_drafts) > COMPOSE_DRAFTS_MAX_KEYS:
             del self._compose_drafts[next(iter(self._compose_drafts))]
-        try:
-            atomic_write_json(
-                _compose_drafts_file_path_for_write(self.profile),
-                {"version": 1, "drafts": dict(self._compose_drafts)},
-            )
-        except Exception:
-            logger.debug("failed to save compose drafts", exc_info=True)
+        save_compose_drafts(
+            _compose_drafts_file_path_for_write(self.profile),
+            dict(self._compose_drafts),
+            identity_key=self._profile_identity_key(),
+        )
 
     def _schedule_compose_drafts_persist(self) -> None:
         self._compose_drafts_save_timer.stop()

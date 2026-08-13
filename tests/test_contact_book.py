@@ -112,6 +112,80 @@ def test_roundtrip_file() -> None:
         assert loaded.contacts[0].display_name == "A"
 
 
+def test_roundtrip_file_encrypted_hides_preview() -> None:
+    identity_key = b"\x42" * 32
+    with tempfile.TemporaryDirectory() as td:
+        path = str(Path(td) / "x.contacts.json")
+        book = cb.ContactBook(
+            contacts=[
+                cb.ContactRecord(
+                    addr=PEER_A_BARE,
+                    display_name="Alice",
+                    last_preview="secret hello",
+                )
+            ],
+            last_active_peer=PEER_A_BARE,
+        )
+        cb.save_book(path, book, identity_key=identity_key)
+        raw = Path(path).read_bytes()
+        assert raw.startswith(cb.CONTACTS_STORE_MAGIC)
+        assert b"secret hello" not in raw
+        assert PEER_A_BARE.encode("ascii") not in raw
+        loaded = cb.load_book(path, identity_key=identity_key)
+        assert loaded.contacts[0].last_preview == "secret hello"
+        assert loaded.contacts[0].display_name == "Alice"
+        empty = cb.load_book(path)
+        assert empty.contacts == []
+
+
+def test_save_without_key_does_not_overwrite_encrypted() -> None:
+    identity_key = b"\x42" * 32
+    with tempfile.TemporaryDirectory() as td:
+        path = str(Path(td) / "x.contacts.json")
+        book = cb.ContactBook(
+            contacts=[
+                cb.ContactRecord(addr=PEER_A_BARE, last_preview="keep me"),
+            ]
+        )
+        cb.save_book(path, book, identity_key=identity_key)
+        raw = Path(path).read_bytes()
+        cb.save_book(
+            path,
+            cb.ContactBook(
+                contacts=[cb.ContactRecord(addr=PEER_B_BARE, last_preview="wipe")]
+            ),
+        )
+        assert Path(path).read_bytes() == raw
+        loaded = cb.load_book(path, identity_key=identity_key)
+        assert loaded.contacts[0].last_preview == "keep me"
+        assert loaded.contacts[0].addr == PEER_A_BARE
+
+
+def test_encrypted_save_migrates_plaintext_file() -> None:
+    identity_key = b"\x11" * 32
+    with tempfile.TemporaryDirectory() as td:
+        path = str(Path(td) / "p.contacts.json")
+        Path(path).write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "contacts": [
+                        {"addr": PEER_A_BARE, "last_preview": "legacy preview"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        book = cb.load_book(path)
+        assert book.contacts[0].last_preview == "legacy preview"
+        cb.save_book(path, book, identity_key=identity_key)
+        raw = Path(path).read_bytes()
+        assert raw.startswith(cb.CONTACTS_STORE_MAGIC)
+        assert b"legacy preview" not in raw
+        loaded = cb.load_book(path, identity_key=identity_key)
+        assert loaded.contacts[0].last_preview == "legacy preview"
+
+
 def test_remove_peer() -> None:
     book = cb.ContactBook(
         contacts=[

@@ -4241,7 +4241,10 @@ class I2PChatCore:
             peers.add(current_peer)
         if self.profile != TRANSIENT_PROFILE_NAME:
             try:
-                book = load_book(self._contacts_json_path())
+                book = load_book(
+                    self._contacts_json_path(),
+                    identity_key=self.get_identity_key_bytes(),
+                )
             except Exception:
                 book = None
             contacts_iter = getattr(book, "contacts", ()) if book is not None else ()
@@ -4863,7 +4866,10 @@ class I2PChatCore:
             current = ""
         if current and same_i2p_destination(current, norm):
             return True
-        book = load_book(self._contacts_json_path())
+        book = load_book(
+            self._contacts_json_path(),
+            identity_key=self.get_identity_key_bytes(),
+        )
         for rec in book.contacts:
             if same_i2p_destination(rec.addr, norm):
                 return True
@@ -4882,9 +4888,13 @@ class I2PChatCore:
         if not norm:
             return False
         path = self._contacts_json_path()
-        book = load_book(path)
+        book = load_book(path, identity_key=self.get_identity_key_bytes())
         if remember_peer(book, norm):
-            save_book(path, trim_book(book))
+            save_book(
+                path,
+                trim_book(book),
+                identity_key=self.get_identity_key_bytes(),
+            )
             return True
         return False
 
@@ -4893,7 +4903,10 @@ class I2PChatCore:
             return True
         if self.profile == TRANSIENT_PROFILE_NAME:
             return False
-        book = load_book(self._contacts_json_path())
+        book = load_book(
+            self._contacts_json_path(),
+            identity_key=self.get_identity_key_bytes(),
+        )
         return bool(book.last_active_peer or book.contacts)
 
     def _last_active_peer_for_telemetry(self) -> str:
@@ -4901,7 +4914,10 @@ class I2PChatCore:
             return self.current_peer_addr
         if self.profile == TRANSIENT_PROFILE_NAME:
             return ""
-        book = load_book(self._contacts_json_path())
+        book = load_book(
+            self._contacts_json_path(),
+            identity_key=self.get_identity_key_bytes(),
+        )
         return (book.last_active_peer or "").strip()
 
     def _blindbox_live_peer_ok_for_root_exchange(

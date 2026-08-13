@@ -74,7 +74,7 @@ Use **Connect** for live chat and the first BlindBox bootstrap session. If Blind
 
 #### 3.1. Saved peers sidebar (contact book)
 
-The **Saved peers** strip on the **left** is your local **contact book** for the current profile. It is stored as `profiles/<profile>/<profile>.contacts.json` (alongside `<profile>.dat`).
+The **Saved peers** strip on the **left** is your local **contact book** for the current profile. It is stored as `profiles/<profile>/<profile>.contacts.json` (alongside `<profile>.dat`) and encrypted at rest with the profile identity key; older plaintext JSON is migrated on the next save.
 
 - **Rows** — each contact shows a display name (or shortened base32 id without the `.b32.i2p` suffix), a subtitle (last message preview or your note), and unread styling when that peer is not the active chat.
 - **Click** a row — sets the peer address field to that contact (same as typing the address) and syncs compose drafts; if the profile is **locked** to another peer, switching may be blocked (see status messages).

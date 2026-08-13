@@ -47,7 +47,9 @@ Persistent local state.
 - `i2pchat/storage/chat_history.py` — encrypted per-peer history
 - `i2pchat/storage/profile_backup.py` — password-protected profile/history backup bundles
 - `i2pchat/storage/profile_export.py` — legacy `.i2pchat-profile` encrypted export/import
-- `i2pchat/storage/contact_book.py` — saved peers / contact metadata
+- `i2pchat/storage/contact_book.py` — saved peers / contact metadata (identity-sealed at rest)
+- `i2pchat/storage/compose_drafts_store.py` — per-peer compose drafts (identity-sealed at rest)
+- `i2pchat/storage/sealed_json.py` — generic identity-keyed JSON SecretBox wrapper
 - `i2pchat/storage/blindbox_state.py` — atomic write helpers and BlindBox state persistence
 - `i2pchat/storage/history_export.py` — encrypted per-peer history export/import (`.i2hx`)
 - `i2pchat/storage/history_retention.py` — retention policy enforcement

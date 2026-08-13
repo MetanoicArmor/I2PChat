@@ -78,5 +78,83 @@ class ApplyComposeDraftPeerSwitchTests(unittest.TestCase):
         self.assertEqual(out["a.b32.i2p"], "last")
 
 
+class ComposeDraftsAtRestTests(unittest.TestCase):
+    def test_encrypted_roundtrip_hides_draft_text(self) -> None:
+        from pathlib import Path
+        import tempfile
+
+        from i2pchat.storage.compose_drafts_store import (
+            COMPOSE_DRAFTS_MAGIC,
+            load_compose_drafts,
+            save_compose_drafts,
+        )
+
+        identity_key = b"\x24" * 32
+        with tempfile.TemporaryDirectory() as td:
+            path = str(Path(td) / "p.compose_drafts.json")
+            save_compose_drafts(
+                path,
+                {"peer-a": "unsent secret"},
+                identity_key=identity_key,
+            )
+            raw = Path(path).read_bytes()
+            self.assertTrue(raw.startswith(COMPOSE_DRAFTS_MAGIC))
+            self.assertNotIn(b"unsent secret", raw)
+            loaded = load_compose_drafts(path, identity_key=identity_key)
+            self.assertEqual(loaded["peer-a"], "unsent secret")
+            self.assertEqual(load_compose_drafts(path), {})
+
+    def test_plaintext_migrates_on_encrypted_save(self) -> None:
+        from pathlib import Path
+        import tempfile
+
+        from i2pchat.storage.compose_drafts_store import (
+            COMPOSE_DRAFTS_MAGIC,
+            load_compose_drafts,
+            save_compose_drafts,
+        )
+
+        identity_key = b"\x33" * 32
+        with tempfile.TemporaryDirectory() as td:
+            path = str(Path(td) / "p.compose_drafts.json")
+            Path(path).write_text(
+                '{"version": 1, "drafts": {"peer-a": "legacy draft"}}',
+                encoding="utf-8",
+            )
+            loaded = load_compose_drafts(path)
+            self.assertEqual(loaded["peer-a"], "legacy draft")
+            save_compose_drafts(path, loaded, identity_key=identity_key)
+            raw = Path(path).read_bytes()
+            self.assertTrue(raw.startswith(COMPOSE_DRAFTS_MAGIC))
+            self.assertNotIn(b"legacy draft", raw)
+            self.assertEqual(
+                load_compose_drafts(path, identity_key=identity_key)["peer-a"],
+                "legacy draft",
+            )
+
+    def test_save_without_key_does_not_overwrite_encrypted(self) -> None:
+        from pathlib import Path
+        import tempfile
+
+        from i2pchat.storage.compose_drafts_store import (
+            load_compose_drafts,
+            save_compose_drafts,
+        )
+
+        identity_key = b"\x24" * 32
+        with tempfile.TemporaryDirectory() as td:
+            path = str(Path(td) / "p.compose_drafts.json")
+            save_compose_drafts(
+                path, {"peer-a": "keep me"}, identity_key=identity_key
+            )
+            raw = Path(path).read_bytes()
+            save_compose_drafts(path, {"peer-a": "wipe"})
+            self.assertEqual(Path(path).read_bytes(), raw)
+            self.assertEqual(
+                load_compose_drafts(path, identity_key=identity_key)["peer-a"],
+                "keep me",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

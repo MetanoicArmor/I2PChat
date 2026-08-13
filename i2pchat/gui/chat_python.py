@@ -72,7 +72,14 @@ from i2pchat.storage.chat_history import (
     normalize_peer_addr,
     save_history,
 )
+from i2pchat.storage.compose_drafts_store import (
+    COMPOSE_DRAFTS_MAGIC,
+    load_compose_drafts,
+    save_compose_drafts,
+)
+from i2pchat.storage.sealed_json import is_sealed_json_file
 from i2pchat.storage.contact_book import (
+    CONTACTS_STORE_MAGIC,
     ContactBook,
     ContactRecord,
     load_book,
@@ -930,8 +937,21 @@ class I2PChat(App):
 
     # ----- contacts / drafts / history -----
 
+    def _profile_identity_key(self) -> Optional[bytes]:
+        getter = getattr(self.core, "get_identity_key_bytes", None)
+        if not callable(getter):
+            return None
+        try:
+            key = getter()
+        except Exception:
+            return None
+        return key if isinstance(key, (bytes, bytearray)) and key else None
+
     def _load_contacts_book(self) -> None:
-        self._contact_book = load_book(self._contacts_file_path_for_read(self.profile))
+        self._contact_book = load_book(
+            self._contacts_file_path_for_read(self.profile),
+            identity_key=self._profile_identity_key(),
+        )
 
     def _reload_contacts_book_after_core_write(self) -> None:
         """Ядро записало ``contacts.json`` (например синхронизация участников группы); обновить MRU и UI."""
@@ -952,7 +972,11 @@ class I2PChat(App):
             _apply()
 
     def _save_contacts_book(self) -> None:
-        save_book(self._contacts_file_path_for_write(self.profile), self._contact_book)
+        save_book(
+            self._contacts_file_path_for_write(self.profile),
+            self._contact_book,
+            identity_key=self._profile_identity_key(),
+        )
 
     def _ensure_stored_peer_in_contact_book(self) -> None:
         stored = peek_persisted_stored_peer(self.profile) or ""
@@ -971,33 +995,49 @@ class I2PChat(App):
             self._compose_drafts[self._compose_draft_active_key] = self._compose_text_snapshot()
 
     def _load_compose_drafts_from_disk(self) -> None:
-        self._compose_drafts = {}
-        path = self._compose_drafts_file_path_for_read(self.profile)
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                data = json.load(handle)
-        except Exception:
-            return
-        if not isinstance(data, dict):
-            return
-        drafts = data.get("drafts")
-        if not isinstance(drafts, dict):
-            return
-        for key, value in drafts.items():
-            if isinstance(key, str) and isinstance(value, str):
+        self._compose_drafts = load_compose_drafts(
+            self._compose_drafts_file_path_for_read(self.profile),
+            identity_key=self._profile_identity_key(),
+        )
+
+    def _merge_compose_drafts_from_disk(self) -> None:
+        disk = load_compose_drafts(
+            self._compose_drafts_file_path_for_read(self.profile),
+            identity_key=self._profile_identity_key(),
+        )
+        for key, value in disk.items():
+            current = self._compose_drafts.get(key, "")
+            if key not in self._compose_drafts or not str(current).strip():
                 self._compose_drafts[key] = value
+
+    def _reload_sealed_profile_sidecars(self) -> None:
+        self._load_contacts_book()
+        self._ensure_stored_peer_in_contact_book()
+        contacts_path = self._contacts_file_path_for_write(self.profile)
+        if not is_sealed_json_file(contacts_path, CONTACTS_STORE_MAGIC):
+            self._save_contacts_book()
+        self._merge_compose_drafts_from_disk()
+        draft_key = self._compose_draft_active_key
+        if draft_key:
+            restored = self._compose_drafts.get(draft_key, "")
+            current = self._compose_text_snapshot()
+            if restored and not (current or "").strip():
+                self._set_compose_text(restored)
+        drafts_path = self._compose_drafts_file_path_for_write(self.profile)
+        if self._compose_drafts or not is_sealed_json_file(
+            drafts_path, COMPOSE_DRAFTS_MAGIC
+        ):
+            self._flush_compose_drafts_to_disk()
 
     def _flush_compose_drafts_to_disk(self) -> None:
         self._merge_active_compose_into_drafts()
         while len(self._compose_drafts) > COMPOSE_DRAFTS_MAX_KEYS:
             del self._compose_drafts[next(iter(self._compose_drafts))]
-        try:
-            atomic_write_json(
-                self._compose_drafts_file_path_for_write(self.profile),
-                {"version": 1, "drafts": dict(self._compose_drafts)},
-            )
-        except Exception:
-            pass
+        save_compose_drafts(
+            self._compose_drafts_file_path_for_write(self.profile),
+            dict(self._compose_drafts),
+            identity_key=self._profile_identity_key(),
+        )
 
     def _sync_compose_draft_to_peer_key(self, new_key: Optional[str]) -> None:
         if new_key == self._compose_draft_active_key:
@@ -1682,7 +1722,7 @@ class I2PChat(App):
             )
             self._refresh_status_bar()
             return False
-        self._ensure_stored_peer_in_contact_book()
+        self._reload_sealed_profile_sidecars()
         self._try_load_history(force=True)
         self._refresh_status_bar()
         return True
