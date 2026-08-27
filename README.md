@@ -441,15 +441,17 @@ If you like this project and it brings value, you can support its development by
 
 **☕ Buy developer a coffee:**
 
-**⚡ TON:**
+**₿ Bitcoin:**
 <div align="center">
-<img src="ton_donation_qr.png" width="200">
+<img src="btc_donation_qr.png" width="200">
+
+Минимальная сумма транзакции: **0.0001 BTC**
 </div>
 
-### 📋 TON Address:
+### 📋 Bitcoin Address:
 
 ```
-UQCsX_UVKylmlxb4dWZlXdmlyRzNm-kzUx7Ld1VQHk1ob0MY
+bc1qfenneg8pt7g42f94uww3l3d7gtw6rl9dd3uslg
 ```
 
 *Thank you for your support! It motivates to continue working on the project* 🙏
