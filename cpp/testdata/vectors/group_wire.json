@@ -1,0 +1,34 @@
+{
+  "_description": "Group transport envelopes carried on the live secure channel or via BlindBox. Both versions serialize with sort_keys=True, separators=(',',':'), ensure_ascii=True after the '__I2PCHAT_GROUP__:' prefix. v3 adds an Ed25519 signature over the unsigned canonical payload. Source: i2pchat/groups/wire.py.",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "prefix": "__I2PCHAT_GROUP__:",
+  "version_v1": 1,
+  "max_transport_bytes": 524288,
+  "delivery_scope_group_blindbox": "group_blindbox",
+  "input": {
+    "group_id": "group-alpha",
+    "group_title": "\u0413\u0440\u0443\u043f\u043f\u0430 \ud83c\udfaf",
+    "members": [
+      "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+      "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz"
+    ],
+    "epoch": 2,
+    "msg_id": "msg-0001",
+    "sender_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+    "group_seq": 7,
+    "content_type": "GROUP_TEXT",
+    "payload": "\u043f\u0440\u0438\u0432\u0435\u0442 \u0433\u0440\u0443\u043f\u043f\u0430",
+    "created_at": "2026-01-01T12:00:00+00:00",
+    "recipient_id": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+    "delivery_id": "delivery-0001"
+  },
+  "v1_recipient_scope": {
+    "encoded": "__I2PCHAT_GROUP__:{\"content_type\":\"GROUP_TEXT\",\"created_at\":\"2026-01-01T12:00:00+00:00\",\"delivery_id\":\"delivery-0001\",\"epoch\":2,\"group_id\":\"group-alpha\",\"group_seq\":7,\"group_title\":\"\\u0413\\u0440\\u0443\\u043f\\u043f\\u0430 \\ud83c\\udfaf\",\"members\":[\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\"],\"msg_id\":\"msg-0001\",\"payload\":\"\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442 \\u0433\\u0440\\u0443\\u043f\\u043f\\u0430\",\"recipient_id\":\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\",\"sender_id\":\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"transport\":\"group\",\"version\":1}"
+  },
+  "v3_group_blindbox_scope": {
+    "signer_pub_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+    "signature_payload_utf8": "{\"content_type\":\"GROUP_TEXT\",\"created_at\":\"2026-01-01T12:00:00+00:00\",\"delivery_scope\":\"group_blindbox\",\"epoch\":2,\"group_id\":\"group-alpha\",\"group_seq\":7,\"group_title\":\"\\u0413\\u0440\\u0443\\u043f\\u043f\\u0430 \\ud83c\\udfaf\",\"members\":[\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\"],\"msg_id\":\"msg-0001\",\"payload\":\"\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442 \\u0433\\u0440\\u0443\\u043f\\u043f\\u0430\",\"sender_id\":\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"signer_key\":\"d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737\",\"transport\":\"group\",\"version\":3}",
+    "signature_hex": "0393d731a9a19a6d8e72e2137698c76c71c5f2529085815df9e7d76539eca2f4fd26d12bb7d915e542c8faf0f5a52517c9458ec31d2e993ef82bf6921bf8c806",
+    "encoded": "__I2PCHAT_GROUP__:{\"content_type\":\"GROUP_TEXT\",\"created_at\":\"2026-01-01T12:00:00+00:00\",\"delivery_scope\":\"group_blindbox\",\"epoch\":2,\"group_id\":\"group-alpha\",\"group_seq\":7,\"group_title\":\"\\u0413\\u0440\\u0443\\u043f\\u043f\\u0430 \\ud83c\\udfaf\",\"members\":[\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\"],\"msg_id\":\"msg-0001\",\"payload\":\"\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442 \\u0433\\u0440\\u0443\\u043f\\u043f\\u0430\",\"sender_id\":\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"signature\":\"0393d731a9a19a6d8e72e2137698c76c71c5f2529085815df9e7d76539eca2f4fd26d12bb7d915e542c8faf0f5a52517c9458ec31d2e993ef82bf6921bf8c806\",\"signer_key\":\"d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737\",\"transport\":\"group\",\"version\":3}"
+  }
+}

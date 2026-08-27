@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "i2pchat-cpp",
+  "description": "I2PChat C++ client: peer-to-peer chat over the I2P network",
+  "homepage": "https://github.com/MetanoicArmor/I2PChat",
+  "license": "AGPL-3.0-or-later",
+  "dependencies": [
+    "libsodium",
+    "nlohmann-json",
+    {
+      "name": "boost-asio",
+      "version>=": "1.81.0"
+    },
+    "boost-process",
+    "boost-system"
+  ],
+  "features": {
+    "tests": {
+      "description": "Build the C++ test suite",
+      "dependencies": ["catch2"]
+    },
+    "tui": {
+      "description": "Build the FTXUI terminal client",
+      "dependencies": ["ftxui"]
+    },
+    "gui": {
+      "description": "Build the Qt 6 desktop client",
+      "dependencies": ["qtbase", "qtmultimedia"]
+    }
+  }
+}

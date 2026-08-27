@@ -1,23 +1,27 @@
 # Building and releasing I2PChat
 
-Python **3.12+** is supported (**3.14+** recommended for release-style builds). Dependencies are managed with **[uv](https://docs.astral.sh/uv/)** (`pyproject.toml` + **`uv.lock`**). **I2P SAM** is implemented in **`i2pchat.sam`**; PyPI **`i2plib`** is not used.
+The **release clients are C++20** (`cpp/`). Python remains for golden vectors and interop tests until cutover.
+
+Developer builds: [`../cpp/README.md`](../cpp/README.md) and the **Building and running from source** section of [`../README.md`](../README.md).
 
 ## Release build scripts
 
 | Target | Command | Output (typical) |
 |--------|---------|------------------|
-| Linux (AppImage + zip) | `./build-linux.sh` | `I2PChat.AppImage`, **`I2PChat-linux-<arch>-v<version>.zip`** (GUI, AppImage inside), **`I2PChat-linux-<arch>-tui-v<version>.zip`** (только TUI) — **в корне репо**; в **`dist/`** — AppImage и onedir; `<arch>` — **`x86_64`** или **`aarch64`** |
-| Linux aarch64 via Docker | `./packaging/docker/build-linux-aarch64.sh` | Same as above with **`aarch64`** in names; Ubuntu **24.04** arm64 image — see [`packaging/docker/README.md`](../packaging/docker/README.md); bundled `i2pd` is **optional** for portable builds |
+| Linux (AppImage + zip) | `./build-linux.sh` | `I2PChat.AppImage`, **`I2PChat-linux-<arch>-v<version>.zip`** (GUI, AppImage inside by default), **`I2PChat-linux-<arch>-tui-v<version>.zip`** — in the **repo root**; **`dist/`** holds the AppImage and the C++ onedir; `<arch>` is **`x86_64`** or **`aarch64`** |
+| Linux aarch64 via Docker | `./packaging/docker/build-linux-aarch64.sh` | Same names with **`aarch64`**; image still needs CMake/Qt/FTXUI instead of uv/PyInstaller — see [`packaging/docker/README.md`](../packaging/docker/README.md) |
 | macOS (.app + zip) | `./build-macos.sh` | `dist/I2PChat.app`, `I2PChat-macOS-<arch>-v<version>.zip`, **`I2PChat-macos-<arch>-tui-v<version>.zip`** |
-| Windows | `.\build-windows.ps1` | `dist\I2PChat\I2PChat.exe`, **`I2PChat-windows-x64-v<version>.zip`**, **`I2PChat-windows-tui-x64-v<version>.zip`**, plus **`I2PChat-windows-x64-winget-v<version>.zip`** / **`I2PChat-windows-tui-x64-winget-v<version>.zip`** (same trees **without** embedded i2pd — for winget / Microsoft validation) |
+| Windows | `.\build-windows.ps1` | `dist\I2PChat\I2PChat.exe`, **`I2PChat-windows-x64-v<version>.zip`**, **`I2PChat-windows-tui-x64-v<version>.zip`**, plus **`*-winget-*`** zips **without** embedded i2pd |
 
-**Linux glibc baseline:** for release zips that run on common LTS distros, prefer building on **Ubuntu 22.04** (or use CI). Workflow **[`build-linux-release-artifacts.yml`](../.github/workflows/build-linux-release-artifacts.yml)** (`workflow_dispatch`) runs two jobs in parallel: **`build`** on **ubuntu-22.04** (x86_64) uploads `I2PChat-linux-x86_64-*.zip` + `SHA256SUMS`; **`build-aarch64`** on **ubuntu-22.04-arm** uploads `I2PChat-linux-aarch64-*.zip` + **`SHA256SUMS.linux-aarch64`** (separate file so it does not overwrite the amd64 checksums). Bundled `i2pd` may be injected locally for portable artifacts, but it is not required to live in the git tree. Inputs: **`tag`**, optional **`source_ref`**. If the checked-out ref has **no `I2PChat-tui.spec`**, the workflow **shallow-fetches `origin/main`** when **`VERSION` on `main` matches** the release. Local builds on bleeding-edge distros can embed a **newer minimum glibc** than users on Debian/Ubuntu LTS have.
+All three scripts call [`scripts/build_cpp_binaries.sh`](../scripts/build_cpp_binaries.sh) (or equivalent `cmake` on Windows): **`-DI2PCHAT_BUILD_GUI=ON -DI2PCHAT_BUILD_TUI=ON -DI2PCHAT_BUILD_TESTS=OFF`**.
 
-**Optional Docker:** **`./packaging/docker/run-linux-build.sh`** — Ubuntu **24.04** on **amd64** (`Dockerfile.linux-noble-glibc239`, glibc **2.39**); newer baseline than 22.04. **`./packaging/docker/build-linux-aarch64.sh`** — Ubuntu **24.04** on **linux/arm64** for **`I2PChat-linux-aarch64-*`** zips in the **repo root**; by default the **GUI zip** is **portable** (binaries + `_internal` at archive root). Set **`I2PCHAT_LINUX_GUI_ZIP_MODE=appimage`** for the single-AppImage zip used on GitHub Releases. Details: [`packaging/docker/README.md`](../packaging/docker/README.md).
+**Linux glibc baseline:** prefer **Ubuntu 22.04** (or CI) so the AppImage/onedir runs on common LTS distros. Workflow **[`build-linux-release-artifacts.yml`](../.github/workflows/build-linux-release-artifacts.yml)** should install CMake, Qt 6, Boost, libsodium, nlohmann-json, FTXUI (or vcpkg) rather than uv.
 
-**Linux script** uses **uv** (`.venv`, `uv sync --frozen --group build`) and PyInstaller **`I2PChat.spec`** (GUI + TUI exe sharing one Qt onedir), `appimagetool`; the AppImage includes `usr/bin/I2PChat` and **`usr/bin/I2PChat-tui`**, plus a TUI `.desktop` with `Terminal=true`. After that it runs **`I2PChat-tui.spec`** → `dist/I2PChat-tui/` (no Qt) and packs **`I2PChat-linux-*-tui-*.zip`** from that tree.
+**Optional Docker:** update images to compile `cpp/` with the same `./build-linux.sh` entrypoint. **`I2PCHAT_LINUX_GUI_ZIP_MODE=appimage`** (default) vs **`portable`**.
 
-**Bundled router version:** portable payloads track i2pd **2.61.0** via [i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd) (Linux from Ubuntu noble → Boost **1.83** SONAME).
+**Linux script** no longer uses uv/PyInstaller. It stages ELF deps with `ldd`, copies Qt `platforms` plugins when `qtpaths6` is available, then **`appimagetool`** (pinned SHA-256). TUI zip is `i2pchat-tui` + `usr/bin/I2PChat-tui` + `usr/lib`.
+
+**Bundled router version:** portable payloads still track i2pd **2.61.0** via [i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd) (Linux from Ubuntu noble → Boost **1.83** SONAME).
 
 **Optional bundled router staging:** portable builds can embed `i2pd` if local files are staged under `vendor/i2pd/`. Build scripts now auto-try [`scripts/ensure_bundled_i2pd.sh`](../scripts/ensure_bundled_i2pd.sh), which resolves in this order:
 
@@ -26,15 +30,15 @@ Python **3.12+** is supported (**3.14+** recommended for release-style builds). 
 3. sibling repo `../i2pchat-bundled-i2pd`
 4. **Git clone** into `.cache/bundled-i2pd-source/`: default **`https://github.com/MetanoicArmor/i2pchat-bundled-i2pd.git`** (`I2PCHAT_BUNDLED_I2PD_GIT_URL` overrides; empty URL or **`I2PCHAT_SKIP_BUNDLED_I2PD_GIT=1`** skips this step). The URL must be **cloneable without a prompt** in your environment (public repo, or SSH URL with keys, or cached credentials); otherwise `ensure_bundled_i2pd.sh` logs `NOT FOUND` and portable builds ship **without** embedded `i2pd`. **`build-linux.sh`** prints an extra **WARN** when the expected `vendor/i2pd/…/i2pd` file is still missing.
 
-**Linux dynamic `i2pd`:** if the router binary is linked against Boost/OpenSSL (not fully static), ship the matching **`*.so*`** files in the same `vendor/i2pd/linux-*/` directory; PyInstaller packs them like Windows `*.dll`, and the app prepends that directory to **`LD_LIBRARY_PATH`** when starting i2pd (so AppImage `_internal` does not shadow Boost). On **Arch/CachyOS** (and similar), prebuilt bundled `i2pd` may need an older Boost SONAME (e.g. **1.83**) while the distro only ships a newer one (e.g. **1.91**) — we **do not** symlink across Boost SONAMEs (C++ ABI mismatch). Run **[`scripts/stage_i2pd_linux_shlibs.sh`](../scripts/stage_i2pd_linux_shlibs.sh)** to copy the exact DT_NEEDED libs from `/usr/lib`; if staging still fails, **`build-linux.sh`** falls back to the system `i2pd` from `PATH` (or copy it into `vendor/i2pd/linux-*/` yourself) so **`uv run`** and AppImage builds work.
+**Linux dynamic `i2pd`:** if the router binary is linked against Boost/OpenSSL (not fully static), ship the matching **`*.so*`** files in the same `vendor/i2pd/linux-*/` directory. **`build-linux.sh`** copies that tree next to the C++ binaries (`usr/bin/vendor/...` in the AppImage). Run **[`scripts/stage_i2pd_linux_shlibs.sh`](../scripts/stage_i2pd_linux_shlibs.sh)** to copy the exact DT_NEEDED libs from `/usr/lib`; if staging still fails, **`build-linux.sh`** falls back to the system `i2pd` from `PATH`.
 
 For predictable builds, prefer setting **`I2PCHAT_BUNDLED_I2PD_SOURCE_DIR`** explicitly. The sibling-repo path is only a local convenience fallback. For manual staging or URL-based fetching, use [`scripts/fetch_bundled_i2pd.sh`](../scripts/fetch_bundled_i2pd.sh). The staged files are untracked and are not required for Debian/Ubuntu packaging.
 
 **Raw binary URLs:** `I2PCHAT_I2PD_*_URL` variables in `fetch_bundled_i2pd.sh` must point to a **single** `i2pd` / `i2pd.exe` file. Upstream [PurpleI2P/i2pd releases](https://github.com/PurpleI2P/i2pd/releases) ship `.deb`/`.rpm`/archives — extract the `i2pd` executable into a directory and run `fetch_bundled_i2pd.sh --from` that directory (or clone **[i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd)** / rely on `ensure_bundled_i2pd.sh`).
 
-**macOS** builds `dist/I2PChat.app` from **`I2PChat.spec`** (GUI + in-bundle TUI entrypoint sharing Qt), then **`I2PChat-tui.spec`** for the standalone **`I2PChat-macos-*-tui-*.zip`**.
+**macOS** builds `dist/I2PChat.app` from the CMake **`i2pchat-gui`** / **`i2pchat-tui`** binaries, then **`macdeployqt`**. The bundle is always **ad-hoc codesigned** (nested Qt dylibs after `macdeployqt` otherwise fail with `CODESIGNING / Invalid Page` on modern macOS). Set **`I2PCHAT_CODESIGN_IDENTITY`** for Developer ID + hardened runtime.
 
-**Windows** runs both specs twice: first **with** bundled i2pd (default zips), then with **`I2PCHAT_OMIT_BUNDLED_I2PD=1`** for the **`*-winget-*`** zips (PyInstaller omits i2pd binaries — AV “riskware” scans on `winget-pkgs`). The **`-tui`** zip is built from **`dist\I2PChat-tui\`**. Safer one-off PowerShell:
+**Windows** CMake-builds once, copies **`I2PChat.exe`** / **`I2PChat-tui.exe`**, runs **`windeployqt`**, packs full zips **with** bundled i2pd, then **`*-winget-*`** zips with `vendor\i2pd` removed (AV “riskware” scans on `winget-pkgs`). Safer one-off PowerShell:
 
 ```powershell
 powershell -NoProfile -Command "Set-ExecutionPolicy -Scope Process RemoteSigned; .\build-windows.ps1"

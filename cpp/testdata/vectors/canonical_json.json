@@ -1,0 +1,101 @@
+{
+  "_description": "Canonical JSON serialization used for Ed25519-signed payloads: keys sorted by code point, no whitespace, non-ASCII escaped as \\uXXXX (non-BMP as surrogate pairs). The C++ serializer must match these strings exactly. Source: i2pchat/groups/invite.py:_canonical_invite_bytes and i2pchat/groups/wire.py.",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "serializer": {
+    "sort_keys": true,
+    "separators": [
+      ",",
+      ":"
+    ],
+    "ensure_ascii": true
+  },
+  "cases": [
+    {
+      "payload": {
+        "b": 1,
+        "a": 2,
+        "C": 3,
+        "_": 4
+      },
+      "canonical_utf8": "{\"C\":3,\"_\":4,\"a\":2,\"b\":1}"
+    },
+    {
+      "payload": {
+        "nested": {
+          "z": [
+            1,
+            2,
+            3
+          ],
+          "a": {
+            "k": null
+          }
+        },
+        "flag": true
+      },
+      "canonical_utf8": "{\"flag\":true,\"nested\":{\"a\":{\"k\":null},\"z\":[1,2,3]}}"
+    },
+    {
+      "payload": {
+        "unicode": "\u043f\u0440\u0438\u0432\u0435\u0442"
+      },
+      "canonical_utf8": "{\"unicode\":\"\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442\"}"
+    },
+    {
+      "payload": {
+        "emoji": "\ud83d\udd10 non-BMP"
+      },
+      "canonical_utf8": "{\"emoji\":\"\\ud83d\\udd10 non-BMP\"}"
+    },
+    {
+      "payload": {
+        "escapes": "quote \" backslash \\ newline \n tab \t cr \r"
+      },
+      "canonical_utf8": "{\"escapes\":\"quote \\\" backslash \\\\ newline \\n tab \\t cr \\r\"}"
+    },
+    {
+      "payload": {
+        "control": "\u0000\u0001\u001f"
+      },
+      "canonical_utf8": "{\"control\":\"\\u0000\\u0001\\u001f\"}"
+    },
+    {
+      "payload": {
+        "empty_containers": {
+          "list": [],
+          "obj": {}
+        }
+      },
+      "canonical_utf8": "{\"empty_containers\":{\"list\":[],\"obj\":{}}}"
+    },
+    {
+      "payload": {
+        "numbers": [
+          0,
+          -1,
+          1,
+          1000000
+        ]
+      },
+      "canonical_utf8": "{\"numbers\":[0,-1,1,1000000]}"
+    },
+    {
+      "payload": {
+        "null_value": null,
+        "false_value": false
+      },
+      "canonical_utf8": "{\"false_value\":false,\"null_value\":null}"
+    },
+    {
+      "payload": {
+        "Z": 1,
+        "a": 2,
+        "A": 3,
+        "z": 4,
+        "0": 5,
+        "_": 6
+      },
+      "canonical_utf8": "{\"0\":5,\"A\":3,\"Z\":1,\"_\":6,\"a\":2,\"z\":4}"
+    }
+  ]
+}

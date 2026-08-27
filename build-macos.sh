@@ -2,8 +2,7 @@
 set -euo pipefail
 
 APP_NAME="I2PChat"
-VENV_DIR=".venv"
-BLINDBOX_INSTALL_SRC="i2pchat/blindbox/daemon/install/install.sh"
+BLINDBOX_PACKAGING="cpp/apps/blindbox-daemon/packaging"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 VERSION_FILE="VERSION"
@@ -17,7 +16,6 @@ if [ -z "${RELEASE_VERSION}" ]; then
   exit 1
 fi
 
-# Определяем архитектуру (i2pd кладём в vendor/i2pd/darwin-x64 или darwin-arm64)
 ARCH=$(uname -m)
 I2PD_DARWIN_VENDOR_SUB="darwin-arm64"
 case "$ARCH" in
@@ -26,86 +24,74 @@ case "$ARCH" in
   *)      ARCH_SUFFIX="$ARCH" ;;
 esac
 
-echo "==> Building for architecture: ${ARCH_SUFFIX}"
-if ! command -v uv >/dev/null 2>&1; then
-  echo "ERROR: установите uv: https://docs.astral.sh/uv/getting-started/installation/ (macOS: brew install uv)" >&2
+echo "==> Building C++ client for architecture: ${ARCH_SUFFIX}"
+if ! command -v cmake >/dev/null 2>&1; then
+  echo "ERROR: cmake >= 3.24 is required (brew install cmake)." >&2
   exit 1
 fi
+
+REPO_ROOT="$(pwd)"
+
+file_sha256() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+
+write_checksums() {
+  local out="$1"
+  shift
+  : > "${out}"
+  local path
+  for path in "$@"; do
+    printf '%s  %s\n' "$(file_sha256 "${path}")" "$(basename "${path}")" >> "${out}"
+  done
+}
 
 echo "==> Checking optional bundled i2pd source"
-"$(pwd)/scripts/ensure_bundled_i2pd.sh"
+"${REPO_ROOT}/scripts/ensure_bundled_i2pd.sh"
 if [ ! -f "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" ]; then
-  echo "WARN: нет vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd — .app будет без встроенного i2pd (см. build-linux.sh / docs/BUILD.md)." >&2
+  echo "WARN: нет vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd — .app будет без встроенного i2pd." >&2
 fi
 
-# На Apple Silicon при сборке x64 через Rosetta Homebrew может подставить arm64 Python 3.14 —
-# тогда PyInstaller соберёт не тот Mach-O. Задайте I2PCHAT_PYTHON=/usr/local/bin/python3 (Intel).
-if [[ -n "${I2PCHAT_PYTHON:-}" ]]; then
-  PYTHON_BIN="${I2PCHAT_PYTHON}"
-elif command -v python3.14 >/dev/null 2>&1; then
-  PYTHON_BIN="python3.14"
-else
-  PYTHON_BIN="python3"
-fi
+STAGE="${REPO_ROOT}/dist/cpp-install"
+BUILD_DIR="${REPO_ROOT}/cpp/build-release"
+rm -rf "${STAGE}"
+mkdir -p "${STAGE}"
+"${REPO_ROOT}/scripts/build_cpp_binaries.sh" "${BUILD_DIR}" "${STAGE}"
 
-echo "==> Синхронизирую зависимости (uv → ${VENV_DIR}, группа build)"
-export UV_PROJECT_ENVIRONMENT="$(pwd)/${VENV_DIR}"
-uv sync --frozen --python "${PYTHON_BIN}" --group build --no-dev
-
-if [ -x "${VENV_DIR}/bin/python" ]; then
-  PYTHON_CMD="${VENV_DIR}/bin/python"
-elif [ -x "${VENV_DIR}/bin/python3" ]; then
-  PYTHON_CMD="${VENV_DIR}/bin/python3"
-else
-  echo "ERROR: после uv sync не найден интерпретатор в ${VENV_DIR}/bin" >&2
+GUI_BIN="${STAGE}/bin/i2pchat-gui"
+TUI_BIN="${STAGE}/bin/i2pchat-tui"
+DAEMON_BIN="${STAGE}/bin/i2pchat-blindbox-daemon"
+if [ ! -x "${GUI_BIN}" ] || [ ! -x "${TUI_BIN}" ]; then
+  echo "ERROR: missing i2pchat-gui / i2pchat-tui in ${STAGE}/bin" >&2
   exit 1
 fi
-
-echo "==> Проверяю PyNaCl (обязателен для secure protocol)"
-"${PYTHON_CMD}" - <<'PY'
-import sys
-try:
-    import nacl
-    from nacl.secret import SecretBox  # noqa: F401
-except Exception as exc:
-    print(f"ERROR: PyNaCl is required for secure protocol build: {exc}", file=sys.stderr)
-    raise SystemExit(1)
-print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
-PY
-
-echo "==> Проверяю синтаксис пакетов и вспомогательных скриптов"
-"${PYTHON_CMD}" -m compileall i2pchat scripts make_icon.py
-
-echo "==> Собираю GUI (PyInstaller I2PChat.spec)"
-rm -rf "dist/${APP_NAME}" "build/${APP_NAME}"
-"${PYTHON_CMD}" -m PyInstaller --clean -y I2PChat.spec
 
 echo "==> Собираю I2PChat.app"
 rm -rf "dist/${APP_NAME}.app"
 mkdir -p "dist/${APP_NAME}.app/Contents/MacOS" "dist/${APP_NAME}.app/Contents/Resources"
-cp -R "dist/${APP_NAME}" "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}"
-if [ -f "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" ]; then
-  mkdir -p "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}"
-  cp "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" \
-    "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd"
-  chmod +x "dist/${APP_NAME}.app/Contents/Resources/${APP_NAME}/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd"
-else
-  echo "==> No local bundled macOS i2pd found (ensure_bundled_i2pd clones https://github.com/MetanoicArmor/i2pchat-bundled-i2pd by default, or run ./scripts/fetch_bundled_i2pd.sh --from …)"
+cp "${GUI_BIN}" "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
+cp "${TUI_BIN}" "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}-tui"
+chmod +x "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}" \
+         "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}-tui"
+if [ -x "${DAEMON_BIN}" ]; then
+  cp "${DAEMON_BIN}" "dist/${APP_NAME}.app/Contents/MacOS/i2pchat-blindbox-daemon"
+  chmod +x "dist/${APP_NAME}.app/Contents/MacOS/i2pchat-blindbox-daemon"
 fi
+
+if [ -f "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" ]; then
+  mkdir -p "dist/${APP_NAME}.app/Contents/Resources/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}"
+  cp "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" \
+    "dist/${APP_NAME}.app/Contents/Resources/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd"
+  chmod +x "dist/${APP_NAME}.app/Contents/Resources/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd"
+fi
+
 if [ -f "I2PChat.icns" ]; then
   cp "I2PChat.icns" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
-else
+elif [ -f "icon.png" ]; then
   echo "WARNING: I2PChat.icns not found, fallback to icon.png"
   cp "icon.png" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
 fi
-printf '%s\n' '#!/bin/sh' "exec \"\$(dirname \"\$0\")/../Resources/${APP_NAME}/${APP_NAME}\" \"\$@\"" > "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
-chmod +x "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
 
-# Консольный TUI (Textual): тот же onedir, отдельный бинарник — удобно запускать из Terminal.
-printf '%s\n' '#!/bin/sh' "exec \"\$(dirname \"\$0\")/../Resources/${APP_NAME}/${APP_NAME}-tui\" \"\$@\"" > "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}-tui"
-chmod +x "dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}-tui"
-
-# Info.plist
 cat > "dist/${APP_NAME}.app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -123,13 +109,109 @@ cat > "dist/${APP_NAME}.app/Contents/Info.plist" <<PLIST
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>${RELEASE_VERSION}</string>
+	<key>CFBundleVersion</key>
+	<string>${RELEASE_VERSION}</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>10.13</string>
+	<string>12.0</string>
 </dict>
 </plist>
 PLIST
 
-echo
+MACDEPLOYQT=""
+QT_LIBPATHS=()
+if command -v brew >/dev/null 2>&1; then
+  QT_PREFIX="$(brew --prefix qt 2>/dev/null || true)"
+  QTBASE_PREFIX="$(brew --prefix qtbase 2>/dev/null || true)"
+  if [ -x "${QT_PREFIX}/bin/macdeployqt" ]; then
+    MACDEPLOYQT="${QT_PREFIX}/bin/macdeployqt"
+  fi
+  if [ -d "${QT_PREFIX}/lib" ]; then
+    QT_LIBPATHS+=(-libpath="${QT_PREFIX}/lib")
+  fi
+  if [ -d "${QTBASE_PREFIX}/lib" ] && [ "${QTBASE_PREFIX}" != "${QT_PREFIX}" ]; then
+    QT_LIBPATHS+=(-libpath="${QTBASE_PREFIX}/lib")
+  fi
+fi
+if [ -z "${MACDEPLOYQT}" ] && command -v macdeployqt >/dev/null 2>&1; then
+  MACDEPLOYQT="$(command -v macdeployqt)"
+fi
+if [ -n "${MACDEPLOYQT}" ]; then
+  echo "==> macdeployqt"
+  # Homebrew Qt 6 plugins resolve @rpath against the .app's sibling lib/
+  # (dist/I2PChat.app → dist/lib). -libpath is ignored for that lookup.
+  DIST_LIB_LINK=""
+  if [ -n "${QT_PREFIX:-}" ] && [ -d "${QT_PREFIX}/lib" ]; then
+    if [ -L dist/lib ] || [ ! -e dist/lib ]; then
+      ln -sfn "${QT_PREFIX}/lib" dist/lib
+      DIST_LIB_LINK=1
+    fi
+  fi
+  "${MACDEPLOYQT}" "dist/${APP_NAME}.app" \
+    -executable="dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}-tui" \
+    -always-overwrite \
+    "${QT_LIBPATHS[@]}"
+  if [ -n "${DIST_LIB_LINK}" ]; then
+    rm -f dist/lib
+  fi
+  if [ ! -d "dist/${APP_NAME}.app/Contents/Frameworks/QtCore.framework" ]; then
+    echo "ERROR: macdeployqt did not copy QtCore.framework (rpath/libpath)." >&2
+    echo "       Pass Homebrew Qt via: brew --prefix qt  → ${QT_PREFIX:-unset}" >&2
+    exit 1
+  fi
+else
+  echo "WARN: macdeployqt not found; the .app will need a system Qt 6 install to run." >&2
+fi
+
+# Homebrew/Qt dylibs keep a signature that becomes invalid after install-name
+# rewrites. Unsigned or stale nested Mach-O pages then SIGKILL on launch
+# (CODESIGNING / Invalid Page), including on local unsigned apps.
+sign_macho() {
+  local identity="$1"
+  shift
+  local extra=()
+  if [ "${identity}" != "-" ]; then
+    extra+=(--options runtime --timestamp)
+  else
+    extra+=(--timestamp=none)
+  fi
+  codesign --force --sign "${identity}" "${extra[@]}" "$@"
+}
+
+sign_app_bundle() {
+  local app="$1"
+  local identity="${I2PCHAT_CODESIGN_IDENTITY:--}"
+  echo "==> codesign (${identity})"
+  xattr -cr "${app}" 2>/dev/null || true
+  local f
+  while IFS= read -r f; do
+    [ -n "${f}" ] || continue
+    sign_macho "${identity}" "${f}"
+  done < <(find "${app}" -type f \( -name '*.dylib' -o -name '*.so' \) 2>/dev/null | sort)
+  if [ -d "${app}/Contents/PlugIns" ]; then
+    while IFS= read -r f; do
+      [ -n "${f}" ] || continue
+      if file -b "${f}" | grep -q 'Mach-O'; then
+        sign_macho "${identity}" "${f}"
+      fi
+    done < <(find "${app}/Contents/PlugIns" -type f 2>/dev/null | sort)
+  fi
+  if [ -d "${app}/Contents/Frameworks" ]; then
+    while IFS= read -r f; do
+      [ -n "${f}" ] || continue
+      sign_macho "${identity}" "${f}"
+    done < <(find "${app}/Contents/Frameworks" -name '*.framework' -print 2>/dev/null | awk '{ print length, $0 }' | sort -nr | awk '{ $1=""; sub(/^ /,""); print }')
+  fi
+  while IFS= read -r f; do
+    [ -n "${f}" ] || continue
+    if file -b "${f}" | grep -q 'Mach-O'; then
+      sign_macho "${identity}" "${f}"
+    fi
+  done < <(find "${app}/Contents" -type f ! -name '*.dylib' ! -name '*.so' 2>/dev/null | sort)
+  sign_macho "${identity}" "${app}"
+}
+
+sign_app_bundle "dist/${APP_NAME}.app"
+
 echo "✔ GUI собран: dist/${APP_NAME}.app (${ARCH_SUFFIX})"
 
 ZIP_FILE="I2PChat-macOS-${ARCH_SUFFIX}-v${RELEASE_VERSION}.zip"
@@ -138,29 +220,31 @@ ZIP_STAGE="dist/${APP_NAME}-macOS-${ARCH_SUFFIX}-bundle"
 rm -rf "${ZIP_STAGE}"
 mkdir -p "${ZIP_STAGE}"
 cp -R "dist/${APP_NAME}.app" "${ZIP_STAGE}/"
-if [ -f "${BLINDBOX_INSTALL_SRC}" ]; then
-  cp "${BLINDBOX_INSTALL_SRC}" "${ZIP_STAGE}/install.sh"
+if [ -d "${BLINDBOX_PACKAGING}" ]; then
+  mkdir -p "${ZIP_STAGE}/blindbox-daemon"
+  cp "${BLINDBOX_PACKAGING}/i2pchat-blindbox.service" \
+     "${BLINDBOX_PACKAGING}/daemon.env.example" \
+     "${ZIP_STAGE}/blindbox-daemon/" 2>/dev/null || true
 fi
 ditto -c -k --sequesterRsrc --keepParent "${ZIP_STAGE}" "${ZIP_FILE}"
 rm -rf "${ZIP_STAGE}"
 echo "✔ Packed ${ZIP_FILE}"
 
-echo "==> Собираю slim TUI-only onedir (I2PChat-tui.spec, без PyQt6)"
-"${PYTHON_CMD}" -m PyInstaller --clean -y I2PChat-tui.spec
-
-# TUI-only zip: отдельный slim onedir из dist/I2PChat-tui (не копия GUI-бандла из .app)
 TUI_ZIP="I2PChat-macOS-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}.zip"
 TUI_STAGE="dist/${APP_NAME}-macOS-${ARCH_SUFFIX}-tui-stage"
 rm -rf "${TUI_STAGE}"
 mkdir -p "${TUI_STAGE}/I2PChat"
-cp "dist/${APP_NAME}-tui/${APP_NAME}-tui" "${TUI_STAGE}/I2PChat/"
-cp -R "dist/${APP_NAME}-tui/_internal" "${TUI_STAGE}/I2PChat/_internal"
-if [ -d "dist/${APP_NAME}-tui/vendor" ]; then
-  cp -R "dist/${APP_NAME}-tui/vendor" "${TUI_STAGE}/I2PChat/vendor"
+cp "${TUI_BIN}" "${TUI_STAGE}/I2PChat/${APP_NAME}-tui"
+chmod +x "${TUI_STAGE}/I2PChat/${APP_NAME}-tui"
+codesign --force --sign - --timestamp=none "${TUI_STAGE}/I2PChat/${APP_NAME}-tui" 2>/dev/null || true
+if [ -f "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" ]; then
+  mkdir -p "${TUI_STAGE}/I2PChat/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}"
+  cp "vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd" \
+    "${TUI_STAGE}/I2PChat/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd"
+  chmod +x "${TUI_STAGE}/I2PChat/vendor/i2pd/${I2PD_DARWIN_VENDOR_SUB}/i2pd"
 fi
 cat > "${TUI_STAGE}/i2pchat-tui" <<'EOF'
 #!/bin/sh
-# Resolve symlinks (e.g. Homebrew copies this to bin while I2PChat/ lives under opt).
 SCRIPT="$0"
 while [ -h "$SCRIPT" ]; do
   LINK="$(readlink "$SCRIPT" 2>/dev/null || true)"
@@ -183,28 +267,12 @@ EOF
 chmod +x "${TUI_STAGE}/i2pchat-tui"
 rm -f "${TUI_ZIP}"
 TUI_ZIP_ABS="$(pwd)/${TUI_ZIP}"
-# -y: keep symlinks as links (PyInstaller _internal uses many); plain -r follows links
-# and duplicates Qt/Python payloads → ~2× zip size vs GUI .app (ditto preserves links).
 ( cd "${TUI_STAGE}" && zip -qry "${TUI_ZIP_ABS}" . )
 rm -rf "${TUI_STAGE}"
 echo "✔ Packed ${TUI_ZIP}"
 
-# Release integrity artifacts: SHA256SUMS + detached GPG signature (SHA256SUMS.asc)
 SHA256_FILE="SHA256SUMS"
-"${PYTHON_CMD}" - "${ZIP_FILE}" "${TUI_ZIP}" "${SHA256_FILE}" <<'PY'
-import hashlib
-import os
-import sys
-
-zip_gui, zip_tui, checksums = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(checksums, "w", encoding="utf-8") as out:
-    for path in (zip_gui, zip_tui):
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(chunk)
-        out.write(f"{h.hexdigest()}  {os.path.basename(path)}\n")
-PY
+write_checksums "${SHA256_FILE}" "${ZIP_FILE}" "${TUI_ZIP}"
 echo "✔ Generated ${SHA256_FILE} (GUI + TUI zips)"
 
 if [ "${I2PCHAT_SKIP_GPG_SIGN:-0}" = "1" ]; then
@@ -239,9 +307,8 @@ else
       echo "ERROR: gpg signing failed in required mode" >&2
       exit 1
     fi
-    echo "⚠ gpg signing failed; continuing without detached signature"
-    echo "   Hint: gpg --list-secret-keys --keyid-format=long; set I2PCHAT_GPG_KEY_ID or default-key in gpg.conf." >&2
+    echo "⚠ gpg signing failed; continuing without detached signature" >&2
   fi
 fi
 echo "  Можно перенести dist/${APP_NAME}.app в /Applications и запускать двойным кликом."
-echo "  TUI: в Terminal: dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}-tui [профиль]"
+echo "  TUI: dist/${APP_NAME}.app/Contents/MacOS/${APP_NAME}-tui"

@@ -258,61 +258,83 @@ Practical notes:
 
 The gallery above is a short subset. **`screenshots/2.png`** (⋯ menu), **`3.png`** (profile picker), **`5.png`** (emoji picker), **`6.png`** (BlindBox diagnostics), **`8.png`** (I2P router dialog), **`9.png`** (Blind Box setup examples — `install.sh` / **Copy curl** for a custom replica), and **`10.png`** (TUI) are documented inline in [**MANUAL_EN.md**](docs/MANUAL_EN.md) / [**MANUAL_RU.md**](docs/MANUAL_RU.md).
 
-### 🛠 Running from source
+### 🛠 Building and running from source (C++)
 
-Requirements:
+The supported client is **C++20** under [`cpp/`](cpp/). It is wire-compatible with Python 1.4.x peers and reads the same profile directory. CMake presets: [`cpp/README.md`](cpp/README.md). Packaging / cutover: [`cpp/packaging/README.md`](cpp/packaging/README.md), [`cpp/docs/CUTOVER.md`](cpp/docs/CUTOVER.md).
 
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — install once (e.g. `brew install uv`, or the `curl` / PowerShell one-liner from the uv docs).
-- Python **3.12+** (matches CI); **3.14+** is recommended for parity with release build images.
-- one of:
-  - a **system** [i2pd](https://i2pd.website) router with **SAM** enabled (default port `7656`), or
-  - a **bundled** `i2pd` binary shipped with your build/package
+Requirements (all platforms):
 
-Dependencies and versions are locked in **`uv.lock`**; declared in **`pyproject.toml`**. After changing dependencies, run **`uv lock`** and commit the updated lockfile.
+- **CMake ≥ 3.24** and a C++20 compiler (GCC 12+, Clang 15+, Apple Clang, MSVC 2022)
+- **libsodium**, **Boost ≥ 1.81** (Asio), **nlohmann/json**
+- **FTXUI** (TUI), **Qt 6 Widgets** (GUI)
+- **Catch2 3** only if you build tests
+- a **system** [i2pd](https://i2pd.website) with **SAM** on port `7656`, or a **bundled** `i2pd` staged by the release scripts
 
-Quick run commands (from repo root). **uv** keeps the project environment in **`.venv`** (default); the commands below are enough.
-
-<img src="docs/icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" /> Linux (Debian/Ubuntu) — system packages you may need:
+<img src="docs/icons/icons8-debian-48.png" alt="Debian" width="28" height="28" align="middle" /> <img src="docs/icons/icons8-ubuntu-48.png" alt="Ubuntu" width="28" height="28" align="middle" /> **Linux (Debian/Ubuntu)**
 
 ```bash
-# Python 3.14 (if missing)
-sudo apt install python3.14 python3.14-venv
+sudo apt install cmake ninja-build g++ pkg-config \
+  libsodium-dev libboost-dev nlohmann-json3-dev \
+  qt6-base-dev libxcb-cursor0
+# FTXUI: distro package if present, else vcpkg feature `tui`.
+# X11: libxcb-cursor0 is required for the Qt xcb platform plugin.
 
-# PyQt6 6.5+ on X11: without this, Qt may fail to load the "xcb" platform plugin
-# (error: xcb-cursor0 / libxcb-cursor0 is needed)
-sudo apt install libxcb-cursor0
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DI2PCHAT_BUILD_TUI=ON -DI2PCHAT_BUILD_GUI=ON -DI2PCHAT_BUILD_TESTS=ON
+cmake --build cpp/build -j
+ctest --test-dir cpp/build --output-on-failure
+
+./cpp/build/apps/tui/i2pchat-tui --help
+./cpp/build/apps/gui/i2pchat-gui --profile default
 ```
 
-<img src="docs/icons/icons8-macos-48.png" alt="macOS" width="28" height="28" align="middle" /><img src="docs/icons/icons8-linux-48.png" alt="Linux" width="28" height="28" align="middle" /> macOS /  Linux
+<img src="docs/icons/icons8-macos-48.png" alt="macOS" width="28" height="28" align="middle" /> **macOS (Homebrew)**
 
 ```bash
-uv sync --python 3.14
-uv run python -m i2pchat.gui.main_qt    # GUI; optional profile name as first arg
-uv run python -m i2pchat.tui            # terminal (TUI)
+brew install cmake ninja libsodium boost nlohmann-json catch2 ftxui qt
+
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DI2PCHAT_BUILD_TUI=ON -DI2PCHAT_BUILD_GUI=ON
+cmake --build cpp/build -j
+
+./cpp/build/apps/tui/i2pchat-tui -p default
+./cpp/build/apps/gui/i2pchat-gui -p default
 ```
 
-<img src="docs/icons/icons8-windows-48.png" alt="Windows" width="28" height="28" align="middle" /> Windows (PowerShell)
+Homebrew prefixes are picked up automatically on Apple Silicon. Profiles live in `~/Library/Application Support/I2PChat/` (same as the historical Python client).
+
+<img src="docs/icons/icons8-windows-48.png" alt="Windows" width="28" height="28" align="middle" /> **Windows (MSVC + vcpkg)**
 
 ```powershell
-uv sync --python 3.14
-uv run python -m i2pchat.gui.main_qt
-uv run python -m i2pchat.tui
+# Visual Studio 2022 with “Desktop development with C++”, CMake, and Git.
+$env:VCPKG_ROOT = "C:\src\vcpkg"   # after bootstrap-vcpkg.bat
+$env:VCPKG_MANIFEST_FEATURES = "tests;tui;gui"
+
+cmake -S cpp -B cpp/build `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+  -DI2PCHAT_BUILD_TUI=ON -DI2PCHAT_BUILD_GUI=ON -DI2PCHAT_BUILD_TESTS=ON
+cmake --build cpp/build --config RelWithDebInfo --parallel
+ctest --test-dir cpp/build -C RelWithDebInfo --output-on-failure
+
+.\cpp\build\apps\tui\RelWithDebInfo\i2pchat-tui.exe --help
+.\cpp\build\apps\gui\RelWithDebInfo\i2pchat-gui.exe --profile default
 ```
 
-If the environment is already synced, you can run only the **`uv run python -m …`** lines you need.
+Without vcpkg, install libsodium/Boost/nlohmann-json/Qt/FTXUI yourself and pass **`CMAKE_PREFIX_PATH`**.
 
-**SAM stack:** live and BlindBox I2P traffic goes through **`i2pchat.sam`** (async client + protocol builders). You do not install **`i2plib`** from PyPI for this project.
+**CLI flags** (TUI and GUI share the parser): `-p` / `--profile`, `--app-root`, `--sam-host`, `--sam-port`, `--bundled-router`, `--connect`, `--replica`, `--replica-direct`, `--poll-seconds`, `--help`, `--version`.
 
-The same GUI path is available as `python -m i2pchat.run_gui` (matches [`i2pchat/run_gui.py`](i2pchat/run_gui.py), the PyInstaller analyzed script) or `python -m i2pchat.gui`. Prefer `-m` from the repo root; running the `.py` file directly can break package imports.
+**SAM:** the C++ stack talks SAM v3 itself. You do not need Python or `i2plib`.
 
-PyInstaller builds use [`i2pchat/run_gui.py`](i2pchat/run_gui.py) as the GUI entry script (equivalent to `python -m i2pchat.gui` / `python -m i2pchat.gui.main_qt`). Release zips can also ship **`I2PChat-tui`** / **`i2pchat-tui`** from a separate slim spec. All modules live under `i2pchat/`.
+**BlindBox daemon:** `i2pchat-blindbox-daemon`. systemd / fail2ban: [`cpp/apps/blindbox-daemon/packaging/`](cpp/apps/blindbox-daemon/packaging/). Public replicas behind I2P may keep replica auth empty; raw TCP should still use a token. See **§4.9** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md).
 
-**Developer note (BlindBox):** [`i2pchat/blindbox/blindbox_server_example.py`](i2pchat/blindbox/blindbox_server_example.py) is the hardened service implementation, while the **production-oriented package entrypoint** is `python -m i2pchat.blindbox.daemon`. The repo now also ships package-local `systemd`, env, install/bundle helper scripts, a one-shot `install.sh`, and fail2ban assets under [`i2pchat/blindbox/daemon/`](i2pchat/blindbox/daemon/) and [`i2pchat/blindbox/fail2ban/`](i2pchat/blindbox/fail2ban/). Public replicas behind an I2P tunnel may keep replica auth empty; raw TCP / loopback exposure should still keep a token. See **§4.9** in [MANUAL_EN](docs/MANUAL_EN.md) / [MANUAL_RU](docs/MANUAL_RU.md).
+The Python tree (`i2pchat/`, `uv`, PyInstaller) remains for interop tests and until cutover; it is not required to build or run the C++ clients.
 
-### 🔧  Cross-platform builds
+### 🔧  Cross-platform release builds
 
-The project is intentionally **cross‑platform** and ships with helper scripts for the main targets.  
-Everywhere, the recommended/runtime version is **Python 3.14+**. SAM transport is implemented in **`i2pchat.sam`** (PyPI **`i2plib`** is not a runtime dependency).
+The project is **cross-platform**. Release scripts compile the **C++** GUI (`i2pchat-gui` → `I2PChat`), TUI (`i2pchat-tui` → `I2PChat-tui`) and BlindBox daemon, then pack the same artifact names as before so apt/AUR/winget/Homebrew consumers only need new checksums.
+
+Shared helper: [`scripts/build_cpp_binaries.sh`](scripts/build_cpp_binaries.sh) (`cmake` + install). Optional bundled router is still staged by [`scripts/ensure_bundled_i2pd.sh`](scripts/ensure_bundled_i2pd.sh) — see [`docs/BUILD.md`](docs/BUILD.md).
 
 #### <img src="docs/icons/icons8-linux-48.png" alt="linux" width="28" height="28" align="middle" /> Linux (GUI AppImage)
 
@@ -322,11 +344,14 @@ Everywhere, the recommended/runtime version is **Python 3.14+**. SAM transport i
 
 This script:
 
-- Requires **uv**; uses `python3.14` (or `python3`) and **`uv sync`** into **`.venv`** (runtime + `build` group).
-- Builds a self‑contained GUI binary via PyInstaller.
-- Packs it into `I2PChat.AppImage` using `appimagetool`.
-- Creates release archive `I2PChat-linux-<arch>-v<version>.zip` (contains `I2PChat.AppImage`); **`arch`** is **`x86_64`** or **`aarch64`** depending on the host. CI publishes matching **`I2PChat-linux-aarch64-v*.zip`** and may attach **`SHA256SUMS.linux-aarch64`** separately from the amd64 checksum file.
-- **Bundled `i2pd`:** before PyInstaller, [`scripts/ensure_bundled_i2pd.sh`](scripts/ensure_bundled_i2pd.sh) stages binaries under `vendor/i2pd/`. If that tree is empty, it **clones by default** [github.com/MetanoicArmor/i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd) into `.cache/bundled-i2pd-source/` (override with **`I2PCHAT_BUNDLED_I2PD_GIT_URL`**, disable git fetch with **`I2PCHAT_SKIP_BUNDLED_I2PD_GIT=1`** or **`I2PCHAT_BUNDLED_I2PD_GIT_URL=`**). See [`docs/BUILD.md`](docs/BUILD.md).
+- Requires **cmake** (≥ 3.24), a C++20 compiler, **Qt 6**, **FTXUI**, libsodium, Boost, nlohmann/json. **Ninja** is used when present.
+- Builds into `cpp/build-release` and installs to `dist/cpp-install`.
+- Stages `I2PChat` / `I2PChat-tui` plus linked libraries and Qt platform plugins, packs **`I2PChat.AppDir`**, then **`appimagetool`** (pinned SHA-256, same as before).
+- Writes `dist/I2PChat-linux-<arch>-v<version>.AppImage` and **`I2PChat-linux-<arch>-v<version>.zip`** (by default one AppImage inside). **`arch`** is **`x86_64`** or **`aarch64`**. Set **`I2PCHAT_LINUX_GUI_ZIP_MODE=portable`** for a zip of the onedir (`I2PChat`, `I2PChat-tui`, `lib/`, `vendor/`).
+- Also packs **`I2PChat-linux-<arch>-tui-v<version>.zip`** (launcher `i2pchat-tui` + `usr/bin/I2PChat-tui`).
+- **Bundled `i2pd`:** [`scripts/ensure_bundled_i2pd.sh`](scripts/ensure_bundled_i2pd.sh) into `vendor/i2pd/` (default clone [i2pchat-bundled-i2pd](https://github.com/MetanoicArmor/i2pchat-bundled-i2pd)). Boost SONAME staging is unchanged (`stage_i2pd_linux_shlibs.sh`).
+
+Need **`zip`** on PATH for the archives. **`wget`** for appimagetool.
 
 #### <img src="docs/icons/icons8-macos-48.png" alt="macOS" width="28" height="28" align="middle" /> macOS (GUI .app bundle)
 
@@ -334,34 +359,32 @@ This script:
 ./build-macos.sh
 ```
 
-- Uses Python 3.14+ (from PATH or Homebrew).
-- Builds `dist/I2PChat.app` via PyInstaller.
+- Homebrew **cmake**, **qt**, **ftxui**, libsodium, boost, nlohmann-json.
+- Builds `dist/I2PChat.app` (`Contents/MacOS/I2PChat` and `I2PChat-tui`).
+- Runs **`macdeployqt`** when found (`brew --prefix qt`).
+- Always ad-hoc **`codesign`** nested Qt libraries after **`macdeployqt`** (required on recent macOS). Optional **`I2PCHAT_CODESIGN_IDENTITY`** for Developer ID + hardened runtime.
+- Zips **`I2PChat-macOS-<arch>-v<version>.zip`** and **`I2PChat-macos-<arch>-tui-v<version>.zip`**.
 
-#### <img src="docs/icons/icons8-windows-48.png" alt="Windows" width="28" height="28" align="middle" /> Windows build (GUI)
-
-For reproducible Windows builds there is a PowerShell script:
+#### <img src="docs/icons/icons8-windows-48.png" alt="Windows" width="28" height="28" align="middle" /> Windows
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build-windows.ps1
 ```
 
-For a safer one-off session, prefer:
+Safer one-off:
 
 ```powershell
 powershell -NoProfile -Command "Set-ExecutionPolicy -Scope Process RemoteSigned; .\build-windows.ps1"
 ```
 
-This limits policy relaxation to the current process and does not change machine/user policy permanently.
+This:
 
-It will:
+1. Requires **cmake** and a C++20 toolchain (MSVC 2022). Prefer **vcpkg**: set **`VCPKG_ROOT`** (manifest features `tui;gui`). Otherwise set **`CMAKE_PREFIX_PATH`** / **`QTDIR`**.
+2. Installs into `dist\cpp-install`, then copies **`dist\I2PChat\I2PChat.exe`** and **`I2PChat-tui.exe`**.
+3. Runs **`windeployqt`** on the GUI when available.
+4. Packs **`I2PChat-windows-x64-v<version>.zip`**, **`I2PChat-windows-tui-x64-v<version>.zip`**, and winget zips **without** embedded i2pd (`*-winget-*`) so Microsoft validation does not flag Riskware.I2PD.
 
-1. Require **uv** on `PATH` (install from the uv docs if needed).
-2. Run **`uv sync --frozen --group build --no-dev`** so **`uv.lock`** pins runtime + PyInstaller tooling.
-3. Build a GUI‑only PyQt6 binary:
-   - Output folder: `dist\I2PChat\`
-   - Main executable: `dist\I2PChat\I2PChat.exe`
-
-The resulting `I2PChat.exe` is self‑contained and can be distributed to machines without Python installed.
+The GUI zip is self-contained after `windeployqt` + vcpkg DLLs; machines do not need MSVC or Python.
 
 ### Verify release artifacts
 

@@ -1,0 +1,102 @@
+{
+  "_description": "One sample of each at-rest format written by the reference implementation. A C++ port must decrypt every blob here to the stated plaintext. Common layout: magic(4)|version(2 BE)|salt(32)|SecretBox, where SecretBox output is nonce(24)||ciphertext||tag(16).",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "common_layout": {
+    "header": "magic(4) | version(uint16 BE) | salt(32)",
+    "body": "NaCl SecretBox: nonce(24) || ciphertext || Poly1305 tag(16)",
+    "json_serialization": "ensure_ascii=True, separators=(',',':')",
+    "legacy": "plaintext JSON without magic is still accepted on read"
+  },
+  "files": [
+    {
+      "kind": "profile_dat",
+      "path_template": "{profile}.dat",
+      "magic": "I2PK",
+      "version": 1,
+      "key_material": {
+        "wrap_key_hex": "4444444444444444444444444444444444444444444444444444444444444444"
+      },
+      "kdf": {
+        "stage1_extract_salt": "I2PCHAT-PROFILE-DAT",
+        "stage1_expand_info": "I2PCHAT-PROFILE-DAT|profile-key",
+        "stage2_extract_salt": "<file salt (32 bytes from header)>",
+        "stage2_expand_info": "I2PCHAT-PROFILE-DAT|file-key"
+      },
+      "plaintext_utf8": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-Pw==\n",
+      "blob_hex": "4932504b000109a813557e222d56156a4b3109313007ea68891d3b602b1ed7fdf8d2be4bccb23cc2d541392865783b327fa05858bf105b49c7e11e70553c17fb81f165ddf7e78621de4b16efe95d2a9bf3723b45411f56fc0c5e992d8f9710f732bbb74fca18e12c9f70f27cc9ef8889691f15df390617bd06ab7578453dd714af6a2d6d8b0047fd949efac0b50119be025791a11ebb0f9a918da0496045b7aabc779a481e8b63",
+      "keyring": {
+        "service": "i2pchat",
+        "account_template": "{profile}__dat_wrap__",
+        "encoding": "base64 of 32 raw bytes",
+        "sidecar_template": "{profile}.dat.wrap"
+      }
+    },
+    {
+      "kind": "contacts",
+      "path_template": "{profile}.contacts.json",
+      "magic": "I2CB",
+      "version": 1,
+      "key_material": {
+        "identity_key_hex": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "kdf": {
+        "domain": "I2PCHAT-CONTACTS",
+        "scheme": "sealed_json two-stage HKDF"
+      },
+      "plaintext_utf8": "{\"version\":2,\"last_active_peer\":\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\",\"contacts\":[{\"addr\":\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\",\"display_name\":\"\\u0422\\u0435\\u0441\\u0442 \\ud83d\\ude42\",\"note\":\"note\",\"last_preview\":\"hi\",\"last_activity_ts\":\"2026-01-01T00:00:00+00:00\"}]}",
+      "blob_hex": "4932434200010b90232996c6a8091b50d438aa766ec2d8b415f6ef333a74c7b489c6b8a5115e07d0d0b4a6aaf38ae1c86508d70a3bd15841376440585f19f0c986bdfe8bfb3b34834fdb5a7e9f14ef32fc0cb3c6fc11858298b683f333077285b55fb624f4702ffac8ae6ca965504204a38907ab486173540c8966a66de7b0b323152e28e43afd2ffe35e525bf781ceee7fc52be454d7b974254375fee64e1ad579061d8b9fd68afff603428374666264b3029eeadfd832727d9d307b716d2c6069d7780b190dfdb0a2b4ed12c28544402656ed348a23dbb4abef9aca22b757055d31c0e3fefbcf0de0b901473285e42f63b68aea317323d4564a6879e2acc23c70de442899edb8f37eb57f15986d47803701ff6018c58a1fcc0ffe4b2d8b61758e4b3af44e9886d9b4b9ada0e02dc1db0489db3a23c3767618237d0e2d843b1184ebbfbd382821661645c2b44249c104e26f62fae4d07c3924db1197cf3779a6831dc6e54762eeec9f45f123a9619c6e525c7ef20dba80b0855"
+    },
+    {
+      "kind": "compose_drafts",
+      "path_template": "{profile}.compose_drafts.json",
+      "magic": "I2CD",
+      "version": 1,
+      "key_material": {
+        "identity_key_hex": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "kdf": {
+        "domain": "I2PCHAT-COMPOSE-DRAFTS",
+        "scheme": "sealed_json two-stage HKDF"
+      },
+      "plaintext_utf8": "{\"version\":1,\"drafts\":{\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\":\"unsent draft\"}}",
+      "blob_hex": "493243440001382a59f939f94c704fb8abce12cd842ff77bf7e7b1f8b55d3233a8b03dd36e8cac23d446f61e6cf625a487d300dc0ac1173ea7d2077f1c37ef4a01eabe564daa6ff6735716c189e389f7ed5aafd3b7e29563477037285c5cb7dcbafa5fc8b1d67aa5957f0c7c53b08f1fc63d537b57a3f7a30cdd1133f687fc33bca5db39fb56d8c953d16d0c5279378f0f3bf3eb5bfe6dad756530bb0f66ca897665361e66b6bdc0a0852930"
+    },
+    {
+      "kind": "chat_history",
+      "path_template": "{profile}.history.<sha256(lower(peer))>.enc",
+      "magic": "I2CH",
+      "version": 2,
+      "key_material": {
+        "identity_key_hex": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "kdf": {
+        "profile_key": "HKDF(salt='I2PCHAT-HISTORY', ikm=identity_key, info='I2PCHAT-HISTORY|profile-key')",
+        "file_key": "HKDF(salt=file_salt, ikm=profile_key, info='I2PCHAT-HISTORY|file-key|' + lower(peer))",
+        "profile_key_hex": "5bd2ec7cd6b81176e1f8377e6b6f20072e9391e7a74063e4c2577abb8556ceb8",
+        "file_key_hex": "1d8c60c559959b04af62ab8a77136d5abc298df61dc3bc8f5c21f1e8826313bf"
+      },
+      "peer": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+      "peer_file_id": "928d7ec5ef2d67dd120adb74b018b773a15c815394e0bcf412b6bc2809b6ada5",
+      "legacy_peer_file_id": "928d7ec5ef2d67dd",
+      "plaintext_utf8": "{\"version\":2,\"peer\":\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\",\"messages\":[{\"kind\":\"out\",\"text\":\"\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442\",\"ts\":\"2026-01-01T00:00:00+00:00\"},{\"kind\":\"in\",\"text\":\"hello\",\"ts\":\"2026-01-01T00:00:01+00:00\"}],\"truncated_at\":null}",
+      "blob_hex": "4932434800026218ec721806fc0339075cbcbe04e51bf6e98572a7293e0ee85ec710423ee29ec5f41ddb03d80bd330632a0d670885534c4fb1e6ef1868c8654b3828e271fd810b3656e403c0a50583a193443694480e73f34eb2d352b408b14e4bb9e0f097d1f97cd1d6b4d862567e7e07fb046585cedb34ef7beebfc65d713e37cf59befb08853976a2eaec03bd55718db8fdddbf9eaef25ef830ad12150c54bb0660e11234ef34eea28ebb217abbd28b31e591d5f5d987edc06aabb155f5c15e04506df6a37821a5370b25aa000818e00fd54c0c765d78f534daa68c80009a92f56c3f4db94c1ada77bce70fca6cc224f220e8dae5bd34141a299c6eb7d32281c1cd3dcfc840314ffd44ccb7ff8e4fdd06a8142ea1f9caf8c968a12ea691bbaed8a0d7d4a9d4153569b16c7ed170ceedaf077cd5b98d4eb99afc28fdb2991740729d94723d1e400ee2351504e2c668a68ac31e2474"
+    },
+    {
+      "kind": "group_store",
+      "path_template": "{profile}.group.<sha256(group_id)>.json",
+      "magic": "I2GS",
+      "version": 1,
+      "key_material": {
+        "identity_key_hex": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "kdf": {
+        "profile_key": "HKDF(salt='I2PCHAT-GROUPSTORE', ikm=identity_key, info='I2PCHAT-GROUPSTORE|profile-key')",
+        "file_key": "HKDF(salt=file_salt, ikm=profile_key, info='I2PCHAT-GROUPSTORE|file-key|' + group_token)"
+      },
+      "group_id": "group-alpha",
+      "group_token": "90adb9befe77f6fe14209a539e0762ab5b746efc1a1e095dc8b07a6f70bb4ecc",
+      "plaintext_utf8": "{\"version\":1,\"state\":{\"group_id\":\"group-alpha\",\"title\":\"\\u0413\\u0440\\u0443\\u043f\\u043f\\u0430\",\"epoch\":1,\"members\":[\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\"]},\"next_group_seq\":3,\"history\":[],\"seen_msg_ids\":[],\"pending_deliveries\":[]}",
+      "blob_hex": "493247530001ab9ba94fd6178bd0a077a43df3d4499eb9e8c1efe173820dedf308d84ee750b39365b8febafaf288a11fce392c8f702e2390f2b15edf654e43820d3451cbbc6ed765b796e35ed0aab218be0c8d693fdf505140be6ca0a877e3c7c36534bd001a2c67bbecf413254fd28e579009a5efcd972a412bf954d66f5e4284db86026e89cf363a91dbe7c51d974f8f15b8cbe26aa38df1d6dfecf7d19f68804d50ae3d8c3e98ba4b8e7a77cfee35e6df82da8e08ec22f54ce6f1a92568d03759420aa87b247ba7912eced883966bd95325bdf7cefbe35b3994668ffa01824b6c2a9e6e0fc490e59d63df57547ff89e67e3fff711199cc9ccef5169dfc383012dd7a056ea4680b6ff9cdf18ce7341216f585663a03712c720eb5343096aed2388646d78bf8e72143e4c2e4f12aeaa5a6a86756b6600a679840d49adc180c23b1f343b2994d6b4b989f88eeb9ae64634ad0ddbb199067bb63a50d5d7a82d030532893bb1b8586e7e81159fb3aa9bae4ce73373b90e8a604bbeab"
+    }
+  ]
+}

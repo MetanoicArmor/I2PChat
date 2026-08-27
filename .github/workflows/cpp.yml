@@ -1,0 +1,89 @@
+name: C++ client
+
+on:
+  push:
+    paths:
+      - "cpp/**"
+      - ".github/workflows/cpp.yml"
+      - "VERSION"
+  pull_request:
+    paths:
+      - "cpp/**"
+      - ".github/workflows/cpp.yml"
+      - "VERSION"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: cpp
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ libsodium-dev \
+            libboost-dev nlohmann-json3-dev catch2 pkg-config
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja libsodium boost nlohmann-json catch2 ftxui
+
+      - name: Bootstrap vcpkg (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ github.workspace }}
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DI2PCHAT_BUILD_TESTS=ON \
+            -DI2PCHAT_BUILD_TUI=${{ runner.os == 'macOS' && 'ON' || 'OFF' }} \
+            -DI2PCHAT_BUILD_GUI=OFF \
+            -DI2PCHAT_WARNINGS_AS_ERRORS=ON
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          cmake -S . -B build `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_MANIFEST_FEATURES="tests" `
+            -DI2PCHAT_BUILD_TESTS=ON `
+            -DI2PCHAT_BUILD_TUI=OFF `
+            -DI2PCHAT_BUILD_GUI=OFF `
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        if: runner.os != 'Windows'
+        run: cmake --build build
+
+      - name: Test
+        if: runner.os != 'Windows'
+        run: ctest --test-dir build --output-on-failure --timeout 120
+
+      - name: Build
+        if: runner.os == 'Windows'
+        run: cmake --build build --config Release
+
+      - name: Test
+        if: runner.os == 'Windows'
+        run: ctest --test-dir build -C Release --output-on-failure --timeout 120

@@ -1,0 +1,99 @@
+{
+  "_description": "Full HS4 handshake transcript with fixed keys: X25519 DH, directional subkey derivation, Ed25519 INIT/RESP signatures, FINISHED key confirmation and per-frame MAC. Note the signed transcript uses the HS3 domain label while the KDF uses HS4 \u2014 reproduce both verbatim. Source: i2pchat/crypto.py and _build_{init,resp}_sig_payload in i2pchat/core/i2p_chat_core.py.",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "parties": {
+    "initiator_addr": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+    "responder_addr": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+    "initiator_signing_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "initiator_signing_pub_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+    "responder_signing_seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+    "responder_signing_pub_hex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+    "initiator_eph_priv_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+    "initiator_eph_pub_hex": "38ab664bd86f77d7e66bdd9ae0792913a94fd8b33a1260027e4b46c1f4884c67",
+    "responder_eph_priv_hex": "6666666666666666666666666666666666666666666666666666666666666666",
+    "responder_eph_pub_hex": "219e4d800da968d2a5fcb009c784f4746c7138edb9ee4844b739e830b05cf424",
+    "nonce_init_hex": "cccd3da99251fb0c86becb54fc68aa5725bcdeb6543c63586fecc2a4d193d315",
+    "nonce_resp_hex": "14c31f7bcef50c35bc6cede9aeba2db3a7ee59c7b183b8c0258bc829be56e237"
+  },
+  "dh_shared_hex": "b6ef1ad8e5f6be50ef861f19399ec05ec370ff39763d6ef2847a52495aad9bb4",
+  "subkeys": {
+    "k_enc_i2r_hex": "9a728ab422107b910e7c1f7a4c3a0d00f185eaa684d7792c6ee9c18be6cd5d9c",
+    "k_mac_i2r_hex": "47460e4f0c14d5e9a99289bba939504360f2a5d1b866ca72ff9130726ac53937",
+    "k_enc_r2i_hex": "0de3c72e62742b3f053fcc04050dac365d52047a945002f4200a824b10ff5c24",
+    "k_mac_r2i_hex": "f72c8614dba9c542c747b50b61debc5e95aa7cfb501a6a3dcf7700eaf83c1c26"
+  },
+  "signatures": {
+    "init_sig_payload_utf8": "I2PCHAT-HS3|INIT|aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm|nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz|cccd3da99251fb0c86becb54fc68aa5725bcdeb6543c63586fecc2a4d193d315|38ab664bd86f77d7e66bdd9ae0792913a94fd8b33a1260027e4b46c1f4884c67|d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+    "init_signature_hex": "319c1c405e47d162ff903d54bc8b58073ecbdff4e272bb17242043627e677b2220b90f626ac5950ad0dee655381daa671cf29a5cf59f67787c896c8ba008d30d",
+    "resp_sig_payload_utf8": "I2PCHAT-HS3|RESP|nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz|aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm|cccd3da99251fb0c86becb54fc68aa5725bcdeb6543c63586fecc2a4d193d315|38ab664bd86f77d7e66bdd9ae0792913a94fd8b33a1260027e4b46c1f4884c67|d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737|14c31f7bcef50c35bc6cede9aeba2db3a7ee59c7b183b8c0258bc829be56e237|219e4d800da968d2a5fcb009c784f4746c7138edb9ee4844b739e830b05cf424|a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+    "resp_signature_hex": "b9f9a925377c71cb2a5cdd769f8082e3b649b048cd6c9eef613e974d5507e69cfbe42ce41e357ea31e0c37c84247ab935b815559008264e2892d516ef494d40e"
+  },
+  "key_confirmation": {
+    "transcript_hash_hex": "0103d3cf9d97c65df5642a0749895955107fea09872c7c15bca1e06f005b26df",
+    "finished_i2r_hex": "7b28650fe93f3434ee9ce24b9f41bd191edb922eaa8831b4ea20cd84b879cc68",
+    "finished_r2i_hex": "1685a671bcd51331764fc5a98dcc46bf8abb9f438c8a84ce4ceb6081fcc5f5c7"
+  },
+  "frame_macs": [
+    {
+      "key_hex": "47460e4f0c14d5e9a99289bba939504360f2a5d1b866ca72ff9130726ac53937",
+      "msg_type": "U",
+      "seq": 1,
+      "msg_id": 0,
+      "flags": 1,
+      "body_hex": "68656c6c6f",
+      "mac_hex": "c7371fa4fd18c25118bb64a7679443bcc54476dd9a87a4252cd96cc4085e1ef8"
+    },
+    {
+      "key_hex": "47460e4f0c14d5e9a99289bba939504360f2a5d1b866ca72ff9130726ac53937",
+      "msg_type": "U",
+      "seq": 2,
+      "msg_id": 3735928559,
+      "flags": 1,
+      "body_hex": "",
+      "mac_hex": "b3b00f5a48140ea901b598f771ca456efa89ddfcabd0e5cde2d57960a7418a3c"
+    },
+    {
+      "key_hex": "47460e4f0c14d5e9a99289bba939504360f2a5d1b866ca72ff9130726ac53937",
+      "msg_type": "D",
+      "seq": 18446744073709551615,
+      "msg_id": 18446744073709551615,
+      "flags": 1,
+      "body_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "mac_hex": "42aa395dce8217001859fe1b9a03479c40e1467af25bcf5f2a6e1482a144ead5"
+    },
+    {
+      "key_hex": "47460e4f0c14d5e9a99289bba939504360f2a5d1b866ca72ff9130726ac53937",
+      "msg_type": "P",
+      "seq": 7,
+      "msg_id": 42,
+      "flags": 0,
+      "body_hex": "70696e67",
+      "mac_hex": "fbacfb7e2ae62e177c2f541554833960e945c3967c44aa66dea5ea1208c82720"
+    }
+  ],
+  "invalid_dh_public_keys_hex": [
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "00000000000000000000000000000000000000000000000000000000000000"
+  ],
+  "messages": {
+    "init": "INIT:cccd3da99251fb0c86becb54fc68aa5725bcdeb6543c63586fecc2a4d193d315:38ab664bd86f77d7e66bdd9ae0792913a94fd8b33a1260027e4b46c1f4884c67:d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737:319c1c405e47d162ff903d54bc8b58073ecbdff4e272bb17242043627e677b2220b90f626ac5950ad0dee655381daa671cf29a5cf59f67787c896c8ba008d30d",
+    "resp": "RESP:14c31f7bcef50c35bc6cede9aeba2db3a7ee59c7b183b8c0258bc829be56e237:219e4d800da968d2a5fcb009c784f4746c7138edb9ee4844b739e830b05cf424:a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0:b9f9a925377c71cb2a5cdd769f8082e3b649b048cd6c9eef613e974d5507e69cfbe42ce41e357ea31e0c37c84247ab935b815559008264e2892d516ef494d40e",
+    "finished_from_initiator": "FINISHED:7b28650fe93f3434ee9ce24b9f41bd191edb922eaa8831b4ea20cd84b879cc68",
+    "finished_from_responder": "FINISHED:1685a671bcd51331764fc5a98dcc46bf8abb9f438c8a84ce4ceb6081fcc5f5c7"
+  },
+  "directional_key_roles": {
+    "initiator": {
+      "send": "i2r",
+      "recv": "r2i"
+    },
+    "responder": {
+      "send": "r2i",
+      "recv": "i2r"
+    }
+  },
+  "timeouts_seconds": {
+    "handshake": 90,
+    "keepalive_interval": 15,
+    "liveness": 90
+  }
+}

@@ -1,0 +1,156 @@
+{
+  "_description": "BlindBox key schedule (pairwise and group) plus encrypted blobs. Blob plaintext is BLNDBX01|ver(1)|dir(1)|index(8 BE)|state_tag(16)|len(4 BE) padded to 256-byte buckets, then SecretBox. Source: i2pchat/blindbox/blindbox_key_schedule.py and blindbox_blob.py.",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "root_secret_hex": "9999999999999999999999999999999999999999999999999999999999999999",
+  "constants": {
+    "blob_magic": "BLNDBX01",
+    "blob_version": 1,
+    "header_struct": ">8sBBQ16sI",
+    "padding_bucket": 256,
+    "direction_codes": {
+      "send": 1,
+      "recv": 2
+    },
+    "max_frame_size": 2097152
+  },
+  "pairwise_keys": [
+    {
+      "local_peer_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+      "remote_peer_id": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+      "direction": "send",
+      "index": 0,
+      "epoch": 0,
+      "direction_label": "LOW_TO_HIGH",
+      "lookup_token": "1375592dc5645d4d4f0688524b92f0b12bfb377d3c97e248e8554721507f6b6c",
+      "lookup_key_hex": "406549ecaba77f1fd42892fe1d806aa0c8560bc85f28d3640ca2efee8c7d6313",
+      "blob_key_hex": "4c8c222c0ffe0c271af180d94b9455304196e41403ffe1a4ae5c038a3255d7ad",
+      "state_tag_hex": "44e926296d44a51efdaf1c893cc9f214"
+    },
+    {
+      "local_peer_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+      "remote_peer_id": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+      "direction": "recv",
+      "index": 0,
+      "epoch": 0,
+      "direction_label": "HIGH_TO_LOW",
+      "lookup_token": "ffd05f34db7a0736205dada7573ba756cfaa0771fddcdf8f5db247774c9477de",
+      "lookup_key_hex": "b4cbe3f942f9a2cc82cb680b55ff03321530a9437651c3f70dfc438d8731d60d",
+      "blob_key_hex": "71fd8e1e7b53585151c336233e5043bbae888d3308a4257226f675ec3b0bae27",
+      "state_tag_hex": "7bedccd71e9da6b85a75cb232e9e3c5c"
+    },
+    {
+      "local_peer_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+      "remote_peer_id": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+      "direction": "send",
+      "index": 1,
+      "epoch": 0,
+      "direction_label": "LOW_TO_HIGH",
+      "lookup_token": "bf0ecf583f2deeb90fff6c362b4236b9faac77be176c6ac608856562ecaca3c2",
+      "lookup_key_hex": "780dee595f1d8a61abb51d720be3ad2d64a00c4a2d86f63cfe8af92a19311698",
+      "blob_key_hex": "a1431eec5bf84005e0c1d156b8cdc2c268604855c6b19b4d00874119304c1848",
+      "state_tag_hex": "3e787a0d8889c5190cbfd72934064b4b"
+    },
+    {
+      "local_peer_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+      "remote_peer_id": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+      "direction": "send",
+      "index": 5,
+      "epoch": 3,
+      "direction_label": "LOW_TO_HIGH",
+      "lookup_token": "8f926d9b97fffde4daba279f9dfd84e778c5f796aa4579764f88943d6953a801",
+      "lookup_key_hex": "37b84ad8f207fe8c51bb0c1faed577db1d416311e3345f594819c97f6b7421c3",
+      "blob_key_hex": "a1f5d5c51002e1a2fb7d6d9af7a517cbba23a644963517c7b85c2cfaf610e8d9",
+      "state_tag_hex": "c907c71750284eac3590239d50abdc01"
+    },
+    {
+      "local_peer_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+      "remote_peer_id": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+      "direction": "recv",
+      "index": 1234567,
+      "epoch": 0,
+      "direction_label": "HIGH_TO_LOW",
+      "lookup_token": "c817f83098639a1fa5faf24a333d70f1ebc552d9fd6765091e4d90856f99b795",
+      "lookup_key_hex": "b12d7ac43b996d9786151fdc31fba299bfd03dbec771f8af1de6cbd764afe057",
+      "blob_key_hex": "12e5e3700a2f9d8da4c8333f7d046f4af599f19a414a5d5010c4283ba5c51b1f",
+      "state_tag_hex": "d2b4f079146a891f5cde4ab3cd337055"
+    }
+  ],
+  "mirrored_direction_check": {
+    "note": "local/remote swapped with direction recv must match the send entry of index 0 from the other side",
+    "lookup_token": "1375592dc5645d4d4f0688524b92f0b12bfb377d3c97e248e8554721507f6b6c",
+    "direction_label": "LOW_TO_HIGH"
+  },
+  "group_keys": [
+    {
+      "group_id": "group-alpha",
+      "sender_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+      "direction": "send",
+      "index": 0,
+      "group_epoch": 0,
+      "root_epoch": 0,
+      "direction_label": "GROUP_SEND",
+      "lookup_token": "6b395e765f7cdb27dc91c5109133b7c562e38c1e7afe842928902b506899646f",
+      "lookup_key_hex": "44ee7c25d8f95c39f710bd7869887da7db3cd0cf9f8eb6ccaa4351dcfec77e94",
+      "blob_key_hex": "53b8d54332263166635865af2cf3672353122984eeff6e5543263ebf78653d6d",
+      "state_tag_hex": "6e22959dfa4aacc5ea07b5de3bd86661"
+    },
+    {
+      "group_id": "group-alpha",
+      "sender_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+      "direction": "send",
+      "index": 1,
+      "group_epoch": 2,
+      "root_epoch": 1,
+      "direction_label": "GROUP_SEND",
+      "lookup_token": "efa70179962b718c2beac0fa90634f424469ce40c7edc47fd4b8ca220787fb2a",
+      "lookup_key_hex": "d1aa08836b956cc3655f18fa291a8e681e94a3d10f7667e17da2586c1c9e4ffb",
+      "blob_key_hex": "d8d6f4cc4889d76cc599b7a8e5eb2446f212eea2f096572c99ab7e985b9cda46",
+      "state_tag_hex": "5f0c533ab31cbb85b3143624a43164fa"
+    },
+    {
+      "group_id": "group-alpha",
+      "sender_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+      "direction": "recv",
+      "index": 3,
+      "group_epoch": 0,
+      "root_epoch": 0,
+      "direction_label": "GROUP_RECV",
+      "lookup_token": "e86dbd2907e5fc876bdcec0b4e3d5fb85dd6153db0724d032bd06f41815eadd7",
+      "lookup_key_hex": "017ed356c7a32ad1e1791aac54662d21145da4b0bc8b12f39a2b67a91d3835f2",
+      "blob_key_hex": "ab489ab2c5875b8e80874edd0a0c6015d53a8d46d1a166dd0d0dd7d789d0c370",
+      "state_tag_hex": "37386a60507c36ae03f8fb12a074ebfd"
+    }
+  ],
+  "blobs": [
+    {
+      "frame_hex": "6f66666c696e65206d657373616765206672616d65",
+      "direction": "send",
+      "index": 0,
+      "blob_key_hex": "4c8c222c0ffe0c271af180d94b9455304196e41403ffe1a4ae5c038a3255d7ad",
+      "state_tag_hex": "44e926296d44a51efdaf1c893cc9f214",
+      "blob_hex": "8f0005b5807ed02ce5fec48bdb4f1fe602d3e3eb1051ca76a062f91ce060caac36edc5e122d63478468eee13f8d6560575b04cdccf32ec696b2524f76ce3e43e554f7eb18a5a6fdcfb7fedf57b17f72fc89ee4560b571274674a1032ce06cd3fe5c1f47a72bc01d051ed8553f11396b1ac8acdac9ba4f56f7a2e61c911f7b15a2ec811e43ffb870e9e5788c98936a843d9b17ef1679c3b39a38a4293adac9cf4852e7043fa5d3c42de42f34c62da2a341b46933c4a25ece882238bd4241bd7f766853eefcf7b54b3cd6ae94db6eccb1174905cac8d9d7c07a0fb27a5598943ef256f69c5628cd883c19d80c515535b2e193ea7e1cd321b9c303392b45fec31050786b5137b9b88fefad0fdb189e3e8cfa7581871905ad71297c5bb97afbabaa76cb6e216e8e53488"
+    },
+    {
+      "frame_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7",
+      "direction": "recv",
+      "index": 7,
+      "blob_key_hex": "45645b8bd3c4205a5a11681b8244e1b875006063706bc00484c5671f7bb8e453",
+      "state_tag_hex": "0657835fba97fa804991a28f33e30675",
+      "blob_hex": "c000aaa3f1847f858d2fbbddc4798c868ec8b1a2c63f740b6fdbf99b8f3c3ac605c3c322a34f120c96c427e4a6ae82c0e3281012eca7bf319f2cb44719cd1bbca28f556c218b5bedb019a23c31ee7d2b5889ba3cbe6f181ae6b974b8fe927e64bc2018e9959ffd2520e26c73922f5612755f50f789af644afdf65de42a4f6682f4848efa60c3a4bfbeb413e7ce373d976c5b721e8e37dbf9b9026dc8c3dd358c96d535cab92ae6e497e13d5fc1cb88369e4514dd1077473bc6cdce7398e61da41ae473582200de72eaf1b7be48623fe792717e1fd7296767b4427fbd367958908900b6ee8efe61cffac575d855ba31790357a463c01dd21014957191a5ac3e41a65f7be620b7a12ec9df66fc8f171e9642ebff808b70014934c0a8acdbd06d4284a50cee7ff06d97"
+    }
+  ],
+  "replica_protocol": {
+    "put": "PUT <lookup_token> <size> [auth_token]\\n<raw bytes>",
+    "get": "GET <lookup_token> [auth_token]\\n",
+    "responses": [
+      "OK",
+      "EXISTS",
+      "FULL",
+      "RATE",
+      "ERR",
+      "MISS"
+    ],
+    "get_hit": "OK <size>\\n<raw bytes>",
+    "default_port": 19444
+  }
+}

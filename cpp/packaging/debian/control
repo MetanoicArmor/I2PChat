@@ -1,0 +1,32 @@
+Source: i2pchat
+Section: net
+Priority: optional
+Maintainer: I2PChat <noreply@example.invalid>
+Build-Depends: debhelper-compat (= 13), cmake, ninja-build, g++,
+ pkg-config, libsodium-dev, libboost-dev, nlohmann-json3-dev,
+ qt6-base-dev, libftxui-dev
+Standards-Version: 4.7.0
+Homepage: https://github.com/MetanoicArmor/I2PChat
+Rules-Requires-Root: no
+
+Package: i2pchat
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: i2pd
+Description: peer-to-peer chat over I2P (Qt client)
+ Desktop client for I2PChat. Wire-compatible with 1.4.x peers. Reads the
+ same on-disk profiles as the historical Python client.
+
+Package: i2pchat-tui
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: i2pd
+Description: peer-to-peer chat over I2P (terminal client)
+ FTXUI terminal client. Same core and profile directory as i2pchat.
+
+Package: i2pchat-blindbox-daemon
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: BlindBox replica daemon for I2PChat
+ Store-and-forward replica used for offline delivery. Emits an audit.log
+ that fail2ban can consume.

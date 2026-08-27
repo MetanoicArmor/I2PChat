@@ -1,0 +1,174 @@
+{
+  "_description": "Chat text is split by Unicode code points, not bytes and not UTF-16 units. Break preference: last newline, then last space, then a hard cut; a break is only taken at or beyond max_chars // 4. Empty input yields an empty list. Source: i2pchat/protocol/chat_text_chunking.py:split_long_chat_text.",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "max_chat_message_chars": 4096,
+  "min_break_lookback_fraction": 4,
+  "min_allowed_max_chars": 32,
+  "cases": [
+    {
+      "max_chars": 4096,
+      "code_point_count": 0,
+      "utf8_byte_count": 0,
+      "chunk_count": 0,
+      "chunk_code_point_lengths": [],
+      "text_utf8": "",
+      "chunks_utf8": []
+    },
+    {
+      "max_chars": 4096,
+      "code_point_count": 5,
+      "utf8_byte_count": 5,
+      "chunk_count": 1,
+      "chunk_code_point_lengths": [
+        5
+      ],
+      "text_utf8": "short",
+      "chunks_utf8": [
+        "short"
+      ]
+    },
+    {
+      "max_chars": 4096,
+      "code_point_count": 10,
+      "utf8_byte_count": 20,
+      "chunk_count": 1,
+      "chunk_code_point_lengths": [
+        10
+      ],
+      "text_utf8": "\u043f\u043f\u043f\u043f\u043f\u043f\u043f\u043f\u043f\u043f",
+      "chunks_utf8": [
+        "\u043f\u043f\u043f\u043f\u043f\u043f\u043f\u043f\u043f\u043f"
+      ]
+    },
+    {
+      "max_chars": 4096,
+      "code_point_count": 4096,
+      "utf8_byte_count": 4096,
+      "chunk_count": 1,
+      "chunk_code_point_lengths": [
+        4096
+      ],
+      "text_repeat": {
+        "unit": "a",
+        "count": 4096
+      }
+    },
+    {
+      "max_chars": 4096,
+      "code_point_count": 4097,
+      "utf8_byte_count": 4097,
+      "chunk_count": 2,
+      "chunk_code_point_lengths": [
+        4096,
+        1
+      ],
+      "text_repeat": {
+        "unit": "a",
+        "count": 4097
+      }
+    },
+    {
+      "max_chars": 4096,
+      "code_point_count": 10,
+      "utf8_byte_count": 40,
+      "chunk_count": 1,
+      "chunk_code_point_lengths": [
+        10
+      ],
+      "text_utf8": "\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d",
+      "chunks_utf8": [
+        "\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d"
+      ]
+    },
+    {
+      "max_chars": 4096,
+      "code_point_count": 4101,
+      "utf8_byte_count": 16404,
+      "chunk_count": 2,
+      "chunk_code_point_lengths": [
+        4096,
+        5
+      ],
+      "text_repeat": {
+        "unit": "\ud83c\udf0d",
+        "count": 4101
+      }
+    },
+    {
+      "max_chars": 32,
+      "code_point_count": 51,
+      "utf8_byte_count": 51,
+      "chunk_count": 2,
+      "chunk_code_point_lengths": [
+        21,
+        30
+      ],
+      "text_utf8": "aaaaaaaaaaaaaaaaaaaa\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "chunks_utf8": [
+        "aaaaaaaaaaaaaaaaaaaa\n",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "max_chars": 32,
+      "code_point_count": 63,
+      "utf8_byte_count": 63,
+      "chunk_count": 2,
+      "chunk_code_point_lengths": [
+        32,
+        31
+      ],
+      "text_utf8": "aa\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "chunks_utf8": [
+        "aa\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "max_chars": 32,
+      "code_point_count": 51,
+      "utf8_byte_count": 51,
+      "chunk_count": 2,
+      "chunk_code_point_lengths": [
+        20,
+        30
+      ],
+      "text_utf8": "aaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "chunks_utf8": [
+        "aaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "max_chars": 32,
+      "code_point_count": 100,
+      "utf8_byte_count": 100,
+      "chunk_count": 4,
+      "chunk_code_point_lengths": [
+        32,
+        32,
+        32,
+        4
+      ],
+      "text_repeat": {
+        "unit": "c",
+        "count": 100
+      }
+    },
+    {
+      "max_chars": 32,
+      "code_point_count": 40,
+      "utf8_byte_count": 160,
+      "chunk_count": 2,
+      "chunk_code_point_lengths": [
+        32,
+        8
+      ],
+      "text_utf8": "\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d",
+      "chunks_utf8": [
+        "\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d",
+        "\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d\ud83c\udf0d"
+      ]
+    }
+  ]
+}

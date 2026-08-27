@@ -1,0 +1,145 @@
+{
+  "_description": "One group conversation record as the reference implementation writes it. The C++ port must open the blob, read every field of the payload, and unwrap the group root secrets \u2014 which are encrypted under the BlindBox local wrap key for scope 'group:<group_id>', not under the record's own key. Source: i2pchat/storage/group_store.py.",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "profile": "default",
+  "identity_key_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+  "signing_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "group_id": "group-beta",
+  "group_token": "69c9a34c79bf4facde97c53d39e887f69accf56d1fcd0e76aa060869a468589b",
+  "wrap_scope": "group:group-beta",
+  "record_version": 1,
+  "max_seen_msg_ids": 4096,
+  "root_secret_hex": "5151515151515151515151515151515151515151515151515151515151515151",
+  "pending_root_secret_hex": "6262626262626262626262626262626262626262626262626262626262626262",
+  "previous_root_secret_hex": "7373737373737373737373737373737373737373737373737373737373737373",
+  "payload": {
+    "version": 1,
+    "state": {
+      "group_id": "group-beta",
+      "title": "\u0413\u0440\u0443\u043f\u043f\u0430 \u03b2",
+      "epoch": 2,
+      "members": [
+        "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+        "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz"
+      ],
+      "created_at": "2026-02-03T04:05:06+00:00",
+      "updated_at": "2026-02-03T04:05:06+00:00"
+    },
+    "next_group_seq": 5,
+    "history": [
+      {
+        "kind": "me",
+        "sender_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+        "content_type": "GROUP_TEXT",
+        "text": "\u043f\u0440\u0438\u0432\u0435\u0442 \u0433\u0440\u0443\u043f\u043f\u0435",
+        "payload": "\u043f\u0440\u0438\u0432\u0435\u0442 \u0433\u0440\u0443\u043f\u043f\u0435",
+        "msg_id": "msg-1",
+        "group_seq": 4,
+        "epoch": 2,
+        "created_at": "2026-02-03T04:05:06+00:00",
+        "source_peer": null,
+        "delivery_results": {
+          "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz": "delivered_live"
+        },
+        "delivery_reasons": {
+          "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz": "live-session"
+        }
+      },
+      {
+        "kind": "peer",
+        "sender_id": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+        "content_type": "GROUP_CONTROL",
+        "text": "",
+        "payload": {
+          "op": "member_left",
+          "member_id": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz"
+        },
+        "msg_id": "msg-2",
+        "group_seq": 3,
+        "epoch": 2,
+        "created_at": "2026-02-03T04:05:06+00:00",
+        "source_peer": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+        "delivery_results": {},
+        "delivery_reasons": {}
+      }
+    ],
+    "seen_msg_ids": [
+      "msg-1",
+      "msg-2"
+    ],
+    "pending_deliveries": [
+      {
+        "group_id": "group-beta",
+        "group_title": "\u0413\u0440\u0443\u043f\u043f\u0430 \u03b2",
+        "group_members": [
+          "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+          "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz"
+        ],
+        "sender_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+        "recipient_id": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+        "delivery_id": "msg-3:nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+        "msg_id": "msg-3",
+        "group_seq": 5,
+        "epoch": 2,
+        "content_type": "GROUP_TEXT",
+        "payload": "\u0435\u0449\u0451 \u043d\u0435 \u0434\u043e\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u043e",
+        "created_at": "2026-02-03T04:05:06+00:00"
+      }
+    ],
+    "blindbox_channel": {
+      "channel_id": "channel-beta",
+      "group_epoch": 2,
+      "state": {
+        "version": "BLINDBOX_STATE_V1",
+        "send_index": 4,
+        "recv_base": 2,
+        "recv_window": 16,
+        "consumed_recv": [
+          0,
+          1,
+          3
+        ],
+        "updated_at": 1700002000
+      },
+      "root_secret_enc": "0174644064efb8f71ff793ea042b1280077ab8e10e040ec3ba46bf10b42c5291f58d13b133eb971c8da34b48d53b6300c077161dcffc6c2f8798a6c061fd3d47d2162fa2ed69e9ad",
+      "root_epoch": 6,
+      "root_created_at": 1700000000,
+      "root_send_index_base": 2,
+      "pending_root_secret_enc": "a66a0d4883fa561718f85b42263e3ec7a0db9c46e4329b41f9fb9267bd40226e28756642844eb92773060568a6f8a55556ee922206aa3edaefe38b1d9ff1d134c484826482d4fd95",
+      "pending_root_epoch": 7,
+      "pending_root_created_at": 1700001000,
+      "pending_root_send_index_base": 4,
+      "pending_root_target_members": [
+        "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz"
+      ],
+      "pending_root_acked_members": [],
+      "prev_roots": [
+        {
+          "group_epoch": 1,
+          "root_epoch": 5,
+          "expires_at": 1700600000,
+          "secret_enc": "76e582d71fdc13b20640d2d626ea7db2022a0573a2dd6f403f77716601e5e14c7ad52ffb9b6d6d0fc35606d18a8acb0c1f40290131a586ccae2d3de79bea32daef4bc0241bf98fe1"
+        }
+      ]
+    },
+    "pending_group_blindbox_messages": [
+      {
+        "group_id": "group-beta",
+        "group_title": "\u0413\u0440\u0443\u043f\u043f\u0430 \u03b2",
+        "group_members": [
+          "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+          "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz"
+        ],
+        "sender_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+        "msg_id": "msg-4",
+        "group_seq": 6,
+        "epoch": 2,
+        "content_type": "GROUP_TEXT",
+        "payload": "\u0436\u0434\u0451\u0442 \u0433\u0440\u0443\u043f\u043f\u043e\u0432\u043e\u0433\u043e \u0440\u0443\u0442\u0430",
+        "created_at": "2026-02-03T04:05:06+00:00"
+      }
+    ]
+  },
+  "plaintext_utf8": "{\"version\":1,\"state\":{\"group_id\":\"group-beta\",\"title\":\"\\u0413\\u0440\\u0443\\u043f\\u043f\\u0430 \\u03b2\",\"epoch\":2,\"members\":[\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\"],\"created_at\":\"2026-02-03T04:05:06+00:00\",\"updated_at\":\"2026-02-03T04:05:06+00:00\"},\"next_group_seq\":5,\"history\":[{\"kind\":\"me\",\"sender_id\":\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"content_type\":\"GROUP_TEXT\",\"text\":\"\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442 \\u0433\\u0440\\u0443\\u043f\\u043f\\u0435\",\"payload\":\"\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442 \\u0433\\u0440\\u0443\\u043f\\u043f\\u0435\",\"msg_id\":\"msg-1\",\"group_seq\":4,\"epoch\":2,\"created_at\":\"2026-02-03T04:05:06+00:00\",\"source_peer\":null,\"delivery_results\":{\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\":\"delivered_live\"},\"delivery_reasons\":{\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\":\"live-session\"}},{\"kind\":\"peer\",\"sender_id\":\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\",\"content_type\":\"GROUP_CONTROL\",\"text\":\"\",\"payload\":{\"op\":\"member_left\",\"member_id\":\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\"},\"msg_id\":\"msg-2\",\"group_seq\":3,\"epoch\":2,\"created_at\":\"2026-02-03T04:05:06+00:00\",\"source_peer\":\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\",\"delivery_results\":{},\"delivery_reasons\":{}}],\"seen_msg_ids\":[\"msg-1\",\"msg-2\"],\"pending_deliveries\":[{\"group_id\":\"group-beta\",\"group_title\":\"\\u0413\\u0440\\u0443\\u043f\\u043f\\u0430 \\u03b2\",\"group_members\":[\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\"],\"sender_id\":\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"recipient_id\":\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\",\"delivery_id\":\"msg-3:nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\",\"msg_id\":\"msg-3\",\"group_seq\":5,\"epoch\":2,\"content_type\":\"GROUP_TEXT\",\"payload\":\"\\u0435\\u0449\\u0451 \\u043d\\u0435 \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043b\\u0435\\u043d\\u043e\",\"created_at\":\"2026-02-03T04:05:06+00:00\"}],\"blindbox_channel\":{\"channel_id\":\"channel-beta\",\"group_epoch\":2,\"state\":{\"version\":\"BLINDBOX_STATE_V1\",\"send_index\":4,\"recv_base\":2,\"recv_window\":16,\"consumed_recv\":[0,1,3],\"updated_at\":1700002000},\"root_secret_enc\":\"0174644064efb8f71ff793ea042b1280077ab8e10e040ec3ba46bf10b42c5291f58d13b133eb971c8da34b48d53b6300c077161dcffc6c2f8798a6c061fd3d47d2162fa2ed69e9ad\",\"root_epoch\":6,\"root_created_at\":1700000000,\"root_send_index_base\":2,\"pending_root_secret_enc\":\"a66a0d4883fa561718f85b42263e3ec7a0db9c46e4329b41f9fb9267bd40226e28756642844eb92773060568a6f8a55556ee922206aa3edaefe38b1d9ff1d134c484826482d4fd95\",\"pending_root_epoch\":7,\"pending_root_created_at\":1700001000,\"pending_root_send_index_base\":4,\"pending_root_target_members\":[\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\"],\"pending_root_acked_members\":[],\"prev_roots\":[{\"group_epoch\":1,\"root_epoch\":5,\"expires_at\":1700600000,\"secret_enc\":\"76e582d71fdc13b20640d2d626ea7db2022a0573a2dd6f403f77716601e5e14c7ad52ffb9b6d6d0fc35606d18a8acb0c1f40290131a586ccae2d3de79bea32daef4bc0241bf98fe1\"}]},\"pending_group_blindbox_messages\":[{\"group_id\":\"group-beta\",\"group_title\":\"\\u0413\\u0440\\u0443\\u043f\\u043f\\u0430 \\u03b2\",\"group_members\":[\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\"],\"sender_id\":\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"msg_id\":\"msg-4\",\"group_seq\":6,\"epoch\":2,\"content_type\":\"GROUP_TEXT\",\"payload\":\"\\u0436\\u0434\\u0451\\u0442 \\u0433\\u0440\\u0443\\u043f\\u043f\\u043e\\u0432\\u043e\\u0433\\u043e \\u0440\\u0443\\u0442\\u0430\",\"created_at\":\"2026-02-03T04:05:06+00:00\"}]}",
+  "blob_hex": "493247530001150361e337c2804897479b4811f3c9d9060ae4675bf978975f2eed3e731d8c1cc3059c670c23bc47c761607ab657553053f82b9994d486ed66e4141d52cb22a96bdf51b546516553949fb3b9b3485fa6ad17a8b1d5cae72f4f81665369e2b4021da26d105dc6cf750d64e42b1a91a3a5dc13cf6a9ab83e287c7642150b7db091e85f167f7393926d1befb1d0de34f578eb4cdfc0810b2bb9b04605767beb9e4d4ca45c65b0fbd7f226629b50099a7c459952c5aba1741342a0f8be5bf0fae5ad9b226011c0c1a68ad12659c46b697f5dfed77433d411e02366e84c837647f12d66edebfb51eb69004639fb3a37c48e4e01ed0e1cb0a0e05d0057071a11e090b99933801df03d7b51031f124eb56c39f46e2aee9a1971cbf341bc66ed53aac252e7131aaf5093667932ec3e7e589efcabf6f53dc099901d1d91b3417f527ab43a411f6db097e94198df98697dc560c4d3edd6e81534e2e9b97b149220c047be3025a4623ef353ecf8493791c32f5f3051aaff0c4ce5bc54250c0572df06bb564a43de33259c4c87854e9d5db4b649fcb33f6c2d88298a6241e09c02d4ad12cc22dd0c8bc3471b30a1a202aeec1fdf79c23c0d06a3f5f2d695bd2d82bc81078468640fdc8b8264c304c1d2c51fd94e0da96899dd682406e3f75958069c80939efe913a72bca40a303020feecf042510d86dbcbb122173ea24f9b759bb0954f5aaf2ef19ad3beb247324e5b3ac39082b9e395810f876f5d9514ab623eb27bbb36af7a4eb59d2ca103b25e881ec9efb4512559d99bcd46c49a0e1fec40c74c1bcc995cf4837ee6227d6abe512a03c5eccc84b4b2520f1081933e350e26b2bc7a1968d73efe95e5e20bd3fdc9d7e96b41643b61f8908eb4159adda303cae6b9e0e6b6758ffc33bd2c4772ab1637dc5a6477d1ef31815a216a05b4c8d214decd23f9a78f254213c8c4199d4274f1cdbfe99686d9224716adf1387b735dd020db671f7d91dee838ad1cc799e137dda77b47b1076453ec6e103b501247bac13694c47dade26f4d8de82be092bc99f6413c6524d17641bd229f5210714c43d144aecb1255b37e30ce199d1427fcd5a67794e7c90748f47f6a112bfc735786e5fbf4dffd027a8e3178135cf7e0eb61b6a5de59850fa92b6045ae7a3605706a9e08953a31ce40df6658e4e8241639a0b1ee6c94c30143d80b3d4f7e513aa3266fe38c13d40eed2034a5f4df985cbb332743ceec44906c847d7783a2d68af531974612b35c1626f3a3c1817189212d0a47272c19b7444a10a826c2a7de90e03d628f9515bfd1c647fbd1cd60751338801c3dfe6e3dd6fa7f8db6307407830191fefa05e6aa23118057ae5dddfcaf2f9ed96717ea853eb4e726dd3f0fdc01fe1e8f1fdece19b257d7c4e1eaa0211a701fd4447b003d92424a02aea450acb729442f4bdb7d3f16eba2a8375b94ab0a70dd8b504428209637b4bd1527f4f320e382702e0f4448775064aa28a5991ca683a3a00e6ff29a9aa614ac16944552afa69e1ce6b54961990d55ece9c8c93171fb7203413378ea0850fe97ddb470d9795168fc649bb5fe234c5a0267c140f3576cff56f87decc61787a05d3a3666479d681bfdc51632ade301d78cc55e99c05a6bafe1ce48badab272325137be5198cde46d8e9c0eb9a25fbdf162c8f1b4df5170895a0b704c06581a83574a48ec87089a97c21409337f7c044d277bba4c9ac7d1a8ff2c98105be220faa41285df75b90fa9e423f1ad0898a58fa9048f2befd30472cc419e048e692f02e5b143d26373df12ec1ebbafcec7767deafecff06c378c35055bab5eb252383947468cb540a7d0f71965797741bff7c386c7bb6f50e9a5769e5fd0fee1bc766341cf5d03b0c56cd146c45f0c707b09c2ce92864f86eca4f03abb73013fa74778dc520062853ba3fda835b5aded27496c8ddf1c948d4912778614924b3f0a56944fa3e206577f6b3a4e1e5572ca666d24cd5d120f871d072fb630e06397567e8e36385e41b3cfba08e190d792af8c7d3b3490846e45e2baaf0c0ff2c853f7ce35fc4eb8844cbd63228d28f40ebee3d2392401b7bfe5e41f4286361ac9252591f6128044cff04aa9df839b92708988b593893e242b8913cbb204f32fd772a5057b2f430b7f0ba52806b927f9c1f6844d7726c8dce064adacb97f0499690143098eb6a3d2734916fe41a9be6a4bacbf0f998d1a935062af091c480829ac57174b29576fd82124df681db735f8b36ab5c42e3850f69aa0f8d4fddd1ab86bb33d59749d55d00fd5c49f89d070464eea541ae53d7bc72aa708f75a4b6cee54d216e279b79e51d08ca46598851656457d2ed194a956205750ea934655f919bd353d9b2e5b59ecb3ff65ae54ab9b8ddac38e9b4f4e98dc6ec375a5c09b708ad1ba84db59004a51792acbd524145d849e6f059cb449d966f50af99710fbe6bd8a793edbfd0b997a41c2d54a1fb7df401dd302c40d1a956f4a5537423bb79b360f427de78a5010d380f0131d0c9dbab2586b3727122ca9414e3e1e50f85490bd88dcb74e9c2431750ed0ea540a4afda3fb57bd9d9c92e1f5349eb55aa6e5caccefba8f51d50b89449fb2186a673683aa793e71e4eedc6ff142baccfd4a31eda46a354515639f7473080aef499ab02f320d5fbad7da4508c1f79123a75e9e7a7d34d0bf619d8b43ece8f75d0e3a9f532bc4a71dde0d56fcd13210c36c09d579ad601afd0bca247aa2e7661c0215a7eb8d972e5da41fd8e70cdb930cf7c8c83c73cf3f4201ea690404432125fd15480cba3f704bf385dc91c502d90460c0409c5c47a3a8f36cd2a528dccb6e87273a654de7bfab968f46438cd0c027ac5bfc8be45c120da89e155e2db1ccb464876d6ba3fe45987edbea6db3aa6bcecdbe44777050919cdb4cc798833d661b117380569f527bb8406e2aa2bb0cd16d0add8d7921e6e1f22dda0ddcf763857780439e3eb3a801c5e4bb20585acc6c2ebeade20578fcab99398d7fad31b110c68f0d3b78aed63a4cd47516b84bbdee89379e0aa8bfe4cf865796a637aef418781ba2d3fe32c490eee4d94c2fb1cd4dbc8922613b80423f245eb5f4d1265e004f68831e817e7f6a309af97f191b5c41bc1b1974bf9a0b425faac0a912659b4a316c3fc14e54760509b21639348ff561e57526f34bbb3af12f9e46a913d116a56890d24642c0bd81e0cb86580c8d9c88ca763726adc3ba59c8dde5bac0821d5058da841ff64ce9df1531b0ef7f9acd9ec7451d791ba091b0fc7716984a975791f444b46b2885be155cb15818631cca27cf003658e75683af59c023cdecc5fff9e243192967503cf8966c03f645a2836b3160cfa18fe43d3b2eb4693e4aea889e32174adc3078e82246e1092f1c4e7a3a5cc7e69c6e4465b19d9652f306a62a4a96ca43140f7a949ef93452b06070824815a07dd91b04c3ecaac96965907f6adf72dcd8a6fddc98a8c146abd57242aca732fab9c2ae95acdc16c41ed517995e7ca3c7802492391637d4d29dbb19a76f105fc1143dcb83e462630aab9e7c1094c5884904bc47ca7cdf3aab767fb585ceff13352fd4af1f280db2e5e568018834806562797616d98e826f182908fbe4731d7c1f9dc6dbd4388167b8e5458b0a8bd56852bd12a6352fecc6bcc87aa3f3b9b452fe114179853d72d7892723613a7363e532d1d0157a062d5b5fdf1d15f28bdcb7a23169382a623f79b92760c3b3b93cc720d5762b88a3e7183b1bfe8801e6b2ccd01c040c493ba5945f3282591521d310b7341a00efd87c14392a26648fb353201af5b6b90be8ea213da77e0adc971749959619c3f767406e30a8a7695a853c5deceacf70bd2c9c43a61368ca4a43cc3c4bdd64bbd848e005c98d0a5b29453ff2bd50bab7599c491af814a5cdc6bed992b7eaacaa7c677f82720f4832976ddc20b9444d050212a980539f56937dd6501806357de2bca2d2a5c5f197e99c2dadad41a7e61e2e0edf6d1780010f181a25b1f78e4946cd6a46ba443e23b0c6b4bb0422dbf4079414335d59124c1502116aa611f76d6acfed970b879576decbcaff92e95579cad7287b5c01a4675aca283b4a93994f738ce4f5b0b29a3c83e6dd87c50c41ab6a8d12fc4c00aa4515ae2363909aa10135d80c343b91b4f8e2e7f8a93c59792fa0685aaeeea69d235c13cdde26d204bee1d645d539508f8f8111365c8ece784f9675794c1360fa355da9086944ad599b98189498e4e2bd62b06eff400eea1351b6ee199494624685d282dbc88027d43a9a98a6985b27d1881f40d6a9bddaaf853db57ad2fc5eb8a46818f297c4bc769ee6bddabf5978622908d16b822be652808d08c00406e042062961abc511688134e2fcf542161b9b11ac6916fed83c5a868c874e54adbe7eb4c776892d132b0552ff2849ad9263f6dec4e3afe1f43cbcfd450ea2d0f497c4188f2f26eba9e5bf70af1400146668995edbe8dffa8651cb10c5ab6f7e6bb62b9e38d3846c263d5c44f4c7f5587da63129b72c306641d0ac21a172e7bd28970354a9da0b3d472fa7607383ef3ca5b1f00e7b3fcb9090cb99eecd7aba8e0c0b24f7d46c96c733d1ed99b67043ce156248bb4d852872e88bb262fbe8665dfa16d7bbd56b3a4c159bd713380e8cf6a07ca19d75c9a17c85d8d9429324d45a54848c26c0fa479b932d829efba613a2a5243fc3e08360191355619451742b3e8d7ba95b6e695b7d5ad8cd0b188d2fd816051b4018ab04264537e33d9fa03921ce8694ad4e4be7fcddd1261454f10878c75b3896f87bbb3c1d55504b7215c2fd1b0416adc7c2290e4433b492fc24de903786ce89197a584d191795920949f7160138293d8e02a97df81d621edc95ba5416db18cddd778e8ad754f2c799d875e9f20174c476f9c7ac72a5d925719ed8eef47c50ace36ec72c6b17a1535e014d480ccd25de41ef8be44709e81607d0225134a6ff5a4068184df95068bf2b2a5f147dae489125167205eb77673de0bfe07e16f6dbaa8687e70bbfce7f893879cc60407fde49bd01fe4bec40e157f512af6b5aae6ee03ab3122a12bfda064e9a2b188e7f9b757507087b0154ac7db12a71a86dc4b04d5afb46f83b66208198a17c8a039bce22a3a272f67fc92ce285a854ba9ea54075d32c5455c0719a03526e53f16b3b098fde9d19bac6fffc954f802c7433ee3922b0bb80eb34f3d4b237a878db"
+}

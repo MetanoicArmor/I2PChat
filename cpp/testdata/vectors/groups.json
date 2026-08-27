@@ -1,0 +1,31 @@
+{
+  "_description": "Signed and sealed group invite: shareable token is base64url(wrap_key(32) || SecretBox(JSON)) with no prefix; the inner JSON is Ed25519-signed over I2PCHAT-GROUP-INVITE-v2|<canonical JSON>. Source: i2pchat/groups/invite.py.",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "invite": {
+    "group_id": "group-alpha",
+    "invite_id": "abcdef0123456789",
+    "title": "\u0413\u0440\u0443\u043f\u043f\u0430 \ud83c\udfaf",
+    "members": [
+      "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+      "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz"
+    ],
+    "epoch": 2,
+    "inviter_id": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm",
+    "inviter_signing_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "inviter_signing_pub_hex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+    "created_at": "2026-01-01T12:00:00+00:00",
+    "expires_at": null,
+    "signature_domain": "I2PCHAT-GROUP-INVITE-v2",
+    "canonical_signed_bytes_utf8": "I2PCHAT-GROUP-INVITE-v2|{\"created_at\":\"2026-01-01T12:00:00+00:00\",\"epoch\":2,\"expires_at\":null,\"group_id\":\"group-alpha\",\"invite_id\":\"abcdef0123456789\",\"inviter_id\":\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"inviter_signing_pub\":\"d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737\",\"members\":[\"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmm\",\"nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz\"],\"title\":\"\\u0413\\u0440\\u0443\\u043f\\u043f\\u0430 \\ud83c\\udfaf\",\"v\":2}",
+    "signature_hex": "eead76a8e4572321b453857c98f25ccdfcc0a3f9f524d1b72ebe983fe08e43df31fcd17d3e2bb9e9444d134b528b04000df9d60d1768e542af9537d11be10505",
+    "token": "f8jQlQ-0vrLOdNFM9Jj6Dkw3IWyHn_q4Jd4VxHJhR5m8rGieUmWa_LJ7kb4VrgDAmJtdv5uGA3mi8Z0Wj_3ntAfsKP0Kcq69gNyJ7tScjwlmpGwn-P9wuv3ugqATynGplFTPIuoDKKCaT6ELjK_BeclpZ2OvdGuYTm61lo7TQYJcPrAjkvbe4b40pF-zjxOWucy_P08oM409_e-K35z_5v3VFsRvFrJasHVvLjwsLowJedhFNTO_apqXPJ4s9d3j16YBLdrrdan29ElGqLrHupuSfT5ZdBpd9ab9W1jvRxLv5S3kBFIEmAachWurGhIo358JoGXguA0KXXPpW299OnwNdVSxpH1a_Xzp0To8_r-fM9eZ4LFW6v6VCMs0TWaPbY6t_iouRUBhrWlaeFBFFZ3PMOv17a7-rVUZuY-34ouQ2lCbQbW4KccWeRjbRe9U5-pG37XZ61XjZqrg9oaDH-FxN6EOKCkRHm74jEHzDxAo-UJl8G6t0C_iDNRMQcsEuG8FDR8hA2IH19RVnUeOtWliqsJiKpV6SMI5sQW_oHlyKij8PmBPvZ5P8DEiEocj1-v3aUb5NEYdhVVFqHPZUetyjN0TPL0C38WYO6QBM3_eQ4InBfynLQIpV0hVsohVKoX1N4fTM-fwoAi9rtqTC7_OPgOdGDT9PqJsi74EjLwU4FNq57P0c1IWaZ7nKNNCRVIRQJyIW7rtCrkaR7qVk0i_iTYfm41mPGh2lzQIxE6_HTmPpdL58QaDpCpj_E4WvD5OkGgnusS07CeHP2d9hKe4G1SiyfzYGsCr3pXjo4Vv7jQa3NY-m2Jyya9iojtZvi0VGIafXFjxn8zheqPHcITJE_DEsjQW1u-PgoN17ITtvfUCiAud_gY_hCzeo8kkiyjoEwURgYvSrFv4SdQ"
+  },
+  "seal": {
+    "wrap_key_size": 32,
+    "hkdf_salt": "I2PCHAT-GROUP-INVITE-SEAL",
+    "hkdf_info": "I2PCHAT-GROUP-INVITE-SEAL|v3",
+    "encoding": "base64url without padding",
+    "layout": "wrap_key(32) || SecretBox(canonical invite JSON)"
+  },
+  "legacy_prefix": "__I2PCHAT_GROUP_INVITE__:"
+}

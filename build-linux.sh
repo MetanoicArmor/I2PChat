@@ -3,7 +3,6 @@ set -euo pipefail
 
 APP_NAME="I2PChat"
 APPDIR="${APP_NAME}.AppDir"
-VENV_DIR=".venv"
 APPIMAGETOOL_VERSION="1.9.1"
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -18,7 +17,6 @@ if [ -z "${RELEASE_VERSION}" ]; then
   exit 1
 fi
 
-# Определяем архитектуру
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  ARCH_SUFFIX="x86_64" ;;
@@ -27,35 +25,42 @@ case "$ARCH" in
   *)       ARCH_SUFFIX="$ARCH" ;;
 esac
 
-echo "==> Building for architecture: ${ARCH_SUFFIX}"
+echo "==> Building C++ client for architecture: ${ARCH_SUFFIX}"
 
 case "${ARCH_SUFFIX}" in
   aarch64) I2PD_LINUX_SUBDIR="linux-aarch64" ;;
   *)       I2PD_LINUX_SUBDIR="linux-x86_64" ;;
 esac
 
-if command -v python3.14 >/dev/null 2>&1; then
-  PYTHON_BIN="python3.14"
-else
-  PYTHON_BIN="python3"
-fi
-
-if ! command -v uv >/dev/null 2>&1; then
-  echo "ERROR: нужен uv (https://docs.astral.sh/uv/getting-started/installation/). В официальном Docker-образе сборки uv уже установлен." >&2
+if ! command -v cmake >/dev/null 2>&1; then
+  echo "ERROR: cmake >= 3.24 is required." >&2
   exit 1
 fi
 
 REPO_ROOT="$(pwd)"
-# UV_PROJECT_ENVIRONMENT можно задать снаружи (например Docker arm64: /opt/i2pchat-venv),
-# чтобы .venv жил на ФС контейнера, а не на bind-mount — иначе PyInstaller иногда ловит
-# FileNotFoundError на hook-*.py при анализе.
-if [ -z "${UV_PROJECT_ENVIRONMENT:-}" ]; then
-  export UV_PROJECT_ENVIRONMENT="${REPO_ROOT}/${VENV_DIR}"
-fi
-# Явный путь к окружению проекта: не зависит от чужого VIRTUAL_ENV в шелле.
-unset VIRTUAL_ENV
 
-# Удаление onedir после сборки от root или с read-only битами: иначе rm → EACCES.
+file_sha256() {
+  local path="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  else
+    echo "ERROR: need sha256sum or shasum" >&2
+    exit 1
+  fi
+}
+
+write_checksums() {
+  local out="$1"
+  shift
+  : > "${out}"
+  local path
+  for path in "$@"; do
+    printf '%s  %s\n' "$(file_sha256 "${path}")" "$(basename "${path}")" >> "${out}"
+  done
+}
+
 safe_rm_rf() {
   local p
   _try_rm() {
@@ -72,7 +77,6 @@ safe_rm_rf() {
     if _try_rm "$p"; then
       continue
     fi
-    # Частый случай: I2PChat.AppDir собирали под root/Docker — chmod от обычного пользователя не помогает.
     if command -v sudo >/dev/null 2>&1; then
       echo "WARN: «$p» не удалось снять без sudo (вероятно владелец root); пробую sudo chown…" >&2
       if sudo chown -R "$(id -u):$(id -g)" "$p" 2>/dev/null; then
@@ -84,8 +88,26 @@ safe_rm_rf() {
     fi
     echo "ERROR: не удалось удалить «$p» (нет прав или файл занят)." >&2
     echo "       Закройте ${APP_NAME} / ${APP_NAME}-tui и снимите монтирование AppImage, если оно из этого каталога." >&2
-    echo "       Вручную: sudo chown -R \"\$(id -u):\$(id -g)\" \"$p\" && rm -rf \"$p\"" >&2
     exit 1
+  done
+}
+
+stage_elf_deps() {
+  local bin="$1"
+  local dest="$2"
+  mkdir -p "${dest}"
+  if ! command -v ldd >/dev/null 2>&1; then
+    return 0
+  fi
+  ldd "${bin}" | awk '/=>/ { print $3 }' | while read -r lib; do
+    [ -n "${lib}" ] && [ -f "${lib}" ] || continue
+    case "${lib}" in
+      */ld-linux*.so* | */libc.so* | */libm.so* | */libpthread.so* | */libdl.so* | \
+      */libresolv.so* | */librt.so* | */libstdc++.so* | */libgcc_s.so*)
+        continue
+        ;;
+    esac
+    cp -a "${lib}" "${dest}/" 2>/dev/null || true
   done
 }
 
@@ -93,13 +115,9 @@ echo "==> Checking optional bundled i2pd source"
 "${REPO_ROOT}/scripts/ensure_bundled_i2pd.sh"
 if [ ! -f "vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd" ]; then
   echo "WARN: нет vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd — AppImage и GUI-zip будут без встроенного i2pd." >&2
-  echo "      Частая причина: git clone по умолчанию не удался (приватный репозиторий, офлайн, нет git в PATH)." >&2
   echo "      Задайте I2PCHAT_BUNDLED_I2PD_SOURCE_DIR, SSH URL в I2PCHAT_BUNDLED_I2PD_GIT_URL, или ./scripts/fetch_bundled_i2pd.sh --from …" >&2
 fi
 
-# Linux bundled i2pd (2.61.0 noble payloads) may need the exact boost SONAME it was linked against.
-# On noble builds we ensure a real libboost_program_options.so.1.83.0 is staged
-# next to i2pd (symlink to newer ABI is not sufficient and may crash at runtime).
 I2PD_BUNDLE_DIR="vendor/i2pd/${I2PD_LINUX_SUBDIR}"
 if [ -f "${I2PD_BUNDLE_DIR}/i2pd" ]; then
   chmod +x "${I2PD_BUNDLE_DIR}/i2pd" 2>/dev/null || true
@@ -122,8 +140,6 @@ if [ -f "${I2PD_BUNDLE_DIR}/i2pd" ]; then
   fi
 fi
 
-# Подтянуть libboost_* рядом с bundled i2pd. На Arch часто нет Boost 1.83 под бинарь из
-# upstream — тогда подставляем системный i2pd из PATH (тот же, что pacman).
 if [ -f "${I2PD_BUNDLE_DIR}/i2pd" ] && command -v objdump >/dev/null 2>&1; then
   if ! "${REPO_ROOT}/scripts/stage_i2pd_linux_shlibs.sh"; then
     if [ "${I2PCHAT_SKIP_DISTRO_I2PD_FALLBACK:-0}" = "1" ]; then
@@ -143,77 +159,72 @@ if [ -f "${I2PD_BUNDLE_DIR}/i2pd" ] && command -v objdump >/dev/null 2>&1; then
   fi
 fi
 
-if [ "$(id -u)" != 0 ] && [ -d "${UV_PROJECT_ENVIRONMENT}" ]; then
-  vuid="$(stat -c %u "${UV_PROJECT_ENVIRONMENT}" 2>/dev/null || true)"
-  if [ -n "${vuid}" ] && [ "${vuid}" = "0" ]; then
-    echo "ERROR: виртуальное окружение принадлежит root: ${UV_PROJECT_ENVIRONMENT}" >&2
-    echo "       Часто после Docker-сборки с монтированием репозитория (uv не может перезаписать bin/*)." >&2
-    echo "       Исправление: sudo chown -R \"$(id -u):$(id -g)\" \"${UV_PROJECT_ENVIRONMENT}\"" >&2
-    exit 1
-  fi
+STAGE="${REPO_ROOT}/dist/cpp-install"
+BUILD_DIR="${REPO_ROOT}/cpp/build-release"
+safe_rm_rf "${STAGE}"
+mkdir -p "${STAGE}"
+"${REPO_ROOT}/scripts/build_cpp_binaries.sh" "${BUILD_DIR}" "${STAGE}"
+
+GUI_BIN="${STAGE}/bin/i2pchat-gui"
+TUI_BIN="${STAGE}/bin/i2pchat-tui"
+DAEMON_BIN="${STAGE}/bin/i2pchat-blindbox-daemon"
+if [ ! -x "${GUI_BIN}" ] || [ ! -x "${TUI_BIN}" ]; then
+  echo "ERROR: CMake install did not produce i2pchat-gui / i2pchat-tui under ${STAGE}/bin" >&2
+  ls -la "${STAGE}/bin" >&2 || true
+  exit 1
 fi
 
-uv sync --frozen --python "${PYTHON_BIN}" --group build --no-dev
+ONEDIR="dist/${APP_NAME}"
+safe_rm_rf "${ONEDIR}"
+mkdir -p "${ONEDIR}"
+cp "${GUI_BIN}" "${ONEDIR}/${APP_NAME}"
+cp "${TUI_BIN}" "${ONEDIR}/${APP_NAME}-tui"
+chmod +x "${ONEDIR}/${APP_NAME}" "${ONEDIR}/${APP_NAME}-tui"
+if [ -x "${DAEMON_BIN}" ]; then
+  cp "${DAEMON_BIN}" "${ONEDIR}/i2pchat-blindbox-daemon"
+  chmod +x "${ONEDIR}/i2pchat-blindbox-daemon"
+fi
+mkdir -p "${ONEDIR}/lib"
+stage_elf_deps "${ONEDIR}/${APP_NAME}" "${ONEDIR}/lib"
+stage_elf_deps "${ONEDIR}/${APP_NAME}-tui" "${ONEDIR}/lib"
+if [ -d "vendor/i2pd/${I2PD_LINUX_SUBDIR}" ]; then
+  mkdir -p "${ONEDIR}/vendor/i2pd/${I2PD_LINUX_SUBDIR}"
+  cp -a "vendor/i2pd/${I2PD_LINUX_SUBDIR}/." "${ONEDIR}/vendor/i2pd/${I2PD_LINUX_SUBDIR}/"
+fi
 
-# Не полагаемся на source activate (в Docker + set -u иногда не появляется python в PATH)
-VENV_ABS="$(cd "${UV_PROJECT_ENVIRONMENT}" && pwd)"
-VENV_PY="${VENV_ABS}/bin/python"
-export VIRTUAL_ENV="${VENV_ABS}"
-export PATH="${VENV_ABS}/bin:${PATH}"
-unset PYTHONHOME
+# Qt platform plugins so the GUI runs off a machine that has no system Qt.
+QT_PLUGIN_DIR=""
+if command -v qtpaths6 >/dev/null 2>&1; then
+  QT_PLUGIN_DIR="$(qtpaths6 --plugin-dir 2>/dev/null || true)"
+elif command -v qtpaths >/dev/null 2>&1; then
+  QT_PLUGIN_DIR="$(qtpaths --plugin-dir 2>/dev/null || true)"
+fi
+if [ -n "${QT_PLUGIN_DIR}" ] && [ -d "${QT_PLUGIN_DIR}/platforms" ]; then
+  mkdir -p "${ONEDIR}/plugins"
+  cp -a "${QT_PLUGIN_DIR}/platforms" "${ONEDIR}/plugins/"
+  [ -d "${QT_PLUGIN_DIR}/imageformats" ] && cp -a "${QT_PLUGIN_DIR}/imageformats" "${ONEDIR}/plugins/"
+  [ -d "${QT_PLUGIN_DIR}/tls" ] && cp -a "${QT_PLUGIN_DIR}/tls" "${ONEDIR}/plugins/"
+fi
 
-# Security gate: secure protocol requires PyNaCl
-"${VENV_PY}" - <<'PY'
-import sys
-try:
-    import nacl
-    from nacl.secret import SecretBox  # noqa: F401
-except Exception as exc:
-    print(f"ERROR: PyNaCl is required for secure protocol build: {exc}", file=sys.stderr)
-    raise SystemExit(1)
-print(f"PyNaCl OK: {getattr(nacl, '__version__', 'unknown')}")
-PY
-
-# Быстрая проверка синтаксиса пакетов и вспомогательных скриптов (без glob *.py в корне)
-"${VENV_PY}" -m compileall i2pchat scripts make_icon.py
-
-# 1) сборка PyInstaller с использованием spec файла (анализирует i2pchat/run_gui.py и зависимости)
-# python -m PyInstaller: bin/pyinstaller shebang часто с путём хоста, в Docker путь другой (/src)
-safe_rm_rf "dist/${APP_NAME}" "build/${APP_NAME}"
-"${VENV_PY}" -m PyInstaller --clean -y I2PChat.spec
-
-# Подмешать libcrypt в onedir (нужен и для AppDir копии, и для portable GUI zip).
-for CAND in /usr/lib/libcrypt.so.2 /lib64/libcrypt.so.2 /lib/libcrypt.so.2; do
-  if [ -f "$CAND" ]; then
-    cp "$CAND" "dist/${APP_NAME}/_internal/" 2>/dev/null || true
-    break
-  fi
-done
-
-# 2) упаковка в AppDir
 safe_rm_rf "${APPDIR}"
 mkdir -p "${APPDIR}/usr/bin" \
+         "${APPDIR}/usr/lib" \
          "${APPDIR}/usr/share/applications" \
          "${APPDIR}/usr/share/icons/hicolor/512x512/apps"
 
-# Кладём внутрь AppDir бинарники (GUI + TUI) и каталог _internal (с libpython и всеми зависимостями)
-cp "dist/${APP_NAME}/${APP_NAME}" "${APPDIR}/usr/bin/${APP_NAME}"
-cp "dist/${APP_NAME}/${APP_NAME}-tui" "${APPDIR}/usr/bin/${APP_NAME}-tui"
-cp -r "dist/${APP_NAME}/_internal" "${APPDIR}/usr/bin/_internal"
-if [ -d "dist/${APP_NAME}/vendor" ]; then
-  cp -r "dist/${APP_NAME}/vendor" "${APPDIR}/usr/bin/vendor"
+cp "${ONEDIR}/${APP_NAME}" "${APPDIR}/usr/bin/${APP_NAME}"
+cp "${ONEDIR}/${APP_NAME}-tui" "${APPDIR}/usr/bin/${APP_NAME}-tui"
+[ -x "${ONEDIR}/i2pchat-blindbox-daemon" ] && cp "${ONEDIR}/i2pchat-blindbox-daemon" "${APPDIR}/usr/bin/"
+cp -a "${ONEDIR}/lib/." "${APPDIR}/usr/lib/" 2>/dev/null || true
+if [ -d "${ONEDIR}/plugins" ]; then
+  cp -a "${ONEDIR}/plugins" "${APPDIR}/usr/plugins"
 fi
-if [ -f "${APPDIR}/usr/bin/vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd" ]; then
-  chmod +x "${APPDIR}/usr/bin/vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd"
-fi
-
-# Добрасываем libcrypt, если он есть в системе, чтобы не требовать его снаружи
-for CAND in /usr/lib/libcrypt.so.2 /lib64/libcrypt.so.2 /lib/libcrypt.so.2; do
-  if [ -f "$CAND" ]; then
-    cp "$CAND" "${APPDIR}/usr/bin/_internal/"
-    break
+if [ -d "${ONEDIR}/vendor" ]; then
+  cp -a "${ONEDIR}/vendor" "${APPDIR}/usr/bin/vendor"
+  if [ -f "${APPDIR}/usr/bin/vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd" ]; then
+    chmod +x "${APPDIR}/usr/bin/vendor/i2pd/${I2PD_LINUX_SUBDIR}/i2pd"
   fi
-done
+fi
 cp icon.png "${APPDIR}/usr/share/icons/hicolor/512x512/apps/i2pchat.png"
 
 cat > "${APPDIR}/usr/share/applications/i2pchat.desktop" <<EOF
@@ -231,14 +242,13 @@ cat > "${APPDIR}/usr/share/applications/i2pchat-tui.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=I2P Chat (terminal)
-Comment=I2PChat Textual TUI — run in a terminal
+Comment=I2PChat FTXUI TUI — run in a terminal
 Exec=${APP_NAME}-tui
 Icon=i2pchat
 Terminal=true
 Categories=Network;Chat;
 EOF
 
-# копия .desktop и иконки в корень AppDir, чтобы appimagetool их увидел
 cp "${APPDIR}/usr/share/applications/i2pchat.desktop" "${APPDIR}/i2pchat.desktop"
 cp "${APPDIR}/usr/share/applications/i2pchat-tui.desktop" "${APPDIR}/i2pchat-tui.desktop"
 cp icon.png "${APPDIR}/i2pchat.png"
@@ -246,15 +256,15 @@ cp icon.png "${APPDIR}/i2pchat.png"
 cat > "${APPDIR}/AppRun" <<'EOF'
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "$0")")"
-# Добавляем наш _internal в путь поиска библиотек,
-# чтобы подхватывались libpython и, например, libcrypt.so.2
-export LD_LIBRARY_PATH="$HERE/usr/bin/_internal:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$HERE/usr/lib:${LD_LIBRARY_PATH:-}"
+if [ -d "$HERE/usr/plugins" ]; then
+  export QT_PLUGIN_PATH="$HERE/usr/plugins"
+  export QT_QPA_PLATFORM_PLUGIN_PATH="$HERE/usr/plugins/platforms"
+fi
 exec "$HERE/usr/bin/I2PChat" "$@"
 EOF
-
 chmod +x "${APPDIR}/AppRun" "${APPDIR}/usr/bin/${APP_NAME}" "${APPDIR}/usr/bin/${APP_NAME}-tui"
 
-# 3) appimagetool (pinned release + SHA256 verification)
 APPIMAGETOOL="appimagetool-${ARCH}.AppImage"
 case "${ARCH}" in
   x86_64) APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0" ;;
@@ -270,34 +280,12 @@ if [ ! -f "$APPIMAGETOOL" ]; then
   echo "==> Downloading appimagetool for ${ARCH}..."
   wget "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/${APPIMAGETOOL}"
 fi
-ACTUAL_SHA256="$("${VENV_PY}" - "$APPIMAGETOOL" <<'PY'
-import hashlib
-import sys
-path = sys.argv[1]
-h = hashlib.sha256()
-with open(path, "rb") as f:
-    for chunk in iter(lambda: f.read(1024 * 1024), b""):
-        h.update(chunk)
-print(h.hexdigest())
-PY
-)"
+ACTUAL_SHA256="$(file_sha256 "${APPIMAGETOOL}")"
 if [ "${ACTUAL_SHA256}" != "${APPIMAGETOOL_SHA256}" ]; then
   echo "⚠ SHA256 mismatch for existing ${APPIMAGETOOL}, re-downloading pinned version..." >&2
-  echo "Expected: ${APPIMAGETOOL_SHA256}" >&2
-  echo "Actual:   ${ACTUAL_SHA256}" >&2
   rm -f "${APPIMAGETOOL}"
   wget "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/${APPIMAGETOOL}"
-  ACTUAL_SHA256="$("${VENV_PY}" - "$APPIMAGETOOL" <<'PY'
-import hashlib
-import sys
-path = sys.argv[1]
-h = hashlib.sha256()
-with open(path, "rb") as f:
-    for chunk in iter(lambda: f.read(1024 * 1024), b""):
-        h.update(chunk)
-print(h.hexdigest())
-PY
-)"
+  ACTUAL_SHA256="$(file_sha256 "${APPIMAGETOOL}")"
   if [ "${ACTUAL_SHA256}" != "${APPIMAGETOOL_SHA256}" ]; then
     echo "ERROR: SHA256 mismatch for downloaded ${APPIMAGETOOL}" >&2
     echo "Expected: ${APPIMAGETOOL_SHA256}" >&2
@@ -307,80 +295,41 @@ PY
 fi
 chmod +x "$APPIMAGETOOL"
 
-# Писать только в dist/ с версией в имени: перезапись ./I2PChat.AppImage в корне
-# даёт ETXTBSY («Text file busy»), если этот AppImage сейчас запущен или смонтирован.
 mkdir -p "dist"
 OUTPUT_FILE="dist/${APP_NAME}-linux-${ARCH_SUFFIX}-v${RELEASE_VERSION}.AppImage"
 ./"$APPIMAGETOOL" "${APPDIR}" "$OUTPUT_FILE"
 echo "✔ Built ${OUTPUT_FILE}"
-echo "  TUI inside AppImage: usr/bin/${APP_NAME}-tui (after mount: ${APP_NAME}.AppImage --appimage-mount)"
 
 ROOT_APPIMAGE="${APP_NAME}.AppImage"
 if [ -e "$ROOT_APPIMAGE" ] || [ -L "$ROOT_APPIMAGE" ]; then
   if cp -f "$OUTPUT_FILE" "$ROOT_APPIMAGE" 2>/dev/null; then
-    echo "✔ Updated ${ROOT_APPIMAGE} (copy from dist; close running AppImage if copy ever fails)"
+    echo "✔ Updated ${ROOT_APPIMAGE}"
   else
-    echo "⚠ Skipped ${ROOT_APPIMAGE}: file busy or not writable (artifact is ${OUTPUT_FILE})" >&2
+    echo "⚠ Skipped ${ROOT_APPIMAGE}: file busy (artifact is ${OUTPUT_FILE})" >&2
   fi
 else
-  if cp "$OUTPUT_FILE" "$ROOT_APPIMAGE" 2>/dev/null; then
-    echo "✔ Created ${ROOT_APPIMAGE}"
-  fi
+  cp "$OUTPUT_FILE" "$ROOT_APPIMAGE" 2>/dev/null || true
 fi
 
-# 4) архив для релиза: версия + архитектура в имени zip (в корне репозитория)
-#    appimage (default) — внутри один .AppImage (как ожидают .deb из релиза, Flatpak, Fedora).
-#    portable — в корне zip: бинарники I2PChat + I2PChat-tui, _internal/, vendor/ (как PyInstaller onedir).
 ZIP_FILE="${APP_NAME}-linux-${ARCH_SUFFIX}-v${RELEASE_VERSION}.zip"
 rm -f "${ZIP_FILE}"
 ZIP_MODE="${I2PCHAT_LINUX_GUI_ZIP_MODE:-appimage}"
 case "${ZIP_MODE}" in
   appimage)
-    "${VENV_PY}" - "${OUTPUT_FILE}" "${ZIP_FILE}" <<'PY'
-import os
-import sys
-import zipfile
-
+    if command -v zip >/dev/null 2>&1; then
+      zip -j "${ZIP_FILE}" "${OUTPUT_FILE}"
+    else
+      python3 - "${OUTPUT_FILE}" "${ZIP_FILE}" <<'PY'
+import os, sys, zipfile
 src, dst = sys.argv[1], sys.argv[2]
 with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     zf.write(src, arcname=os.path.basename(src))
 PY
+    fi
     ;;
   portable)
-    ONEDIR="dist/${APP_NAME}"
-    if [ ! -d "${ONEDIR}" ]; then
-      echo "ERROR: missing PyInstaller onedir ${ONEDIR} (portable GUI zip)" >&2
-      exit 1
-    fi
-    "${VENV_PY}" - "${ONEDIR}" "${ZIP_FILE}" <<'PY'
-import os
-import sys
-import zipfile
-
-stage, out = sys.argv[1], sys.argv[2]
-
-
-def add_path(zf, path, arcname):
-    if os.path.islink(path):
-        zi = zipfile.ZipInfo(arcname)
-        zi.create_system = 3  # Unix
-        st = os.lstat(path)
-        zi.external_attr = (st.st_mode & 0xFFFF) << 16
-        zf.writestr(zi, os.fsencode(os.readlink(path)))
-    else:
-        zf.write(path, arcname)
-
-
-with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-    for root, dirnames, files in os.walk(stage, followlinks=False):
-        for d in dirnames:
-            p = os.path.join(root, d)
-            if os.path.islink(p):
-                add_path(zf, p, os.path.relpath(p, stage))
-        for name in files:
-            path = os.path.join(root, name)
-            add_path(zf, path, os.path.relpath(path, stage))
-PY
+    ZIP_ABS="$(pwd)/${ZIP_FILE}"
+    ( cd "${ONEDIR}" && zip -qry "${ZIP_ABS}" . )
     ;;
   *)
     echo "ERROR: unknown I2PCHAT_LINUX_GUI_ZIP_MODE=${ZIP_MODE} (use appimage or portable)" >&2
@@ -389,26 +338,15 @@ PY
 esac
 echo "✔ Packed ${ZIP_FILE} (GUI zip mode: ${ZIP_MODE})"
 
-echo "==> PyInstaller slim TUI-only onedir (I2PChat-tui.spec, без PyQt6)"
-safe_rm_rf "dist/${APP_NAME}-tui" "build/${APP_NAME}-tui"
-"${VENV_PY}" -m PyInstaller --clean -y I2PChat-tui.spec
-
-# 4b) TUI-only zip (no AppImage): usr/bin layout + root launcher for AUR / manual install
 TUI_ZIP="${APP_NAME}-linux-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}.zip"
 TUI_STAGE="${APP_NAME}-linux-${ARCH_SUFFIX}-tui-v${RELEASE_VERSION}-stage"
 safe_rm_rf "${TUI_STAGE}"
-mkdir -p "${TUI_STAGE}/usr/bin"
-cp "dist/${APP_NAME}-tui/${APP_NAME}-tui" "${TUI_STAGE}/usr/bin/"
-cp -a "dist/${APP_NAME}-tui/_internal" "${TUI_STAGE}/usr/bin/_internal"
-if [ -d "dist/${APP_NAME}-tui/vendor" ]; then
-  cp -a "dist/${APP_NAME}-tui/vendor" "${TUI_STAGE}/usr/bin/vendor"
+mkdir -p "${TUI_STAGE}/usr/bin" "${TUI_STAGE}/usr/lib"
+cp "${ONEDIR}/${APP_NAME}-tui" "${TUI_STAGE}/usr/bin/"
+cp -a "${ONEDIR}/lib/." "${TUI_STAGE}/usr/lib/" 2>/dev/null || true
+if [ -d "${ONEDIR}/vendor" ]; then
+  cp -a "${ONEDIR}/vendor" "${TUI_STAGE}/usr/bin/vendor"
 fi
-for CAND in /usr/lib/libcrypt.so.2 /lib64/libcrypt.so.2 /lib/libcrypt.so.2; do
-  if [ -f "$CAND" ]; then
-    cp "$CAND" "${TUI_STAGE}/usr/bin/_internal/"
-    break
-  fi
-done
 cat > "${TUI_STAGE}/i2pchat-tui" <<EOF
 #!/bin/sh
 SCRIPT="\$0"
@@ -420,63 +358,18 @@ while [ -h "\$SCRIPT" ]; do
   esac
 done
 HERE="\$(cd "\$(dirname "\$SCRIPT")" && pwd)"
-export LD_LIBRARY_PATH="\$HERE/usr/bin/_internal:\${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="\$HERE/usr/lib:\${LD_LIBRARY_PATH:-}"
 exec "\$HERE/usr/bin/${APP_NAME}-tui" "\$@"
 EOF
 chmod +x "${TUI_STAGE}/i2pchat-tui" "${TUI_STAGE}/usr/bin/${APP_NAME}-tui"
 rm -f "${TUI_ZIP}"
 TUI_ZIP_ABS="$(pwd)/${TUI_ZIP}"
-# Same as macOS: preserve symlinks in PyInstaller onedir (avoid duplicated _internal).
-# Pure Python (no zip(1)); Unix symlink entries (no ZipFile.write(resolve_symlinks=…)
-# — not available on all runtimes, e.g. current CPython 3.14 in this venv).
-"${VENV_PY}" - "${TUI_STAGE}" "${TUI_ZIP_ABS}" <<'PY'
-import os
-import sys
-import zipfile
-
-stage, out = sys.argv[1], sys.argv[2]
-
-
-def add_path(zf, path, arcname):
-    if os.path.islink(path):
-        zi = zipfile.ZipInfo(arcname)
-        zi.create_system = 3  # Unix
-        st = os.lstat(path)
-        zi.external_attr = (st.st_mode & 0xFFFF) << 16
-        zf.writestr(zi, os.fsencode(os.readlink(path)))
-    else:
-        zf.write(path, arcname)
-
-
-with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-    for root, dirnames, files in os.walk(stage, followlinks=False):
-        for d in dirnames:
-            p = os.path.join(root, d)
-            if os.path.islink(p):
-                add_path(zf, p, os.path.relpath(p, stage))
-        for name in files:
-            path = os.path.join(root, name)
-            add_path(zf, path, os.path.relpath(path, stage))
-PY
+( cd "${TUI_STAGE}" && zip -qry "${TUI_ZIP_ABS}" . )
 safe_rm_rf "${TUI_STAGE}"
 echo "✔ Packed ${TUI_ZIP}"
 
-# 5) release integrity artifacts: SHA256SUMS + detached GPG signature (SHA256SUMS.asc)
 SHA256_FILE="SHA256SUMS"
-"${VENV_PY}" - "${ZIP_FILE}" "${TUI_ZIP}" "${SHA256_FILE}" <<'PY'
-import hashlib
-import os
-import sys
-
-zip_gui, zip_tui, checksums = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(checksums, "w", encoding="utf-8") as out:
-    for path in (zip_gui, zip_tui):
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(chunk)
-        out.write(f"{h.hexdigest()}  {os.path.basename(path)}\n")
-PY
+write_checksums "${SHA256_FILE}" "${ZIP_FILE}" "${TUI_ZIP}"
 echo "✔ Generated ${SHA256_FILE} (GUI + TUI zips)"
 
 if [ "${I2PCHAT_SKIP_GPG_SIGN:-0}" = "1" ]; then
@@ -488,7 +381,6 @@ elif ! command -v gpg >/dev/null 2>&1; then
   fi
   echo "⚠ gpg not found; skipping detached signature (set I2PCHAT_REQUIRE_GPG=1 to enforce)"
 else
-  # В CI (нет TTY на stdin/stdout) — --batch; иначе — без batch, чтобы pinentry мог запросить пароль.
   use_gpg_batch=1
   if [ -t 0 ] || [ -t 1 ]; then
     use_gpg_batch=0
@@ -512,8 +404,6 @@ else
       echo "ERROR: gpg signing failed in required mode" >&2
       exit 1
     fi
-    echo "⚠ gpg signing failed; continuing without detached signature"
-    echo "   Подсказка: gpg --list-secret-keys --keyid-format=long  (тот же GNUPGHOME, что у сборки)" >&2
-    echo "   Задайте I2PCHAT_GPG_KEY_ID=<keyid или отпечаток> или default-key в ~/.gnupg/gpg.conf." >&2
+    echo "⚠ gpg signing failed; continuing without detached signature" >&2
   fi
 fi

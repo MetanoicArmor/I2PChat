@@ -1,0 +1,378 @@
+# Official C++ release zips / AppImage on GitHub-hosted runners (no Docker).
+# Linux: Ubuntu 24.04 amd64 + arm64. macOS: Apple Silicon + Intel. Windows: x64.
+name: Release artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release version (v1.2.3, 1.2.3, or typo v.1.2.3) — upload targets Git tag vX.Y.Z"
+        required: true
+        type: string
+      source_ref:
+        description: "Ref to build from: main, v1.2.3, or empty (= same as tag)."
+        required: false
+        type: string
+        default: ""
+      upload:
+        description: "Upload assets to the GitHub Release"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  QT_QPA_PLATFORM: offscreen
+  I2PCHAT_SKIP_GPG_SIGN: "1"
+  APPIMAGE_EXTRACT_AND_RUN: "1"
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+            sums: SHA256SUMS
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+            sums: SHA256SUMS.linux-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Resolve tag and checkout ref
+        id: meta
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+          SOURCE_REF: ${{ github.event.inputs.source_ref }}
+        run: |
+          # checkout has not run yet — inline the same logic as scripts/ci_resolve_release_tag.sh
+          trim() { echo "$1" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
+          to_ver() {
+            local x
+            x="$(trim "$1")"
+            x="${x#v}"
+            x="${x#.}"
+            echo "$x"
+          }
+          R="$(to_ver "$TAG")"
+          if [ -z "$R" ]; then echo "ERROR: empty tag" >&2; exit 1; fi
+          if ! echo "$R" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: tag must be semver X.Y.Z, got: $TAG" >&2
+            exit 1
+          fi
+          echo "tag=v${R}" >> "$GITHUB_OUTPUT"
+          echo "ver=${R}" >> "$GITHUB_OUTPUT"
+          SRC_RAW="$(trim "$SOURCE_REF")"
+          if [ -z "$SRC_RAW" ]; then SRC="v${R}"
+          else
+            TMP="$(to_ver "$SRC_RAW")"
+            if echo "$TMP" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then SRC="v${TMP}"; else SRC="$SRC_RAW"; fi
+          fi
+          echo "checkout_ref=${SRC}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.checkout_ref }}
+
+      - name: Use main packaging when C++ tree is missing
+        run: |
+          VER="${{ steps.meta.outputs.ver }}"
+          if [ -f cpp/CMakeLists.txt ] && [ -f build-linux.sh ]; then
+            exit 0
+          fi
+          echo "C++ packaging missing — fetching origin/main"
+          git fetch --depth=1 origin main
+          git checkout -f FETCH_HEAD
+          FILE_VER="$(tr -d '\r\n' < VERSION)"
+          if [ "$FILE_VER" != "$VER" ]; then
+            echo "ERROR: origin/main VERSION is '$FILE_VER' but release is '$VER'." >&2
+            exit 1
+          fi
+
+      - name: Install Linux build dependencies
+        run: bash scripts/ci_install_linux_release_deps.sh
+
+      - name: Build Linux zips (CMake + AppImage)
+        run: ./build-linux.sh
+
+      - name: Smoke-test TUI zip
+        run: |
+          VER="${{ steps.meta.outputs.ver }}"
+          ZIP="I2PChat-linux-${{ matrix.arch }}-tui-v${VER}.zip"
+          mkdir -p /tmp/tui-smoke
+          unzip -q -d /tmp/tui-smoke "$ZIP"
+          cd /tmp/tui-smoke
+          set +e
+          out="$(timeout 15 ./i2pchat-tui --help 2>&1)"
+          echo "$out"
+          if echo "$out" | grep -qi 'GLIBC_.*not found'; then
+            echo "ERROR: TUI needs a newer glibc than this runner" >&2
+            exit 1
+          fi
+          echo "TUI smoke OK"
+
+      - name: Verify VERSION matches tag
+        run: |
+          VER="${{ steps.meta.outputs.ver }}"
+          FILE_VER="$(tr -d '\r\n' < VERSION)"
+          if [ "$FILE_VER" != "$VER" ]; then
+            echo "ERROR: VERSION file is '$FILE_VER' but tag implies '$VER'" >&2
+            exit 1
+          fi
+
+      - name: Upload Linux assets to release
+        if: ${{ github.event.inputs.upload == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          VER="${{ steps.meta.outputs.ver }}"
+          ARCH="${{ matrix.arch }}"
+          SUMS="${{ matrix.sums }}"
+          ZIP_GUI="I2PChat-linux-${ARCH}-v${VER}.zip"
+          ZIP_TUI="I2PChat-linux-${ARCH}-tui-v${VER}.zip"
+          for f in "$ZIP_GUI" "$ZIP_TUI" SHA256SUMS; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: missing $f" >&2
+              ls -la >&2 || true
+              exit 1
+            fi
+          done
+          if [ "$SUMS" != "SHA256SUMS" ]; then
+            cp SHA256SUMS "$SUMS"
+          fi
+          gh release upload "$TAG" "$ZIP_GUI" "$ZIP_TUI" "$SUMS" \
+            --repo "${{ github.repository }}" --clobber
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+            sums: SHA256SUMS.macos-arm64
+          - os: macos-13
+            arch: x64
+            sums: SHA256SUMS.macos-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Resolve tag and checkout ref
+        id: meta
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+          SOURCE_REF: ${{ github.event.inputs.source_ref }}
+        run: |
+          trim() { echo "$1" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
+          to_ver() {
+            local x
+            x="$(trim "$1")"
+            x="${x#v}"
+            x="${x#.}"
+            echo "$x"
+          }
+          R="$(to_ver "$TAG")"
+          if [ -z "$R" ]; then echo "ERROR: empty tag" >&2; exit 1; fi
+          if ! echo "$R" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: tag must be semver X.Y.Z, got: $TAG" >&2
+            exit 1
+          fi
+          echo "tag=v${R}" >> "$GITHUB_OUTPUT"
+          echo "ver=${R}" >> "$GITHUB_OUTPUT"
+          SRC_RAW="$(trim "$SOURCE_REF")"
+          if [ -z "$SRC_RAW" ]; then SRC="v${R}"
+          else
+            TMP="$(to_ver "$SRC_RAW")"
+            if echo "$TMP" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then SRC="v${TMP}"; else SRC="$SRC_RAW"; fi
+          fi
+          echo "checkout_ref=${SRC}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.checkout_ref }}
+
+      - name: Use main packaging when C++ tree is missing
+        run: |
+          VER="${{ steps.meta.outputs.ver }}"
+          if [ -f cpp/CMakeLists.txt ] && [ -f build-macos.sh ]; then
+            exit 0
+          fi
+          git fetch --depth=1 origin main
+          git checkout -f FETCH_HEAD
+          FILE_VER="$(tr -d '\r\n' < VERSION)"
+          if [ "$FILE_VER" != "$VER" ]; then
+            echo "ERROR: origin/main VERSION is '$FILE_VER' but release is '$VER'." >&2
+            exit 1
+          fi
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew install cmake ninja libsodium boost nlohmann-json ftxui qt zip
+
+      - name: Build macOS zips
+        run: ./build-macos.sh
+
+      - name: Smoke-test TUI zip
+        run: |
+          VER="${{ steps.meta.outputs.ver }}"
+          ZIP="I2PChat-macOS-${{ matrix.arch }}-tui-v${VER}.zip"
+          mkdir -p /tmp/tui-smoke
+          unzip -q -d /tmp/tui-smoke "$ZIP"
+          cd /tmp/tui-smoke
+          ./i2pchat-tui --help >/tmp/tui-out 2>&1 &
+          pid=$!
+          sleep 2
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          cat /tmp/tui-out || true
+          echo "TUI smoke OK"
+
+      - name: Verify VERSION matches tag
+        run: |
+          VER="${{ steps.meta.outputs.ver }}"
+          FILE_VER="$(tr -d '\r\n' < VERSION)"
+          if [ "$FILE_VER" != "$VER" ]; then
+            echo "ERROR: VERSION file is '$FILE_VER' but tag implies '$VER'" >&2
+            exit 1
+          fi
+
+      - name: Upload macOS assets to release
+        if: ${{ github.event.inputs.upload == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          VER="${{ steps.meta.outputs.ver }}"
+          ARCH="${{ matrix.arch }}"
+          SUMS="${{ matrix.sums }}"
+          ZIP_GUI="I2PChat-macOS-${ARCH}-v${VER}.zip"
+          ZIP_TUI="I2PChat-macOS-${ARCH}-tui-v${VER}.zip"
+          for f in "$ZIP_GUI" "$ZIP_TUI" SHA256SUMS; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: missing $f" >&2
+              ls -la >&2 || true
+              exit 1
+            fi
+          done
+          cp SHA256SUMS "$SUMS"
+          gh release upload "$TAG" "$ZIP_GUI" "$ZIP_TUI" "$SUMS" \
+            --repo "${{ github.repository }}" --clobber
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Resolve tag and checkout ref
+        id: meta
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+          SOURCE_REF: ${{ github.event.inputs.source_ref }}
+        shell: bash
+        run: |
+          trim() { echo "$1" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
+          to_ver() {
+            local x
+            x="$(trim "$1")"
+            x="${x#v}"
+            x="${x#.}"
+            echo "$x"
+          }
+          R="$(to_ver "$TAG")"
+          if [ -z "$R" ]; then echo "ERROR: empty tag" >&2; exit 1; fi
+          if ! echo "$R" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: tag must be semver X.Y.Z, got: $TAG" >&2
+            exit 1
+          fi
+          echo "tag=v${R}" >> "$GITHUB_OUTPUT"
+          echo "ver=${R}" >> "$GITHUB_OUTPUT"
+          SRC_RAW="$(trim "$SOURCE_REF")"
+          if [ -z "$SRC_RAW" ]; then SRC="v${R}"
+          else
+            TMP="$(to_ver "$SRC_RAW")"
+            if echo "$TMP" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then SRC="v${TMP}"; else SRC="$SRC_RAW"; fi
+          fi
+          echo "checkout_ref=${SRC}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.checkout_ref }}
+
+      - name: Enable GitHub Actions cache for vcpkg
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Bootstrap vcpkg
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git vcpkg
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Build Windows zips
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+          VCPKG_MANIFEST_FEATURES: tui;gui
+          VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
+          I2PCHAT_SKIP_GPG_SIGN: "1"
+        run: .\build-windows.ps1
+
+      - name: Smoke-test TUI
+        env:
+          VER: ${{ steps.meta.outputs.ver }}
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE "dist\I2PChat\I2PChat-tui.exe"
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+          $p = Start-Process -FilePath $exe -ArgumentList "--help" -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\tui-out.txt" -RedirectStandardError "$env:TEMP\tui-err.txt"
+          Start-Sleep -Seconds 3
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+          Get-Content "$env:TEMP\tui-out.txt","$env:TEMP\tui-err.txt" -ErrorAction SilentlyContinue
+          Write-Host "TUI smoke OK"
+
+      - name: Verify VERSION matches tag
+        shell: bash
+        run: |
+          VER="${{ steps.meta.outputs.ver }}"
+          FILE_VER="$(tr -d '\r\n' < VERSION)"
+          if [ "$FILE_VER" != "$VER" ]; then
+            echo "ERROR: VERSION file is '$FILE_VER' but tag implies '$VER'" >&2
+            exit 1
+          fi
+
+      - name: Upload Windows assets to release
+        if: ${{ github.event.inputs.upload == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          VER="${{ steps.meta.outputs.ver }}"
+          cp dist/I2PChat-windows-x64-v"${VER}".zip \
+             dist/I2PChat-windows-tui-x64-v"${VER}".zip \
+             dist/I2PChat-windows-x64-winget-v"${VER}".zip \
+             dist/I2PChat-windows-tui-x64-winget-v"${VER}".zip \
+             .
+          cp SHA256SUMS SHA256SUMS.windows-x64
+          for f in \
+            "I2PChat-windows-x64-v${VER}.zip" \
+            "I2PChat-windows-tui-x64-v${VER}.zip" \
+            "I2PChat-windows-x64-winget-v${VER}.zip" \
+            "I2PChat-windows-tui-x64-winget-v${VER}.zip" \
+            SHA256SUMS.windows-x64
+          do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: missing $f" >&2
+              ls -la dist >&2 || true
+              exit 1
+            fi
+          done
+          gh release upload "$TAG" \
+            "I2PChat-windows-x64-v${VER}.zip" \
+            "I2PChat-windows-tui-x64-v${VER}.zip" \
+            "I2PChat-windows-x64-winget-v${VER}.zip" \
+            "I2PChat-windows-tui-x64-winget-v${VER}.zip" \
+            SHA256SUMS.windows-x64 \
+            --repo "${{ github.repository }}" --clobber

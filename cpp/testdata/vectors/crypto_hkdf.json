@@ -1,0 +1,74 @@
+{
+  "_description": "HKDF-SHA256 (RFC 5869) extract/expand plus raw HMAC-SHA256 and SHA-256 vectors. Source: i2pchat/crypto.py hkdf_extract/hkdf_expand.",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "hkdf": [
+    {
+      "salt_hex": "",
+      "ikm_hex": "",
+      "info_hex": "493250434841542d544553547c696e666f",
+      "length": 32,
+      "prk_hex": "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad",
+      "okm_hex": "9902abebdaf2f6bc620f8dec21d365dc660a716cffdde737f6a9d77841687c52"
+    },
+    {
+      "salt_hex": "73616c74",
+      "ikm_hex": "696e707574206b6579696e67206d6174657269616c",
+      "info_hex": "493250434841542d544553547c696e666f",
+      "length": 32,
+      "prk_hex": "45a39914db43cbfb9a3318dd20171ca16f1f7556063ab5438d1d837f24a79bf4",
+      "okm_hex": "4ad067172e0e0d13ea95ea6d85618f4411fd7254cc85e45a0ac2c0de3375af68"
+    },
+    {
+      "salt_hex": "493250434841542d50524f46494c452d444154",
+      "ikm_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "info_hex": "493250434841542d544553547c696e666f",
+      "length": 32,
+      "prk_hex": "3d5c6a441f3baa0e871db540ca167d05a0cb11ca1d4f41aa2f888f36e2507a2d",
+      "okm_hex": "cd27d447c27dcc1edf7b88caf2ce7faabc772c6f09d698eebdb1bfe45feaffb9"
+    },
+    {
+      "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "ikm_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "info_hex": "493250434841542d544553547c696e666f",
+      "length": 64,
+      "prk_hex": "55d8cf7fd6ff10153102bf76efed89a01f26225331054cf0bc83cb81e1bc3a7a",
+      "okm_hex": "222106d6b0c708f7398c4e0f37e5f06614677302bc2ccb2a72f3dc1aba5c1a9d17e40616bcdfc4466d0cc6cf7a622cb59422725144fab8c43e950c8baa89ba10"
+    },
+    {
+      "salt_hex": "6d756c74692d626c6f636b",
+      "ikm_hex": "696b6d",
+      "info_hex": "493250434841542d544553547c696e666f",
+      "length": 100,
+      "prk_hex": "e80143285b83499dfccde1e4e517942e64bb2dbdb44a47fc9f2d27bc3047fc2a",
+      "okm_hex": "76f41f0f6dc17437c5f94b22e9da7d784525ddae26e6a435b05efb5c948589c6d7b63350a543adf7eadb3e8b02b981516f5708f556e8240c5440c55aa42da819ac4ce93ab74c1b97d40a4446efb758337f7c794853caeb892d3a880be8d5fd7e1fd5bda7"
+    },
+    {
+      "salt_hex": "756e69636f64652073616c7420d0bfd180d0b8d0b2d0b5d182",
+      "ikm_hex": "696b6d",
+      "info_hex": "493250434841542d544553547c696e666f",
+      "length": 48,
+      "prk_hex": "894d2ca9250f46f4b03f30c0fc271e3119b3659ad10071fbb0fdc90ed6c9b12c",
+      "okm_hex": "b63a4f8d27c6c3de8c99e9497a3c1b963e4e4919371478ef6afcf90922aa058ffb535fbd115545f692f54c36f4404606"
+    }
+  ],
+  "hmac_sha256": [
+    {
+      "key_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "message_hex": "",
+      "hmac_sha256_hex": "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad",
+      "sha256_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "message_hex": "73686f7274",
+      "hmac_sha256_hex": "3cb953cd24a1cc17d28b0a569a3515e15615853bc3335f29386d8d2d78c4c0ba",
+      "sha256_hex": "f9b0078b5df596d2ea19010c001bbd009e651de2c57e8fb7e355f31eb9d3f739"
+    },
+    {
+      "key_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "message_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "hmac_sha256_hex": "3b0baba8acb283ebbf8b1d3d0263ed5e425c3f78836298113d52b580485e819e",
+      "sha256_hex": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880"
+    }
+  ]
+}

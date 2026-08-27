@@ -1,0 +1,7 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <qresource prefix="/i2pchat">
+    <file>qss/light.qss</file>
+    <file>qss/dark.qss</file>
+  </qresource>
+</RCC>

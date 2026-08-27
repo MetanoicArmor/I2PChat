@@ -1,0 +1,51 @@
+QMainWindow, QDialog, QWidget {
+  background-color: #f5f5f7;
+  color: #1d1d1f;
+}
+QListView#ContactList {
+  background: #eef1f7;
+  border: none;
+  padding: 8px;
+  outline: none;
+}
+QListView#ContactList::item {
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+QListView#ContactList::item:selected {
+  background: #e8f2ff;
+  color: #0a3d7a;
+}
+QListView#ChatView {
+  background: #f5f5f7;
+  border: none;
+  outline: none;
+}
+QLineEdit#Composer {
+  background: #ffffff;
+  border: 1px solid #d8dce6;
+  border-radius: 12px;
+  padding: 10px 14px;
+  color: #1d1d1f;
+  min-height: 22px;
+}
+QLineEdit#Composer:focus { border: 1px solid #0a84ff; }
+QPushButton {
+  background-color: #f0f2f6;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  color: #1d1d1f;
+}
+QPushButton:hover { background-color: #e8ecf4; }
+QPushButton#PrimaryButton { background-color: #0a84ff; color: #ffffff; }
+QPushButton#PrimaryButton:hover { background-color: #0077ed; }
+QLabel#StatusBar {
+  color: #626875;
+  font-size: 12px;
+  padding: 4px 12px;
+}
+QMenuBar { background: #f5f5f7; }
+QMenu { background: #ffffff; border-radius: 8px; }
+QScrollBar:vertical { width: 10px; background: transparent; }
+QScrollBar::handle:vertical { background: #c0c8d4; border-radius: 4px; min-height: 24px; }

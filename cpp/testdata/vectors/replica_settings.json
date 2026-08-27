@@ -1,0 +1,56 @@
+{
+  "_description": "The per-profile BlindBox replica list: plaintext JSON whose auth tokens sit in a base64 'I2RA' blob sealed under the profile identity key. Endpoint normalisation drops blanks, comments and duplicates and keeps first-seen order; a token whose endpoint is not in the list is discarded on both read and write. Source: i2pchat/storage/profile_blindbox_replicas.py.",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "version": 3,
+  "identity_key_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+  "raw_endpoints": [
+    "127.0.0.1:19444",
+    "  spaced.b32.i2p:19444  ",
+    "",
+    "# a comment",
+    "127.0.0.1:19444",
+    "other.b32.i2p:19444"
+  ],
+  "normalized_endpoints": [
+    "127.0.0.1:19444",
+    "spaced.b32.i2p:19444",
+    "other.b32.i2p:19444"
+  ],
+  "raw_auth": {
+    "127.0.0.1:19444": "local-token",
+    "other.b32.i2p:19444": "remote-token",
+    "unlisted.b32.i2p:19444": "orphan-token"
+  },
+  "expected_auth": {
+    "127.0.0.1:19444": "local-token",
+    "other.b32.i2p:19444": "remote-token"
+  },
+  "expected_endpoints": [
+    "127.0.0.1:19444",
+    "spaced.b32.i2p:19444",
+    "other.b32.i2p:19444"
+  ],
+  "auth_blob_base64": "STJSQQABDtbOi8l5u+zqSTjth26M8DDukgj7JHUJtIU6YFGJCZEizw8ciEqUniiC+B+6nlBsP1/J+/f9WZuh1NY/WGZfNA7MtlIJiRGURC1Z5ZHlbrRHtdsOuSPPkfnztjkVw1XUJTT2dlekyTLEPACQpeuyd55VTCFL3WYwc8yLtmXqEbk4MmtVr+aqeDpFaI1vNw==",
+  "auth_plaintext_utf8": "{\"127.0.0.1:19444\":\"local-token\",\"other.b32.i2p:19444\":\"remote-token\"}",
+  "file_utf8": "{\n  \"replica_auth_enc\": \"STJSQQABDtbOi8l5u+zqSTjth26M8DDukgj7JHUJtIU6YFGJCZEizw8ciEqUniiC+B+6nlBsP1/J+/f9WZuh1NY/WGZfNA7MtlIJiRGURC1Z5ZHlbrRHtdsOuSPPkfnztjkVw1XUJTT2dlekyTLEPACQpeuyd55VTCFL3WYwc8yLtmXqEbk4MmtVr+aqeDpFaI1vNw==\",\n  \"replicas\": [\n    \"127.0.0.1:19444\",\n    \"spaced.b32.i2p:19444\",\n    \"other.b32.i2p:19444\"\n  ],\n  \"version\": 3\n}",
+  "legacy_version_1": {
+    "version": 1,
+    "replicas": [
+      "127.0.0.1:19444",
+      "spaced.b32.i2p:19444",
+      "other.b32.i2p:19444"
+    ]
+  },
+  "legacy_version_2": {
+    "version": 2,
+    "replicas": [
+      "127.0.0.1:19444",
+      "spaced.b32.i2p:19444",
+      "other.b32.i2p:19444"
+    ],
+    "replica_auth": {
+      "127.0.0.1:19444": "local-token",
+      "other.b32.i2p:19444": "remote-token"
+    }
+  }
+}

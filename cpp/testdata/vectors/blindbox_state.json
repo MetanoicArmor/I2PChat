@@ -1,0 +1,80 @@
+{
+  "_description": "Local wrapping of BlindBox root secrets and the per-peer state file. Wrap v2: salt=SHA256('BLINDBOX-LOCAL-WRAP-SALT-V2|'+profile+'|'+scope), prk=HKDF-Extract(salt, signing_seed), key=HKDF-Expand(prk, 'BLINDBOX-LOCAL-WRAP-KEY-V2|'+profile+'|'+scope, 32). Wrap v1 (read-only, for migration): salt=HKDF-Extract('', SHA256('BLINDBOX-LOCAL-WRAP-SALT|'+profile+'|'+scope)), key=HKDF-Expand(salt, 'BLINDBOX-LOCAL-WRAP-KEY', 32) \u2014 no signing seed. Scope is the peer id lowercased with a trailing '.b32.i2p' stripped, or 'group:<group_id>'. Source: i2pchat/core/i2p_chat_core.py and i2pchat/storage/blindbox_state.py.",
+  "_generator": "cpp/testdata/generate_vectors.py",
+  "constants": {
+    "wrap_version_legacy": 1,
+    "wrap_version_current": 2,
+    "state_version": "BLINDBOX_STATE_V1",
+    "default_recv_window": 16,
+    "filename": "{profile}.blindbox.{safe_peer}.json",
+    "safe_peer_rule": "lowercase, then every character outside [a-z0-9._-] replaced with '_'"
+  },
+  "wrap_keys": [
+    {
+      "scope": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+      "profile": "default",
+      "signing_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "wrap_key_v1_hex": "3e50cca97394bf2cab760ace8e9482370e18a6f3445ca2c4d10f6b73aef353a1",
+      "wrap_key_v2_hex": "fb51f851ce52474c52c8e08bb0bb05d3385cf7899b82bbbd64b07237bb2232c5"
+    },
+    {
+      "scope": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz.b32.i2p",
+      "profile": "default",
+      "signing_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "wrap_key_v1_hex": "3e50cca97394bf2cab760ace8e9482370e18a6f3445ca2c4d10f6b73aef353a1",
+      "wrap_key_v2_hex": "fb51f851ce52474c52c8e08bb0bb05d3385cf7899b82bbbd64b07237bb2232c5"
+    },
+    {
+      "scope": "group:group-alpha",
+      "profile": "default",
+      "signing_seed_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "wrap_key_v1_hex": "2bc3b51ec0c11da9a7103cf9c3fc19a4a67b468a2384e6290ac19c537ae4c84e",
+      "wrap_key_v2_hex": "44a5be560b652f2ee0e3f0d7b6dabd7aa264779d6100103f38e99e449783b2dd"
+    }
+  ],
+  "root_secret_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+  "peer_id": "nnnnooooppppqqqqrrrrssssttttuuuuvvvvwwwwxxxxyyyyzzzz",
+  "encrypted_root_v2_hex": "1a4bf9969e2b6c7ca2ca2dda1bb5d8a7b9872471e113b1c38f7c7da27783404db1586895d30eb3c23263be53e19d034aa97637ef5656cb37cde8383e1ea79730f132781749699a60",
+  "encrypted_root_v1_hex": "9b61d1f9359aaf232fa8ca92b8a14213ce92c5e80b397eeb1b5dcbf9017d19ae62cf6e5eebcde9320cb93226b38b4a1aebf584107784a2e7d615588dad6a6dc0c0d655ce280243fd",
+  "state": {
+    "version": "BLINDBOX_STATE_V1",
+    "send_index": 7,
+    "recv_base": 3,
+    "recv_window": 16,
+    "consumed_recv": [
+      0,
+      1,
+      2,
+      5
+    ],
+    "updated_at": 1700000000
+  },
+  "state_file": {
+    "version": "BLINDBOX_STATE_V1",
+    "send_index": 7,
+    "recv_base": 3,
+    "recv_window": 16,
+    "consumed_recv": [
+      0,
+      1,
+      2,
+      5
+    ],
+    "updated_at": 1700000000,
+    "blindbox_wrap_version": 2,
+    "blindbox_root_secret_enc": "1a4bf9969e2b6c7ca2ca2dda1bb5d8a7b9872471e113b1c38f7c7da27783404db1586895d30eb3c23263be53e19d034aa97637ef5656cb37cde8383e1ea79730f132781749699a60",
+    "blindbox_root_epoch": 4,
+    "blindbox_root_created_at": 1699990000,
+    "blindbox_root_send_index_base": 5,
+    "blindbox_pending_root_epoch": 0,
+    "blindbox_pending_root_created_at": 1700000000,
+    "blindbox_pending_root_send_index_base": 7,
+    "blindbox_prev_roots": [
+      {
+        "epoch": 3,
+        "expires_at": 1700003600,
+        "secret_enc": "a78ec2ebe2894c6fd2e31adaf794b6198b127be8ef3e8b87c30bdfce0ee0f9d71bfdb89f0f372827dbc011f7b7e4c5ea1c4563d0a62735ed23bb607b955f718e10a9a523d58c6ddf"
+      }
+    ]
+  }
+}
