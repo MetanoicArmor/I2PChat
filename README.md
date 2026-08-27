@@ -445,7 +445,7 @@ If you like this project and it brings value, you can support its development by
 <div align="center">
 <img src="btc_donation_qr.png" width="200">
 
-Минимальная сумма транзакции: **0.0001 BTC**
+Минимальная сумма транзакции / Minimum transaction amount: **0.0001 BTC**
 </div>
 
 ### 📋 Bitcoin Address:
