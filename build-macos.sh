@@ -96,6 +96,10 @@ if [ -d "i2pchat/gui/fluent_emoji" ]; then
   mkdir -p "dist/${APP_NAME}.app/Contents/Resources/fluent_emoji"
   rsync -a --delete "i2pchat/gui/fluent_emoji/" "dist/${APP_NAME}.app/Contents/Resources/fluent_emoji/"
 fi
+if [ -f "assets/sounds/notify.wav" ]; then
+  mkdir -p "dist/${APP_NAME}.app/Contents/Resources/sounds"
+  cp "assets/sounds/notify.wav" "dist/${APP_NAME}.app/Contents/Resources/sounds/"
+fi
 if [ -f "i2pchat/gui/icons/face.dashed.png" ]; then
   mkdir -p "dist/${APP_NAME}.app/Contents/Resources/icons"
   cp "i2pchat/gui/icons/face.dashed.png" "dist/${APP_NAME}.app/Contents/Resources/icons/"

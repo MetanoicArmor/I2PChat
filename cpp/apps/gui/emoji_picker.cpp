@@ -10,10 +10,13 @@
 #include <QFile>
 #include <QGridLayout>
 #include <QIcon>
+#include <QHideEvent>
+#include <QKeyEvent>
 #include <QPainter>
 #include <QPixmap>
 #include <QScreen>
 #include <QScrollArea>
+#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <fstream>
@@ -150,6 +153,7 @@ void EmojiPickerPopup::rebuild() {
     auto* grid = new QGridLayout(inner_);
     grid->setSpacing(4);
     grid->setContentsMargins(8, 6, 8, 6);
+    buttons_.clear();
     int i = 0;
     for (const std::string_view raw : kEmojiChars) {
         const QString glyph = QString::fromUtf8(raw.data(), static_cast<int>(raw.size()));
@@ -176,24 +180,105 @@ void EmojiPickerPopup::rebuild() {
             hide();
         });
         grid->addWidget(btn, i / kCols, i % kCols);
+        buttons_.push_back(btn);
         ++i;
     }
+}
+
+void EmojiPickerPopup::sync_focus_visual() {
+    const int n = static_cast<int>(buttons_.size());
+    if (n == 0) {
+        return;
+    }
+    focus_idx_ = std::clamp(focus_idx_, 0, n - 1);
+    for (int i = 0; i < n; ++i) {
+        buttons_[i]->setProperty("emojiNavFocus", i == focus_idx_);
+        buttons_[i]->style()->unpolish(buttons_[i]);
+        buttons_[i]->style()->polish(buttons_[i]);
+    }
+    scroll_->ensureWidgetVisible(buttons_[focus_idx_]);
+}
+
+void EmojiPickerPopup::pick_focused() {
+    if (focus_idx_ < 0 || focus_idx_ >= buttons_.size()) {
+        return;
+    }
+    const std::string_view raw = kEmojiChars[static_cast<std::size_t>(focus_idx_)];
+    emit emoji_chosen(QString::fromUtf8(raw.data(), static_cast<int>(raw.size())));
+    hide();
+}
+
+void EmojiPickerPopup::keyPressEvent(QKeyEvent* event) {
+    const int n = static_cast<int>(buttons_.size());
+    if (n == 0) {
+        QFrame::keyPressEvent(event);
+        return;
+    }
+    const int key = event->key();
+    if (key == Qt::Key_Escape) {
+        hide();
+        event->accept();
+        return;
+    }
+    if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Space) {
+        pick_focused();
+        event->accept();
+        return;
+    }
+    const int cols = kCols;
+    const int row = focus_idx_ / cols;
+    const int col = focus_idx_ % cols;
+    bool moved = false;
+    if (key == Qt::Key_Left && col > 0) {
+        --focus_idx_;
+        moved = true;
+    } else if (key == Qt::Key_Right && col < cols - 1 && focus_idx_ + 1 < n) {
+        ++focus_idx_;
+        moved = true;
+    } else if (key == Qt::Key_Up && focus_idx_ >= cols) {
+        focus_idx_ -= cols;
+        moved = true;
+    } else if (key == Qt::Key_Down && focus_idx_ + cols < n) {
+        focus_idx_ += cols;
+        moved = true;
+    }
+    (void)row;
+    if (moved) {
+        sync_focus_visual();
+        event->accept();
+        return;
+    }
+    QFrame::keyPressEvent(event);
 }
 
 void EmojiPickerPopup::set_night(bool night) { night_ = night; }
 
 void EmojiPickerPopup::show_above(QWidget* anchor) {
     adjustSize();
-    QPoint pos = anchor->mapToGlobal(QPoint(0, -height() - 6));
-    if (QScreen* screen = QApplication::screenAt(pos)) {
-        const QRect avail = screen->availableGeometry();
-        pos.setX(std::min(pos.x(), avail.right() - width() + 1));
-        pos.setY(std::max(pos.y(), avail.top()));
-        pos.setX(std::max(pos.x(), avail.left()));
+    const QPoint top_left = anchor->mapToGlobal(QPoint(0, 0));
+    int x = top_left.x() + anchor->width() - width();
+    int y = top_left.y() - height() - 6;
+    if (y < 0) {
+        y = top_left.y() + anchor->height() + 6;
     }
-    move(pos);
+    if (QScreen* screen = QApplication::screenAt(QPoint(x, y))) {
+        const QRect avail = screen->availableGeometry();
+        constexpr int margin = 6;
+        x = std::max(avail.left() + margin, std::min(x, avail.right() - width() - margin + 1));
+        y = std::max(avail.top() + margin, std::min(y, avail.bottom() - height() - margin + 1));
+    }
+    move(x, y);
+    focus_idx_ = 0;
+    sync_focus_visual();
     show();
     raise();
+    activateWindow();
+    setFocus(Qt::PopupFocusReason);
+}
+
+void EmojiPickerPopup::hideEvent(QHideEvent* event) {
+    QFrame::hideEvent(event);
+    emit picker_hidden();
 }
 
 }  // namespace i2pchat::gui

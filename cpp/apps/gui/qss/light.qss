@@ -208,7 +208,7 @@ QToolButton#EmojiPickerButton {
   padding: 0px;
   border-radius: 6px;
 }
-QToolButton#EmojiPickerButton:hover { background: rgba(60, 60, 67, 0.10); }
+QToolButton#EmojiPickerButton:hover { background: rgba(10, 132, 255, 0.12); }
 QFrame#EmojiPickerPopupWindow { background: transparent; border: none; }
 QFrame#EmojiPickerPopupSurface {
   background: #f6f7fa;
@@ -222,3 +222,4 @@ QToolButton#EmojiCell {
   font-size: 18px;
 }
 QToolButton#EmojiCell:hover { background: #e5eaf2; }
+QToolButton#EmojiCell[emojiNavFocus="true"] { background: #d6e8ff; }

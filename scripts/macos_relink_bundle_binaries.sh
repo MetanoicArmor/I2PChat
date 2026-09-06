@@ -72,8 +72,21 @@ copy_dylib_into_fw() {
 rewrite_dep() {
   local bin="$1"
   local dep="$2"
-  local name dest new
+  local name dest new rest
   case "${dep}" in
+    @rpath/*.framework/*)
+      rest="${dep#@rpath/}"
+      dest="${FW}/${rest}"
+      if [ ! -e "${dest}" ]; then
+        echo "WARN: ${bin} needs ${dep} but ${dest} is missing" >&2
+        return 0
+      fi
+      new="@executable_path/../Frameworks/${rest}"
+      if [ "${dep}" != "${new}" ]; then
+        echo "  ${dep}  →  ${new}"
+        install_name_tool -change "${dep}" "${new}" "${bin}"
+      fi
+      ;;
     @rpath/*.dylib|@rpath/*.so)
       name="$(basename "${dep}")"
       dest="${FW}/${name}"
@@ -116,10 +129,40 @@ rewrite_dep() {
         fi
       fi
       new="@executable_path/../Frameworks/${name}"
-      echo "  ${dep}  →  ${new}"
-      install_name_tool -change "${dep}" "${new}" "${bin}"
+      if [ "${dep}" != "${new}" ]; then
+        echo "  ${dep}  →  ${new}"
+        install_name_tool -change "${dep}" "${new}" "${bin}"
+      fi
       ;;
   esac
+}
+
+strip_external_rpaths() {
+  local bin="$1"
+  local path
+  while IFS= read -r path; do
+    [ -n "${path}" ] || continue
+    case "${path}" in
+      /opt/homebrew/*|/usr/local/*|/opt/local/*)
+        echo "  -delete_rpath ${path}"
+        install_name_tool -delete_rpath "${path}" "${bin}" 2>/dev/null || true
+        ;;
+    esac
+  done < <(otool -l "${bin}" 2>/dev/null | awk '/cmd LC_RPATH/{c=1} c && $1=="path"{print $2; c=0}')
+}
+
+ensure_bundle_rpath() {
+  local bin="$1"
+  case "${bin}" in
+    "${MACOS}"/*) ;;
+    *) return 0 ;;
+  esac
+  if otool -l "${bin}" 2>/dev/null | awk '/cmd LC_RPATH/{c=1} c && $1=="path"{print $2; c=0}' \
+      | grep -qx '@executable_path/../Frameworks'; then
+    return 0
+  fi
+  echo "  -add_rpath @executable_path/../Frameworks"
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "${bin}" 2>/dev/null || true
 }
 
 relink_file() {
@@ -173,5 +216,12 @@ while [ "${pass}" -lt 6 ]; do
     break
   fi
 done
+
+echo "==> Strip Homebrew LC_RPATH from bundled Mach-O"
+while IFS= read -r bin; do
+  [ -n "${bin}" ] || continue
+  strip_external_rpaths "${bin}"
+  ensure_bundle_rpath "${bin}"
+done < <(iter_macho)
 
 echo "✔ Relink done"

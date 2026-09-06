@@ -235,3 +235,4 @@ QToolButton#EmojiCell {
   font-size: 18px;
 }
 QToolButton#EmojiCell:hover { background: rgba(255, 255, 255, 0.10); }
+QToolButton#EmojiCell[emojiNavFocus="true"] { background: rgba(10, 132, 255, 0.28); }

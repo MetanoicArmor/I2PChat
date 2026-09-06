@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <functional>
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -44,7 +45,9 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QStyleHints>
+#include <QCursor>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QPainter>
@@ -52,6 +55,7 @@
 #include <QPlainTextEdit>
 #include <QScrollArea>
 #include <QPushButton>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -61,7 +65,9 @@
 #include <QSplitter>
 #include <QStackedLayout>
 #include <QTabWidget>
+#include <QTcpSocket>
 #include <QTextCursor>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
@@ -269,8 +275,9 @@ QString i2p_net_tag(session::TransportState state) {
 
 class SidebarResizeGrip : public QWidget {
 public:
-    explicit SidebarResizeGrip(QSplitter* splitter, QWidget* parent = nullptr)
-        : QWidget(parent), splitter_(splitter) {
+    explicit SidebarResizeGrip(QSplitter* splitter, std::function<void(int)> persist,
+                               QWidget* parent = nullptr)
+        : QWidget(parent), splitter_(splitter), persist_(std::move(persist)) {
         setObjectName("ContactsResizeGrip");
         setFixedWidth(4);
         setCursor(Qt::SplitHCursor);
@@ -290,15 +297,26 @@ protected:
             return;
         }
         const int delta = event->globalPosition().toPoint().x() - drag_origin_;
-        int left = drag_sizes_[0] + delta;
-        left = std::clamp(left, 160, 520);
-        const int total = drag_sizes_[0] + drag_sizes_[1];
+        int left = std::clamp(drag_sizes_[0] + delta, 160, 520);
+        const int total = std::max(400, drag_sizes_[0] + drag_sizes_[1]);
         splitter_->setSizes({left, std::max(200, total - left)});
+        if (persist_) {
+            persist_(left);
+        }
     }
-    void mouseReleaseEvent(QMouseEvent*) override { dragging_ = false; }
+    void mouseReleaseEvent(QMouseEvent*) override {
+        dragging_ = false;
+        if (persist_ && splitter_ != nullptr) {
+            const auto sizes = splitter_->sizes();
+            if (!sizes.isEmpty() && sizes[0] >= 160) {
+                persist_(sizes[0]);
+            }
+        }
+    }
 
 private:
     QSplitter* splitter_ = nullptr;
+    std::function<void(int)> persist_;
     int drag_origin_ = 0;
     QList<int> drag_sizes_;
     bool dragging_ = false;
@@ -306,8 +324,9 @@ private:
 
 class ComposeResizeGrip : public QWidget {
 public:
-    explicit ComposeResizeGrip(QSplitter* splitter, QWidget* parent = nullptr)
-        : QWidget(parent), splitter_(splitter) {
+    explicit ComposeResizeGrip(QSplitter* splitter, std::function<void(int)> persist,
+                               QWidget* parent = nullptr)
+        : QWidget(parent), splitter_(splitter), persist_(std::move(persist)) {
         setObjectName("ComposeResizeGrip");
         setFixedHeight(4);
         setCursor(Qt::SizeVerCursor);
@@ -328,17 +347,34 @@ protected:
             return;
         }
         const int delta = drag_origin_ - event->globalPosition().toPoint().y();
-        int bottom = std::clamp(drag_sizes_[1] + delta, 72, 280);
-        const int total = drag_sizes_[0] + drag_sizes_[1];
+        const int total = std::max(200, drag_sizes_[0] + drag_sizes_[1]);
+        const int max_bottom = std::min(280, std::max(72, total / 2));
+        const int bottom = std::clamp(drag_sizes_[1] + delta, 72, max_bottom);
         splitter_->setSizes({std::max(120, total - bottom), bottom});
     }
-    void mouseReleaseEvent(QMouseEvent*) override { dragging_ = false; }
+    void mouseReleaseEvent(QMouseEvent*) override {
+        dragging_ = false;
+        if (persist_ && splitter_ != nullptr) {
+            const auto sizes = splitter_->sizes();
+            if (sizes.size() > 1) {
+                persist_(sizes[1]);
+            }
+        }
+    }
 
 private:
     QSplitter* splitter_ = nullptr;
+    std::function<void(int)> persist_;
     int drag_origin_ = 0;
     QList<int> drag_sizes_;
     bool dragging_ = false;
+};
+
+class ComposerEdit : public QPlainTextEdit {
+public:
+    explicit ComposerEdit(QWidget* parent = nullptr) : QPlainTextEdit(parent) {
+        setViewportMargins(0, 4, 42, 0);
+    }
 };
 
 class SearchHitsConsole : public QFrame {
@@ -385,6 +421,8 @@ ChatWindow::ChatWindow(GuiOptions options, QWidget* parent)
     enter_sends_ = settings.value(QStringLiteral("enterSends"), true).toBool();
     notify_sound_ = settings.value(QStringLiteral("notifySound"), true).toBool();
     theme_pref_ = settings.value(QStringLiteral("themePref"), QStringLiteral("auto")).toString();
+    sidebar_width_saved_ = settings.value(QStringLiteral("contactsSidebarWidth"), 0).toInt();
+    compose_bottom_saved_ = settings.value(QStringLiteral("composeSplitBottom"), 0).toInt();
     if (theme_pref_ != QStringLiteral("auto") && theme_pref_ != QStringLiteral("light") &&
         theme_pref_ != QStringLiteral("dark")) {
         theme_pref_ = QStringLiteral("auto");
@@ -573,7 +611,7 @@ void ChatWindow::build_ui() {
     chat_layout->addWidget(search_console_);
     chat_layout->addWidget(chat_stack, 1);
 
-    composer_ = new QPlainTextEdit(this);
+    composer_ = new ComposerEdit(this);
     composer_->setObjectName("Composer");
     composer_->installEventFilter(this);
     composer_->setPlaceholderText(tr("Message or /command…  Enter to send, Shift+Enter for a new line"));
@@ -586,7 +624,8 @@ void ChatWindow::build_ui() {
     emoji_button_ = new QToolButton(this);
     emoji_button_->setObjectName("EmojiPickerButton");
     emoji_button_->setAutoRaise(true);
-    emoji_button_->setFixedSize(32, 32);
+    emoji_button_->setFixedSize(28, 28);
+    emoji_button_->setIconSize(QSize(17, 17));
     emoji_button_->setCursor(Qt::PointingHandCursor);
     emoji_button_->setToolTip(
         tr("Open emoji panel.\nIn the panel: click to insert; Esc to close.\n\nShortcut: %1")
@@ -595,6 +634,28 @@ void ChatWindow::build_ui() {
     emoji_popup_ = new EmojiPickerPopup(this);
     connect(emoji_button_, &QToolButton::clicked, this, &ChatWindow::toggle_emoji_picker);
     connect(emoji_popup_, &EmojiPickerPopup::emoji_chosen, this, &ChatWindow::insert_emoji);
+    connect(emoji_popup_, &EmojiPickerPopup::picker_hidden, this, [this] {
+        emoji_picker_suppress_until_ms_ = QDateTime::currentMSecsSinceEpoch() + 180;
+        if (composer_ != nullptr) {
+            composer_->setFocus();
+        }
+    });
+    emoji_button_->installEventFilter(this);
+    emoji_popup_->installEventFilter(this);
+    emoji_hover_open_ = new QTimer(this);
+    emoji_hover_open_->setSingleShot(true);
+    connect(emoji_hover_open_, &QTimer::timeout, this, [this] {
+        if (cursor_over_emoji_area()) {
+            show_emoji_picker();
+        }
+    });
+    emoji_hover_close_ = new QTimer(this);
+    emoji_hover_close_->setSingleShot(true);
+    connect(emoji_hover_close_, &QTimer::timeout, this, [this] {
+        if (emoji_popup_ != nullptr && emoji_popup_->isVisible() && !cursor_over_emoji_area()) {
+            emoji_popup_->hide();
+        }
+    });
     send_button_ = new QPushButton(tr("Send"), this);
     send_button_->setObjectName("PrimaryActionButton");
     send_button_->setMinimumHeight(compose_min_h);
@@ -606,8 +667,15 @@ void ChatWindow::build_ui() {
     auto* compose_row = new QHBoxLayout(compose);
     compose_row->setContentsMargins(8, 8, 8, 8);
     compose_row->setSpacing(8);
-    compose_row->addWidget(emoji_button_, 0, Qt::AlignBottom);
-    compose_row->addWidget(composer_, 1);
+    auto* compose_wrap = new QWidget(compose);
+    compose_wrap->setObjectName("ComposeInputWrap");
+    auto* wrap_lay = new QVBoxLayout(compose_wrap);
+    wrap_lay->setContentsMargins(0, 0, 0, 0);
+    wrap_lay->setSpacing(0);
+    wrap_lay->addWidget(composer_);
+    emoji_button_->setParent(compose_wrap);
+    compose_wrap->installEventFilter(this);
+    compose_row->addWidget(compose_wrap, 1);
     compose_row->addWidget(send_button_);
 
     addr_edit_ = new QLineEdit(this);
@@ -656,16 +724,23 @@ void ChatWindow::build_ui() {
     compose_col->setContentsMargins(0, 0, 0, 0);
     compose_col->setSpacing(0);
     auto* compose_splitter = new QSplitter(Qt::Vertical, right_column);
+    compose_splitter_ = compose_splitter;
     compose_splitter->setHandleWidth(0);
     compose_splitter->setChildrenCollapsible(false);
-    auto* compose_grip = new ComposeResizeGrip(compose_splitter, compose_bottom);
+    compose_splitter->setStretchFactor(0, 1);
+    compose_splitter->setStretchFactor(1, 0);
+    auto* compose_grip = new ComposeResizeGrip(
+        compose_splitter, [this](int h) { persist_compose_bottom(h); }, compose_bottom);
     compose_col->addWidget(compose_grip);
     compose_col->addWidget(compose, 1);
     compose_splitter->addWidget(chat_surface);
     compose_splitter->addWidget(compose_bottom);
     compose_splitter->setStretchFactor(0, 1);
     compose_splitter->setStretchFactor(1, 0);
-    compose_splitter->setSizes({400, compose_min_h + 20});
+    const int compose_default = compose_min_h + 20;
+    const int compose_bottom_h =
+        compose_bottom_saved_ > 0 ? compose_bottom_saved_ : compose_default;
+    compose_splitter->setSizes({400, compose_bottom_h});
 
     right_layout->addWidget(compose_splitter, 1);
     right_layout->addWidget(actions);
@@ -686,7 +761,8 @@ void ChatWindow::build_ui() {
     splitter_->setChildrenCollapsible(false);
     splitter_->setOpaqueResize(true);
 
-    sidebar_grip_ = new SidebarResizeGrip(splitter_, this);
+    sidebar_grip_ = new SidebarResizeGrip(
+        splitter_, [this](int w) { persist_sidebar_width(w); }, this);
 
     auto* right_pack = new QWidget(this);
     right_pack_layout_ = new QHBoxLayout(right_pack);
@@ -738,6 +814,10 @@ void ChatWindow::build_ui() {
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+B")), this, SLOT(toggle_sidebar()));
 
     sync_sidebar_toggle_margin();
+    QTimer::singleShot(0, this, [this] {
+        position_emoji_button();
+        balance_sidebar_splitter();
+    });
 
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
         tray_ = new QSystemTrayIcon(this);
@@ -789,7 +869,7 @@ void ChatWindow::apply_theme() {
     }
     if (emoji_button_) {
         emoji_button_->setIcon(tinted_face_icon(options_.dark));
-        emoji_button_->setIconSize(QSize(20, 20));
+        emoji_button_->setIconSize(QSize(17, 17));
     }
     chat_view_->viewport()->update();
     contact_view_->viewport()->update();
@@ -876,6 +956,47 @@ void ChatWindow::show_chat_context_menu(const QPoint& pos) {
             });
         }
     }
+    chat_popup_->add_separator();
+    chat_popup_->add_action(
+        tr("Reply"), {},
+        [this, text] {
+            const QString cur = composer_->toPlainText();
+            const QString quote = QStringLiteral("> ") + text;
+            composer_->setPlainText(cur.trimmed().isEmpty() ? quote
+                                                            : cur + QStringLiteral("\n\n") + quote);
+            composer_->setFocus();
+        },
+        tr("Insert a quoted copy of this message into the compose field."));
+    const auto kind = static_cast<presentation::LineKind>(index.data(ChatModel::KindRole).toInt());
+    const QString marker = index.data(ChatModel::MarkerRole).toString();
+    if (kind == presentation::LineKind::Outgoing && marker == QStringLiteral("✗")) {
+        chat_popup_->add_action(
+            tr("Retry"), {},
+            [this, text] {
+                if (!service_) {
+                    return;
+                }
+                if (text.startsWith(QStringLiteral("[image] "))) {
+                    const std::string media = text.mid(8).trimmed().toStdString();
+                    const std::string peer = selected_;
+                    post_core([this, peer, media]() -> asio::awaitable<void> {
+                        co_await service_->send_image(peer, media);
+                    });
+                } else if (text.startsWith(QStringLiteral("[file] "))) {
+                    const std::string media = text.mid(7).trimmed().toStdString();
+                    const std::string peer = selected_;
+                    post_core([this, peer, media]() -> asio::awaitable<void> {
+                        co_await service_->send_file(peer, media);
+                    });
+                } else if (!selected_.empty()) {
+                    const std::string peer = selected_;
+                    post_core([this, peer, body = text.toStdString()]() -> asio::awaitable<void> {
+                        co_await service_->send_text(peer, body);
+                    });
+                }
+            },
+            tr("Send this outgoing message again."));
+    }
     chat_popup_->show_at(chat_view_->viewport()->mapToGlobal(pos));
 }
 
@@ -923,26 +1044,84 @@ void ChatWindow::toggle_sidebar() {
     QTimer::singleShot(0, this, [this] { balance_sidebar_splitter(); });
 }
 
+void ChatWindow::persist_sidebar_width(int width_px) {
+    sidebar_width_saved_ = std::clamp(width_px, 160, 520);
+    QSettings().setValue(QStringLiteral("contactsSidebarWidth"), sidebar_width_saved_);
+}
+
+void ChatWindow::persist_compose_bottom(int height_px) {
+    compose_bottom_saved_ = std::max(72, height_px);
+    QSettings().setValue(QStringLiteral("composeSplitBottom"), compose_bottom_saved_);
+}
+
+int ChatWindow::sidebar_open_target_px(int total) const {
+    const int avail = std::max(160, total - 200);
+    if (sidebar_width_saved_ <= 0) {
+        const int quarter = std::max(0, total / 4);
+        return std::min({std::max(160, std::min(quarter, 240)), 520, avail});
+    }
+    return std::min({std::max(160, sidebar_width_saved_), 520, avail});
+}
+
 void ChatWindow::balance_sidebar_splitter() {
     if (splitter_ == nullptr) {
         return;
     }
     const int total = std::max(400, splitter_->width());
-    if (sidebar_collapsed_ || !sidebar_->isVisible()) {
+    if (sidebar_collapsed_ || (sidebar_ != nullptr && !sidebar_->isVisible())) {
         splitter_->setSizes({0, total});
         return;
     }
-    const int left = std::clamp(sidebar_width_saved_, 160, std::min(520, total - 200));
+    const int left = sidebar_open_target_px(total);
     splitter_->setSizes({left, std::max(200, total - left)});
+}
+
+void ChatWindow::position_emoji_button() {
+    if (emoji_button_ == nullptr) {
+        return;
+    }
+    auto* wrap = qobject_cast<QWidget*>(emoji_button_->parent());
+    if (wrap == nullptr) {
+        return;
+    }
+    constexpr int margin = 6;
+    emoji_button_->move(wrap->width() - emoji_button_->width() - margin, margin);
+    emoji_button_->raise();
 }
 
 void ChatWindow::toggle_emoji_picker() {
     if (emoji_popup_ == nullptr || emoji_button_ == nullptr) {
         return;
     }
+    if (QDateTime::currentMSecsSinceEpoch() < emoji_picker_suppress_until_ms_) {
+        return;
+    }
     if (emoji_popup_->isVisible()) {
         emoji_popup_->hide();
         return;
+    }
+    show_emoji_picker();
+}
+
+bool ChatWindow::cursor_over_emoji_area() const {
+    if (emoji_button_ == nullptr) {
+        return false;
+    }
+    const QPoint gp = QCursor::pos();
+    const QRect btn(emoji_button_->mapToGlobal(QPoint(0, 0)), emoji_button_->size());
+    if (btn.contains(gp)) {
+        return true;
+    }
+    return emoji_popup_ != nullptr && emoji_popup_->isVisible() &&
+           emoji_popup_->frameGeometry().contains(gp);
+}
+
+void ChatWindow::show_emoji_picker() {
+    if (emoji_popup_ == nullptr || emoji_button_ == nullptr) {
+        return;
+    }
+    if (emoji_hover_close_ != nullptr) {
+        emoji_hover_close_->stop();
     }
     emoji_popup_->set_night(options_.dark);
     emoji_popup_->show_above(emoji_button_);
@@ -959,6 +1138,9 @@ void ChatWindow::insert_emoji(const QString& glyph) {
 }
 
 void ChatWindow::show_more_menu() {
+    if (emoji_popup_ != nullptr && emoji_popup_->isVisible()) {
+        emoji_popup_->hide();
+    }
     more_popup_->clear_actions();
     more_popup_->set_night(options_.dark);
     more_popup_->add_action(tr("Load profile (.dat)"), QStringLiteral("Ctrl+O"),
@@ -1114,9 +1296,73 @@ void ChatWindow::ensure_bundled_router() {
     bundled_router_->start();
 }
 
+bool ChatWindow::wait_for_sam_ready(int timeout_ms) {
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < timeout_ms) {
+        QTcpSocket sock;
+        sock.connectToHost(QString::fromStdString(options_.sam_host), options_.sam_port);
+        if (sock.waitForConnected(400)) {
+            sock.write("HELLO VERSION MIN=3.1 MAX=3.3\n");
+            if (sock.waitForReadyRead(800)) {
+                if (sock.readAll().contains("HELLO REPLY")) {
+                    return true;
+                }
+            }
+        }
+        QThread::msleep(250);
+        QCoreApplication::processEvents();
+    }
+    return false;
+}
+
+void ChatWindow::play_notify_sound() {
+    const QDir exe(QCoreApplication::applicationDirPath());
+    const QStringList rels = {
+        exe.absoluteFilePath(QStringLiteral("../Resources/sounds/notify.wav")),
+        exe.absoluteFilePath(QStringLiteral("../../Resources/sounds/notify.wav")),
+        exe.absoluteFilePath(QStringLiteral("../../../../assets/sounds/notify.wav")),
+        exe.absoluteFilePath(QStringLiteral("../../../assets/sounds/notify.wav")),
+        QStringLiteral(":/i2pchat/sounds/notify.wav"),
+    };
+    QString path;
+    for (const QString& candidate : rels) {
+        if (candidate.startsWith(QLatin1Char(':')) && QFile::exists(candidate)) {
+            QFile in(candidate);
+            if (in.open(QIODevice::ReadOnly)) {
+                const QString tmp =
+                    QDir::temp().filePath(QStringLiteral("i2pchat-notify.wav"));
+                QFile out(tmp);
+                if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    out.write(in.readAll());
+                    out.close();
+                    path = tmp;
+                    break;
+                }
+            }
+        } else if (QFile::exists(candidate)) {
+            path = candidate;
+            break;
+        }
+    }
+    if (!path.isEmpty()) {
+#ifdef Q_OS_MAC
+        if (QProcess::startDetached(QStringLiteral("afplay"), {path})) {
+            return;
+        }
+#endif
+        if (QProcess::startDetached(QStringLiteral("paplay"), {path}) ||
+            QProcess::startDetached(QStringLiteral("aplay"), {path})) {
+            return;
+        }
+    }
+    QApplication::beep();
+}
+
 void ChatWindow::start_core() {
     apply_router_settings_to_options();
     ensure_bundled_router();
+    wait_for_sam_ready(bundled_router_ ? 45000 : 8000);
     runtime::ChatServiceConfig config;
     config.app_root = options_.app_root;
     config.profile = options_.profile;
@@ -1955,6 +2201,7 @@ void ChatWindow::router_settings() {
             apply_router_settings_to_options();
             try {
                 ensure_bundled_router();
+                wait_for_sam_ready(45000);
                 restart_i2p_session();
             } catch (const std::exception& error) {
                 QMessageBox::warning(this, tr("I2P router"), QString::fromStdString(error.what()));
@@ -1974,6 +2221,7 @@ void ChatWindow::router_settings() {
             QMessageBox::warning(this, tr("I2P router"), QString::fromStdString(error.what()));
         }
     }
+    wait_for_sam_ready(next.backend == "bundled" ? 45000 : 8000);
     restart_i2p_session();
     status_label_->setText(
         tr("I2P router backend applied: %1 (SAM %2:%3)")
@@ -2901,7 +3149,7 @@ void ChatWindow::notify_incoming(const std::string& peer, const QString& preview
         tray_->showMessage(tr("I2PChat"), body);
     }
     if (notify_sound_) {
-        QApplication::beep();
+        play_notify_sound();
     }
 }
 
@@ -2915,6 +3163,41 @@ void ChatWindow::sync_media_dirs() {
 }
 
 bool ChatWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (emoji_button_ != nullptr && watched == emoji_button_->parent() &&
+        event->type() == QEvent::Resize) {
+        position_emoji_button();
+    }
+    if (watched == emoji_button_) {
+        if (event->type() == QEvent::Enter && emoji_hover_open_ != nullptr) {
+            if (emoji_hover_close_ != nullptr) {
+                emoji_hover_close_->stop();
+            }
+            if (emoji_popup_ == nullptr || !emoji_popup_->isVisible()) {
+                emoji_hover_open_->start(120);
+            }
+        } else if (event->type() == QEvent::Leave && emoji_hover_close_ != nullptr) {
+            if (emoji_hover_open_ != nullptr) {
+                emoji_hover_open_->stop();
+            }
+            if (emoji_popup_ != nullptr && emoji_popup_->isVisible()) {
+                emoji_hover_close_->start(180);
+            }
+        }
+    }
+    if (watched == emoji_popup_) {
+        if (event->type() == QEvent::Enter && emoji_hover_close_ != nullptr) {
+            emoji_hover_close_->stop();
+        } else if (event->type() == QEvent::Leave && emoji_hover_close_ != nullptr) {
+            emoji_hover_close_->start(180);
+        } else if (event->type() == QEvent::Hide) {
+            if (emoji_hover_open_ != nullptr) {
+                emoji_hover_open_->stop();
+            }
+            if (emoji_hover_close_ != nullptr) {
+                emoji_hover_close_->stop();
+            }
+        }
+    }
     if (watched == composer_ && event->type() == QEvent::KeyPress) {
         const auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
@@ -3028,9 +3311,8 @@ void ChatWindow::closeEvent(QCloseEvent* event) {
 
 void ChatWindow::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
-    apply_empty_state();
     refresh_status();
-    balance_sidebar_splitter();
+    position_emoji_button();
 }
 
 }  // namespace i2pchat::gui

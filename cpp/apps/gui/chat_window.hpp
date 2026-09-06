@@ -137,8 +137,16 @@ private:
     void schedule_compose_drafts_persist();
     void sync_compose_draft(const std::optional<std::string>& new_key);
     [[nodiscard]] std::optional<std::string> compose_draft_key() const;
+    void position_emoji_button();
+    void show_emoji_picker();
+    [[nodiscard]] bool cursor_over_emoji_area() const;
+    void persist_sidebar_width(int width_px);
+    void persist_compose_bottom(int height_px);
+    [[nodiscard]] int sidebar_open_target_px(int total) const;
     void apply_router_settings_to_options();
     void ensure_bundled_router();
+    bool wait_for_sam_ready(int timeout_ms);
+    void play_notify_sound();
     void restart_i2p_session();
     QString bundled_router_status() const;
     session::TrustDecision on_trust(session::TrustPrompt prompt, const std::string& peer,
@@ -153,6 +161,7 @@ private:
     QLabel* status_label_ = nullptr;
     QToolButton* theme_button_ = nullptr;
     QSplitter* splitter_ = nullptr;
+    QSplitter* compose_splitter_ = nullptr;
     QWidget* sidebar_ = nullptr;
     QHBoxLayout* right_pack_layout_ = nullptr;
     QListView* contact_view_ = nullptr;
@@ -167,6 +176,9 @@ private:
     QPlainTextEdit* composer_ = nullptr;
     QToolButton* emoji_button_ = nullptr;
     EmojiPickerPopup* emoji_popup_ = nullptr;
+    QTimer* emoji_hover_open_ = nullptr;
+    QTimer* emoji_hover_close_ = nullptr;
+    qint64 emoji_picker_suppress_until_ms_ = 0;
     QPushButton* send_button_ = nullptr;
     QLineEdit* addr_edit_ = nullptr;
     QPushButton* connect_button_ = nullptr;
@@ -187,7 +199,8 @@ private:
     QVector<int> search_hits_;
     int search_cur_ = -1;
     bool sidebar_collapsed_ = false;
-    int sidebar_width_saved_ = 240;
+    int sidebar_width_saved_ = 0;
+    int compose_bottom_saved_ = 0;
     bool history_enabled_ = true;
     bool privacy_mode_ = false;
     bool enter_sends_ = true;
