@@ -93,6 +93,7 @@ ParseResult parse_options(const std::vector<std::string>& args) {
                 return result;
             }
             result.options.profile = *value;
+            result.options.profile_from_cli = true;
             continue;
         }
         if (arg == "--app-root") {

@@ -1,5 +1,7 @@
 #include "i2pchat/runtime/chat_service.hpp"
 
+#include "i2pchat/runtime/identity.hpp"
+
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/redirect_error.hpp>
@@ -7,14 +9,21 @@
 #include <boost/asio/use_awaitable.hpp>
 #include <algorithm>
 #include <chrono>
+#include <stdexcept>
 #include <utility>
 
 #include "i2pchat/blindbox/state.hpp"
 #include "i2pchat/encoding.hpp"
+#include "i2pchat/crypto.hpp"
+#include "i2pchat/groups/invite.hpp"
+#include "i2pchat/groups/store.hpp"
+#include "i2pchat/groups/wire.hpp"
 #include "i2pchat/protocol/codec.hpp"
 #include "i2pchat/protocol/signals.hpp"
 #include "i2pchat/protocol/text_chunking.hpp"
 #include "i2pchat/sam/destination.hpp"
+#include "i2pchat/session/peer_session.hpp"
+#include "i2pchat/storage/contacts.hpp"
 
 namespace i2pchat::runtime {
 namespace {
@@ -133,16 +142,47 @@ asio::awaitable<void> ChatService::start() {
     }
 
     sessions_.set_transport_state(session::TransportState::Starting, "start");
+
+    const Bytes signing_seed = load_or_create_signing_seed(paths_);
+    if (const std::optional<sam::Destination> existing = load_destination(paths_)) {
+        identity_ = identity_from(config_.profile, *existing, ByteView(signing_seed));
+        contacts_ = storage::load_contact_book(paths_.contacts(),
+                                              ByteView(identity_.identity_key));
+        if (events_.on_local_address) {
+            events_.on_local_address(identity_.local_addr);
+        }
+        if (events_.on_contacts_changed) {
+            events_.on_contacts_changed();
+        }
+    }
+
     sam_ = std::make_shared<sam::SamSession>(executor_, config_.sam);
-    identity_ = co_await load_identity(*sam_, paths_);
-
-    contacts_ = storage::load_contact_book(paths_.contacts(), ByteView(identity_.identity_key));
-
-    sam::SessionOptions options;
-    options.session_id = session_nickname(config_.profile);
-    options.destination = identity_.destination_base64;
-    options.options = config_.sam_options;
-    co_await sam_->open(options);
+    try {
+        if (identity_.destination_base64.empty()) {
+            identity_ = co_await load_identity(*sam_, paths_);
+            contacts_ = storage::load_contact_book(paths_.contacts(),
+                                                  ByteView(identity_.identity_key));
+            if (events_.on_local_address) {
+                events_.on_local_address(identity_.local_addr);
+            }
+            if (events_.on_contacts_changed) {
+                events_.on_contacts_changed();
+            }
+        }
+        sam::SessionOptions options;
+        options.session_id = session_nickname(config_.profile);
+        options.destination = identity_.destination_base64;
+        options.options = config_.sam_options;
+        co_await sam_->open(options);
+    } catch (const std::exception& error) {
+        sessions_.set_transport_state(session::TransportState::Failed, error.what());
+        emit_error("Cannot reach I2P SAM at " + config_.sam.host + ":" +
+                   std::to_string(config_.sam.port) +
+                   ". Start i2pd or choose a router.");
+        running_ = true;
+        stopping_ = false;
+        co_return;
+    }
 
     sessions_.set_transport_state(session::TransportState::WarmingTunnels,
                                   "sam-session-created");
@@ -262,7 +302,7 @@ void ChatService::wire_transfers(Peer& peer) {
     callbacks.on_file_received = [this, addr](const std::filesystem::path& path) {
         storage::HistoryEntry entry;
         entry.kind = "in";
-        entry.text = "[file] " + path.filename().string();
+        entry.text = "[file] " + path.string();
         entry.ts = storage::now_iso8601_utc();
         append_history(addr, entry);
         if (events_.on_file_received) {
@@ -272,7 +312,7 @@ void ChatService::wire_transfers(Peer& peer) {
     callbacks.on_image_received = [this, addr](const std::filesystem::path& path) {
         storage::HistoryEntry entry;
         entry.kind = "in";
-        entry.text = "[image] " + path.filename().string();
+        entry.text = "[image] " + path.string();
         entry.ts = storage::now_iso8601_utc();
         append_history(addr, entry);
         if (events_.on_image_received) {
@@ -528,6 +568,12 @@ void ChatService::on_frame(const std::string& peer_addr, const PeerFrame& frame)
 
 void ChatService::on_text(const std::string& peer_addr, const std::string& text,
                           std::uint64_t msg_id) {
+    if (ingest_group_transport(peer_addr, text)) {
+        if (Peer* peer = find_peer(peer_addr); peer != nullptr && peer->link && msg_id != 0) {
+            peer->link->send_signal(protocol::build_msg_ack(msg_id), next_msg_id());
+        }
+        return;
+    }
     storage::HistoryEntry entry;
     entry.kind = "in";
     entry.text = text;
@@ -731,6 +777,7 @@ asio::awaitable<bool> ChatService::send_file(std::string peer, std::filesystem::
     }
 
     std::optional<transfer::OutgoingTransfer> outgoing;
+    const std::filesystem::path source = path;
     try {
         outgoing.emplace(std::move(path), false);
     } catch (const std::exception& error) {
@@ -763,7 +810,7 @@ asio::awaitable<bool> ChatService::send_file(std::string peer, std::filesystem::
     }
     storage::HistoryEntry entry;
     entry.kind = "out";
-    entry.text = "[file] " + outgoing->name();
+    entry.text = "[file] " + source.string();
     entry.ts = storage::now_iso8601_utc();
     append_history(peer_addr, entry);
     co_return true;
@@ -778,6 +825,7 @@ asio::awaitable<bool> ChatService::send_image(std::string peer, std::filesystem:
     }
 
     std::optional<transfer::OutgoingTransfer> outgoing;
+    const std::filesystem::path source = path;
     try {
         outgoing.emplace(std::move(path), true);
     } catch (const std::exception& error) {
@@ -804,7 +852,7 @@ asio::awaitable<bool> ChatService::send_image(std::string peer, std::filesystem:
     }
     storage::HistoryEntry entry;
     entry.kind = "out";
-    entry.text = "[image] " + outgoing->name();
+    entry.text = "[image] " + source.string();
     entry.ts = storage::now_iso8601_utc();
     append_history(peer_addr, entry);
     co_return true;
@@ -875,9 +923,14 @@ asio::awaitable<std::size_t> ChatService::collect_from_peer(const std::string& p
                 if (frame->msg_type != 'U') {
                     continue;
                 }
+                const std::string text = to_string(ByteView(frame->payload));
+                if (ingest_group_transport(peer_addr, text)) {
+                    ++delivered;
+                    continue;
+                }
                 storage::HistoryEntry entry;
                 entry.kind = "in";
-                entry.text = to_string(ByteView(frame->payload));
+                entry.text = text;
                 entry.ts = storage::now_iso8601_utc();
                 entry.delivery_route = "blindbox";
                 if (frame->msg_id != 0) {
@@ -1027,6 +1080,312 @@ std::vector<std::string> ChatService::connected_peers() const {
 
 bool ChatService::blindbox_ready() const {
     return config_.blindbox_enabled && !replica_settings_.endpoints.empty();
+}
+
+void ChatService::save_replica_settings(storage::ReplicaSettings settings) {
+    settings.endpoints = storage::normalize_replica_endpoints(settings.endpoints);
+    replica_settings_ = std::move(settings);
+    config_.replicas = replica_settings_;
+    storage::save_replica_settings(paths_.blindbox_replicas(), replica_settings_,
+                                   ByteView(identity_.identity_key));
+}
+
+std::vector<groups::GroupState> ChatService::list_groups() const {
+    try {
+        return groups::list_states(paths_, ByteView(identity_.identity_key),
+                                   ByteView(identity_.signing_seed));
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+std::optional<groups::StoredConversation> ChatService::load_group(
+    std::string_view group_id) const {
+    try {
+        return groups::load_conversation(paths_, group_id, ByteView(identity_.identity_key),
+                                         ByteView(identity_.signing_seed));
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+groups::GroupState ChatService::create_group(std::string title,
+                                             std::vector<std::string> members) {
+    std::vector<std::string> roster;
+    roster.push_back(groups::normalize_member_id(identity_.local_addr));
+    for (const std::string& member : members) {
+        const std::string id = groups::normalize_member_id(member);
+        if (id.empty() || id == roster.front()) {
+            continue;
+        }
+        roster.push_back(id);
+    }
+    groups::GroupState state(crypto::random_hex(12), 0, std::move(roster), std::move(title));
+    return groups::upsert_state(paths_, state, ByteView(identity_.identity_key),
+                                ByteView(identity_.signing_seed), 1)
+        .state;
+}
+
+groups::GroupState ChatService::update_group(const std::string& group_id, std::string title,
+                                             std::vector<std::string> members) {
+    const std::optional<groups::StoredConversation> existing = load_group(group_id);
+    if (!existing) {
+        throw std::runtime_error("unknown group");
+    }
+    std::vector<std::string> roster;
+    roster.push_back(groups::normalize_member_id(identity_.local_addr));
+    for (const std::string& member : members) {
+        const std::string id = groups::normalize_member_id(member);
+        if (id.empty() || id == roster.front()) {
+            continue;
+        }
+        roster.push_back(id);
+    }
+    groups::GroupState state(existing->state.group_id(), existing->state.epoch() + 1,
+                             std::move(roster), std::move(title));
+    return groups::upsert_state(paths_, state, ByteView(identity_.identity_key),
+                                ByteView(identity_.signing_seed), std::nullopt)
+        .state;
+}
+
+bool ChatService::delete_group(const std::string& group_id) {
+    if (group_coordinator_) {
+        group_coordinator_->forget_group(group_id);
+    }
+    return groups::delete_record(paths_, group_id);
+}
+
+std::optional<groups::TopologySnapshot> ChatService::group_topology(const std::string& group_id) {
+    const std::optional<groups::StoredConversation> existing = load_group(group_id);
+    if (!existing) {
+        return std::nullopt;
+    }
+    groups::TopologyInputs inputs;
+    inputs.local_member_id = groups::normalize_member_id(identity_.local_addr);
+    const bool bb_ok = blindbox_ready();
+    int offline = 0;
+    int offline_without_root = 0;
+    for (const std::string& member : existing->state.members()) {
+        const std::string id = groups::normalize_member_id(member);
+        if (id.empty() || id == inputs.local_member_id) {
+            continue;
+        }
+        const bool live = this->live(id);
+        inputs.live_by_member[id] = live;
+        const session::PeerTransport* transport = sessions_.find_peer(id);
+        inputs.peer_state_by_member[id] =
+            transport != nullptr ? std::string(session::peer_state_name(transport->state))
+                                 : std::string("disconnected");
+        bool root_ready = false;
+        if (bb_ok) {
+            try {
+                root_ready = blindbox_snapshot(id).root_secret.has_value();
+            } catch (const std::exception&) {
+                root_ready = false;
+            }
+        }
+        inputs.blindbox_ready_by_member[id] = root_ready;
+        if (!live) {
+            ++offline;
+            if (!root_ready) {
+                ++offline_without_root;
+            }
+        }
+    }
+    inputs.group_blindbox_ready = bb_ok && offline > 0 && offline_without_root == 0;
+    inputs.await_group_root = bb_ok && offline > 0 && offline_without_root > 0;
+    for (auto it = existing->history.rbegin(); it != existing->history.rend(); ++it) {
+        if (it->kind == "me" && !it->delivery_results.empty()) {
+            inputs.delivery_status_by_member = it->delivery_results;
+            inputs.delivery_reason_by_member = it->delivery_reasons;
+            break;
+        }
+    }
+    groups::TopologySnapshot snapshot = groups::build_observed_topology(existing->state, inputs);
+    for (groups::TopologyNode& node : snapshot.nodes) {
+        if (node.is_local) {
+            node.label = "You";
+            continue;
+        }
+        if (const storage::ContactRecord* rec = contacts_.get(node.member_id);
+            rec != nullptr && !rec->display_name.empty()) {
+            node.label = rec->display_name;
+        }
+    }
+    return snapshot;
+}
+
+groups::GroupState ChatService::join_group_invite(std::string_view token) {
+    const groups::GroupInvite invite = groups::decode_invite(token);
+    groups::GroupState state(invite.group_id, invite.epoch, invite.members, invite.title);
+    return groups::upsert_state(paths_, state, ByteView(identity_.identity_key),
+                                ByteView(identity_.signing_seed), std::nullopt)
+        .state;
+}
+
+void ChatService::append_group_text(const std::string& group_id, std::string text) {
+    const std::optional<groups::StoredConversation> existing = load_group(group_id);
+    if (!existing) {
+        throw std::runtime_error("unknown group");
+    }
+    groups::HistoryEntry entry;
+    entry.kind = "me";
+    entry.sender_id = identity_.local_addr;
+    entry.text = std::move(text);
+    entry.payload = entry.text;
+    entry.created_at = storage::now_iso8601_utc();
+    entry.msg_id = crypto::random_hex(16);
+    (void)groups::append_history(paths_, existing->state, entry, ByteView(identity_.identity_key),
+                                 ByteView(identity_.signing_seed), std::nullopt);
+    emit_group_message(group_id);
+}
+
+void ChatService::emit_group_message(const std::string& group_id) const {
+    if (events_.on_group_message) {
+        events_.on_group_message(group_id);
+    }
+}
+
+bool ChatService::ingest_group_transport(const std::string& peer_addr, const std::string& text) {
+    std::optional<groups::DecodedTransportMessage> decoded;
+    try {
+        decoded = groups::decode_transport(text);
+    } catch (const groups::WireError& error) {
+        emit_error(std::string(error.what()));
+        return true;
+    }
+    if (!decoded) {
+        return false;
+    }
+    (void)groups::upsert_state(paths_, decoded->state, ByteView(identity_.identity_key),
+                               ByteView(identity_.signing_seed), std::nullopt);
+    groups::HistoryEntry entry;
+    const std::string local = groups::normalize_member_id(identity_.local_addr);
+    entry.kind = groups::normalize_member_id(decoded->envelope.sender_id) == local ? "me" : "peer";
+    entry.sender_id = decoded->envelope.sender_id;
+    entry.content_type = decoded->envelope.content_type;
+    if (decoded->envelope.payload.is_string()) {
+        entry.text = decoded->envelope.payload.get<std::string>();
+        entry.payload = entry.text;
+    } else {
+        entry.payload = decoded->envelope.payload;
+    }
+    entry.msg_id = decoded->envelope.msg_id;
+    entry.group_seq = decoded->envelope.group_seq;
+    entry.epoch = decoded->envelope.epoch;
+    entry.created_at = decoded->envelope.created_at;
+    entry.source_peer = peer_addr;
+    (void)groups::append_history(paths_, decoded->state, entry, ByteView(identity_.identity_key),
+                                 ByteView(identity_.signing_seed), std::nullopt);
+    emit_group_message(decoded->state.group_id());
+    return true;
+}
+
+void ChatService::ensure_group_coordinator() {
+    if (group_coordinator_) {
+        return;
+    }
+    groups::GroupCoordinator::Callbacks callbacks;
+    callbacks.send_live = [this](const std::string& recipient, const groups::GroupEnvelope& envelope,
+                                 const groups::RecipientDelivery& delivery)
+        -> asio::awaitable<groups::TransportOutcome> {
+        const std::string dest = sam::normalize_peer_address(recipient);
+        const std::optional<groups::StoredConversation> conv = load_group(envelope.group_id);
+        if (!conv) {
+            co_return groups::TransportOutcome{false, "unknown-group", {}};
+        }
+        Peer* target = find_peer(dest);
+        if (target == nullptr || target->link == nullptr || !target->link->secure()) {
+            co_return groups::TransportOutcome{false, "no-live-session", {}};
+        }
+        const std::string wire =
+            groups::encode_transport_v1(conv->state, envelope, delivery);
+        const std::uint64_t msg_id = next_msg_id();
+        target->link->send_text('U', wire, msg_id);
+        co_return groups::TransportOutcome{true, "live-session", std::to_string(msg_id)};
+    };
+    callbacks.send_offline = [this](const std::string& recipient,
+                                    const groups::GroupEnvelope& envelope,
+                                    const groups::RecipientDelivery& delivery)
+        -> asio::awaitable<groups::TransportOutcome> {
+        const std::string dest = sam::normalize_peer_address(recipient);
+        const std::optional<groups::StoredConversation> conv = load_group(envelope.group_id);
+        if (!conv) {
+            co_return groups::TransportOutcome{false, "unknown-group", {}};
+        }
+        if (!ensure_replica_client()) {
+            co_return groups::TransportOutcome{false, "blindbox-disabled", {}};
+        }
+        blindbox::PeerSnapshot& snapshot = blindbox_snapshot(dest);
+        if (!snapshot.root_secret.has_value()) {
+            co_return groups::TransportOutcome{false, "blindbox-await-root", {}};
+        }
+        const std::string wire =
+            groups::encode_transport_v1(conv->state, envelope, delivery);
+        const std::uint64_t msg_id = next_msg_id();
+        const Bytes frame = protocol::encode_frame('U', as_bytes(wire), msg_id, 0);
+        try {
+            (void)co_await blindbox::send_pairwise(*replicas_, snapshot, identity_.local_addr,
+                                                   frame, config_.blindbox, unix_now());
+            save_blindbox_snapshot(dest);
+            co_return groups::TransportOutcome{true, "blindbox-ready", std::to_string(msg_id)};
+        } catch (const std::exception& error) {
+            co_return groups::TransportOutcome{false, error.what(), {}};
+        }
+    };
+    callbacks.live_ready = [this](const std::string& peer) {
+        const std::string dest = sam::normalize_peer_address(peer);
+        return sessions_.live_ready(dest);
+    };
+    callbacks.new_msg_id = [] { return crypto::random_hex(16); };
+    callbacks.now = [] { return storage::now_iso8601_utc(); };
+    group_coordinator_ = std::make_unique<groups::GroupCoordinator>(std::move(callbacks));
+}
+
+asio::awaitable<void> ChatService::send_group_text(std::string group_id, std::string text) {
+    const std::optional<groups::StoredConversation> existing = load_group(group_id);
+    if (!existing) {
+        emit_error("unknown group");
+        co_return;
+    }
+    ensure_group_coordinator();
+    group_coordinator_->prime_sequence(existing->state.group_id(), existing->next_group_seq);
+    groups::SendResult result =
+        co_await group_coordinator_->send_text(existing->state, identity_.local_addr, text);
+    groups::HistoryEntry entry;
+    entry.kind = "me";
+    entry.sender_id = identity_.local_addr;
+    entry.content_type = result.envelope.content_type;
+    entry.text = std::move(text);
+    entry.payload = entry.text;
+    entry.msg_id = result.envelope.msg_id;
+    entry.group_seq = result.envelope.group_seq;
+    entry.epoch = result.envelope.epoch;
+    entry.created_at = result.envelope.created_at;
+    for (const groups::MemberDelivery& delivery : result.deliveries) {
+        entry.delivery_results[delivery.recipient_id] =
+            std::string(groups::delivery_status_name(delivery.status));
+        entry.delivery_reasons[delivery.recipient_id] = delivery.reason;
+    }
+    (void)groups::append_history(paths_, existing->state, entry, ByteView(identity_.identity_key),
+                                 ByteView(identity_.signing_seed), result.envelope.group_seq + 1);
+    emit_group_message(existing->state.group_id());
+}
+
+std::string ChatService::encode_group_invite(const std::string& group_id) {
+    const std::optional<groups::StoredConversation> existing = load_group(group_id);
+    if (!existing) {
+        throw std::runtime_error("unknown group");
+    }
+    groups::GroupInvite invite;
+    invite.invite_id = crypto::random_hex(12);
+    invite.group_id = existing->state.group_id();
+    invite.members = existing->state.members();
+    invite.epoch = existing->state.epoch();
+    invite.inviter_id = identity_.local_addr;
+    invite.title = existing->state.title();
+    invite.created_at = storage::now_iso8601_utc();
+    return groups::encode_invite(invite, ByteView(identity_.signing_seed));
 }
 
 std::uint64_t ChatService::next_msg_id() {

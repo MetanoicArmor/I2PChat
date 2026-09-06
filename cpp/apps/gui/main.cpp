@@ -1,19 +1,31 @@
 #include <QCoreApplication>
 #include <QApplication>
+#include <QFont>
 #include <QPalette>
+#include <QStyleFactory>
 #include <iostream>
 #include <string>
 #include <vector>
 
 #include "chat_window.hpp"
+#include "profile_select_dialog.hpp"
 #include "options.hpp"
+#include "profile_select_dialog.hpp"
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     app.setApplicationName("I2PChat");
     app.setOrganizationName("I2PChat");
     app.setApplicationVersion(I2PCHAT_VERSION);
-    app.setQuitOnLastWindowClosed(false);
+    app.setQuitOnLastWindowClosed(true);
+#ifdef Q_OS_MACOS
+    app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+#endif
+    QFont font = app.font();
+    if (font.pointSize() < 12) {
+        font.setPointSize(12);
+        app.setFont(font);
+    }
 
     std::vector<std::string> args;
     const QStringList raw = QCoreApplication::arguments();
@@ -41,6 +53,18 @@ int main(int argc, char** argv) {
     options.sam_port = parsed.options.sam_port;
     const QPalette palette = app.palette();
     options.dark = palette.color(QPalette::Window).lightness() < 128;
+
+    if (!parsed.options.profile_from_cli) {
+        i2pchat::gui::ProfileSelectDialog dialog(options.app_root, options.dark);
+        if (dialog.exec() != QDialog::Accepted) {
+            return 0;
+        }
+        const QString chosen = dialog.selected_profile();
+        if (chosen.isEmpty()) {
+            return 0;
+        }
+        options.profile = chosen.toStdString();
+    }
 
     i2pchat::gui::ChatWindow window(std::move(options));
     window.show();

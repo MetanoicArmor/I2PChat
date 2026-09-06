@@ -24,6 +24,10 @@
 #include "i2pchat/storage/profile_paths.hpp"
 #include "i2pchat/storage/replica_settings.hpp"
 #include "i2pchat/transfer/manager.hpp"
+#include "i2pchat/groups/coordinator.hpp"
+#include "i2pchat/groups/invite.hpp"
+#include "i2pchat/groups/store.hpp"
+#include "i2pchat/groups/wire.hpp"
 
 /// The core, as a UI sees it.
 ///
@@ -124,6 +128,8 @@ struct ChatEvents {
     /// accept a first sighting, which is what trust on first use means.
     session::TrustPromptHandler on_trust_prompt;
     std::function<void()> on_contacts_changed;
+    /// Group list or an open group's history changed.
+    std::function<void(const std::string& group_id)> on_group_message;
     /// The local address became known, once the SAM session is up.
     std::function<void(const std::string& local_addr)> on_local_address;
 };
@@ -189,7 +195,27 @@ public:
     [[nodiscard]] std::vector<std::string> connected_peers() const;
     /// True when the offline path is configured and usable.
     [[nodiscard]] bool blindbox_ready() const;
+    [[nodiscard]] bool blindbox_enabled() const noexcept { return config_.blindbox_enabled; }
+    [[nodiscard]] const storage::ReplicaSettings& replica_settings() const {
+        return replica_settings_;
+    }
+    void save_replica_settings(storage::ReplicaSettings settings);
+    void set_retention(storage::RetentionPolicy policy) { config_.retention = policy; }
     [[nodiscard]] bool running() const noexcept { return running_; }
+
+    [[nodiscard]] std::vector<groups::GroupState> list_groups() const;
+    [[nodiscard]] std::optional<groups::StoredConversation> load_group(
+        std::string_view group_id) const;
+    groups::GroupState create_group(std::string title, std::vector<std::string> members);
+    groups::GroupState update_group(const std::string& group_id, std::string title,
+                                    std::vector<std::string> members);
+    bool delete_group(const std::string& group_id);
+    groups::GroupState join_group_invite(std::string_view token);
+    void append_group_text(const std::string& group_id, std::string text);
+    asio::awaitable<void> send_group_text(std::string group_id, std::string text);
+    [[nodiscard]] std::string encode_group_invite(const std::string& group_id);
+    [[nodiscard]] std::optional<groups::TopologySnapshot> group_topology(
+        const std::string& group_id);
 
 private:
     struct Peer;
@@ -207,6 +233,9 @@ private:
     void on_link_closed(const std::string& peer_addr, const std::string& reason);
     void on_text(const std::string& peer_addr, const std::string& text,
                  std::uint64_t msg_id);
+    bool ingest_group_transport(const std::string& peer_addr, const std::string& text);
+    void ensure_group_coordinator();
+    void emit_group_message(const std::string& group_id) const;
     void on_established(PeerLink& link);
     /// Offer the peer a BlindBox root if this side is the one that offers and
     /// the channel has none, or the current one is due for replacement.
@@ -253,6 +282,7 @@ private:
     std::uint64_t next_msg_id_ = 1;
     bool running_ = false;
     bool stopping_ = false;
+    std::unique_ptr<groups::GroupCoordinator> group_coordinator_;
 };
 
 }  // namespace i2pchat::runtime

@@ -12,6 +12,7 @@ namespace i2pchat::tui {
 struct Options {
     std::filesystem::path app_root;
     std::string profile = "default";
+    bool profile_from_cli = false;
     std::string sam_host = "127.0.0.1";
     std::uint16_t sam_port = 7656;
     /// Start the bundled router from this binary before connecting. Empty means

@@ -1,5 +1,7 @@
 #include "chat_model.hpp"
 
+#include <QString>
+
 namespace i2pchat::gui {
 
 ChatModel::ChatModel(QObject* parent) : QAbstractListModel(parent) {}
@@ -58,6 +60,21 @@ void ChatModel::clear() {
     beginResetModel();
     lines_.clear();
     endResetModel();
+}
+
+QVector<int> ChatModel::match_rows(const QString& query) const {
+    QVector<int> hits;
+    const QString needle = query.trimmed();
+    if (needle.isEmpty()) {
+        return hits;
+    }
+    for (int row = 0; row < lines_.size(); ++row) {
+        const QString hay = QString::fromStdString(lines_.at(row).text);
+        if (hay.contains(needle, Qt::CaseInsensitive)) {
+            hits.push_back(row);
+        }
+    }
+    return hits;
 }
 
 }  // namespace i2pchat::gui

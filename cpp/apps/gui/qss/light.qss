@@ -1,51 +1,204 @@
-QMainWindow, QDialog, QWidget {
-  background-color: #f5f5f7;
-  color: #1d1d1f;
-}
-QListView#ContactList {
-  background: #eef1f7;
+QMainWindow { background-color: #e6eaf2; }
+QDialog { background-color: #e6eaf2; color: #1d1d1f; }
+QLabel#StatusLabel {
+  background-color: #f8f9fc;
   border: none;
-  padding: 8px;
-  outline: none;
-}
-QListView#ContactList::item {
-  padding: 10px 12px;
   border-radius: 10px;
+  padding: 0px 8px;
+  min-height: 30px;
+  color: #525966;
+  font-size: 12px;
 }
-QListView#ContactList::item:selected {
-  background: #e8f2ff;
-  color: #0a3d7a;
-}
-QListView#ChatView {
-  background: #f5f5f7;
+QToolButton#ThemeSwitchButton {
+  background-color: #f8f9fc;
   border: none;
-  outline: none;
+  border-radius: 9px;
+  color: #525966;
+  padding: 0px;
 }
-QLineEdit#Composer {
-  background: #ffffff;
+QToolButton#ThemeSwitchButton:hover { background-color: #ffffff; }
+QWidget#ContactsSidebar {
+  background: #eef1f7;
   border: 1px solid #d8dce6;
-  border-radius: 12px;
-  padding: 10px 14px;
-  color: #1d1d1f;
-  min-height: 22px;
+  border-radius: 14px;
 }
-QLineEdit#Composer:focus { border: 1px solid #0a84ff; }
-QPushButton {
-  background-color: #f0f2f6;
-  border: none;
-  border-radius: 8px;
-  padding: 8px 16px;
-  color: #1d1d1f;
-}
-QPushButton:hover { background-color: #e8ecf4; }
-QPushButton#PrimaryButton { background-color: #0a84ff; color: #ffffff; }
-QPushButton#PrimaryButton:hover { background-color: #0077ed; }
-QLabel#StatusBar {
+QLabel#ContactsSidebarTitle {
   color: #626875;
   font-size: 12px;
-  padding: 4px 12px;
+  font-weight: 600;
 }
-QMenuBar { background: #f5f5f7; }
-QMenu { background: #ffffff; border-radius: 8px; }
-QScrollBar:vertical { width: 10px; background: transparent; }
-QScrollBar::handle:vertical { background: #c0c8d4; border-radius: 4px; min-height: 24px; }
+QPushButton#GroupsCreateButton {
+  padding: 2px 18px;
+  font-size: 12px;
+  font-weight: 600;
+}
+QListView#ContactsList {
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 8px 2px 8px 8px;
+}
+QWidget#ChatSurface {
+  background: #f2f4f8;
+  border: 1px solid #ffffff;
+  border-radius: 14px;
+}
+QListView#ChatView {
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 8px;
+}
+QLabel#ChatEmptyHint {
+  color: #626875;
+  font-size: 14px;
+  padding: 24px;
+  background: transparent;
+}
+QLineEdit, QPlainTextEdit {
+  background: #ffffff;
+  border: none;
+  border-radius: 9px;
+  padding: 8px 10px;
+  color: #1d1d1f;
+}
+QLineEdit#ChatSearchLineEdit { padding: 5px 10px; min-height: 0px; }
+QLineEdit#PeerAddressEdit { padding: 8px 10px 8px 8px; }
+QLineEdit:focus, QPlainTextEdit:focus {
+  background: #ffffff;
+  border: 1px solid #0a84ff;
+}
+QLabel#ChatSearchStatusInline {
+  color: rgba(60, 60, 67, 0.55);
+  background: transparent;
+  padding-right: 10px;
+  font-size: 12px;
+}
+QWidget#ComposeBar, QWidget#ActionToolbar {
+  background: #eaedf4;
+  border: 1px solid #ffffff;
+  border-radius: 10px;
+}
+QPushButton {
+  background-color: #f8f9fc;
+  border-radius: 9px;
+  padding: 8px 14px;
+  color: #20232b;
+  border: none;
+}
+QPushButton:hover { background-color: #f0f3f8; }
+QPushButton:disabled { color: rgba(32, 35, 43, 0.35); }
+QPushButton#PrimaryActionButton, QPushButton#ConnectPeerButton {
+  background-color: #0a84ff;
+  color: #ffffff;
+}
+QPushButton#PrimaryActionButton:hover, QPushButton#ConnectPeerButton:hover {
+  background-color: #2d95ff;
+}
+QPushButton#PrimaryActionButton:disabled, QPushButton#ConnectPeerButton:disabled {
+  background-color: #c8d9f2;
+  color: rgba(255, 255, 255, 0.82);
+}
+QPushButton#DisconnectPeerButton {
+  background-color: #e6ebf3;
+  color: #b94b45;
+}
+QPushButton#DisconnectPeerButton:disabled {
+  background-color: #eef1f6;
+  color: rgba(185, 75, 69, 0.38);
+}
+QPushButton#ChatSearchStepButton {
+  padding: 0px;
+  min-width: 36px;
+  max-width: 36px;
+}
+QPushButton#ContactsSidebarToggle {
+  background-color: #f8f9fc;
+  border: none;
+  border-radius: 8px;
+  color: #525966;
+  font-size: 11px;
+  font-weight: normal;
+  min-width: 22px;
+  max-width: 22px;
+  min-height: 30px;
+  margin: 0px;
+  padding: 0px;
+  text-align: center;
+}
+QPushButton#ContactsSidebarToggle:hover { background-color: #ffffff; }
+QWidget#ContactsResizeGrip, QWidget#ComposeResizeGrip { background: transparent; }
+QWidget#ContactsResizeGrip:hover, QWidget#ComposeResizeGrip:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+QToolButton#MoreActionsButton {
+  background-color: #f8f9fc;
+  border: none;
+  border-radius: 9px;
+  color: #525966;
+  padding: 4px 12px;
+  font-size: 18px;
+  min-width: 32px;
+}
+QMenu {
+  background: #f6f7fa;
+  color: #2c3442;
+  border: none;
+  border-radius: 14px;
+  padding: 8px;
+}
+QMenu::item { color: #2c3442; padding: 9px 14px; border-radius: 9px; }
+QMenu::item:selected { background: #e5eaf2; }
+QMenu::separator { height: 1px; margin: 6px 8px; background: #d6dce7; }
+QFrame#ActionsPopupWindow { background: transparent; border: none; }
+QFrame#ActionsPopupSurface {
+  background: #f6f7fa;
+  border: none;
+  border-radius: 14px;
+}
+QFrame#ActionsPopupItem { background: transparent; border: none; border-radius: 8px; padding: 0px; }
+QFrame#ActionsPopupItem:hover { background: #e5eaf2; }
+QLabel#ActionsPopupItemTitle { color: #2c3442; font-size: 12px; background: transparent; }
+QLabel#ActionsPopupItemShortcut { color: #6c7380; font-size: 11px; background: transparent; }
+QFrame#ActionsPopupSeparator { background: #d6dce7; border: none; margin: 3px 6px; max-height: 1px; min-height: 1px; }
+QScrollBar:vertical { background: transparent; width: 7px; margin: 2px 0px; }
+QScrollBar::handle:vertical { background: rgba(60, 60, 67, 0.35); min-height: 24px; border-radius: 3px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+QPushButton#ChatSearchHitButton {
+  text-align: left;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #2c3442;
+}
+QPushButton#ChatSearchHitButton:hover { background: #e5eaf2; }
+QLabel#RouterStatusLabel { color: #626875; font-size: 12px; }
+QLabel#RouterSectionTitle { color: #2d3442; font-size: 13px; font-weight: 600; margin-top: 4px; }
+QLabel#RouterSectionSecondaryTitle { color: #626875; font-size: 12px; font-weight: 600; margin-top: 8px; }
+QFrame#RouterBackendPanel {
+  border: 1px solid #d8dce6;
+  border-radius: 12px;
+  background: #eef1f7;
+}
+QLabel#RouterBackendPickTitle { color: #626875; font-size: 11px; font-weight: 600; }
+QPushButton#RouterBackendOption {
+  border: 1px solid #d0d5de;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1d1d1f;
+  padding: 10px 12px;
+  text-align: left;
+  min-height: 48px;
+  font-weight: 600;
+}
+QPushButton#RouterBackendOption:checked {
+  background: #e8f2ff;
+  border: 2px solid #0a84ff;
+  color: #0a3d7a;
+  padding: 9px 11px;
+}
+QPushButton#PrimaryButton { background-color: #0a84ff; color: #ffffff; }
+QPushButton#PrimaryButton:hover { background-color: #409cff; }
+QPushButton#SecondaryButton { background-color: #ffffff; color: #1d1d1f; }

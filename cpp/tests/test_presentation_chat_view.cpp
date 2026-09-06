@@ -112,6 +112,20 @@ TEST_CASE("history entries become chat lines") {
         CHECK(line_from_history(entry, contacts, kAlice).kind == LineKind::System);
     }
 
+    SECTION("Python history kinds me/peer map to outgoing/incoming") {
+        storage::HistoryEntry peer;
+        peer.kind = "peer";
+        peer.text = "from python";
+        CHECK(line_from_history(peer, contacts, kAlice).kind == LineKind::Incoming);
+        CHECK(line_from_history(peer, contacts, kAlice).author == "Alice");
+        storage::HistoryEntry me;
+        me.kind = "me";
+        me.text = "from me";
+        me.delivery_state = "sent";
+        CHECK(line_from_history(me, contacts, kAlice).kind == LineKind::Outgoing);
+        CHECK(line_from_history(me, contacts, kAlice).author == "you");
+    }
+
     SECTION("a whole conversation keeps its order") {
         std::vector<storage::HistoryEntry> entries(3);
         entries[0].kind = "in";

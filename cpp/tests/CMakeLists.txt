@@ -26,6 +26,8 @@ add_executable(i2pchat_tests
   test_storage_sealed.cpp
   test_storage_stores.cpp
   test_storage_profile_dat.cpp
+  test_profile_backup.cpp
+  test_release_index.cpp
   test_signals.cpp
   test_transfer.cpp
   test_blindbox.cpp

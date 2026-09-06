@@ -162,6 +162,9 @@ else
   echo "WARN: macdeployqt not found; the .app will need a system Qt 6 install to run." >&2
 fi
 
+echo "==> Rewrite Homebrew install names to bundled Frameworks"
+"${REPO_ROOT}/scripts/macos_relink_bundle_binaries.sh" "dist/${APP_NAME}.app"
+
 # Homebrew/Qt dylibs keep a signature that becomes invalid after install-name
 # rewrites. Unsigned or stale nested Mach-O pages then SIGKILL on launch
 # (CODESIGNING / Invalid Page), including on local unsigned apps.

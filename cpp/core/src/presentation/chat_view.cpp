@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -91,10 +92,12 @@ ChatLine line_from_history(const storage::HistoryEntry& entry,
     line.time = format_clock(entry.ts);
     line.text = entry.text;
 
-    if (entry.kind == "in") {
+    const std::string kind = lowered(entry.kind);
+    // Python history uses me/peer/system; the C++ writer uses in/out/sys/err.
+    if (kind == "in" || kind == "peer") {
         line.kind = LineKind::Incoming;
         line.author = author_label(contacts, peer_addr);
-    } else if (entry.kind == "out") {
+    } else if (kind == "out" || kind == "me") {
         line.kind = LineKind::Outgoing;
         line.author = "you";
         if (entry.delivery_state) {
@@ -105,7 +108,7 @@ ChatLine line_from_history(const storage::HistoryEntry& entry,
         } else if (!entry.delivery_hint.empty()) {
             line.detail = entry.delivery_hint;
         }
-    } else if (entry.kind == "err") {
+    } else if (kind == "err" || kind == "error" || kind == "disconnect") {
         line.kind = LineKind::Error;
     } else {
         line.kind = LineKind::System;

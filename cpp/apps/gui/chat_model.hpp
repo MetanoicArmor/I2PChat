@@ -28,6 +28,7 @@ public:
     void set_lines(std::vector<presentation::ChatLine> lines);
     void append(presentation::ChatLine line);
     void clear();
+    [[nodiscard]] QVector<int> match_rows(const QString& query) const;
 
 private:
     QVector<presentation::ChatLine> lines_;

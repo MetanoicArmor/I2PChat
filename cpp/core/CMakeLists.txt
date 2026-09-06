@@ -38,6 +38,7 @@ add_library(i2pchat_core
   src/storage/group_record.cpp
   src/storage/profile_paths.cpp
   src/storage/profile_dat.cpp
+  src/storage/profile_backup.cpp
   src/storage/keyring.cpp
   src/storage/keyring_macos.cpp
   src/storage/keyring_linux.cpp
@@ -49,6 +50,7 @@ add_library(i2pchat_core
   src/sam/protocol.cpp
   src/sam/client.cpp
   src/router/i2pd.cpp
+  src/updates/release_index.cpp
 )
 
 target_include_directories(i2pchat_core
@@ -59,12 +61,14 @@ target_include_directories(i2pchat_core
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+find_package(ZLIB REQUIRED)
 target_link_libraries(i2pchat_core
   PUBLIC
     nlohmann_json::nlohmann_json
     Boost::headers
   PRIVATE
     i2pchat::sodium
+    ZLIB::ZLIB
     i2pchat_project_options
 )
 
