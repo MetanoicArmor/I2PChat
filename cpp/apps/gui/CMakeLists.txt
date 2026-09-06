@@ -16,6 +16,8 @@ qt_add_executable(i2pchat-gui
   tofu_dialog.cpp
   group_topology_map.cpp
   router_settings_dialog.cpp
+  dialog_theme.cpp
+  emoji_picker.cpp
   resources.qrc
   ${CMAKE_CURRENT_SOURCE_DIR}/../tui/options.cpp
 )

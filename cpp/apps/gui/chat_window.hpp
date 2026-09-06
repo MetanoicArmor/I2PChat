@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPoint>
 #include <QMainWindow>
 #include <QEvent>
 #include <QVector>
@@ -8,6 +9,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -23,6 +25,7 @@
 #include "i2pchat/session/manager.hpp"
 #include "i2pchat/session/trust_store.hpp"
 
+class QTimer;
 class QNetworkAccessManager;
 class QNetworkReply;
 class QHBoxLayout;
@@ -39,6 +42,7 @@ class QWidget;
 namespace i2pchat::gui {
 
 class ActionsPopup;
+class EmojiPickerPopup;
 
 struct GuiOptions {
     std::filesystem::path app_root;
@@ -71,6 +75,9 @@ private slots:
     void copy_address();
     void toggle_theme();
     void toggle_sidebar();
+    void balance_sidebar_splitter();
+    void toggle_emoji_picker();
+    void insert_emoji(const QString& glyph);
     void show_more_menu();
     void search_changed(const QString& text);
     void search_step(int delta);
@@ -84,6 +91,7 @@ private slots:
     void sidebar_context_menu(const QPoint& pos);
     void load_profile_dat();
     void show_blindbox_diagnostics();
+    void show_blindbox_setup_examples(QWidget* parent);
     void export_profile_backup();
     void import_profile_backup();
     void export_history_backup();
@@ -103,6 +111,12 @@ private:
     void refresh_contacts();
     void refresh_status();
     void refresh_connection_buttons();
+    void show_theme_menu();
+    void show_chat_context_menu(const QPoint& pos);
+    void note_unread(const std::string& conversation_id);
+    void clear_unread(const std::string& conversation_id);
+    void update_tray_unread();
+    [[nodiscard]] bool resolved_dark() const;
     void apply_theme();
     void apply_empty_state();
     void highlight_search();
@@ -118,8 +132,14 @@ private:
     void show_group_map(const std::string& group_id);
     void copy_group_invite_of(const std::string& group_id);
     void switch_to_profile(const std::string& name);
+    void load_compose_drafts();
+    void flush_compose_drafts();
+    void schedule_compose_drafts_persist();
+    void sync_compose_draft(const std::optional<std::string>& new_key);
+    [[nodiscard]] std::optional<std::string> compose_draft_key() const;
     void apply_router_settings_to_options();
     void ensure_bundled_router();
+    void restart_i2p_session();
     QString bundled_router_status() const;
     session::TrustDecision on_trust(session::TrustPrompt prompt, const std::string& peer,
                                     const std::string& neu, const std::string& old);
@@ -145,6 +165,8 @@ private:
     QListView* chat_view_ = nullptr;
     QLabel* empty_hint_ = nullptr;
     QPlainTextEdit* composer_ = nullptr;
+    QToolButton* emoji_button_ = nullptr;
+    EmojiPickerPopup* emoji_popup_ = nullptr;
     QPushButton* send_button_ = nullptr;
     QLineEdit* addr_edit_ = nullptr;
     QPushButton* connect_button_ = nullptr;
@@ -152,6 +174,8 @@ private:
     QToolButton* more_button_ = nullptr;
     ActionsPopup* more_popup_ = nullptr;
     ActionsPopup* sidebar_popup_ = nullptr;
+    ActionsPopup* chat_popup_ = nullptr;
+    ActionsPopup* theme_popup_ = nullptr;
     QString status_full_;
     QString status_compact_;
     QSystemTrayIcon* tray_ = nullptr;
@@ -163,10 +187,16 @@ private:
     QVector<int> search_hits_;
     int search_cur_ = -1;
     bool sidebar_collapsed_ = false;
+    int sidebar_width_saved_ = 240;
     bool history_enabled_ = true;
     bool privacy_mode_ = false;
     bool enter_sends_ = true;
     bool notify_sound_ = true;
+    std::map<std::string, std::string> compose_drafts_;
+    std::optional<std::string> compose_draft_active_key_;
+    QTimer* compose_drafts_timer_ = nullptr;
+    std::map<std::string, unsigned> unread_;
+    QString theme_pref_ = QStringLiteral("auto");
     session::TransportState transport_ = session::TransportState::Starting;
     std::string transport_reason_;
 

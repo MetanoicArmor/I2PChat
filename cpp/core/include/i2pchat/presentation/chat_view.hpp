@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "i2pchat/bytes.hpp"
 #include "i2pchat/session/manager.hpp"
 #include "i2pchat/session/peer_session.hpp"
 #include "i2pchat/session/trust_store.hpp"
@@ -139,6 +140,12 @@ struct TrustPromptView {
 
 /// Group a hex key in fours: `a1b2 c3d4 …`. What a user reads over a phone.
 [[nodiscard]] std::string group_fingerprint(std::string_view hex);
+
+/// SHA-256 of a signing public key, hex. Empty when `key_hex` is not valid hex.
+[[nodiscard]] std::string fingerprint_of_signing_key(std::string_view key_hex);
+
+/// Signal-style safety number from two Ed25519 public keys.
+[[nodiscard]] std::string format_safety_number(ByteView local_pubkey, ByteView peer_pubkey);
 
 /// One row of the transfers screen.
 [[nodiscard]] std::string transfer_row(std::string_view peer,

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "i2pchat/crypto.hpp"
 #include "i2pchat/presentation/chat_view.hpp"
 
 using namespace i2pchat;
@@ -247,6 +248,16 @@ TEST_CASE("fingerprints are grouped in fours") {
     CHECK(group_fingerprint("0123456789ab") == "0123 4567 89ab");
     CHECK(group_fingerprint("ABC") == "abc");
     CHECK(group_fingerprint("").empty());
+}
+
+TEST_CASE("safety number is deterministic and order-independent") {
+    crypto::init();
+    const Bytes a(32, 0x11);
+    const Bytes b(32, 0x22);
+    const std::string ab = format_safety_number(ByteView(a), ByteView(b));
+    const std::string ba = format_safety_number(ByteView(b), ByteView(a));
+    CHECK(ab == ba);
+    CHECK(ab.size() == 12 * 5 + 11);
 }
 
 TEST_CASE("byte sizes read naturally") {

@@ -1,4 +1,5 @@
 #include "tofu_dialog.hpp"
+#include "dialog_theme.hpp"
 
 #include <QHBoxLayout>
 #include <QTextEdit>
@@ -8,6 +9,7 @@ namespace i2pchat::gui {
 
 TofuDialog::TofuDialog(const presentation::TrustPromptView& view, QWidget* parent)
     : QDialog(parent) {
+    apply_dialog_theme(this);
     setWindowTitle(QString::fromStdString(view.title));
     setModal(true);
     setMinimumWidth(480);

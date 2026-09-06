@@ -890,6 +890,7 @@ asio::awaitable<std::size_t> ChatService::poll_blindbox() {
     for (const std::string& addr : addrs) {
         delivered += co_await collect_from_peer(addr);
     }
+    delivered += co_await collect_from_groups();
     if (config_.blindbox.privacy.cover_gets > 0) {
         co_await blindbox::emit_cover_gets(*replicas_, config_.blindbox.privacy.cover_gets);
     }
@@ -943,6 +944,61 @@ asio::awaitable<std::size_t> ChatService::collect_from_peer(const std::string& p
         } catch (const protocol::ProtocolError& error) {
             emit_error(std::string("a collected BlindBox message was malformed: ") +
                        error.what());
+        }
+    }
+    co_return delivered;
+}
+
+asio::awaitable<std::size_t> ChatService::collect_from_groups() {
+    if (!ensure_replica_client()) {
+        co_return 0;
+    }
+    std::size_t delivered = 0;
+    const std::vector<groups::GroupState> states =
+        groups::list_states(paths_, ByteView(identity_.identity_key),
+                            ByteView(identity_.signing_seed));
+    for (const groups::GroupState& state : states) {
+        std::optional<groups::StoredConversation> conv = load_group(state.group_id());
+        if (!conv || !conv->blindbox_channel || !conv->blindbox_channel->root_secret) {
+            continue;
+        }
+        for (const std::string& member : conv->state.members()) {
+            if (groups::normalize_member_id(member) ==
+                groups::normalize_member_id(identity_.local_addr)) {
+                continue;
+            }
+            std::vector<blindbox::ReceivedMessage> messages;
+            try {
+                messages = co_await blindbox::poll_group(
+                    *replicas_, *conv->blindbox_channel, member, config_.blindbox, unix_now());
+            } catch (const std::exception& error) {
+                emit_error(std::string("Group BlindBox collection failed: ") + error.what());
+                continue;
+            }
+            for (const blindbox::ReceivedMessage& message : messages) {
+                protocol::FrameReader reader;
+                reader.feed(ByteView(message.frame));
+                try {
+                    while (const std::optional<protocol::Frame> frame = reader.next()) {
+                        if (frame->msg_type != 'U') {
+                            continue;
+                        }
+                        const std::string text = to_string(ByteView(frame->payload));
+                        if (ingest_group_transport(member, text)) {
+                            ++delivered;
+                        }
+                    }
+                } catch (const protocol::ProtocolError& error) {
+                    emit_error(std::string("a collected group BlindBox message was malformed: ") +
+                               error.what());
+                }
+            }
+        }
+        try {
+            groups::save_conversation(paths_, *conv, ByteView(identity_.identity_key),
+                                      ByteView(identity_.signing_seed));
+        } catch (const std::exception& error) {
+            emit_error(std::string("could not save group BlindBox state: ") + error.what());
         }
     }
     co_return delivered;
@@ -1066,6 +1122,15 @@ bool ChatService::live(std::string_view peer) {
         return false;
     }
     return sessions_.live_ready(addr);
+}
+
+bool ChatService::peer_offline_ready(std::string_view peer) const {
+    const std::string addr = sam::normalize_peer_address(std::string(peer));
+    const auto found = blindbox_snapshots_.find(addr);
+    if (found == blindbox_snapshots_.end()) {
+        return false;
+    }
+    return found->second.root_secret.has_value();
 }
 
 std::vector<std::string> ChatService::connected_peers() const {
@@ -1309,29 +1374,57 @@ void ChatService::ensure_group_coordinator() {
                                     const groups::RecipientDelivery& delivery)
         -> asio::awaitable<groups::TransportOutcome> {
         const std::string dest = sam::normalize_peer_address(recipient);
-        const std::optional<groups::StoredConversation> conv = load_group(envelope.group_id);
+        std::optional<groups::StoredConversation> conv = load_group(envelope.group_id);
         if (!conv) {
             co_return groups::TransportOutcome{false, "unknown-group", {}};
         }
         if (!ensure_replica_client()) {
             co_return groups::TransportOutcome{false, "blindbox-disabled", {}};
         }
+        if (last_group_bb_msg_id_ == envelope.msg_id) {
+            co_return groups::TransportOutcome{true, "blindbox-ready", {}};
+        }
         blindbox::PeerSnapshot& snapshot = blindbox_snapshot(dest);
-        if (!snapshot.root_secret.has_value()) {
-            co_return groups::TransportOutcome{false, "blindbox-await-root", {}};
+        if (snapshot.root_secret.has_value()) {
+            const std::string wire =
+                groups::encode_transport_v1(conv->state, envelope, delivery);
+            const std::uint64_t msg_id = next_msg_id();
+            const Bytes frame = protocol::encode_frame('U', as_bytes(wire), msg_id, 0);
+            try {
+                (void)co_await blindbox::send_pairwise(*replicas_, snapshot, identity_.local_addr,
+                                                       frame, config_.blindbox, unix_now());
+                save_blindbox_snapshot(dest);
+                co_return groups::TransportOutcome{true, "blindbox-ready", std::to_string(msg_id)};
+            } catch (const std::exception& error) {
+                co_return groups::TransportOutcome{false, error.what(), {}};
+            }
         }
-        const std::string wire =
-            groups::encode_transport_v1(conv->state, envelope, delivery);
-        const std::uint64_t msg_id = next_msg_id();
-        const Bytes frame = protocol::encode_frame('U', as_bytes(wire), msg_id, 0);
-        try {
-            (void)co_await blindbox::send_pairwise(*replicas_, snapshot, identity_.local_addr,
-                                                   frame, config_.blindbox, unix_now());
-            save_blindbox_snapshot(dest);
-            co_return groups::TransportOutcome{true, "blindbox-ready", std::to_string(msg_id)};
-        } catch (const std::exception& error) {
-            co_return groups::TransportOutcome{false, error.what(), {}};
+        if (conv->blindbox_channel && conv->blindbox_channel->root_secret.has_value() &&
+            conv->blindbox_channel->group_epoch == envelope.epoch) {
+            try {
+                const Bytes signer = identity_.signing_public;
+                const Bytes payload =
+                    groups::v3_signature_payload(conv->state, envelope, ByteView(signer));
+                const Bytes signature = crypto::sign_data(ByteView(identity_.signing_seed),
+                                                          ByteView(payload));
+                const std::string wire =
+                    groups::encode_transport_v3(conv->state, envelope, ByteView(signer),
+                                                ByteView(signature));
+                const std::uint64_t msg_id = next_msg_id();
+                const Bytes frame = protocol::encode_frame('U', as_bytes(wire), msg_id, 0);
+                (void)co_await blindbox::send_group(*replicas_, *conv->blindbox_channel,
+                                                    identity_.local_addr, frame, config_.blindbox,
+                                                    unix_now());
+                groups::save_conversation(paths_, *conv, ByteView(identity_.identity_key),
+                                          ByteView(identity_.signing_seed));
+                last_group_bb_msg_id_ = envelope.msg_id;
+                co_return groups::TransportOutcome{true, "blindbox-ready",
+                                                   std::to_string(msg_id)};
+            } catch (const std::exception& error) {
+                co_return groups::TransportOutcome{false, error.what(), {}};
+            }
         }
+        co_return groups::TransportOutcome{false, "blindbox-await-root", {}};
     };
     callbacks.live_ready = [this](const std::string& peer) {
         const std::string dest = sam::normalize_peer_address(peer);

@@ -192,6 +192,7 @@ public:
 
     [[nodiscard]] std::vector<storage::HistoryEntry> history(std::string_view peer) const;
     [[nodiscard]] bool live(std::string_view peer);
+    [[nodiscard]] bool peer_offline_ready(std::string_view peer) const;
     [[nodiscard]] std::vector<std::string> connected_peers() const;
     /// True when the offline path is configured and usable.
     [[nodiscard]] bool blindbox_ready() const;
@@ -246,6 +247,7 @@ private:
     asio::awaitable<bool> send_offline(const std::string& peer_addr, std::string text,
                                        std::uint64_t msg_id);
     asio::awaitable<std::size_t> collect_from_peer(const std::string& peer_addr);
+    asio::awaitable<std::size_t> collect_from_groups();
 
     /// Resolve a user-supplied peer string to a full destination.
     asio::awaitable<std::string> resolve_destination(const std::string& peer);
@@ -283,6 +285,7 @@ private:
     bool running_ = false;
     bool stopping_ = false;
     std::unique_ptr<groups::GroupCoordinator> group_coordinator_;
+    std::string last_group_bb_msg_id_;
 };
 
 }  // namespace i2pchat::runtime

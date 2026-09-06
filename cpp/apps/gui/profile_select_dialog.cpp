@@ -5,7 +5,6 @@
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QEvent>
-#include <QFile>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
@@ -15,6 +14,7 @@
 #include <QVBoxLayout>
 
 #include "i2pchat/runtime/identity.hpp"
+#include "dialog_theme.hpp"
 
 namespace i2pchat::gui {
 
@@ -125,11 +125,7 @@ ProfileSelectDialog::ProfileSelectDialog(const std::filesystem::path& app_root, 
     buttons->addStretch();
     layout->addLayout(buttons);
 
-    const QString sheet = dark ? ":/i2pchat/qss/dark.qss" : ":/i2pchat/qss/light.qss";
-    QFile file(sheet);
-    if (file.open(QIODevice::ReadOnly)) {
-        setStyleSheet(QString::fromUtf8(file.readAll()));
-    }
+    apply_dialog_theme(this, dark);
 }
 
 QString ProfileSelectDialog::selected_profile() const {

@@ -1,4 +1,5 @@
 #include "router_settings_dialog.hpp"
+#include "dialog_theme.hpp"
 
 #include <cstdlib>
 #include <fstream>
@@ -12,6 +13,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSizePolicy>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -57,16 +59,6 @@ std::uint16_t coerce_port(const nlohmann::json& value, std::uint16_t fallback) {
     } catch (...) {
         return fallback;
     }
-}
-
-QWidget* wrap_spin(QSpinBox* box) {
-    auto* wrap = new QWidget(box->parentWidget());
-    auto* row = new QHBoxLayout(wrap);
-    row->setContentsMargins(0, 0, 0, 0);
-    row->addWidget(box);
-    row->addStretch(1);
-    box->setMinimumWidth(96);
-    return wrap;
 }
 
 QLabel* section_label(const QString& text, bool secondary, QWidget* parent) {
@@ -190,11 +182,12 @@ std::optional<std::filesystem::path> find_bundled_i2pd_binary() {
 }
 
 RouterSettingsDialog::RouterSettingsDialog(QWidget* parent, GuiRouterSettings settings,
-                                           const QString& bundled_status,
+                                           const QString& bundled_status, bool night,
                                            std::function<void()> open_data_dir,
                                            std::function<void()> open_log,
                                            std::function<void()> restart_bundled)
     : QDialog(parent) {
+    apply_dialog_theme(this, night);
     setWindowTitle(tr("I2P router"));
     setModal(true);
     setMinimumWidth(560);
@@ -229,13 +222,13 @@ RouterSettingsDialog::RouterSettingsDialog(QWidget* parent, GuiRouterSettings se
     bundled_control_http_port_->setValue(settings.bundled_control_http_port);
 
     form->addRow(section_label(tr("Built-in router (Bundled i2pd)"), false, this));
-    form->addRow(tr("SAM port"), wrap_spin(bundled_sam_port_));
-    form->addRow(tr("HTTP proxy"), wrap_spin(bundled_http_proxy_port_));
-    form->addRow(tr("SOCKS proxy"), wrap_spin(bundled_socks_proxy_port_));
-    form->addRow(tr("Control HTTP"), wrap_spin(bundled_control_http_port_));
+    form->addRow(tr("SAM port"), wrap_history_numeric_row(bundled_sam_port_));
+    form->addRow(tr("HTTP proxy"), wrap_history_numeric_row(bundled_http_proxy_port_));
+    form->addRow(tr("SOCKS proxy"), wrap_history_numeric_row(bundled_socks_proxy_port_));
+    form->addRow(tr("Control HTTP"), wrap_history_numeric_row(bundled_control_http_port_));
     form->addRow(section_label(tr("External router (System i2pd)"), true, this));
     form->addRow(tr("SAM host"), system_host_);
-    form->addRow(tr("SAM port"), wrap_spin(system_port_));
+    form->addRow(tr("SAM port"), wrap_history_numeric_row(system_port_));
 
     auto* form_wrap = new QWidget(this);
     auto* form_outer = new QVBoxLayout(form_wrap);
@@ -258,11 +251,13 @@ RouterSettingsDialog::RouterSettingsDialog(QWidget* parent, GuiRouterSettings se
     opt_bundled_->setCheckable(true);
     opt_bundled_->setAutoDefault(false);
     opt_bundled_->setDefault(false);
+    opt_bundled_->setFocusPolicy(Qt::StrongFocus);
     opt_system_ = new QPushButton(tr("System i2pd\nExisting install"), backend_panel);
     opt_system_->setObjectName("RouterBackendOption");
     opt_system_->setCheckable(true);
     opt_system_->setAutoDefault(false);
     opt_system_->setDefault(false);
+    opt_system_->setFocusPolicy(Qt::StrongFocus);
 
     auto* group = new QButtonGroup(this);
     group->setExclusive(true);
@@ -324,11 +319,7 @@ RouterSettingsDialog::RouterSettingsDialog(QWidget* parent, GuiRouterSettings se
     bb->button(QDialogButtonBox::Cancel)->setObjectName("SecondaryButton");
     connect(bb, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(bb, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    auto* buttons_row = new QHBoxLayout();
-    buttons_row->addStretch(1);
-    buttons_row->addWidget(bb);
-    buttons_row->addStretch(1);
-    v->addLayout(buttons_row);
+    add_centered_dialog_buttons(v, bb);
 
     connect(group, &QButtonGroup::idClicked, this, [this](int) { sync_enabled(); });
     connect(btn_open_data, &QPushButton::clicked, this, [open_data_dir] {

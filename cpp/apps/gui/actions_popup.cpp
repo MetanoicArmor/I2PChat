@@ -9,23 +9,28 @@
 #include <QMouseEvent>
 #include <QScreen>
 #include <QStyle>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
 namespace i2pchat::gui {
 
-ActionsPopupItem::ActionsPopupItem(const QString& title, const QString& shortcut, QWidget* parent)
+ActionsPopupItem::ActionsPopupItem(const QString& title, const QString& shortcut,
+                                   const QString& tooltip, QWidget* parent)
     : QFrame(parent) {
     setObjectName("ActionsPopupItem");
     setAttribute(Qt::WA_Hover, true);
     setCursor(Qt::PointingHandCursor);
+    if (!tooltip.isEmpty()) {
+        setToolTip(tooltip);
+    }
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(10, 2, 10, 2);
     layout->setSpacing(8);
-    auto* title_label = new QLabel(title, this);
-    title_label->setObjectName("ActionsPopupItemTitle");
-    title_label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
-    layout->addWidget(title_label, 1);
+    title_label_ = new QLabel(title, this);
+    title_label_->setObjectName("ActionsPopupItemTitle");
+    title_label_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    layout->addWidget(title_label_, 1);
     auto* shortcut_label = new QLabel(shortcut, this);
     shortcut_label->setObjectName("ActionsPopupItemShortcut");
     shortcut_label->setAttribute(Qt::WA_TransparentForMouseEvents, true);
@@ -34,10 +39,23 @@ ActionsPopupItem::ActionsPopupItem(const QString& title, const QString& shortcut
     layout->addWidget(shortcut_label, 0);
 }
 
-void ActionsPopupItem::mouseReleaseEvent(QMouseEvent* event) {
-    if (event->button() == Qt::LeftButton && rect().contains(event->pos())) {
-        emit clicked();
+void ActionsPopupItem::set_title(const QString& title) {
+    if (title_label_ != nullptr) {
+        title_label_->setText(title);
     }
+}
+
+void ActionsPopupItem::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        emit clicked();
+        event->accept();
+        return;
+    }
+    QFrame::mousePressEvent(event);
+}
+
+void ActionsPopupItem::mouseReleaseEvent(QMouseEvent* event) {
+    QFrame::mouseReleaseEvent(event);
 }
 
 void ActionsPopupItem::enterEvent(QEnterEvent*) { setProperty("hover", true); style()->unpolish(this); style()->polish(this); }
@@ -69,16 +87,17 @@ void ActionsPopup::clear_actions() {
     }
 }
 
-void ActionsPopup::add_action(const QString& title, const QString& shortcut,
-                              const std::function<void()>& callback) {
-    auto* item = new ActionsPopupItem(title, shortcut, surface_);
+ActionsPopupItem* ActionsPopup::add_action(const QString& title, const QString& shortcut,
+                              const std::function<void()>& callback, const QString& tooltip) {
+    auto* item = new ActionsPopupItem(title, shortcut, tooltip, surface_);
     connect(item, &ActionsPopupItem::clicked, this, [this, callback] {
         hide();
         if (callback) {
-            callback();
+            QTimer::singleShot(0, this, [callback] { callback(); });
         }
     });
     surface_layout_->addWidget(item);
+    return item;
 }
 
 void ActionsPopup::add_separator() {

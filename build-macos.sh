@@ -92,6 +92,15 @@ elif [ -f "icon.png" ]; then
   cp "icon.png" "dist/${APP_NAME}.app/Contents/Resources/I2PChat.icns"
 fi
 
+if [ -d "i2pchat/gui/fluent_emoji" ]; then
+  mkdir -p "dist/${APP_NAME}.app/Contents/Resources/fluent_emoji"
+  rsync -a --delete "i2pchat/gui/fluent_emoji/" "dist/${APP_NAME}.app/Contents/Resources/fluent_emoji/"
+fi
+if [ -f "i2pchat/gui/icons/face.dashed.png" ]; then
+  mkdir -p "dist/${APP_NAME}.app/Contents/Resources/icons"
+  cp "i2pchat/gui/icons/face.dashed.png" "dist/${APP_NAME}.app/Contents/Resources/icons/"
+fi
+
 cat > "dist/${APP_NAME}.app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

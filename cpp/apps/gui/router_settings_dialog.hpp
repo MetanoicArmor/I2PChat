@@ -39,8 +39,8 @@ class RouterSettingsDialog : public QDialog {
     Q_OBJECT
 public:
     RouterSettingsDialog(QWidget* parent, GuiRouterSettings settings, const QString& bundled_status,
-                         std::function<void()> open_data_dir, std::function<void()> open_log,
-                         std::function<void()> restart_bundled);
+                         bool night, std::function<void()> open_data_dir,
+                         std::function<void()> open_log, std::function<void()> restart_bundled);
 
     [[nodiscard]] GuiRouterSettings settings() const;
     void set_status(const QString& text);

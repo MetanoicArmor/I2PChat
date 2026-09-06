@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <ctime>
 
+#include "i2pchat/crypto.hpp"
 #include "i2pchat/encoding.hpp"
 
 namespace i2pchat::presentation {
@@ -208,6 +209,40 @@ std::string group_fingerprint(std::string_view hex) {
             out.push_back(' ');
         }
         out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(hex[index]))));
+    }
+    return out;
+}
+
+std::string fingerprint_of_signing_key(std::string_view key_hex) {
+    const std::optional<Bytes> raw = encoding::hex_decode(key_hex);
+    if (!raw || raw->empty()) {
+        return {};
+    }
+    return encoding::hex_encode(ByteView(crypto::sha256(ByteView(*raw))));
+}
+
+std::string format_safety_number(ByteView local_pubkey, ByteView peer_pubkey) {
+    Bytes left = crypto::sha256(local_pubkey);
+    Bytes right = crypto::sha256(peer_pubkey);
+    if (left > right) {
+        std::swap(left, right);
+    }
+    Bytes concat;
+    concat.insert(concat.end(), left.begin(), left.end());
+    concat.insert(concat.end(), right.begin(), right.end());
+    const Bytes digest = crypto::sha256(ByteView(concat));
+    std::string out;
+    for (int i = 0; i < 12 && (i * 2 + 1) < static_cast<int>(digest.size()); ++i) {
+        const unsigned n =
+            (static_cast<unsigned>(digest[static_cast<std::size_t>(i * 2)]) << 8 |
+             static_cast<unsigned>(digest[static_cast<std::size_t>(i * 2 + 1)])) %
+            100000U;
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "%05u", n);
+        if (!out.empty()) {
+            out.push_back(' ');
+        }
+        out += buf;
     }
     return out;
 }

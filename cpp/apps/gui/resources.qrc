@@ -3,5 +3,9 @@
   <qresource prefix="/i2pchat">
     <file>qss/light.qss</file>
     <file>qss/dark.qss</file>
+    <file>qss/dialog_light.qss</file>
+    <file>qss/dialog_dark.qss</file>
+    <file alias="blindbox/install.sh">../../../i2pchat/blindbox/daemon/install/install.sh</file>
+    <file alias="icons/face.dashed.png">../../../i2pchat/gui/icons/face.dashed.png</file>
   </qresource>
 </RCC>

@@ -202,3 +202,23 @@ QPushButton#RouterBackendOption:checked {
 QPushButton#PrimaryButton { background-color: #0a84ff; color: #ffffff; }
 QPushButton#PrimaryButton:hover { background-color: #409cff; }
 QPushButton#SecondaryButton { background-color: #ffffff; color: #1d1d1f; }
+QToolButton#EmojiPickerButton {
+  background: transparent;
+  border: none;
+  padding: 0px;
+  border-radius: 6px;
+}
+QToolButton#EmojiPickerButton:hover { background: rgba(60, 60, 67, 0.10); }
+QFrame#EmojiPickerPopupWindow { background: transparent; border: none; }
+QFrame#EmojiPickerPopupSurface {
+  background: #f6f7fa;
+  border: none;
+  border-radius: 14px;
+}
+QToolButton#EmojiCell {
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  font-size: 18px;
+}
+QToolButton#EmojiCell:hover { background: #e5eaf2; }

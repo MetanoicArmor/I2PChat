@@ -1,5 +1,7 @@
 #include "actions_popup.hpp"
 #include "chat_window.hpp"
+#include "dialog_theme.hpp"
+#include "emoji_picker.hpp"
 #include "group_topology_map.hpp"
 #include "router_settings_dialog.hpp"
 
@@ -7,10 +9,12 @@
 #include <fstream>
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDir>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDragEnterEvent>
@@ -37,7 +41,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
+#include <QGuiApplication>
 #include <QImage>
+#include <QStyleHints>
 #include <QDateTime>
 #include <QEvent>
 #include <QKeyEvent>
@@ -48,11 +54,15 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QShortcut>
 #include <QSizePolicy>
 #include <QSplitter>
 #include <QStackedLayout>
+#include <QTabWidget>
+#include <QTextCursor>
+#include <QTimer>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -60,6 +70,10 @@
 #include <boost/asio/detached.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 
+#include "i2pchat/bytes.hpp"
+#include "i2pchat/blindbox/state.hpp"
+#include "i2pchat/crypto.hpp"
+#include "i2pchat/encoding.hpp"
 #include "i2pchat/groups/invite.hpp"
 #include "i2pchat/groups/store.hpp"
 #include "i2pchat/groups/wire.hpp"
@@ -69,6 +83,7 @@
 #include "i2pchat/sam/destination.hpp"
 #include "i2pchat/storage/atomic_write.hpp"
 #include "i2pchat/storage/chat_history.hpp"
+#include "i2pchat/storage/compose_drafts.hpp"
 #include "i2pchat/storage/profile_backup.hpp"
 #include "i2pchat/storage/replica_settings.hpp"
 #include "i2pchat/updates/release_index.hpp"
@@ -76,6 +91,7 @@
 
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <tuple>
 #include <QAbstractButton>
 #include <QNetworkAccessManager>
 #include <QNetworkProxy>
@@ -135,28 +151,35 @@ storage::RetentionPolicy load_retention_policy(const std::filesystem::path& app_
     return policy;
 }
 
-QWidget* history_field_label(const QString& title, const QString& hint, QWidget* parent) {
-    auto* wrap = new QWidget(parent);
-    auto* lay = new QVBoxLayout(wrap);
-    lay->setContentsMargins(0, 0, 0, 0);
-    lay->setSpacing(2);
-    auto* head = new QLabel(title, wrap);
-    auto* sub = new QLabel(hint, wrap);
-    sub->setWordWrap(true);
-    sub->setObjectName("RouterStatusLabel");
-    lay->addWidget(head);
-    lay->addWidget(sub);
-    return wrap;
-}
+constexpr int kComposeDraftsMaxKeys = 100;
+constexpr int kComposeDraftsDebounceMs = 1500;
 
-QWidget* wrap_spin_row(QSpinBox* box) {
-    auto* wrap = new QWidget(box->parentWidget());
-    auto* row = new QHBoxLayout(wrap);
-    row->setContentsMargins(0, 0, 0, 0);
-    row->addWidget(box);
-    row->addStretch(1);
-    box->setMinimumWidth(96);
-    return wrap;
+std::tuple<std::optional<std::string>, std::string, std::map<std::string, std::string>>
+apply_compose_draft_peer_switch(const std::optional<std::string>& old_key,
+                                const std::optional<std::string>& new_key,
+                                const std::string& input_plain,
+                                std::map<std::string, std::string> drafts) {
+    if (new_key == old_key) {
+        return {old_key, input_plain, std::move(drafts)};
+    }
+    std::string orphan;
+    if (!old_key && new_key) {
+        orphan = input_plain;
+    }
+    if (old_key) {
+        drafts[*old_key] = input_plain;
+    }
+    std::string text;
+    if (!new_key) {
+        text.clear();
+    } else {
+        const auto found = drafts.find(*new_key);
+        text = found == drafts.end() ? std::string{} : found->second;
+        if (text.find_first_not_of(" \t\r\n") == std::string::npos && !orphan.empty()) {
+            text = orphan;
+        }
+    }
+    return {new_key, text, std::move(drafts)};
 }
 
 bool valid_profile_name(const QString& name) {
@@ -167,6 +190,7 @@ bool valid_profile_name(const QString& name) {
 std::optional<QString> prompt_backup_passphrase(QWidget* parent, const QString& title,
                                                 bool confirm) {
     QDialog dialog(parent);
+    apply_dialog_theme(&dialog);
     dialog.setWindowTitle(title);
     dialog.setModal(true);
     auto* v = new QVBoxLayout(&dialog);
@@ -360,12 +384,22 @@ ChatWindow::ChatWindow(GuiOptions options, QWidget* parent)
     privacy_mode_ = settings.value(QStringLiteral("privacyMode"), false).toBool();
     enter_sends_ = settings.value(QStringLiteral("enterSends"), true).toBool();
     notify_sound_ = settings.value(QStringLiteral("notifySound"), true).toBool();
+    theme_pref_ = settings.value(QStringLiteral("themePref"), QStringLiteral("auto")).toString();
+    if (theme_pref_ != QStringLiteral("auto") && theme_pref_ != QStringLiteral("light") &&
+        theme_pref_ != QStringLiteral("dark")) {
+        theme_pref_ = QStringLiteral("auto");
+    }
     build_ui();
+    compose_drafts_timer_ = new QTimer(this);
+    compose_drafts_timer_->setSingleShot(true);
+    compose_drafts_timer_->setInterval(kComposeDraftsDebounceMs);
+    connect(compose_drafts_timer_, &QTimer::timeout, this, [this] { flush_compose_drafts(); });
     apply_theme();
     start_core();
 }
 
 ChatWindow::~ChatWindow() {
+    flush_compose_drafts();
     stop_core();
     bundled_router_.reset();
 }
@@ -389,7 +423,14 @@ void ChatWindow::build_ui() {
     theme_button_->setAutoRaise(false);
     theme_button_->setFixedSize(30, 30);
     theme_button_->setCursor(Qt::PointingHandCursor);
-    connect(theme_button_, &QToolButton::clicked, this, &ChatWindow::toggle_theme);
+    connect(theme_button_, &QToolButton::clicked, this, &ChatWindow::show_theme_menu);
+    if (qApp->styleHints() != nullptr) {
+        connect(qApp->styleHints(), &QStyleHints::colorSchemeChanged, this, [this] {
+            if (theme_pref_ == QStringLiteral("auto")) {
+                apply_theme();
+            }
+        });
+    }
     auto* status_row_w = new QWidget(this);
     auto* status_row = new QHBoxLayout(status_row_w);
     status_row->setContentsMargins(0, 0, 0, 0);
@@ -510,6 +551,9 @@ void ChatWindow::build_ui() {
     chat_view_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     chat_view_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     chat_view_->setFrameShape(QFrame::NoFrame);
+    chat_view_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(chat_view_, &QWidget::customContextMenuRequested, this,
+            &ChatWindow::show_chat_context_menu);
 
     empty_hint_ = new QLabel(
         tr("Select a saved peer, or paste a base32 address and press Connect."), chat_surface);
@@ -539,27 +583,30 @@ void ChatWindow::build_ui() {
     const int compose_min_h = std::max(48, composer_->fontMetrics().lineSpacing() + 20);
     composer_->setMinimumHeight(compose_min_h);
     composer_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    auto* send_shortcut = new QShortcut(QKeySequence(Qt::Key_Return), composer_);
-    send_shortcut->setContext(Qt::WidgetWithChildrenShortcut);
-    connect(send_shortcut, &QShortcut::activated, this, [this] {
-        if (!enter_sends_) {
-            return;
-        }
-        if (QApplication::keyboardModifiers() & Qt::ShiftModifier) {
-            return;
-        }
-        send_current();
-    });
+    emoji_button_ = new QToolButton(this);
+    emoji_button_->setObjectName("EmojiPickerButton");
+    emoji_button_->setAutoRaise(true);
+    emoji_button_->setFixedSize(32, 32);
+    emoji_button_->setCursor(Qt::PointingHandCursor);
+    emoji_button_->setToolTip(
+        tr("Open emoji panel.\nIn the panel: click to insert; Esc to close.\n\nShortcut: %1")
+            .arg(QKeySequence(QStringLiteral("Ctrl+;"))
+                     .toString(QKeySequence::NativeText)));
+    emoji_popup_ = new EmojiPickerPopup(this);
+    connect(emoji_button_, &QToolButton::clicked, this, &ChatWindow::toggle_emoji_picker);
+    connect(emoji_popup_, &EmojiPickerPopup::emoji_chosen, this, &ChatWindow::insert_emoji);
     send_button_ = new QPushButton(tr("Send"), this);
     send_button_->setObjectName("PrimaryActionButton");
     send_button_->setMinimumHeight(compose_min_h);
     send_button_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Expanding);
     connect(send_button_, &QPushButton::clicked, this, &ChatWindow::send_current);
+    connect(composer_, &QPlainTextEdit::textChanged, this, [this] { schedule_compose_drafts_persist(); });
     auto* compose = new QWidget(this);
     compose->setObjectName("ComposeBar");
     auto* compose_row = new QHBoxLayout(compose);
     compose_row->setContentsMargins(8, 8, 8, 8);
     compose_row->setSpacing(8);
+    compose_row->addWidget(emoji_button_, 0, Qt::AlignBottom);
     compose_row->addWidget(composer_, 1);
     compose_row->addWidget(send_button_);
 
@@ -585,6 +632,9 @@ void ChatWindow::build_ui() {
     more_button_->setObjectName("MoreActionsButton");
     more_button_->setText(QStringLiteral("⋯"));
     more_button_->setFixedHeight(30);
+    more_button_->setToolTip(
+        tr("Open the ⋯ menu: load profile, send picture or file, backups, BlindBox, lock, "
+           "history, privacy, notifications, and more."));
     connect(more_button_, &QToolButton::clicked, this, &ChatWindow::show_more_menu);
     auto* actions = new QWidget(this);
     actions->setObjectName("ActionToolbar");
@@ -659,6 +709,10 @@ void ChatWindow::build_ui() {
     more_popup_->set_night(options_.dark);
     sidebar_popup_ = new ActionsPopup(this);
     sidebar_popup_->set_night(options_.dark);
+    chat_popup_ = new ActionsPopup(this);
+    chat_popup_->set_night(options_.dark);
+    theme_popup_ = new ActionsPopup(this);
+    theme_popup_->set_night(options_.dark);
 
     auto bind_shortcut = [this](const QString& keys, auto slot) {
         new QShortcut(QKeySequence(keys), this, slot);
@@ -679,6 +733,7 @@ void ChatWindow::build_ui() {
     bind_shortcut(QStringLiteral("Ctrl+Shift+C"), [this] { copy_address(); });
     bind_shortcut(QStringLiteral("Ctrl+Shift+G"), [this] { copy_group_invite(); });
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Return")), this, SLOT(send_current()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+;")), this, SLOT(toggle_emoji_picker()));
 
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+B")), this, SLOT(toggle_sidebar()));
 
@@ -698,14 +753,15 @@ void ChatWindow::build_ui() {
 }
 
 void ChatWindow::apply_theme() {
+    options_.dark = resolved_dark();
+    qApp->setProperty("i2pchatNight", options_.dark);
     const QString path = options_.dark ? ":/i2pchat/qss/dark.qss" : ":/i2pchat/qss/light.qss";
     QFile file(path);
     if (file.open(QIODevice::ReadOnly)) {
         qApp->setStyleSheet(QString::fromUtf8(file.readAll()));
     }
     theme_button_->setText(options_.dark ? QStringLiteral("☾") : QStringLiteral("☀"));
-    theme_button_->setToolTip(options_.dark ? tr("Switch to light theme")
-                                            : tr("Switch to dark theme"));
+    theme_button_->setToolTip(tr("Theme: System / Light / Dark"));
     if (chat_delegate_) {
         chat_delegate_->set_dark(options_.dark);
     }
@@ -722,66 +778,233 @@ void ChatWindow::apply_theme() {
     if (sidebar_popup_) {
         sidebar_popup_->set_night(options_.dark);
     }
+    if (chat_popup_) {
+        chat_popup_->set_night(options_.dark);
+    }
+    if (theme_popup_) {
+        theme_popup_->set_night(options_.dark);
+    }
+    if (emoji_popup_) {
+        emoji_popup_->set_night(options_.dark);
+    }
+    if (emoji_button_) {
+        emoji_button_->setIcon(tinted_face_icon(options_.dark));
+        emoji_button_->setIconSize(QSize(20, 20));
+    }
     chat_view_->viewport()->update();
     contact_view_->viewport()->update();
 }
 
-void ChatWindow::toggle_theme() {
-    options_.dark = !options_.dark;
-    apply_theme();
+void ChatWindow::toggle_theme() { show_theme_menu(); }
+
+bool ChatWindow::resolved_dark() const {
+    if (theme_pref_ == QStringLiteral("light")) {
+        return false;
+    }
+    if (theme_pref_ == QStringLiteral("dark")) {
+        return true;
+    }
+    if (qApp->styleHints() != nullptr) {
+        return qApp->styleHints()->colorScheme() == Qt::ColorScheme::Dark;
+    }
+    return options_.dark;
+}
+
+void ChatWindow::show_theme_menu() {
+    if (theme_popup_ == nullptr) {
+        return;
+    }
+    theme_popup_->clear_actions();
+    theme_popup_->set_night(options_.dark);
+    auto pick = [this](const QString& pref) {
+        theme_pref_ = pref;
+        QSettings().setValue(QStringLiteral("themePref"), theme_pref_);
+        apply_theme();
+    };
+    theme_popup_->add_action(tr("System"), {}, [pick] { pick(QStringLiteral("auto")); },
+                             tr("Follow the desktop light/dark setting."));
+    theme_popup_->add_action(tr("Light"), {}, [pick] { pick(QStringLiteral("light")); });
+    theme_popup_->add_action(tr("Dark"), {}, [pick] { pick(QStringLiteral("dark")); });
+    theme_popup_->show_below(theme_button_);
+}
+
+void ChatWindow::show_chat_context_menu(const QPoint& pos) {
+    if (chat_popup_ == nullptr || chat_ == nullptr) {
+        return;
+    }
+    const QModelIndex index = chat_view_->indexAt(pos);
+    if (!index.isValid()) {
+        return;
+    }
+    const QString text = index.data(ChatModel::TextRole).toString();
+    const QString time = index.data(ChatModel::TimeRole).toString();
+    const QString author = index.data(ChatModel::AuthorRole).toString();
+    chat_popup_->clear_actions();
+    chat_popup_->set_night(options_.dark);
+    chat_popup_->add_action(tr("Copy text"), {}, [text] { qApp->clipboard()->setText(text); },
+                            tr("Copy the message body."));
+    chat_popup_->add_action(
+        tr("Copy with timestamp"), {},
+        [text, time, author] {
+            QString line;
+            if (!time.isEmpty()) {
+                line += time + QStringLiteral(" ");
+            }
+            if (!author.isEmpty()) {
+                line += author + QStringLiteral(": ");
+            }
+            line += text;
+            qApp->clipboard()->setText(line);
+        },
+        tr("Copy the message with time and author."));
+    QString path;
+    if (text.startsWith(QStringLiteral("[image] "))) {
+        path = text.mid(8).trimmed();
+    } else if (text.startsWith(QStringLiteral("[file] "))) {
+        path = text.mid(7).trimmed();
+    }
+    if (!path.isEmpty()) {
+        chat_popup_->add_action(tr("Open"), {}, [path] {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        });
+        chat_popup_->add_action(tr("Copy path"), {}, [path] { qApp->clipboard()->setText(path); });
+        const QFileInfo info(path);
+        if (info.exists()) {
+            const QString folder = info.absolutePath();
+            chat_popup_->add_action(tr("Open folder"), {}, [folder] {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+            });
+        }
+    }
+    chat_popup_->show_at(chat_view_->viewport()->mapToGlobal(pos));
+}
+
+void ChatWindow::note_unread(const std::string& conversation_id) {
+    if (conversation_id.empty()) {
+        return;
+    }
+    unread_[conversation_id] += 1;
+    update_tray_unread();
+}
+
+void ChatWindow::clear_unread(const std::string& conversation_id) {
+    unread_.erase(conversation_id);
+    update_tray_unread();
+}
+
+void ChatWindow::update_tray_unread() {
+    unsigned total = 0;
+    for (const auto& [_, count] : unread_) {
+        total += count;
+    }
+    if (tray_ == nullptr) {
+        return;
+    }
+    tray_->setToolTip(total == 0 ? QStringLiteral("I2PChat")
+                                 : tr("I2PChat (%1 unread)").arg(total));
 }
 
 void ChatWindow::toggle_sidebar() {
     sidebar_collapsed_ = !sidebar_collapsed_;
-    sidebar_->setVisible(!sidebar_collapsed_);
-    if (sidebar_grip_ != nullptr) {
-        sidebar_grip_->setVisible(!sidebar_collapsed_);
+    if (sidebar_collapsed_) {
+        if (splitter_ != nullptr) {
+            const auto sizes = splitter_->sizes();
+            if (sizes.size() >= 1 && sizes[0] > 0) {
+                sidebar_width_saved_ = sizes[0];
+            }
+        }
+        sidebar_->hide();
+    } else {
+        sidebar_->show();
     }
     sidebar_toggle_->setText(sidebar_collapsed_ ? QStringLiteral("▶") : QStringLiteral("◀"));
     sync_sidebar_toggle_margin();
-    if (splitter_ != nullptr) {
-        const int total = std::max(400, splitter_->width());
-        if (sidebar_collapsed_) {
-            splitter_->setSizes({0, total});
-        } else {
-            splitter_->setSizes({240, std::max(200, total - 240)});
-        }
+    balance_sidebar_splitter();
+    QTimer::singleShot(0, this, [this] { balance_sidebar_splitter(); });
+}
+
+void ChatWindow::balance_sidebar_splitter() {
+    if (splitter_ == nullptr) {
+        return;
     }
+    const int total = std::max(400, splitter_->width());
+    if (sidebar_collapsed_ || !sidebar_->isVisible()) {
+        splitter_->setSizes({0, total});
+        return;
+    }
+    const int left = std::clamp(sidebar_width_saved_, 160, std::min(520, total - 200));
+    splitter_->setSizes({left, std::max(200, total - left)});
+}
+
+void ChatWindow::toggle_emoji_picker() {
+    if (emoji_popup_ == nullptr || emoji_button_ == nullptr) {
+        return;
+    }
+    if (emoji_popup_->isVisible()) {
+        emoji_popup_->hide();
+        return;
+    }
+    emoji_popup_->set_night(options_.dark);
+    emoji_popup_->show_above(emoji_button_);
+}
+
+void ChatWindow::insert_emoji(const QString& glyph) {
+    if (composer_ == nullptr || glyph.isEmpty()) {
+        return;
+    }
+    QTextCursor cursor = composer_->textCursor();
+    cursor.insertText(glyph);
+    composer_->setTextCursor(cursor);
+    composer_->setFocus();
 }
 
 void ChatWindow::show_more_menu() {
     more_popup_->clear_actions();
     more_popup_->set_night(options_.dark);
     more_popup_->add_action(tr("Load profile (.dat)"), QStringLiteral("Ctrl+O"),
-                            [this] { load_profile_dat(); });
+                            [this] { load_profile_dat(); },
+                            tr("Open a file dialog to load a profile from a .dat file."));
     more_popup_->add_action(tr("Send picture"), QStringLiteral("Ctrl+P"),
-                            [this] { choose_file(true); });
+                            [this] { choose_file(true); },
+                            tr("Send an image file to the connected peer; images appear inline."));
     more_popup_->add_action(tr("Send file"), QStringLiteral("Ctrl+F"),
-                            [this] { choose_file(false); });
+                            [this] { choose_file(false); },
+                            tr("Send any file to the connected peer via the file picker."));
     more_popup_->add_action(tr("New text group…"), QStringLiteral("Ctrl+G"),
-                            [this] { new_group_hint(); });
+                            [this] { new_group_hint(); },
+                            tr("Create a text-only group with a local title and member addresses."));
     more_popup_->add_action(tr("Join group via invite…"), QStringLiteral("Ctrl+J"),
-                            [this] { join_group_hint(); });
+                            [this] { join_group_hint(); },
+                            tr("Paste a copied group invite string to join that text group."));
     if (!active_group_id_.empty()) {
         more_popup_->add_action(tr("Copy group invite"), QStringLiteral("Ctrl+Shift+G"),
-                                [this] { copy_group_invite(); });
+                                [this] { copy_group_invite(); },
+                                tr("Copy a shareable invite string for this group to the clipboard."));
     }
     more_popup_->add_action(tr("BlindBox diagnostics"), QStringLiteral("Ctrl+D"),
-                            [this] { show_blindbox_diagnostics(); });
+                            [this] { show_blindbox_diagnostics(); },
+                            tr("Show offline-delivery status and edit BlindBox replica endpoints."));
     more_popup_->add_action(tr("Export profile backup…"), QStringLiteral("Ctrl+E"),
-                            [this] { export_profile_backup(); });
+                            [this] { export_profile_backup(); },
+                            tr("Export an encrypted backup of this profile."));
     more_popup_->add_action(tr("Import profile backup…"), QStringLiteral("Ctrl+I"),
-                            [this] { import_profile_backup(); });
+                            [this] { import_profile_backup(); },
+                            tr("Import an encrypted profile backup."));
     more_popup_->add_action(tr("Export history backup…"), QStringLiteral("Ctrl+Shift+E"),
-                            [this] { export_history_backup(); });
+                            [this] { export_history_backup(); },
+                            tr("Export an encrypted backup of chat history."));
     more_popup_->add_action(tr("Import history backup…"), QStringLiteral("Ctrl+Shift+I"),
-                            [this] { import_history_backup(); });
+                            [this] { import_history_backup(); },
+                            tr("Import an encrypted history backup."));
     more_popup_->add_action(tr("Check for updates…"), QStringLiteral("Ctrl+U"),
-                            [this] { check_for_updates(); });
+                            [this] { check_for_updates(); },
+                            tr("Look up the latest I2PChat release."));
     more_popup_->add_action(tr("Open App dir"), QStringLiteral("Ctrl+Shift+A"),
-                            [this] { open_app_dir(); });
+                            [this] { open_app_dir(); },
+                            tr("Open the application data folder in the file manager."));
     more_popup_->add_action(tr("I2P router…"), QStringLiteral("Ctrl+R"),
-                            [this] { router_settings(); });
+                            [this] { router_settings(); },
+                            tr("Choose bundled or system i2pd and SAM ports."));
     more_popup_->add_separator();
     more_popup_->add_action(tr("Forget pinned peer key"), {}, [this] { forget_pin(); });
     more_popup_->add_action(tr("Copy my address"), QStringLiteral("Ctrl+Shift+C"),
@@ -971,6 +1194,9 @@ void ChatWindow::start_core() {
     };
     events.on_group_message = [this](const std::string& group_id) {
         QMetaObject::invokeMethod(this, [this, group_id] {
+            if (group_id != active_group_id_) {
+                note_unread(group_id);
+            }
             refresh_contacts();
             if (group_id == active_group_id_) {
                 reload_selected();
@@ -995,6 +1221,8 @@ void ChatWindow::start_core() {
             co_await service_->start();
             QMetaObject::invokeMethod(this, [this] {
                 sync_media_dirs();
+                load_compose_drafts();
+                sync_compose_draft(compose_draft_key());
                 refresh_contacts();
                 refresh_status();
                 refresh_connection_buttons();
@@ -1083,10 +1311,13 @@ void ChatWindow::refresh_contacts() {
         }
         row.subtitle = preview;
         row.selected = state.group_id() == active_group_id_;
+        row.unread = unread_[state.group_id()];
         groups.push_back(std::move(row));
     }
+    std::vector<std::pair<std::string, unsigned>> unread_pairs(unread_.begin(), unread_.end());
     contacts_model_->set_rows(sidebar_from_contacts(
-        presentation::contact_rows(service_->contacts(), service_->connected_peers(), selected_),
+        presentation::contact_rows(service_->contacts(), service_->connected_peers(), selected_,
+                                   unread_pairs),
         groups));
 }
 
@@ -1204,7 +1435,9 @@ void ChatWindow::contact_activated(const QModelIndex& index) {
         return;
     }
     if (contacts_model_->is_group(index.row())) {
+        sync_compose_draft(contacts_model_->addr_at(index.row()).toStdString());
         active_group_id_ = contacts_model_->addr_at(index.row()).toStdString();
+        clear_unread(active_group_id_);
         selected_.clear();
         addr_edit_->clear();
         reload_selected();
@@ -1213,8 +1446,11 @@ void ChatWindow::contact_activated(const QModelIndex& index) {
         refresh_contacts();
         return;
     }
+    const std::string peer = contacts_model_->addr_at(index.row()).toStdString();
+    sync_compose_draft(peer);
+    clear_unread(peer);
     active_group_id_.clear();
-    selected_ = contacts_model_->addr_at(index.row()).toStdString();
+    selected_ = peer;
     addr_edit_->setText(QString::fromStdString(selected_));
     reload_selected();
     refresh_status();
@@ -1228,6 +1464,10 @@ void ChatWindow::send_current() {
         return;
     }
     composer_->clear();
+    if (compose_draft_active_key_) {
+        compose_drafts_.erase(*compose_draft_active_key_);
+        schedule_compose_drafts_persist();
+    }
     if (text.startsWith('/')) {
         if (text == "/copyaddr") {
             copy_address();
@@ -1359,20 +1599,27 @@ void ChatWindow::sidebar_context_menu(const QPoint& pos) {
     sidebar_popup_->set_night(options_.dark);
     if (contacts_model_->is_group(index.row())) {
         sidebar_popup_->add_action(tr("Edit title & members…"), {},
-                                   [this, id] { edit_group_dialog(id); });
+                                   [this, id] { edit_group_dialog(id); },
+                                   tr("Change this group's title and members."));
         sidebar_popup_->add_action(tr("Copy invite"), {},
-                                   [this, id] { copy_group_invite_of(id); });
-        sidebar_popup_->add_action(tr("Map…"), {}, [this, id] { show_group_map(id); });
+                                   [this, id] { copy_group_invite_of(id); },
+                                   tr("Copy a shareable invite string for this group."));
+        sidebar_popup_->add_action(tr("Map…"), {}, [this, id] { show_group_map(id); },
+                                   tr("Show who is connected live versus waiting on BlindBox."));
         sidebar_popup_->add_action(tr("Delete group…"), {},
-                                   [this, id] { confirm_delete_group(id); });
+                                   [this, id] { confirm_delete_group(id); },
+                                   tr("Delete this group and its local history."));
     } else {
         sidebar_popup_->add_action(tr("Edit name & note…"), {},
-                                   [this, id] { edit_saved_peer(id); });
+                                   [this, id] { edit_saved_peer(id); },
+                                   tr("Set a local display name and note for this peer."));
         sidebar_popup_->add_action(tr("Contact details…"), {},
-                                   [this, id] { show_contact_details(id); });
+                                   [this, id] { show_contact_details(id); },
+                                   tr("Show address, TOFU pin, fingerprint, and safety number."));
         sidebar_popup_->add_separator();
         sidebar_popup_->add_action(tr("Remove from saved peers…"), {},
-                                   [this, id] { remove_saved_peer(id); });
+                                   [this, id] { remove_saved_peer(id); },
+                                   tr("Remove this peer from Saved peers, with optional history cleanup."));
     }
     sidebar_popup_->show_at(contact_view_->viewport()->mapToGlobal(pos));
 }
@@ -1383,6 +1630,7 @@ void ChatWindow::edit_saved_peer(const std::string& addr) {
     }
     const storage::ContactRecord* rec = service_->contacts().get(addr);
     QDialog dialog(this);
+    apply_dialog_theme(&dialog);
     dialog.setWindowTitle(tr("Edit name & note"));
     dialog.setMinimumWidth(380);
     auto* form = new QFormLayout(&dialog);
@@ -1390,8 +1638,10 @@ void ChatWindow::edit_saved_peer(const std::string& addr) {
     auto* note = new QLineEdit(&dialog);
     name->setText(rec ? QString::fromStdString(rec->display_name) : QString());
     note->setText(rec ? QString::fromStdString(rec->note) : QString());
-    form->addRow(tr("Name:"), name);
-    form->addRow(tr("Note:"), note);
+    name->setPlaceholderText(tr("Optional label in Saved peers list"));
+    note->setPlaceholderText(tr("Short note (shown under title when no preview)"));
+    form->addRow(tr("Display name"), name);
+    form->addRow(tr("Note"), note);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     form->addRow(buttons);
     QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -1410,6 +1660,7 @@ void ChatWindow::show_contact_details(const std::string& addr) {
         return;
     }
     QDialog dialog(this);
+    apply_dialog_theme(&dialog);
     dialog.setWindowTitle(tr("Contact details"));
     dialog.setMinimumWidth(420);
     auto* layout = new QVBoxLayout(&dialog);
@@ -1423,16 +1674,68 @@ void ChatWindow::show_contact_details(const std::string& addr) {
         const QString key = QString::fromStdString(pin->signing_key_hex);
         const QString short_key =
             key.size() > 48 ? key.left(24) + QStringLiteral("…") + key.right(16) : key;
-        const std::string grouped = presentation::group_fingerprint(pin->signing_key_hex);
+        const std::string fp_full = presentation::fingerprint_of_signing_key(pin->signing_key_hex);
+        const QString fp_short =
+            QString::fromStdString(fp_full).left(16);
+        const std::string grouped = presentation::group_fingerprint(fp_full);
+        QString safety;
+        if (const auto peer_key = encoding::hex_decode(pin->signing_key_hex);
+            peer_key && !service_->identity().signing_public.empty()) {
+            safety = QString::fromStdString(presentation::format_safety_number(
+                ByteView(service_->identity().signing_public), ByteView(*peer_key)));
+        }
         html += QStringLiteral(
                     "<br><b>TOFU</b>: pinned<br><b>OOB verified:</b> %1<br>"
-                    "<b>Fingerprint:</b><br><pre style='margin:4px 0'>%2</pre>"
-                    "<b>Signing key (hex, truncated):</b> %3")
+                    "<b>Fingerprint (short):</b> %2<br>"
+                    "<b>Fingerprint (full):</b><br><pre style='margin:4px 0'>%3</pre>")
                     .arg(pin->oob_verified ? tr("yes (confirmed)") : tr("no — compare out-of-band"),
-                         QString::fromStdString(grouped).toHtmlEscaped(), short_key.toHtmlEscaped());
-    } else {
-        html += QStringLiteral("<br>No TOFU pin stored for this peer.");
+                         fp_short.toHtmlEscaped(),
+                         QString::fromStdString(grouped).toHtmlEscaped());
+        if (!safety.isEmpty()) {
+            html += QStringLiteral("<br><b>Safety number:</b><br><pre style='margin:4px 0'>%1</pre>")
+                        .arg(safety.toHtmlEscaped());
+        }
+        html += QStringLiteral("<b>Signing key (hex, truncated):</b> %1").arg(short_key.toHtmlEscaped());
+        body->setText(html);
+        layout->addWidget(body);
+        auto* row = new QHBoxLayout();
+        auto* copy_addr = new QPushButton(tr("Copy address"), &dialog);
+        connect(copy_addr, &QPushButton::clicked, this, [addr] {
+            qApp->clipboard()->setText(QString::fromStdString(addr));
+        });
+        row->addWidget(copy_addr);
+        if (!fp_full.empty()) {
+            auto* copy_fp = new QPushButton(tr("Copy fingerprint"), &dialog);
+            connect(copy_fp, &QPushButton::clicked, this, [fp_full] {
+                qApp->clipboard()->setText(QString::fromStdString(fp_full));
+            });
+            row->addWidget(copy_fp);
+        }
+        if (!safety.isEmpty()) {
+            auto* copy_sn = new QPushButton(tr("Copy safety number"), &dialog);
+            connect(copy_sn, &QPushButton::clicked, this, [safety] {
+                qApp->clipboard()->setText(safety);
+            });
+            row->addWidget(copy_sn);
+        }
+        auto* forget = new QPushButton(tr("Remove pin…"), &dialog);
+        connect(forget, &QPushButton::clicked, this, [this, addr, &dialog] {
+            dialog.accept();
+            if (service_->trust().forget(addr)) {
+                service_->trust().save();
+                status_label_->setText(tr("Forgotten pinned key for this peer."));
+            }
+        });
+        row->addWidget(forget);
+        row->addStretch(1);
+        auto* close = new QPushButton(tr("Close"), &dialog);
+        connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+        row->addWidget(close);
+        layout->addLayout(row);
+        dialog.exec();
+        return;
     }
+    html += QStringLiteral("<br>No TOFU pin stored for this peer.");
     body->setText(html);
     layout->addWidget(body);
     auto* row = new QHBoxLayout();
@@ -1464,13 +1767,49 @@ void ChatWindow::remove_saved_peer(const std::string& addr) {
     if (!service_) {
         return;
     }
-    if (QMessageBox::question(this, tr("Remove from saved peers"),
-                              tr("Remove this peer from the saved list?\n\n%1")
-                                  .arg(QString::fromStdString(addr))) != QMessageBox::Yes) {
+    const auto bb_path = service_->paths().data_dir() /
+                         blindbox::peer_state_filename(options_.profile, addr);
+    std::error_code exists_ec;
+    const bool has_bb = std::filesystem::is_regular_file(bb_path, exists_ec);
+    QDialog dialog(this);
+    apply_dialog_theme(&dialog);
+    dialog.setWindowTitle(tr("Remove from saved peers"));
+    auto* v = new QVBoxLayout(&dialog);
+    v->addWidget(new QLabel(tr("Remove this peer from Saved peers?\n\n%1")
+                                .arg(QString::fromStdString(addr)),
+                            &dialog));
+    auto* cb_history = new QCheckBox(tr("Also delete encrypted chat history for this peer"), &dialog);
+    auto* cb_pin = new QCheckBox(tr("Also remove TOFU pin for this peer"), &dialog);
+    auto* cb_bb = new QCheckBox(tr("Also remove BlindBox local state file for this peer"), &dialog);
+    cb_bb->setVisible(has_bb);
+    v->addWidget(cb_history);
+    v->addWidget(cb_pin);
+    v->addWidget(cb_bb);
+    auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    bb->button(QDialogButtonBox::Ok)->setText(tr("Remove"));
+    bb->button(QDialogButtonBox::Ok)->setObjectName("PrimaryButton");
+    bb->button(QDialogButtonBox::Cancel)->setObjectName("SecondaryButton");
+    QObject::connect(bb, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(bb, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    add_centered_dialog_buttons(v, bb);
+    if (dialog.exec() != QDialog::Accepted) {
         return;
+    }
+    if (cb_history->isChecked()) {
+        storage::delete_history(service_->paths(), addr);
+    }
+    if (cb_pin->isChecked()) {
+        if (service_->trust().forget(addr)) {
+            service_->trust().save();
+        }
+    }
+    if (cb_bb->isChecked() && has_bb) {
+        std::error_code rm_ec;
+        std::filesystem::remove(bb_path, rm_ec);
     }
     service_->contacts().remove_peer(addr);
     service_->save_contacts();
+    unread_.erase(addr);
     if (selected_ == addr) {
         selected_.clear();
         addr_edit_->clear();
@@ -1478,6 +1817,7 @@ void ChatWindow::remove_saved_peer(const std::string& addr) {
     }
     refresh_contacts();
     refresh_connection_buttons();
+    update_tray_unread();
 }
 
 void ChatWindow::confirm_delete_group(const std::string& group_id) {
@@ -1520,6 +1860,7 @@ void ChatWindow::show_group_map(const std::string& group_id) {
                               ? QString::fromStdString(conv->state.group_id())
                               : QString::fromStdString(conv->state.title());
     QDialog dialog(this);
+    apply_dialog_theme(&dialog);
     dialog.setWindowTitle(tr("Group map: %1").arg(title));
     dialog.resize(760, 620);
     auto* layout = new QVBoxLayout(&dialog);
@@ -1577,20 +1918,31 @@ void ChatWindow::open_app_dir() {
     QDesktopServices::openUrl(url);
 }
 
+void ChatWindow::restart_i2p_session() {
+    flush_compose_drafts();
+    stop_core();
+    core_.restart();
+    service_.reset();
+    start_core();
+}
+
 void ChatWindow::router_settings() {
     GuiRouterSettings current = load_gui_router_settings(options_.app_root);
     RouterSettingsDialog dialog(
-        this, current, bundled_router_status(),
+        this, current, bundled_router_status(), options_.dark,
         [this] {
             QDesktopServices::openUrl(QUrl::fromLocalFile(
                 QString::fromStdString(router_runtime_dir(options_.app_root).string())));
         },
         [this] {
-            const auto log = router_runtime_dir(options_.app_root) / "i2pd.log";
+            const auto data_dir = router_runtime_dir(options_.app_root);
+            const auto log = data_dir / "router.log";
+            const auto fallback = data_dir / "i2pd.log";
             std::error_code ec;
             const auto path = std::filesystem::is_regular_file(log, ec)
                                   ? log
-                                  : router_runtime_dir(options_.app_root);
+                                  : (std::filesystem::is_regular_file(fallback, ec) ? fallback
+                                                                                    : data_dir);
             QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(path.string())));
         },
         [this] {
@@ -1603,6 +1955,7 @@ void ChatWindow::router_settings() {
             apply_router_settings_to_options();
             try {
                 ensure_bundled_router();
+                restart_i2p_session();
             } catch (const std::exception& error) {
                 QMessageBox::warning(this, tr("I2P router"), QString::fromStdString(error.what()));
             }
@@ -1613,17 +1966,19 @@ void ChatWindow::router_settings() {
     const GuiRouterSettings next = dialog.settings();
     save_gui_router_settings(options_.app_root, next);
     apply_router_settings_to_options();
+    bundled_router_.reset();
     if (next.backend == "bundled") {
-        bundled_router_.reset();
         try {
             ensure_bundled_router();
         } catch (const std::exception& error) {
             QMessageBox::warning(this, tr("I2P router"), QString::fromStdString(error.what()));
         }
     }
+    restart_i2p_session();
     status_label_->setText(
-        tr("Router settings saved. SAM %1:%2 — restart the I2P session to apply.")
-            .arg(QString::fromStdString(options_.sam_host))
+        tr("I2P router backend applied: %1 (SAM %2:%3)")
+            .arg(QString::fromStdString(next.backend),
+                 QString::fromStdString(options_.sam_host))
             .arg(options_.sam_port));
 }
 
@@ -1642,6 +1997,7 @@ void ChatWindow::edit_group_dialog(const std::string& existing_group_id) {
         }
     }
     QDialog dialog(this);
+    apply_dialog_theme(&dialog);
     dialog.setWindowTitle(existing ? tr("Edit title & members") : tr("New text group"));
     dialog.setMinimumWidth(420);
     auto* layout = new QVBoxLayout(&dialog);
@@ -1713,6 +2069,7 @@ void ChatWindow::join_group_hint() {
         return;
     }
     QDialog dialog(this);
+    apply_dialog_theme(&dialog);
     dialog.setWindowTitle(tr("Join group via invite"));
     dialog.resize(520, 280);
     auto* layout = new QVBoxLayout(&dialog);
@@ -1811,6 +2168,9 @@ void ChatWindow::load_profile_dat() {
                               tr("Could not copy the profile:\n%1").arg(error.what()));
         return;
     }
+    flush_compose_drafts();
+    compose_drafts_.clear();
+    compose_draft_active_key_.reset();
     stop_core();
     core_.restart();
     service_.reset();
@@ -1820,6 +2180,9 @@ void ChatWindow::load_profile_dat() {
 }
 
 void ChatWindow::switch_to_profile(const std::string& name) {
+    flush_compose_drafts();
+    compose_drafts_.clear();
+    compose_draft_active_key_.reset();
     stop_core();
     core_.restart();
     service_.reset();
@@ -1828,8 +2191,68 @@ void ChatWindow::switch_to_profile(const std::string& name) {
     start_core();
 }
 
+std::optional<std::string> ChatWindow::compose_draft_key() const {
+    if (!active_group_id_.empty()) {
+        return active_group_id_;
+    }
+    if (!selected_.empty()) {
+        return selected_;
+    }
+    return std::nullopt;
+}
+
+void ChatWindow::load_compose_drafts() {
+    compose_drafts_.clear();
+    if (!service_ || options_.profile == runtime::kTransientProfile) {
+        return;
+    }
+    compose_drafts_ = storage::load_compose_drafts(service_->paths().compose_drafts(),
+                                                   ByteView(service_->identity().identity_key));
+}
+
+void ChatWindow::flush_compose_drafts() {
+    if (compose_drafts_timer_ != nullptr) {
+        compose_drafts_timer_->stop();
+    }
+    if (compose_draft_active_key_ && composer_ != nullptr) {
+        compose_drafts_[*compose_draft_active_key_] = composer_->toPlainText().toStdString();
+    }
+    if (!service_ || options_.profile == runtime::kTransientProfile) {
+        return;
+    }
+    while (static_cast<int>(compose_drafts_.size()) > kComposeDraftsMaxKeys) {
+        compose_drafts_.erase(compose_drafts_.begin());
+    }
+    try {
+        storage::save_compose_drafts(service_->paths().compose_drafts(), compose_drafts_,
+                                     ByteView(service_->identity().identity_key));
+    } catch (const std::exception&) {
+    }
+}
+
+void ChatWindow::schedule_compose_drafts_persist() {
+    if (compose_drafts_timer_ != nullptr) {
+        compose_drafts_timer_->start();
+    }
+}
+
+void ChatWindow::sync_compose_draft(const std::optional<std::string>& new_key) {
+    if (composer_ == nullptr) {
+        return;
+    }
+    auto [active, text, out] = apply_compose_draft_peer_switch(
+        compose_draft_active_key_, new_key, composer_->toPlainText().toStdString(),
+        compose_drafts_);
+    compose_drafts_ = std::move(out);
+    compose_draft_active_key_ = std::move(active);
+    const QSignalBlocker blocker(composer_);
+    composer_->setPlainText(QString::fromStdString(text));
+    schedule_compose_drafts_persist();
+}
+
 void ChatWindow::show_blindbox_diagnostics() {
     QDialog dlg(this);
+    apply_dialog_theme(&dlg);
     dlg.setWindowTitle(tr("BlindBox diagnostics"));
     dlg.resize(720, 580);
     auto* layout = new QVBoxLayout(&dlg);
@@ -1849,12 +2272,63 @@ void ChatWindow::show_blindbox_diagnostics() {
     summary->setObjectName("BlindBoxDiagnosticsSummary");
     summary->setReadOnly(true);
     QString text;
+    const QString peer_label =
+        !selected_.empty() ? QString::fromStdString(selected_)
+                           : (!active_group_id_.empty() ? QString::fromStdString(active_group_id_)
+                                                        : QStringLiteral("—"));
     text += tr("Profile: %1\n").arg(QString::fromStdString(options_.profile));
-    text += tr("Selected peer: %1\n")
-                .arg(selected_.empty() ? QStringLiteral("—") : QString::fromStdString(selected_));
+    text += tr("Selected peer: %1\n").arg(peer_label);
     text += tr("BlindBox enabled: %1\n").arg(bb_on ? tr("yes") : tr("no"));
     text += tr("BlindBox ready: %1\n")
                 .arg(service_ && service_->blindbox_ready() ? tr("yes") : tr("no"));
+    QString delivery_state = QStringLiteral("unknown");
+    QString status_title = tr("Status unknown");
+    QStringList details;
+    QStringList actions;
+    if (!bb_on) {
+        delivery_state = QStringLiteral("blindbox-disabled");
+        status_title = tr("Offline queue is disabled by configuration");
+        details << tr("BlindBox is currently turned off for this profile or deployment.");
+        actions << tr("Enable BlindBox or use a live connection instead.");
+    } else if (service_ && service_->replica_settings().endpoints.empty()) {
+        delivery_state = QStringLiteral("blindbox-needs-boxes");
+        status_title = tr("No BlindBox replicas are configured");
+        details << tr("Delayed delivery cannot work until at least one replica endpoint is configured.");
+        actions << tr("Add replicas in this dialog.");
+    } else if (!selected_.empty() && service_ && service_->live(selected_)) {
+        delivery_state = QStringLiteral("online-live");
+        status_title = tr("Live secure session is active");
+        details << tr("Messages can be delivered immediately.")
+                << tr("Offline delivery remains available as a fallback when configured.");
+        actions << tr("Send text, images, or files normally.") << tr("No fix is required.");
+    } else if (!selected_.empty() && service_ && service_->peer_offline_ready(selected_)) {
+        delivery_state = QStringLiteral("offline-ready");
+        status_title = tr("Offline queue is ready");
+        details << tr("You can send text now without a live secure session.")
+                << tr("Live connect is optional right now.");
+        actions << tr("Send text now — it will be queued for delayed delivery.")
+                << tr("No fix is required.");
+    } else if (!selected_.empty() && service_) {
+        delivery_state = QStringLiteral("await-live-root");
+        status_title = tr("Offline queue is not ready yet");
+        details << tr("BlindBox is configured, but the first offline key exchange is still missing.")
+                << tr("One successful live secure chat is required before delayed delivery can start.");
+        actions << tr("Press Connect once and complete one secure live session with this peer.");
+    }
+    text += tr("Delivery state: %1\n").arg(delivery_state);
+    text += tr("\n%1\n").arg(status_title);
+    if (!details.isEmpty()) {
+        text += tr("\nDetails:\n");
+        for (const QString& line : details) {
+            text += QStringLiteral("- %1\n").arg(line);
+        }
+    }
+    if (!actions.isEmpty()) {
+        text += tr("\nWhat to do:\n");
+        for (const QString& line : actions) {
+            text += QStringLiteral("- %1\n").arg(line);
+        }
+    }
     if (service_) {
         text += tr("Replicas file:\n%1\n")
                     .arg(QString::fromStdString(service_->paths().blindbox_replicas().string()));
@@ -1902,11 +2376,16 @@ void ChatWindow::show_blindbox_diagnostics() {
     auth_edit->setMaximumHeight(fm.lineSpacing() * 4 + 20);
     layout->addWidget(auth_edit);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dlg);
+    auto* example = buttons->addButton(tr("Example server…"), QDialogButtonBox::ActionRole);
+    example->setToolTip(tr("Show install.sh and i2pd tunnel snippets for a BlindBox replica."));
     auto* save = buttons->addButton(tr("Save endpoints"), QDialogButtonBox::AcceptRole);
     save->setObjectName("PrimaryButton");
     save->setEnabled(can_edit);
     buttons->button(QDialogButtonBox::Close)->setObjectName("SecondaryButton");
     layout->addWidget(buttons);
+    QObject::connect(example, &QPushButton::clicked, &dlg, [this, &dlg] {
+        show_blindbox_setup_examples(&dlg);
+    });
     QObject::connect(save, &QPushButton::clicked, &dlg, [&] {
         if (!service_ || !can_edit) {
             return;
@@ -1945,6 +2424,121 @@ void ChatWindow::show_blindbox_diagnostics() {
     });
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     dlg.exec();
+}
+
+void ChatWindow::show_blindbox_setup_examples(QWidget* parent) {
+    constexpr const char* kCurl =
+        "curl -fsSL https://raw.githubusercontent.com/MetanoicArmor/I2PChat/main/"
+        "i2pchat/blindbox/daemon/install/install.sh -o install.sh && sudo bash install.sh";
+    constexpr const char* kI2pd = "# /etc/i2pd/tunnels.conf (merge + restart i2pd; set keys= to your .dat)\n"
+                                  "\n"
+                                  "[blindbox]\n"
+                                  "type = server\n"
+                                  "host = 127.0.0.1\n"
+                                  "port = 19444\n"
+                                  "keys = blindbox.dat\n"
+                                  "inport = 19444\n";
+    QFile install_file(QStringLiteral(":/i2pchat/blindbox/install.sh"));
+    QString install_text;
+    if (install_file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        install_text = QString::fromUtf8(install_file.readAll());
+    } else {
+        install_text = tr("# Example file install.sh not found in the application bundle.\n");
+    }
+
+    QDialog sub(parent != nullptr ? parent : this);
+    apply_dialog_theme(&sub);
+    sub.setWindowTitle(tr("Blind Box setup examples"));
+    sub.resize(680, 520);
+    auto* v = new QVBoxLayout(&sub);
+    auto* tabs = new QTabWidget(&sub);
+    tabs->setObjectName("BlindBoxExampleTabWidget");
+    tabs->setDocumentMode(true);
+    tabs->tabBar()->setUsesScrollButtons(false);
+    tabs->tabBar()->setExpanding(false);
+    tabs->tabBar()->setDrawBase(false);
+
+    auto make_page = [&](const QString& note, const QString& body) {
+        auto* page = new QWidget(&sub);
+        auto* pl = new QVBoxLayout(page);
+        pl->setContentsMargins(8, 8, 8, 8);
+        auto* hl = new QLabel(note, page);
+        hl->setTextFormat(Qt::RichText);
+        hl->setWordWrap(true);
+        hl->setOpenExternalLinks(false);
+        pl->addWidget(hl);
+        auto* te = new QPlainTextEdit(page);
+        te->setObjectName("BlindBoxExampleSourceEdit");
+        te->setReadOnly(true);
+        te->setPlainText(body);
+        te->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        pl->addWidget(te, 1);
+        return std::pair<QWidget*, QPlainTextEdit*>{page, te};
+    };
+
+    const auto install_page = make_page(
+        tr("<b>Production daemon package:</b> this is the supported package-local deployment path. "
+           "Use <code>python3 -m i2pchat.blindbox.daemon</code> or point <code>systemd</code> to the "
+           "same module. The package bundles a dedicated <code>systemd</code> unit, env example, and "
+           "matching fail2ban assets, plus install/package helper scripts. "
+           "If you want a single downloaded server installer, use <code>install.sh</code>."),
+        install_text);
+    tabs->addTab(install_page.first, QStringLiteral("install.sh"));
+    const auto i2p_page = make_page(
+        tr("<b>Merge into <code>tunnels.conf</code>, restart i2pd.</b> "
+           "I2P traffic hits <code>127.0.0.1:19444</code> where the replica listens. "
+           "Use this tunnel&apos;s <code>*.b32.i2p:19444</code> in I2PChat (Blind Box diagnostics)."),
+        QString::fromUtf8(kI2pd));
+    tabs->addTab(i2p_page.first, QStringLiteral("I2pd"));
+    v->addWidget(tabs, 1);
+
+    auto* brow = new QHBoxLayout();
+    brow->setContentsMargins(8, 0, 8, 0);
+    auto* get_install = new QPushButton(tr("Get install"), &sub);
+    get_install->setToolTip(
+        tr("Save the one-shot install.sh locally so you can copy it to a server and run it there."));
+    QObject::connect(get_install, &QPushButton::clicked, &sub, [&] {
+        const QString path = QFileDialog::getSaveFileName(
+            &sub, tr("Save BlindBox install.sh"),
+            QDir::homePath() + QStringLiteral("/install.sh"),
+            tr("Shell script (*.sh);;All Files (*)"));
+        if (path.isEmpty()) {
+            return;
+        }
+        QFile out(path);
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+            QMessageBox::critical(&sub, tr("Get install"), out.errorString());
+            return;
+        }
+        out.write(install_text.toUtf8());
+        out.close();
+        out.setPermissions(out.permissions() | QFileDevice::ExeOwner | QFileDevice::ExeUser |
+                           QFileDevice::ExeGroup | QFileDevice::ExeOther);
+        QMessageBox::information(
+            &sub, tr("Get install"),
+            tr("Saved install.sh to:\n%1\n\nCopy it to your server and run:\n\nsudo bash install.sh")
+                .arg(path));
+    });
+    auto* copy_curl = new QPushButton(tr("Copy curl"), &sub);
+    copy_curl->setToolTip(
+        tr("Copy the one-liner: download install.sh from GitHub and run it on the server."));
+    QObject::connect(copy_curl, &QPushButton::clicked, &sub, [kCurl] {
+        qApp->clipboard()->setText(QString::fromUtf8(kCurl));
+    });
+    auto* copy_all = new QPushButton(tr("Copy all"), &sub);
+    QObject::connect(copy_all, &QPushButton::clicked, &sub, [tabs, install_page, i2p_page] {
+        const auto* edit = tabs->currentIndex() == 0 ? install_page.second : i2p_page.second;
+        qApp->clipboard()->setText(edit->toPlainText());
+    });
+    auto* close_sub = new QPushButton(tr("Close"), &sub);
+    QObject::connect(close_sub, &QPushButton::clicked, &sub, &QDialog::accept);
+    brow->addStretch(1);
+    brow->addWidget(get_install);
+    brow->addWidget(copy_curl);
+    brow->addWidget(copy_all);
+    brow->addWidget(close_sub);
+    v->addLayout(brow);
+    sub.exec();
 }
 
 void ChatWindow::export_profile_backup() {
@@ -2196,6 +2790,7 @@ void ChatWindow::clear_history() {
 void ChatWindow::configure_history_retention() {
     const storage::RetentionPolicy shown = load_retention_policy(options_.app_root);
     QDialog dialog(this);
+    apply_dialog_theme(&dialog, options_.dark);
     dialog.setWindowTitle(tr("History retention"));
     dialog.setModal(true);
     auto* v = new QVBoxLayout(&dialog);
@@ -2215,25 +2810,21 @@ void ChatWindow::configure_history_retention() {
     sp_days->setRange(0, 3650);
     sp_days->setSingleStep(1);
     sp_days->setValue(static_cast<int>(shown.max_age_days));
-    form->addRow(history_field_label(tr("Max saved messages per peer"),
-                                     tr("Older entries are dropped when this count is exceeded."),
-                                     &dialog),
-                 wrap_spin_row(sp_messages));
-    form->addRow(history_field_label(tr("Max age in days"),
-                                     tr("0 = keep only by message count above (ignore age)."),
-                                     &dialog),
-                 wrap_spin_row(sp_days));
+    form->addRow(history_field_label_block(tr("Max saved messages per peer"),
+                                           tr("Older entries are dropped when this count is exceeded."),
+                                           &dialog),
+                 wrap_history_numeric_row(sp_messages));
+    form->addRow(history_field_label_block(tr("Max age in days"),
+                                           tr("0 = keep only by message count above (ignore age)."),
+                                           &dialog),
+                 wrap_history_numeric_row(sp_days));
     v->addLayout(form);
     auto* bb = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     bb->button(QDialogButtonBox::Ok)->setObjectName("PrimaryButton");
     bb->button(QDialogButtonBox::Cancel)->setObjectName("SecondaryButton");
     QObject::connect(bb, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(bb, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    auto* buttons_row = new QHBoxLayout();
-    buttons_row->addStretch(1);
-    buttons_row->addWidget(bb);
-    buttons_row->addStretch(1);
-    v->addLayout(buttons_row);
+    add_centered_dialog_buttons(v, bb);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -2294,6 +2885,10 @@ void ChatWindow::rebuild_search_console() {
 }
 
 void ChatWindow::notify_incoming(const std::string& peer, const QString& preview) {
+    if (peer != selected_) {
+        note_unread(peer);
+        refresh_contacts();
+    }
     const bool focused = isActiveWindow() && peer == selected_;
     if (privacy_mode_ && isActiveWindow()) {
         return;
@@ -2322,6 +2917,18 @@ void ChatWindow::sync_media_dirs() {
 bool ChatWindow::eventFilter(QObject* watched, QEvent* event) {
     if (watched == composer_ && event->type() == QEvent::KeyPress) {
         const auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+            const Qt::KeyboardModifiers mods = key->modifiers();
+            const bool shift = mods.testFlag(Qt::ShiftModifier);
+            const bool command_like =
+                mods.testFlag(Qt::ControlModifier) || mods.testFlag(Qt::MetaModifier);
+            const bool wants_send = enter_sends_ ? !shift : command_like;
+            if (wants_send) {
+                send_current();
+                return true;
+            }
+            return QMainWindow::eventFilter(watched, event);
+        }
         if (key->matches(QKeySequence::Paste) && QApplication::clipboard()->mimeData() &&
             QApplication::clipboard()->mimeData()->hasImage() && service_ && !selected_.empty()) {
             const QImage image = qvariant_cast<QImage>(QApplication::clipboard()->mimeData()->imageData());
@@ -2410,6 +3017,7 @@ void ChatWindow::dropEvent(QDropEvent* event) {
 }
 
 void ChatWindow::closeEvent(QCloseEvent* event) {
+    flush_compose_drafts();
     if (tray_ && tray_->isVisible()) {
         hide();
         event->ignore();
@@ -2422,6 +3030,7 @@ void ChatWindow::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
     apply_empty_state();
     refresh_status();
+    balance_sidebar_splitter();
 }
 
 }  // namespace i2pchat::gui

@@ -12,15 +12,22 @@ namespace i2pchat::gui {
 class ActionsPopupItem : public QFrame {
     Q_OBJECT
 public:
-    explicit ActionsPopupItem(const QString& title, const QString& shortcut, QWidget* parent);
+    explicit ActionsPopupItem(const QString& title, const QString& shortcut,
+                              const QString& tooltip, QWidget* parent);
 
 signals:
     void clicked();
 
 protected:
+    void mousePressEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
+
+    void set_title(const QString& title);
+
+private:
+    QLabel* title_label_ = nullptr;
 };
 
 class ActionsPopup : public QFrame {
@@ -29,8 +36,8 @@ public:
     explicit ActionsPopup(QWidget* parent = nullptr);
 
     void clear_actions();
-    void add_action(const QString& title, const QString& shortcut,
-                    const std::function<void()>& callback);
+    ActionsPopupItem* add_action(const QString& title, const QString& shortcut,
+                    const std::function<void()>& callback, const QString& tooltip = {});
     void add_separator();
     void show_below(QWidget* anchor);
     void show_at(const QPoint& global_pos);
