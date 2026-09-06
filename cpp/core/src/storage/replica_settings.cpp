@@ -1,6 +1,8 @@
 #include "i2pchat/storage/replica_settings.hpp"
 
+#include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <set>
 #include <utility>
 
@@ -228,6 +230,40 @@ void save_replica_settings(const std::filesystem::path& path,
                            const ReplicaSettings& settings,
                            std::optional<ByteView> identity_key) {
     atomic_write_json(path, replica_settings_to_json(settings, identity_key));
+}
+
+std::vector<std::string> default_release_blindbox_endpoints() {
+    std::vector<std::string> out;
+    out.reserve(std::size(kDefaultReleaseBlindboxEndpoints));
+    for (const std::string_view ep : kDefaultReleaseBlindboxEndpoints) {
+        out.emplace_back(ep);
+    }
+    return out;
+}
+
+bool same_as_release_builtin_endpoints(const std::vector<std::string>& endpoints) {
+    const auto want = normalize_replica_endpoints(default_release_blindbox_endpoints());
+    const auto have = normalize_replica_endpoints(endpoints);
+    if (want.size() != have.size()) {
+        return false;
+    }
+    std::set<std::string> left(want.begin(), want.end());
+    std::set<std::string> right(have.begin(), have.end());
+    return left == right;
+}
+
+bool builtin_release_replicas_disabled() {
+    const char* raw = std::getenv("I2PCHAT_BLINDBOX_NO_BUILTIN_DEFAULTS");
+    if (raw == nullptr) {
+        return false;
+    }
+    std::string value(raw);
+    for (char& ch : value) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return value == "1" || value == "true" || value == "yes" || value == "on";
 }
 
 }  // namespace i2pchat::storage

@@ -2597,6 +2597,12 @@ void ChatWindow::show_blindbox_diagnostics() {
     replica_edit->setObjectName("BlindBoxReplicaEndpointsEdit");
     QStringList lines;
     if (service_) {
+        const bool builtin = service_->replica_source() == "release-builtin" ||
+                             storage::same_as_release_builtin_endpoints(
+                                 service_->replica_settings().endpoints);
+        if (builtin && !service_->replica_settings().endpoints.empty()) {
+            lines.push_back(QStringLiteral("# default servers"));
+        }
         for (const auto& ep : service_->replica_settings().endpoints) {
             lines.push_back(QString::fromStdString(ep));
         }

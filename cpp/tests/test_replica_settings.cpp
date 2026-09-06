@@ -149,3 +149,11 @@ TEST_CASE("a missing or corrupt replica file yields empty settings") {
     storage::atomic_write_text(path, "{not json");
     CHECK(storage::load_replica_settings(path, std::nullopt).endpoints.empty());
 }
+
+TEST_CASE("release builtin BlindBox endpoints match the Python pool") {
+    const auto eps = storage::default_release_blindbox_endpoints();
+    REQUIRE(eps.size() == 1);
+    CHECK(eps[0] ==
+          "dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444");
+    CHECK(storage::same_as_release_builtin_endpoints(eps));
+}

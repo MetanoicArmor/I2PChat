@@ -9,6 +9,7 @@
 #include <boost/asio/use_awaitable.hpp>
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <stdexcept>
 #include <utility>
 
@@ -190,11 +191,25 @@ asio::awaitable<void> ChatService::start() {
     stopping_ = false;
 
     if (config_.blindbox_enabled) {
-        if (!config_.replicas.has_value()) {
+        const bool replicas_from_config = config_.replicas.has_value();
+        if (!replicas_from_config) {
             config_.replicas = storage::load_replica_settings(
                 paths_.blindbox_replicas(), ByteView(identity_.identity_key));
         }
         replica_settings_ = *config_.replicas;
+        replica_source_ = replicas_from_config ? "config" : "profile-file";
+        if (replica_settings_.endpoints.empty() && !replicas_from_config &&
+            config_.profile != kTransientProfile &&
+            !storage::builtin_release_replicas_disabled()) {
+            replica_settings_.endpoints = storage::default_release_blindbox_endpoints();
+            config_.replicas = replica_settings_;
+            replica_source_ = "release-builtin";
+        } else if (replica_settings_.endpoints.empty()) {
+            replica_source_ = "none";
+        } else if (!replicas_from_config &&
+                   storage::same_as_release_builtin_endpoints(replica_settings_.endpoints)) {
+            replica_source_ = "release-builtin";
+        }
         if (replica_settings_.auth_locked) {
             emit_error(
                 "BlindBox replica tokens could not be decrypted; the offline path "
@@ -1151,6 +1166,11 @@ void ChatService::save_replica_settings(storage::ReplicaSettings settings) {
     settings.endpoints = storage::normalize_replica_endpoints(settings.endpoints);
     replica_settings_ = std::move(settings);
     config_.replicas = replica_settings_;
+    replica_source_ = replica_settings_.endpoints.empty()
+                          ? "none"
+                          : (storage::same_as_release_builtin_endpoints(replica_settings_.endpoints)
+                                 ? "release-builtin"
+                                 : "profile-file");
     storage::save_replica_settings(paths_.blindbox_replicas(), replica_settings_,
                                    ByteView(identity_.identity_key));
 }

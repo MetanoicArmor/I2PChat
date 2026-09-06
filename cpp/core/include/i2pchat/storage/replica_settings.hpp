@@ -36,6 +36,15 @@ struct ReplicaSettings {
     bool auth_locked = false;
 };
 
+/// Project public BlindBox replica, matching Python `DEFAULT_RELEASE_BLINDBOX_ENDPOINTS`.
+inline constexpr std::string_view kDefaultReleaseBlindboxEndpoints[] = {
+    "dzyhukukogujr6r2vwfy667cwm7vg3oomhx2sryxhb6mn4i4wbjq.b32.i2p:19444",
+};
+
+[[nodiscard]] std::vector<std::string> default_release_blindbox_endpoints();
+[[nodiscard]] bool same_as_release_builtin_endpoints(const std::vector<std::string>& endpoints);
+[[nodiscard]] bool builtin_release_replicas_disabled();
+
 /// Trim, drop blanks, comments and duplicates, keeping first-seen order.
 [[nodiscard]] std::vector<std::string> normalize_replica_endpoints(
     const std::vector<std::string>& raw);

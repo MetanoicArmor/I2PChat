@@ -200,6 +200,7 @@ public:
     [[nodiscard]] const storage::ReplicaSettings& replica_settings() const {
         return replica_settings_;
     }
+    [[nodiscard]] std::string_view replica_source() const noexcept { return replica_source_; }
     void save_replica_settings(storage::ReplicaSettings settings);
     void set_retention(storage::RetentionPolicy policy) { config_.retention = policy; }
     [[nodiscard]] bool running() const noexcept { return running_; }
@@ -275,6 +276,7 @@ private:
     std::shared_ptr<sam::SamSession> sam_;
     std::shared_ptr<blindbox::ReplicaClient> replicas_;
     storage::ReplicaSettings replica_settings_;
+    std::string replica_source_ = "none";
     std::map<std::string, std::unique_ptr<Peer>> peers_;
     /// Loaded lazily and kept in memory: every send and poll touches it.
     std::map<std::string, blindbox::PeerSnapshot> blindbox_snapshots_;
